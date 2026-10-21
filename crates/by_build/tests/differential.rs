@@ -7440,6 +7440,99 @@ def describe() -> str:
 }
 
 #[test]
+fn a_function_the_module_body_writes_over_through_its_namespace_keeps_the_write() {
+    // the module body runs before init publishes anything, and a write it makes through
+    // the namespace object rather than by name is not something the source says: a
+    // subscript or an `update` on `globals()`, a helper handed `globals()`, an `exec`.
+    // each leaves the name holding what was written, as python does, and a compiled
+    // caller calls through it. `kept` is written over by nothing, and is the compiled one
+    let Some(compiled) = agree_python_built(
+        "nswrite",
+        "\
+def by_subscript(n: int) -> int:
+    return n + 1
+
+
+def by_update(n: int) -> int:
+    return n + 1
+
+
+def by_helper(n: int) -> int:
+    return n + 1
+
+
+def by_exec(n: int) -> int:
+    return n + 1
+
+
+def kept(n: int) -> int:
+    return n + 1
+
+
+def call_all(n: int) -> list[int]:
+    return [by_subscript(n), by_update(n), by_helper(n), by_exec(n), kept(n)]
+
+
+def rebind(namespace: dict[str, object]) -> None:
+    namespace['by_helper'] = lambda n: n - 300
+
+
+globals()['by_subscript'] = lambda n: n - 100
+globals().update(by_update=lambda n: n - 200)
+rebind(globals())
+exec('by_exec = lambda n: n - 400')
+",
+        &[
+            "m.call_all(1)",
+            "[f(1) for f in (m.by_subscript, m.by_update, m.by_helper, m.by_exec, m.kept)]",
+            "[f.__name__ for f in (m.by_subscript, m.by_update, m.by_helper, m.by_exec, m.kept)]",
+        ],
+    ) else {
+        return;
+    };
+    // a forwarder's frame names the file every compiled function's does, so this is what
+    // says the function that was not written over is still the compiled one
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_nswrite as m\n\
+         print(m.kept.__code__.co_filename, m.call_all.__code__.co_filename)\n",
+    );
+    assert_eq!(out, "<by native forwarder> <by native forwarder>");
+}
+
+#[test]
+fn a_class_the_module_body_writes_over_through_its_namespace_keeps_the_write() {
+    // compiled code reaches a class without going through its name, so a write over the
+    // name that the source does not spell out leaves the whole module as its interpreted
+    // definition built it, where `make` calls what the name holds
+    agree_python(
+        "nsclasswrite",
+        "\
+class Kept:
+    def get(self) -> int:
+        return 1
+
+
+class Other:
+    def get(self) -> int:
+        return 2
+
+
+def make() -> object:
+    return Kept().get()
+
+
+globals()['Kept'] = Other
+",
+        &["m.make()", "m.Kept is m.Other", "m.Kept.__name__"],
+    );
+}
+
+#[test]
 fn a_rebound_global_is_observed() {
     // resolving a global per call rather than caching it: early binding is a
     // tier-3 assumption, and at the default tier python would see the rebind
@@ -10788,6 +10881,81 @@ def took(obj, name):
             "m.Counted().bump()",
         ],
     );
+}
+
+#[test]
+fn a_decorated_class_declaring_slots_throughout_keeps_the_bare_layout() {
+    // a class decorator is handed the class the `class` statement made, and with
+    // `__slots__` declared on every rung that class has no dict in python. so neither has
+    // the emitted one, whatever the decorators go on to do with it
+    let Some(compiled) = agree_python_built(
+        "slotsdecorated",
+        "\
+import functools
+
+
+def tag(cls):
+    cls.tagged = True
+    return cls
+
+
+def took(obj, name):
+    try:
+        setattr(obj, name, 7)
+    except AttributeError:
+        return 'AttributeError'
+    return getattr(obj, name)
+
+
+class Base:
+    __slots__ = ('v',)
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Base) and self.v == other.v
+
+    def __hash__(self) -> int:
+        return self.v
+
+    def get(self) -> int:
+        return self.v
+
+
+@tag
+@functools.total_ordering
+class Leaf(Base):
+    __slots__ = ()
+
+    def __lt__(self, other: 'Leaf') -> bool:
+        return self.v < other.v
+
+    def twice(self) -> int:
+        return self.v * 2
+",
+        &[
+            "m.took(m.Leaf(1), 'brand_new')",
+            "m.took(m.Base(1), 'brand_new')",
+            "m.took(m.Leaf(1), 'v')",
+            "(hasattr(m.Leaf(1), '__dict__'), hasattr(m.Base(1), '__dict__'))",
+            "(m.Leaf(1) <= m.Leaf(2), m.Leaf(3) >= m.Leaf(2), m.Leaf(1).twice(), m.Leaf.tagged)",
+        ],
+    ) else {
+        return;
+    };
+    // the interpreted leg holds functions, so the answers above only say something where
+    // the compiled leg holds its own methods
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_slotsdecorated as m\n\
+         print(type(m.Base.get).__name__, type(m.Leaf.twice).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor");
 }
 
 #[test]
@@ -25260,11 +25428,11 @@ Bag.second = later
 /// fields has nothing to lose and moves. the alternative — turning every immutable class
 /// down up front — would cost the second case for nothing.
 #[test]
-fn a_frozen_instance_moves_only_where_it_has_no_field_to_fill() {
-    // `Fixed.origin` is absent because `n` has no setter to write it through, and absent is
-    // the right answer: an emitted instance with `n` unwritten would answer `0`, which is
-    // the quiet wrong answer the whole move is arranged to avoid. `Blank.nothing` moves,
-    // because a frozen class with no fields is entirely its type
+fn a_frozen_instance_moves_onto_the_compiled_class() {
+    // a `frozen data class` refuses every assignment in `__setattr__`, and a moved instance
+    // is filled underneath it, the way `object.__setattr__` fills one: each field takes its
+    // one write there. so `Fixed.origin` moves with its field, as `Blank.nothing` does with
+    // none, and each is the compiled class's own instance
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -25303,13 +25471,52 @@ Blank.nothing = nothing
         &python,
         &dir,
         "import by_diff_twinfrozen as m\n\
-         print(hasattr(m.Fixed, 'origin'), type(m.origin) is m.Fixed)\n\
+         print(type(m.Fixed.origin) is m.Fixed, m.origin is m.Fixed.origin, m.origin.n)\n\
          print(type(m.Blank.nothing) is m.Blank, m.nothing is m.Blank.nothing)\n",
     );
     assert_eq!(
         out,
-        "False False\n\
+        "True True 0\n\
          True True"
+    );
+}
+
+#[test]
+fn a_module_level_instance_of_a_frozen_data_class_is_an_instance_of_it() {
+    // the module body builds `ORIGIN` and the key of `TABLE` with the interpreted class,
+    // and each is moved onto the compiled one, so it compares, hashes and is checked as
+    // what the class makes now
+    agree(
+        "frozenglobal",
+        "\
+from typing import Final
+
+
+frozen data class Pair:
+    x: int
+    y: int
+
+
+ORIGIN: Final = Pair(0, 0)
+TABLE = {Pair(1, 2): \"a\"}
+
+
+def origin() -> Pair:
+    return ORIGIN
+
+
+def look(key: Pair) -> str:
+    return TABLE[key]
+",
+        &[
+            "(type(m.ORIGIN) is m.Pair, isinstance(m.ORIGIN, m.Pair))",
+            "(m.ORIGIN == m.Pair(0, 0), m.ORIGIN)",
+            "m.TABLE[m.Pair(1, 2)]",
+            "m.look(m.Pair(1, 2))",
+            "m.origin() is m.ORIGIN",
+            "(lambda ns: (exec('try:\\n    o.x = 1\\nexcept Exception as e:\\n    r = type(e).__name__', ns), \
+             ns['r'])[1])({'o': m.ORIGIN})",
+        ],
     );
 }
 
@@ -25837,13 +26044,15 @@ def alias_answers() -> int:
     );
 }
 
-/// the three places a module-level name still keeps what the body put there
+/// the two places a module-level name still keeps what the body put there, and one it
+/// used to
 ///
-/// a set's member and a dict's key are hashed on, so replacing one is a removal and an
-/// insertion in a container somebody else is already holding — the settling walk refuses
-/// both rather than moving them.
+/// a set's member is hashed on, so replacing one is a removal and an insertion in a
+/// container somebody else is already holding — the settling walk refuses it rather than
+/// moving it. a dict's key used to be refused for the same reason, and moves now: the dict
+/// is keyed again in the order it held its keys, the same object as before.
 ///
-/// a module-level *tuple* is the third, and it is a different reason. a tuple cannot be
+/// a module-level *tuple* is the other, and it is a different reason. a tuple cannot be
 /// written, so settling one builds a copy; the module name is only ever rebound to a
 /// value that *is* something replaced, and a copy is not — putting one where the original
 /// stood would break every other holder's `is` against it, and a second holder walked
@@ -25890,12 +26099,14 @@ PAIR = (proxy,)
          print(m.proxy in m.MEMBERS, m.proxy in m.KEYED, m.PAIR[0] is m.proxy)\n\
          print(next(iter(m.MEMBERS))(), m.KEYED[next(iter(m.KEYED))], m.PAIR[0]())\n",
     );
-    // python answers `True True True` on the first line. the second is what the
+    // python answers `True True True` on the first line. a dict's key moves, and the
+    // dict is keyed again, so `KEYED` agrees; a set's member is what it is hashed on and a
+    // tuple is the definition's own, so those two do not. the second line is what the
     // divergence still cannot reach: what is held there computes what the forwarder
     // computes, so nothing but identity sees it
     assert_eq!(
         out,
-        "False False False\n\
+        "False True False\n\
          7 held 7"
     );
 }
@@ -26854,6 +27065,67 @@ class Sub(Written):
             "m.Written.__annotations__ is m.Written.__annotations__",
         ],
     );
+}
+
+#[test]
+fn a_class_answers_the_annotate_function_its_body_wrote() {
+    // 3.14 keeps the function a class body's annotations are computed by, and
+    // `__annotate__` answers with it — `None` only for a class that wrote none. it
+    // evaluates the annotations afresh at each call: a name the class body bound is read
+    // out of the namespace the body ran in, where `Kind` was bound to the interpreted
+    // `Node`, and every other name out of the module, where the compiled type stands.
+    // `many` is one `__annotations__` refuses, because the mapping settled at import
+    // holds the interpreted `Node`; a call evaluates it again and has no such trouble.
+    // below 3.14 there is no `__annotate__` and each of these answers its default
+    let Some(compiled) = agree_python_built(
+        "annannotate",
+        "\
+class Node:
+    def tag(self) -> str:
+        return \"node\"
+
+
+class Written:
+    Kind = Node
+    count: int
+    label: str = \"x\"
+    peer: Node
+    kind: Kind
+    many: list[Node]
+
+    def tag(self) -> str:
+        return \"written\"
+
+
+class Bare:
+    def tag(self) -> str:
+        return \"bare\"
+",
+        &[
+            "(lambda a: a if a is None else (type(a).__name__, a.__qualname__, a(1))) \
+             (getattr(m.Written, '__annotate__', None))",
+            "(lambda a: a if a is None else \
+             (a(1)['peer'] is m.Node, a(1)['kind'] is m.Node, a(1)['many'] == list[m.Node])) \
+             (getattr(m.Written, '__annotate__', None))",
+            "getattr(m.Bare, '__annotate__', 'absent')",
+            "getattr(m.Written, '__annotate__', 1) is getattr(m.Written, '__annotate__', 2)",
+            "(lambda found: found and __import__('annotationlib').get_annotations( \
+             m.Written, format=__import__('annotationlib').Format.STRING)) \
+             (__import__('importlib.util').util.find_spec('annotationlib') is not None)",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_annannotate as m\n\
+         print(type(m.Written.tag).__name__, type(m.Bare.tag).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor");
 }
 
 #[test]
@@ -43629,6 +43901,62 @@ def discarded(f: Callable[[int], int], log: list[str]) -> None:
             "(lambda log: (m.discarded(lambda i: type('B', (int,), \
              {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])",
         ],
+    );
+}
+
+#[test]
+fn a_discarded_tuple_of_ints_from_a_rebound_function_lets_go_of_them_last_to_first() {
+    // once `ints` is rebound the call goes through python and the pair it answers is taken
+    // apart into two `int` slots, so nothing holds them together but the tuple the slots
+    // are put back into. an `int` subclass with a `__del__` sees when that tuple goes:
+    // python lets go of the second element first
+    agree_python(
+        "intrebounddrop",
+        "\
+from collections.abc import Callable
+
+
+def ints(f: Callable[[int], int]) -> tuple[int, int]:
+    return f(1), f(2)
+
+
+def discarded(f: Callable[[int], int], log: list[str]) -> None:
+    ints(f)
+    log.append('after')
+",
+        &[
+            "(lambda log, ints: (setattr(m, 'ints', lambda f: ints(f)), \
+             m.discarded(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[2])([], m.ints)",
+            "(lambda log: (m.discarded(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])",
+        ],
+    );
+}
+
+#[test]
+fn a_named_int_taken_out_of_a_tuple_lives_as_long_as_its_name() {
+    // `part` holds what the pair held, and an `int` subclass with a `__del__` sees when
+    // that goes: python lets go of it with the frame, after the last line has run, not
+    // once the last read of `part` is done
+    agree_python(
+        "intnamedelement",
+        "\
+from collections.abc import Callable
+
+
+def split(f: Callable[[int], int]) -> tuple[str, int]:
+    return 'a', f(2)
+
+
+def kept(f: Callable[[int], int], log: list[str]) -> int:
+    head, part = split(f)
+    total = part + 1
+    log.append('kept')
+    return total
+",
+        &["(lambda log: (m.kept(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])"],
     );
 }
 

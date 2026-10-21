@@ -484,6 +484,33 @@ bump([Acc(1)])
 `//=`, `%=`, `**=`, `<<=` and `>>=` ask whether the left operand is an exact `int`
 before they take the plain operator's path, which is one more test on a short
 
+such a value can have a `__del__`, so it is let go of when python lets go of it. a
+tuple of `int`s nothing reads goes on holding its elements until python's would have
+gone, and lets them go last to first; a name an element was taken out of a tuple into
+holds it for as long as the name does:
+
+```python
+def ints(f) -> tuple[int, int]:
+    return f(1), f(2)
+
+
+def discarded(f) -> None:
+    ints(f)         # the second element's `__del__` runs first, as in python
+
+
+def kept(f) -> int:
+    head, part = split(f)
+    total = part + 1
+    log("kept")     # `part`'s `__del__` runs after this, as in python
+    return total
+```
+
+the tuple is held as the struct of its elements rather than as an object, so holding it
+allocates nothing. what it still costs is a reference taken and given back per element:
+the `tuples` benchmark, which builds `pair = (whole, part)` in its loop and reads only
+the elements, retires 15% more instructions for it (10.2M to 11.7M a call), and `pairs`
+2.4% more. no other benchmark's compiled functions changed
+
 ## floats, strings, tuples
 
 - **`float`** is an unboxed `double` wherever it is not stored in an
@@ -657,10 +684,60 @@ so the substitution is made everywhere a twin can still be held:
 | a retained interpreted definition's defaults  | `By_RemapTwinDefaults`, one call per handle   |
 | a declined class's own methods and attributes | the same walk, one step in                    |
 
-a value that merely **reaches** a twin — an instance whose type it is, a list
-holding one — is not moved and cannot be. those stay as the body left them, and
-that limit is the reason the rule is a substitution of *the twin itself* rather
-than a deep rewrite.
+an instance the body built with one of those classes is moved too: an instance of the
+emitted type is allocated without running a constructor, and the state the twin's
+instance holds is handed over field by field, the way `object.__setattr__` writes it —
+past any `__setattr__` the class wrote, so a `frozen data class` moves like any other.
+the move is remembered, so every holder of the one instance ends up holding the one
+replacement. a key of a dict moves the same way, and the dict is keyed again in the order
+it held its keys, so a table the body built answers a key the compiled class makes:
+
+```python
+frozen data class Pair:
+    x: int
+    y: int
+
+
+ORIGIN: Final = Pair(0, 0)
+TABLE = {Pair(1, 2): "a"}
+
+isinstance(ORIGIN, Pair)  # both: True
+TABLE[Pair(1, 2)]  # both: "a"
+```
+
+what is still left as the body left it is a value nothing here can write: a member of a
+set, which it is hashed on, and a key of a dict *subclass*, which may keep its own account
+of its keys beside the table. those still hold the interpreted class's instance
+
+### what the body wrote over a definition's name
+
+installing a definition is only right while its name still holds what the definition
+made. a write the source spells out — `f = g`, `del f` — is seen at build time and the
+definition stays interpreted. a write through the namespace object is not:
+`globals()["f"] = g`, `globals().update(...)`, a helper handed `globals()`, an `exec`, a
+star import of an accelerator module — `operator`'s trailing `from _operator import *` is
+the shape. so init asks the name itself, once the body has run:
+
+- a function is published only where its name still holds the function its `def` made,
+    told apart by its code object, which is a constant of the module's own. one the body
+    wrote over keeps what was written, and every compiled call of it goes through the name
+- a class is installed only where its name still holds the class its statement built. one
+    the body wrote over leaves the **whole module** as its interpreted definition built it,
+    because compiled code reaches a class without going through its name
+
+```python
+def f(n: int) -> int:
+    return n + 1
+
+
+def call(n: int) -> int:
+    return f(n)
+
+
+globals()["f"] = lambda n: n - 100
+
+call(1)  # both: -99
+```
 
 ### checking that what was installed is what was reported
 
@@ -955,6 +1032,26 @@ original["scale"] = 10
 mod.scaled.__kwdefaults__ = original
 mod.scaled(2)  # python: 20; compiled with watchers: 20; compiled without: 2
 ```
+
+### a field is an attribute of its class
+
+an emitted instance keeps its fields in its layout, and python reaches a field there
+through a descriptor the class publishes under the field's name, as it reaches a slot.
+so the class answers for a name python's class only holds on its instances:
+
+```python
+class Cell:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+hasattr(Cell, "v")  # python: False; compiled: True
+"v" in vars(Cell)  # python: False; compiled: True, a `getset_descriptor`
+```
+
+an instance answers the same either way. a descriptor is the one place a generic attribute
+read finds a field held outside a dict, so taking them away would mean a read of every
+attribute going through a lookup of the class's own
 
 ### a method is not a `function`
 

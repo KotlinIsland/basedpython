@@ -3446,10 +3446,15 @@ static void By_FindFunctionWatch(void) {
  * at all — before 3.12, or free-threaded — takes note of what the function holds
  * instead, and asks again at each call. `called` says whether any compiled call asks the
  * site: one nobody asks needs no word of writes to its name, only of what happens to the
- * function its own python entry stands for */
-static int By_ArmFunctionSite(ByFunctionSite *site, PyObject *dict, const char *name, int called) {
+ * function its own python entry stands for. `published` says whether init published the
+ * function at all: one whose name the module body wrote over is not, and its site is left
+ * never standing, so every call goes through whatever the name holds — see
+ * `By_DefinitionStanding` */
+static int By_ArmFunctionSite(ByFunctionSite *site, PyObject *dict, const char *name, int called,
+                              int published) {
     if (site->name == NULL) site->name = By_InternedStr(name, (Py_ssize_t)strlen(name));
     if (site->name == NULL) return -1;
+    if (!published) return 0;
     PyObject *forwarder = PyDict_GetItemWithError(dict, site->name);
     if (forwarder == NULL) {
         if (!PyErr_Occurred()) {
@@ -5685,34 +5690,49 @@ static inline char By_IsMatchSequence(PyObject *o) {
     return (char)(o != NULL && PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_SEQUENCE));
 }
 
-/* the refusal `__annotations__` gives where a class's own could not be carried across
+/* the refusal `__annotations__` gives where a class's own could not be carried across,
+ * and `__annotate__` where the function computing them could not
  *
  * `type_get_annotations` hands whatever it finds under that name in `tp_dict` to its own
- * `tp_descr_get`, so a descriptor written there is how an emitted type says no. it has
- * to be able to: an *absent* `__annotations__` is not a loud failure the way an absent
- * attribute is, because python invents an empty mapping for it on the spot — which is a
- * wrong answer wearing a right one's clothes */
+ * `tp_descr_get`, and 3.14's `type_get_annotate` does the same, so a descriptor written
+ * there is how an emitted type says no. it has to be able to: an *absent*
+ * `__annotations__` is not a loud failure the way an absent attribute is, because python
+ * invents an empty mapping for it on the spot — which is a wrong answer wearing a right
+ * one's clothes — and an absent `__annotate__` is `None`, which says the class wrote no
+ * annotations at all */
+typedef struct {
+    PyObject_HEAD
+    const char *name;
+} By_LostAnnotationsObject;
+
 static PyObject *By_LostAnnotations_get(PyObject *self, PyObject *object, PyObject *type) {
-    (void)self;
     (void)object;
-    PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '__annotations__'",
+    PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '%s'",
                  type != NULL && PyType_Check(type) ? ((PyTypeObject *)type)->tp_name
-                                                    : "<unknown>");
+                                                    : "<unknown>",
+                 ((By_LostAnnotationsObject *)self)->name);
     return NULL;
 }
 
 static PyTypeObject By_LostAnnotationsType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "by.lost_annotations",
-    .tp_basicsize = sizeof(PyObject),
+    .tp_basicsize = sizeof(By_LostAnnotationsObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_descr_get = By_LostAnnotations_get,
 };
 
-static inline PyObject *By_LostAnnotations(void) {
+static inline PyObject *By_LostAnnotationsNamed(const char *name) {
+    By_LostAnnotationsObject *lost;
     if (PyType_Ready(&By_LostAnnotationsType) < 0) return NULL;
-    return PyObject_New(PyObject, &By_LostAnnotationsType);
+    lost = PyObject_New(By_LostAnnotationsObject, &By_LostAnnotationsType);
+    if (lost != NULL) lost->name = name;
+    return (PyObject *)lost;
+}
+
+static inline PyObject *By_LostAnnotations(void) {
+    return By_LostAnnotationsNamed("__annotations__");
 }
 
 /* where a class keeps the annotations its body wrote, once they are a mapping
@@ -5864,15 +5884,55 @@ static int By_SettlesInPlace(PyObject *value, const By_Twins *twins, int depth) 
     return same;
 }
 
-/* settle every value of a dict, in place, and say whether the dict now holds no twin
+/* put `rekeyed` — `(key, replacement)` pairs — in place of those keys of an exact dict, in
+ * the order the dict holds them, and say whether that was done
  *
- * a twin used as a *key* is refused rather than moved: a dict is keyed on the object a
- * class hashes as, so replacing one is a removal and an insertion, and doing that to a
- * mapping somebody else is holding is a bigger claim than this has evidence for */
+ * a dict is keyed on what an object hashes as, so a key is replaced by building the
+ * mapping again rather than by a removal and an insertion, which would move the entry to
+ * the end. it is built aside first and the original only emptied and filled from it once
+ * every key has gone in, so a key that cannot be hashed leaves the dict as it was */
+static int By_RekeyDict(PyObject *dict, PyObject *rekeyed) {
+    PyObject *items = PyDict_Items(dict);
+    PyObject *rebuilt = PyDict_New();
+    Py_ssize_t at, pair;
+    int done = items != NULL && rebuilt != NULL;
+    for (at = 0; done && at < PyList_GET_SIZE(items); at++) {
+        PyObject *item = PyList_GET_ITEM(items, at);
+        PyObject *key = PyTuple_GET_ITEM(item, 0);
+        for (pair = 0; pair < PyList_GET_SIZE(rekeyed); pair++) {
+            PyObject *replacing = PyList_GET_ITEM(rekeyed, pair);
+            if (PyTuple_GET_ITEM(replacing, 0) == key) {
+                key = PyTuple_GET_ITEM(replacing, 1);
+                break;
+            }
+        }
+        done = PyDict_SetItem(rebuilt, key, PyTuple_GET_ITEM(item, 1)) == 0;
+    }
+    done = done && PyDict_GET_SIZE(rebuilt) == PyList_GET_SIZE(items);
+    if (done) {
+        PyDict_Clear(dict);
+        done = PyDict_Update(dict, rebuilt) == 0;
+    }
+    if (!done) PyErr_Clear();
+    Py_XDECREF(items);
+    Py_XDECREF(rebuilt);
+    return done;
+}
+
+/* settle every key and value of a dict, in place, and say whether the dict now holds no
+ * twin
+ *
+ * a key moves the way a value does — a twin becomes the type standing for it and an
+ * instance one of them built is moved onto it — because a mapping keyed on a class or on
+ * one of its instances is asked with what the class makes *now*: `TABLE[Pair(1, 2)]`
+ * builds its key with the compiled class, and a dispatch table is asked with
+ * `type(obj)`. only an exact dict is keyed again (see `By_RekeyDict`): a subclass may
+ * keep its own account of its keys beside the table, and is refused where a key moves */
 static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth) {
     /* the keys first: a value is settled one at a time and anything at all may run while
      * that happens, so nothing may be walking the dict itself */
     PyObject *keys = PyDict_Keys(dict);
+    PyObject *rekeyed = NULL;
     Py_ssize_t at;
     int settled = 1;
     if (keys == NULL) {
@@ -5884,13 +5944,24 @@ static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth)
         /* held rather than borrowed: settling one entry can run arbitrary code, and the
          * entry this is about to write back over must not have gone away underneath it */
         PyObject *value = By_NewRef(PyDict_GetItem(dict, key));
-        PyObject *stands;
+        PyObject *stands, *moved;
         if (value == NULL) continue;
-        if (!By_SettlesInPlace(key, twins, depth)) {
+        moved = By_SettledValue(key, twins, depth);
+        if (moved == NULL) {
             Py_DECREF(value);
             settled = 0;
             continue;
         }
+        if (moved != key) {
+            PyObject *pair = PyDict_CheckExact(dict) ? PyTuple_Pack(2, key, moved) : NULL;
+            if (pair == NULL || (rekeyed == NULL && (rekeyed = PyList_New(0)) == NULL)
+                || PyList_Append(rekeyed, pair) < 0) {
+                PyErr_Clear();
+                settled = 0;
+            }
+            Py_XDECREF(pair);
+        }
+        Py_DECREF(moved);
         stands = By_SettledValue(value, twins, depth);
         if (stands == NULL) {
             Py_DECREF(value);
@@ -5905,6 +5976,10 @@ static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth)
         Py_DECREF(value);
     }
     Py_DECREF(keys);
+    if (rekeyed != NULL) {
+        if (!By_RekeyDict(dict, rekeyed)) settled = 0;
+        Py_DECREF(rekeyed);
+    }
     return settled;
 }
 
@@ -5939,6 +6014,63 @@ static int By_SettleListItems(PyObject *list, const By_Twins *twins, int depth) 
     return settled;
 }
 
+/* whether the cell at `at` of a function's closure is `__classdict__`: the namespace a class
+ * body ran in, which python 3.12 and later close an annotation or type-parameter scope over
+ * so that it can read the names the body bound before it reads the module's */
+static int By_IsClassNamespaceCell(PyObject *freevars, Py_ssize_t at) {
+    PyObject *name;
+    if (freevars == NULL || !PyTuple_Check(freevars) || at >= PyTuple_GET_SIZE(freevars)) {
+        return 0;
+    }
+    name = PyTuple_GET_ITEM(freevars, at);
+    return PyUnicode_Check(name) && PyUnicode_CompareWithASCIIString(name, "__classdict__") == 0;
+}
+
+/* settle, in place, the entries of a class namespace that `fn` can read, and say whether
+ * they now hold no twin
+ *
+ * a body that bound a name to one of this module's classes bound it to the twin, so the
+ * entry is moved as a dict's value is. only the names `fn` can look up are asked about —
+ * its code's `co_names`, which is every name it reads out of the namespace and the
+ * attribute names it reads besides — because the namespace also holds the class's other
+ * members, and among them the very function being settled: a 3.14 class keeps its
+ * `__annotate__` there, which closes over the namespace again, and walking that cycle runs
+ * into the depth bound and refuses. a mapping that is not a dict, which a metaclass's
+ * `__prepare__` may make, is refused rather than written */
+static int By_SettleNamespaceReads(PyObject *fn, PyObject *namespace_, const By_Twins *twins,
+                                   int depth) {
+    PyObject *names;
+    Py_ssize_t at;
+    int settled = 1;
+    if (!PyDict_Check(namespace_)) return 0;
+    names = PyObject_GetAttrString(PyFunction_GetCode(fn), "co_names");
+    if (names == NULL || !PyTuple_Check(names)) {
+        PyErr_Clear();
+        Py_XDECREF(names);
+        return 0;
+    }
+    for (at = 0; at < PyTuple_GET_SIZE(names); at++) {
+        PyObject *name = PyTuple_GET_ITEM(names, at);
+        /* held rather than borrowed: settling can run arbitrary code */
+        PyObject *value = By_NewRef(PyDict_GetItem(namespace_, name));
+        PyObject *stands;
+        if (value == NULL) continue;
+        stands = By_SettledValue(value, twins, depth);
+        if (stands == NULL) {
+            settled = 0;
+        } else {
+            if (stands != value && PyDict_SetItem(namespace_, name, stands) < 0) {
+                PyErr_Clear();
+                settled = 0;
+            }
+            Py_DECREF(stands);
+        }
+        Py_DECREF(value);
+    }
+    Py_DECREF(names);
+    return settled;
+}
+
 /* settle what a function captured, in place, and say whether it now holds no twin
  *
  * a `def` evaluates its defaults and closes over its cells where it stands, and everything
@@ -5965,7 +6097,9 @@ static int By_SettleFunction(PyObject *fn, const By_Twins *twins, int depth) {
     Py_ssize_t at;
     int settled = 1;
 
-    if (closure != NULL && PyTuple_Check(closure)) {
+    if (closure != NULL && PyTuple_Check(closure) && PyTuple_GET_SIZE(closure) > 0) {
+        PyObject *freevars = PyObject_GetAttrString(PyFunction_GetCode(fn), "co_freevars");
+        if (freevars == NULL) PyErr_Clear();
         for (at = 0; at < PyTuple_GET_SIZE(closure); at++) {
             PyObject *cell = PyTuple_GET_ITEM(closure, at);
             PyObject *held, *stands;
@@ -5976,6 +6110,11 @@ static int By_SettleFunction(PyObject *fn, const By_Twins *twins, int depth) {
             held = PyCell_Get(cell); /* a new reference, and NULL for an unbound cell */
             if (held == NULL) {
                 PyErr_Clear();
+                continue;
+            }
+            if (By_IsClassNamespaceCell(freevars, at)) {
+                if (!By_SettleNamespaceReads(fn, held, twins, depth)) settled = 0;
+                Py_DECREF(held);
                 continue;
             }
             stands = By_SettledValue(held, twins, depth);
@@ -5990,6 +6129,7 @@ static int By_SettleFunction(PyObject *fn, const By_Twins *twins, int depth) {
             }
             Py_DECREF(held);
         }
+        Py_XDECREF(freevars);
     }
 
     /* read after the closure and not before: settling a cell can run arbitrary code, and
@@ -6153,6 +6293,10 @@ static void By_UnwindMoves(PyObject *moved, Py_ssize_t mark) {
  * be found on the twin *first*, and an instance carrying state the emitted type has nowhere
  * to put is refused outright rather than moved with the remainder dropped.
  *
+ * each is written the way `object.__setattr__` writes it, past a `__setattr__` the class
+ * wrote: the state is being handed over, not assigned by the program, so a class whose
+ * `__setattr__` refuses — a `frozen data class` — moves like any other.
+ *
  * nowhere is narrower than "outside the layout". an emitted class keeps a dict beside its
  * layout wherever the source did not declare `__slots__` throughout, and a name written on
  * the twin from outside `__init__` goes into it — the same place `o.brand_new = 7` on a
@@ -6174,6 +6318,17 @@ static void By_UnwindMoves(PyObject *moved, Py_ssize_t mark) {
  * `layouts[i]` is NULL for a class this cannot be done for at all, and the emitting side
  * decides that: a class whose instance is not wholly its own field run — one standing on a
  * base python allocates — keeps state in a place nothing here can read */
+/* `object.__setattr__(obj, name, value)`, which reaches a data descriptor's setter or the
+ * instance dict without asking a `__setattr__` the object's class wrote */
+static int By_SetAttrPastClass(PyObject *obj, const char *name, PyObject *value) {
+    PyObject *key = PyUnicode_InternFromString(name);
+    int failed;
+    if (key == NULL) return -1;
+    failed = PyObject_GenericSetAttr(obj, key, value);
+    Py_DECREF(key);
+    return failed;
+}
+
 static PyObject *By_MovedInstance(PyObject *value, const By_Twins *twins, int depth) {
     PyObject *type = NULL;
     const By_Field *layout = NULL;
@@ -6308,12 +6463,14 @@ static PyObject *By_MovedInstance(PyObject *value, const By_Twins *twins, int de
             continue;
         }
         stands = By_SettledValue(held, twins, depth - 1);
-        /* the setter is the type's own, so the value goes through the same conversion an
+        /* the setter is the field's own, so the value goes through the same conversion an
          * assignment from python does — and a value that could not be settled keeps what
-         * the twin gave it rather than costing the instance the whole attribute */
-        failed = PyObject_SetAttrString(fresh, field->name,
-                                        stands != NULL ? stands : held)
-                 < 0;
+         * the twin gave it rather than costing the instance the whole attribute. it is
+         * reached the way `object.__setattr__` reaches it, past any `__setattr__` the class
+         * has: this is the state the twin already holds being handed over, not an
+         * assignment the program makes, and a `frozen data class` refuses every assignment
+         * there while its fields take one write each underneath */
+        failed = By_SetAttrPastClass(fresh, field->name, stands != NULL ? stands : held) < 0;
         Py_XDECREF(stands);
         Py_DECREF(held);
         if (failed) {
@@ -6350,7 +6507,7 @@ static PyObject *By_MovedInstance(PyObject *value, const By_Twins *twins, int de
         if (held == NULL) continue;
         Py_INCREF(held);
         stands = By_SettledValue(held, twins, depth - 1);
-        failed = PyObject_SetAttr(fresh, name, stands != NULL ? stands : held) < 0;
+        failed = PyObject_GenericSetAttr(fresh, name, stands != NULL ? stands : held) < 0;
         Py_XDECREF(stands);
         Py_DECREF(held);
         if (failed) {
@@ -6629,10 +6786,10 @@ static PyObject *By_TwinReplacement(PyObject *value, const By_Twins *twins) {
  * module wrote whatever the body's expressions evaluated to, and neither can be worked
  * out again from here.
  *
- * `__annotations__` is the one dunder carried, and it is carried because the objection to
- * the rest does not reach it: it fills no type slot, so there is no second answer for it
- * to disagree with. the getset *is* the only way to read it, on a compiled class and an
- * interpreted one alike.
+ * `__annotations__` is carried, with 3.14's `__annotate__` beside it (see
+ * `By_CarryAnnotate`), because the objection to the other dunders does not reach it: it
+ * fills no type slot, so there is no second answer for it to disagree with. the getset
+ * *is* the only way to read it, on a compiled class and an interpreted one alike.
  *
  * the values are subject to the same rule every carried attribute is — see
  * `By_TwinReplacement` — and where one of them fails it, the whole mapping is replaced by
@@ -6683,6 +6840,46 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
     failed = PyDict_SetItemString(target, BY_ANNOTATIONS, carried) < 0;
     Py_DECREF(carried);
     return failed ? -1 : 0;
+}
+
+/* the function a class's annotations are computed by, carried onto the type that takes the
+ * class's place
+ *
+ * 3.14 keeps it in the class's own dict — under `__annotate_func__`, or `__annotate__`
+ * where the body assigned one — and `__annotate__` answers with it, read through a getset
+ * on the metatype that looks at that dict and no base's. `None` there says the class
+ * wrote no annotations, and is what the getset writes for a class it finds nothing on, so
+ * a type that carried nothing would say exactly that. this is the second dunder carried,
+ * for the reason `By_CarryAnnotations` gives for the first.
+ *
+ * the function evaluates the annotations afresh at each call, the names the body bound
+ * read out of the namespace it ran in. it is settled as any carried value is, which
+ * settles what it can read of that namespace (see `By_SettleNamespaceReads`), and where
+ * that is refused the refusal is written in */
+static inline int By_CarryAnnotate(PyObject *source, PyObject *target, const By_Twins *twins) {
+#if PY_VERSION_HEX >= 0x030E0000
+    static const char *const keys[] = {"__annotate__", "__annotate_func__"};
+    size_t at;
+    for (at = 0; at < sizeof(keys) / sizeof(keys[0]); at++) {
+        /* held rather than borrowed: settling can run arbitrary code */
+        PyObject *written = By_NewRef(PyDict_GetItemString(source, keys[at]));
+        PyObject *carried;
+        int failed;
+        if (written == NULL) continue;
+        carried = By_TwinReplacement(written, twins);
+        Py_DECREF(written);
+        if (carried == NULL) carried = By_LostAnnotationsNamed("__annotate__");
+        if (carried == NULL) return -1;
+        failed = PyDict_SetItemString(target, keys[at], carried) < 0;
+        Py_DECREF(carried);
+        if (failed) return -1;
+    }
+#else
+    (void)source;
+    (void)target;
+    (void)twins;
+#endif
+    return 0;
 }
 
 /* the abstract-base registry a module body built, carried onto the type that takes the
@@ -6787,9 +6984,9 @@ static int By_AdoptMethodTwins(PyObject *source, PyObject *target) {
  *
  * a dunder is never carried. a name written into `tp_dict` does not fill a type slot,
  * so an adopted `__ge__` would answer `a.__ge__(b)` while `a >= b` still went to the
- * slot — two answers where the interpreted class has one. `__annotations__` is the one
- * exception, and `By_CarryAnnotations` says why: it fills no slot, so there is nothing
- * for it to disagree with */
+ * slot — two answers where the interpreted class has one. `__annotations__` and 3.14's
+ * `__annotate__` are the exceptions, and `By_CarryAnnotations` says why: they fill no
+ * slot, so there is nothing for them to disagree with */
 static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
     Py_ssize_t index;
     for (index = 0; index < twins->count; index++) {
@@ -6803,6 +7000,7 @@ static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
         target = ((PyTypeObject *)type)->tp_dict;
         if (source == NULL || target == NULL) continue;
         if (By_CarryAnnotations(source, target, twins) < 0) return -1;
+        if (By_CarryAnnotate(source, target, twins) < 0) return -1;
         if (By_AdoptMethodTwins(source, target) < 0) return -1;
         /* ahead of the walk below, which leaves a name the target already holds alone —
          * and the target holds an `_abc_impl` of its own, the empty one it was built with */
@@ -8031,15 +8229,88 @@ static inline PyObject *By_FallbackCode(const By_Fallback *fallback) {
  * `PyEval_EvalCode` and `PyRun_String` reach the same evaluator by the same route, and
  * both take the builtins the frame runs against from `dict["__builtins__"]` — which is
  * what lets the capture below swap that entry and have it seen */
-static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject *dict) {
+/* run a module's interpreted twin in `dict`, handing back in `*ran` the code object that
+ * ran it, as a new reference
+ *
+ * the code object is what says which function each `def` statement made — see
+ * `By_DefinitionCodes` — so the source is compiled to one here rather than run straight
+ * from the text, under the name `PyRun_String` would have given it */
+static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject *dict,
+                                          PyObject **ran) {
     PyObject *code = By_FallbackCode(fallback), *result;
-    if (code != NULL) {
-        result = PyEval_EvalCode(code, dict, dict);
-        Py_DECREF(code);
-        return result;
+    *ran = NULL;
+    if (code == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        code = Py_CompileString(fallback->source, "<string>", Py_file_input);
+        if (code == NULL) return NULL;
     }
-    if (PyErr_Occurred()) return NULL;
-    return PyRun_String(fallback->source, Py_file_input, dict, dict);
+    result = PyEval_EvalCode(code, dict, dict);
+    if (result == NULL) {
+        Py_DECREF(code);
+        return NULL;
+    }
+    *ran = code;
+    return result;
+}
+
+/* the code of each function a module-level `def` statement makes, by name
+ *
+ * a `def` makes its function out of a code object compiled into the module's own — a
+ * constant of it, or of the scope a generic definition's type parameters are evaluated
+ * in — whose qualified name is the definition's. so those constants say which object the
+ * statement made, and nothing else can make one out of the same code without being handed
+ * it. every code object the module's reaches is asked, which a nested definition's
+ * qualified name keeps apart (`outer.<locals>.f`, `C.f`). a name two of them share is a
+ * module that defines it twice, and maps to `None`: neither can be told apart as the
+ * definition this module compiled */
+static int By_CollectDefinitionCodes(PyObject *codes, PyObject *code, int depth) {
+    PyObject *consts = ((PyCodeObject *)code)->co_consts;
+    Py_ssize_t at;
+    if (depth <= 0 || consts == NULL || !PyTuple_Check(consts)) return 0;
+    for (at = 0; at < PyTuple_GET_SIZE(consts); at++) {
+        PyObject *inner = PyTuple_GET_ITEM(consts, at);
+        PyObject *name;
+        int seen;
+        if (!PyCode_Check(inner)) continue;
+        name = ((PyCodeObject *)inner)->co_qualname;
+        seen = PyDict_Contains(codes, name);
+        if (seen < 0 || PyDict_SetItem(codes, name, seen ? Py_None : inner) < 0) return -1;
+        if (By_CollectDefinitionCodes(codes, inner, depth - 1) < 0) return -1;
+    }
+    return 0;
+}
+
+/* `By_CollectDefinitionCodes` over the code a module body ran, as a new reference, or NULL
+ * with an exception set. the walk is bounded because a code object's constants are as deep
+ * as the source nests, and python's own compiler stops well short of this */
+static inline PyObject *By_DefinitionCodes(PyObject *ran) {
+    PyObject *codes = PyDict_New();
+    if (codes == NULL || ran == NULL || !PyCode_Check(ran)) return codes;
+    if (By_CollectDefinitionCodes(codes, ran, 256) < 0) {
+        Py_DECREF(codes);
+        return NULL;
+    }
+    return codes;
+}
+
+/* the function the module-level `def name` statement made, where the name still holds it,
+ * borrowed; NULL where it does not
+ *
+ * the module body runs before anything is installed, and a body can write over a name in
+ * ways no reading of the source sees: `globals()["f"] = g`, a helper handed `globals()`, an
+ * `exec`, a star import of an accelerator module. publishing the native under the name
+ * would throw that write away and answer with the definition python no longer has. so a
+ * definition is published only where the name still holds the function whose code is the
+ * statement's own (see `By_DefinitionCodes`), and is otherwise left as the module body
+ * left it */
+static inline PyObject *By_DefinitionStanding(PyObject *dict, const char *name,
+                                              PyObject *codes) {
+    PyObject *held = PyDict_GetItemString(dict, name);
+    PyObject *code;
+    if (held == NULL || codes == NULL || !PyFunction_Check(held)) return NULL;
+    code = PyDict_GetItemString(codes, name);
+    if (code == NULL || code == Py_None || PyFunction_GET_CODE(held) != code) return NULL;
+    return held;
 }
 
 /* run a module's interpreted twin, capturing each class body before its decorators run
@@ -8082,9 +8353,11 @@ static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject 
  * `{name: class}` alongside it, the class each of those statements built before any
  * decorator was handed it, and `*bound` is given `{name: (class, dict)}` for each statement
  * the twin wrote `@__build_class__(...)` over — see `By_RecordBound` — each as a new
- * reference or NULL */
+ * reference or NULL. `*ran` is given the code object the body ran, as `By_ExecModuleBody`
+ * hands it back */
 static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *dict,
-                                         PyObject **statements, PyObject **bound) {
+                                         PyObject **statements, PyObject **bound,
+                                         PyObject **ran) {
     static PyMethodDef capture = {"__build_class__",
                                   (PyCFunction)(void (*)(void))By_CaptureClassBody,
                                   METH_VARARGS | METH_KEYWORDS, NULL};
@@ -8133,7 +8406,8 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     failed = failed || wrapper == NULL
              || PyDict_SetItemString(dict, "__builtins__", stood) < 0
              || PyDict_SetItemString(mapping, "__build_class__", wrapper) < 0;
-    result = failed ? NULL : By_ExecModuleBody(fallback, dict);
+    *ran = NULL;
+    result = failed ? NULL : By_ExecModuleBody(fallback, dict, ran);
     Py_XDECREF(result);
     /* whatever the body did, the capture stops here */
     if (state != NULL) {
@@ -8155,6 +8429,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
         Py_DECREF(bodies);
         Py_CLEAR(*statements);
         Py_CLEAR(*bound);
+        Py_CLEAR(*ran);
         return NULL;
     }
     return bodies;
@@ -8164,6 +8439,29 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
 static inline PyObject *By_ClassBody(PyObject *bodies, const char *name) {
     if (bodies == NULL) return NULL;
     return PyDict_GetItemString(bodies, name);
+}
+
+/* whether a class's name no longer holds what its `class` statement bound, so that
+ * installing the type over it would throw away a write the module body made
+ *
+ * what the statement bound is the class it built (see `By_CaptureClassBody`) — init
+ * applies a compiled class's decorators itself, and the twin's statement carries none —
+ * or, where `rebuilt` says the twin's own decorator made the class again, what the
+ * statement's record says it bound (see `By_RecordBound`). a class with no record is a
+ * question that cannot be asked, and is answered the way that cannot be wrong. compiled
+ * code reaches a class without going through its name, so this is the whole module's
+ * refusal rather than the class's */
+static inline int By_ClassNameMoved(PyObject *statements, PyObject *bound, PyObject *dict,
+                                    const char *name, int rebuilt) {
+    PyObject *made;
+    if (rebuilt) {
+        PyObject *record = By_ClassBody(bound, name);
+        if (record == NULL || !PyTuple_Check(record) || PyTuple_GET_SIZE(record) != 2) return 1;
+        made = PyTuple_GET_ITEM(record, 0);
+    } else {
+        made = By_ClassBody(statements, name);
+    }
+    return made == NULL || PyDict_GetItemString(dict, name) != made;
 }
 
 /* whether `a` and `b` hold different objects under `key`, absence included */
@@ -8218,8 +8516,9 @@ static inline int By_DunderApart(PyObject *now, PyObject *body, PyObject *key) {
  *   those accesses looks. NULL for a class whose every access is checked, which copes with
  *   a rewrite as it copes with one made after import
  *
- * a class whose name no longer holds what its statement built is left alone, as
- * `By_CarryRewrittenMembers` leaves it. `rebuilt` says the twin is a `data class`, which
+ * a class whose name no longer holds what its statement built is left alone here, as
+ * `By_CarryRewrittenMembers` leaves it: `By_ClassNameMoved` stands the module down for it
+ * on its own account. `rebuilt` says the twin is a `data class`, which
  * `@dataclass(slots=True)` made again out of what the statement built and wrote every
  * dunder it generates onto — so what that class is read against is not the body but what
  * the statement *bound*, after its decorators, which `bound` recorded (see
@@ -11483,13 +11782,19 @@ static inline PyObject *By_BuiltForwarder(PyObject *staging, const char *name) {
 /* bind each built forwarder under the name its definition holds, which is the moment
  * the definition stops being what that name means
  *
+ * `stands` says, forwarder by forwarder, whether the name still holds the definition —
+ * see `By_DefinitionStanding`. one the module body wrote over keeps what the body wrote.
+ *
  * the installer took itself back out of the *copy* it was handed, so the module's own
  * namespace is still carrying it and this is where that is undone */
 static inline int By_InstallForwarders(PyObject *dict, PyObject *staging, PyMethodDef *methods,
-                                       Py_ssize_t count, const char *installer) {
+                                       Py_ssize_t count, const char *installer,
+                                       const char *stands) {
     Py_ssize_t at;
     for (at = 0; at < count; at++) {
-        PyObject *built = By_BuiltForwarder(staging, methods[at].ml_name);
+        PyObject *built;
+        if (!stands[at]) continue;
+        built = By_BuiltForwarder(staging, methods[at].ml_name);
         if (built == NULL) {
             PyErr_Format(PyExc_ImportError,
                          "this module's installer published no forwarder for '%s'",

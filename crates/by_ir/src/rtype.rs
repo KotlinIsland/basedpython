@@ -263,11 +263,14 @@ impl RType {
 
     /// whether a value of this type is, or holds as an element, a reference to an
     /// object — something that may have a finalizer, or hold one that does
+    ///
+    /// a tagged `int` is one. its pointer case is an exact `int` too wide for the tag or an
+    /// `int` subclass kept as itself, and a subclass can write `__del__`
     pub fn holds_object_reference(&self) -> bool {
         match self {
             Self::Tuple(items) => items.iter().any(Self::holds_object_reference),
             Self::Array(element) => element.holds_object_reference(),
-            _ => self.is_object_reference(),
+            _ => self.owns_one_reference(),
         }
     }
 
