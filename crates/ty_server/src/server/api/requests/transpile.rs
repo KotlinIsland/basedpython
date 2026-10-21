@@ -117,20 +117,22 @@ impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
         let document = ruff_db::source::source_text(db, file);
         let source = params.source.as_deref().unwrap_or(document.as_str());
 
-        // Reverse always goes through the text form: the rewrite is syntactic, and there is no
-        // python project db to infer against. Forward uses the project db when it is the whole
-        // document that was asked about — that is the reason for answering here, since cross-module
-        // types resolve — and the single-file path for a fragment, which has no module to resolve
-        // against however it is transpiled.
-        // Both forward paths run on a thread that has attached no database — see
-        // [`super::detached_transpile`]. Every forward transpile builds a database of its
-        // own, and doing that under this handler's attached one panics; the reverse
-        // direction is purely syntactic and needs no database at all, so it stays here.
+        // Reverse always goes through the text form: there is no python project db to infer
+        // against. Forward uses the project db when it is the whole document that was asked
+        // about — that is the reason for answering here, since cross-module types resolve — and
+        // the single-file path for a fragment, which has no module to resolve against however it
+        // is transpiled.
+        // Every path runs on a thread that has attached no database — see
+        // [`super::detached_transpile`]. Each builds a database of its own, the reverse
+        // direction included (it reads a semantic model of the source for its literal,
+        // subscript and callable rewrites), and doing that under this handler's attached one
+        // panics.
         let owned = db.dyn_clone();
         let response = if params.reverse {
-            match by_transforms::reverse_transpile(source, &config) {
-                Ok(out) => TranspileResponse::generated(out),
-                Err(error) => TranspileResponse::failed(error),
+            match transpile_detached(move || by_transforms::reverse_transpile(source, &config)) {
+                Ok(Ok(out)) => TranspileResponse::generated(out),
+                Ok(Err(error)) => TranspileResponse::failed(error),
+                Err(()) => TranspileResponse::failed("the transpiler panicked".to_owned()),
             }
         } else {
             let fragment = params.source.is_some();

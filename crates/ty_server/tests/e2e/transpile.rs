@@ -123,6 +123,44 @@ fn transpiling_a_document_answers_rather_than_panicking() -> Result<()> {
     Ok(())
 }
 
+/// The reverse direction, python in and basedpython out, which builds an in-memory
+/// database of its own to read a semantic model of the source — so it needs the
+/// detached thread as much as the forward one does.
+#[test]
+fn reverse_transpiling_a_document_answers_rather_than_panicking() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/legacy.py");
+    let content = "def f(x: int | None) -> int:\n    return x if x is not None else 0\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(main, content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, content, 1);
+    let uri = server.file_uri(main);
+
+    let response = server
+        .send_request_await::<Transpile>(TranspileParams {
+            reverse: true,
+            ..params(&uri, None)
+        })
+        .expect("the server answered nothing at all");
+
+    assert!(
+        response.error.is_none(),
+        "reverse transpile failed: {:?}",
+        response.error
+    );
+    let generated = response.source.expect("no generated source");
+    assert!(
+        generated.contains("return x ?? 0"),
+        "unexpected output:\n{generated}"
+    );
+    Ok(())
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TranspileForBuildParams {
