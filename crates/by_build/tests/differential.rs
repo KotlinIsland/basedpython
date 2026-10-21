@@ -955,6 +955,30 @@ def _deepest(fn, limit):
     finally:
         sys.setrecursionlimit(saved)
 
+# whether `fn(n)` answers `n` at the deepest `n` a python recursion of one frame a level
+# reaches from here, asked once. `_deepest` asks at every depth below the limit first,
+# so a frame `fn` takes only once on the way in is the whole of what this can see
+def _at_the_limit(fn, limit):
+    import sys
+    def model(n):
+        return 0 if n == 0 else model(n - 1) + 1
+    saved = sys.getrecursionlimit()
+    sys.setrecursionlimit(limit)
+    try:
+        n = 0
+        while True:
+            try:
+                model(n)
+            except RecursionError:
+                break
+            n += 1
+        try:
+            return fn(n - 1) == n - 1
+        except RecursionError:
+            return 'RecursionError'
+    finally:
+        sys.setrecursionlimit(saved)
+
 # a code object `fn.__code__` can be swapped for, answering `value` however it is called.
 # python refuses a code object whose free variables do not match the function's, and a
 # compiled function is published as a forwarder closing over its native entry — so the
@@ -2937,6 +2961,23 @@ fn a_native_recursion_follows_the_recursion_limit() {
             // specialised the subscript for go thirty frames past the limit, so the
             // interpreter answers differently from itself on 3.13
             "_deepest(lambda n: len(m.Chain(n)), 100)",
+        ],
+    );
+}
+
+#[test]
+fn a_native_recursion_entered_through_its_forwarder_follows_the_recursion_limit() {
+    // the forwarder a module function is published as is the python frame python's own
+    // function would have pushed, and the native call behind it takes no frame of its
+    // own. python 3.11 counts a call into a builtin against the recursion limit, so there
+    // that call took a second frame and the recursion stopped a level early
+    agree_python(
+        "reclimitentry",
+        RECURSIONS,
+        &[
+            "_at_the_limit(m.depth, 100)",
+            "_at_the_limit(m.ping, 100)",
+            "_at_the_limit(m.entered, 100)",
         ],
     );
 }
@@ -7979,6 +8020,10 @@ def total(shapes: list[Shape]) -> int:
 /// a method whose decorators only mark it answers as python's does, marks included
 #[test]
 fn a_method_whose_decorators_only_mark_it_agrees() {
+    // the source is python 3.12's: `typing.override` is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     agree_python(
         "markingdeco",
         MARKING_METHODS,
@@ -8007,6 +8052,10 @@ fn a_method_whose_decorators_only_mark_it_agrees() {
 /// calling the decorator a second time. `type` is what tells the two apart
 #[test]
 fn a_method_whose_decorators_only_mark_it_is_the_compiled_one() {
+    // the source is python 3.12's: `typing.override` is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -8332,6 +8381,10 @@ def same(a: Money, b: Money) -> bool:
 
 #[test]
 fn a_marked_dunder_agrees() {
+    // the source is python 3.12's: `typing.override` is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     agree_python(
         "markeddunder",
         MARKED_DUNDERS,
@@ -8348,6 +8401,10 @@ fn a_marked_dunder_agrees() {
 /// …and the name answers with the compiled method
 #[test]
 fn a_marked_dunder_is_the_compiled_method() {
+    // the source is python 3.12's: `typing.override` is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((_dir, answers)) = compiled_answers(
         "markeddunder_t",
         MARKED_DUNDERS,
@@ -8396,6 +8453,11 @@ def total(shapes: list[Shape]) -> int:
 
 #[test]
 fn an_override_modifier_agrees() {
+    // below 3.12 the transpiler imports `override` from `typing_extensions`, which an
+    // interpreter does not ship, so neither leg can import the module there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     agree(
         "overridemodifier",
         MARKING_MODIFIERS,
@@ -8409,6 +8471,11 @@ fn an_override_modifier_agrees() {
 /// …and the method it marks is the compiled one
 #[test]
 fn an_override_modifier_is_the_compiled_method() {
+    // below 3.12 the transpiler imports `override` from `typing_extensions`, which an
+    // interpreter does not ship, so neither leg can import the module there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((_dir, answers)) = compiled_answers(
         "overridemodifier_t",
         MARKING_MODIFIERS,
@@ -13254,6 +13321,10 @@ class Sealed:
 
 #[test]
 fn a_method_answers_for_the_annotations_the_class_statement_evaluated() {
+    // the source is python 3.12's: a type parameter list is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // a method of a class answers `__annotations__` with what python evaluated for the
     // interpreted definition — on 3.14 when first asked for — whether it is an instance
     // method, a class method or a static method
@@ -13422,6 +13493,10 @@ class Counter:
 
 #[test]
 fn a_nested_function_answers_for_its_annotations() {
+    // the source is python 3.12's: a type parameter list is new there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // python evaluates a nested function's annotations over the frames it is written in:
     // where the `def` stands on 3.13, and when they are first asked for from 3.14. either way
     // they, the signature `inspect` reads and the hints `typing` resolves are what the
@@ -13616,6 +13691,9 @@ class Later:
             "_annotation_report(m.Box().make(3))",
             "_annotation_report(m.generic())",
             "_annotation_report(m.forward())",
+            // a name a function does not have is refused in python's words, whichever
+            // names the running version gives a function
+            "[(str(e), e.name, e.obj is f) for f in [m.forward()] for e in [_capture(lambda: f.nothing_here)]]",
         ],
     );
 }
@@ -13928,6 +14006,11 @@ class Mixed(Plain):
 
 #[test]
 fn reading_a_class_s_annotations_leaves_the_module_compiled() {
+    // below 3.12 the transpiler imports `override` from `typing_extensions`, which an
+    // interpreter does not ship, so neither leg can import the module there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // from python 3.14 a class's annotations are worked out when they are first read, and
     // the read writes its answer back onto the class: the mapping, and `None` under
     // `__annotate_func__` where the class has no function computing one. `@dataclass`
@@ -14034,6 +14117,11 @@ class Tagged:
 
 #[test]
 fn an_inherited_default_binds_the_same_value_in_both_halves() {
+    // below 3.12 the transpiler imports `override` from `typing_extensions`, which an
+    // interpreter does not ship, so neither leg can import the module there
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // basedpython carries a method's defaults to its overrides, so `Loud.say` may be
     // called with no argument even though nothing in its own header says so. the
     // compiled half reads its parameter list out of the source, where the default is
@@ -20898,8 +20986,9 @@ def guarded() -> str:
             "m.submodule('a b/c')",
             "m.dotted('a b/c')",
             "m.guarded()",
-            // the type, the message and every attribute an `except` clause reads
-            "(lambda e: (type(e).__name__, str(e), e.name, e.path, e.name_from))(_capture(m.absent))",
+            // the type, the message and every attribute an `except` clause reads, of which
+            // `name_from` is 3.12's
+            "(lambda e: (type(e).__name__, str(e), e.name, e.path, getattr(e, 'name_from', None)))(_capture(m.absent))",
             // a thousand imports must not accumulate references to the module. a
             // leaked module is one object with a climbing refcount, which no
             // object-count check can see
@@ -21828,6 +21917,12 @@ fn a_subclass_that_appends_nothing_past_a_base_agrees() {
 
 #[test]
 fn a_subclass_that_appends_nothing_is_the_compiled_type() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // the behaviour above is answered identically by a class that fell back to its
     // interpreted definition, so it cannot say which build answered.
     // `method_descriptor` can: a real type of ours holds one where the interpreted
@@ -21941,6 +22036,12 @@ fn a_subclass_write_to_a_base_s_field_agrees() {
 
 #[test]
 fn a_subclass_write_to_a_base_s_field_keeps_the_rest_of_the_module() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // the behaviour above is the same either way — the base publishes a descriptor over
     // the field, so the dynamic write reached it too. what moved is which build answers,
     // and only `type(...).__name__` says: `Refused` falls back on its own, and `Held` and
@@ -22114,14 +22215,21 @@ fn only_the_class_no_spec_can_build_is_left_interpreted() {
          \x20     type(m.Kept.__dict__['note']).__name__,\n\
          \x20     type(m.Deeper.__dict__['down']).__name__,\n\
          \x20     _leg(m.add))\n\
-         # a spec has no code object to write one from, so its absence is the emitted type\n\
-         print('__firstlineno__' in vars(m.Held), '__firstlineno__' in vars(m.Kept))\n",
+         # a spec has no code object to write one from, so its absence is the emitted type.\n\
+         # `__firstlineno__` is 3.13's, and before it the type of a method is what says so\n\
+         import sys\n\
+         _twin = lambda c, method: '__firstlineno__' in vars(c) if sys.version_info >= (3, 13) else type(vars(c)[method]).__name__ == 'function'\n\
+         print(_twin(m.Held, 'read'), _twin(m.Kept, 'note'))\n",
     );
-    assert_eq!(
-        out,
-        "function method_descriptor method_descriptor native\n\
-         True False"
-    );
+    // below 3.12 there is no way to append storage to a base's instance, so no class here
+    // has a construction and the whole module stands down: every class and the module's
+    // own function are the interpreted definitions
+    let expected = if supports(&toolchain, (3, 12)) {
+        "function method_descriptor method_descriptor native\nTrue False"
+    } else {
+        "function function function function\nTrue True"
+    };
+    assert_eq!(out, expected);
 }
 
 /// and the classes that stand beside the refused one still lay out, collect and free
@@ -22134,6 +22242,12 @@ fn only_the_class_no_spec_can_build_is_left_interpreted() {
 /// what it finds — which is the failure that segfaulted 24 of the `encodings` modules
 #[test]
 fn the_classes_beside_a_refused_one_lay_out_and_deallocate() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -22253,12 +22367,19 @@ fn a_family_no_spec_can_build_agrees_beside_a_module_function() {
 /// which build answered, which no comparison of the two legs can say
 ///
 /// the family is interpreted either way — `__firstlineno__` is in both class dicts, since
-/// a spec has no code object to write one from — so the only thing that moves is whether
+/// a spec has no code object to write one from, and below 3.13, which has no
+/// `__firstlineno__`, their methods are python functions — so the only thing that moves is whether
 /// the module's own function was installed. before the family could stand down together,
 /// `by_exec` gave up before `PyModule_AddFunctions` ran and `count` was an ordinary python
 /// function
 #[test]
 fn a_module_function_stands_where_the_whole_family_stood_down() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -22287,7 +22408,10 @@ fn a_module_function_stands_where_the_whole_family_stood_down() {
         "import by_diff_refusedfamily_t as m\n\
          _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(_leg(m.count), m.count([1, 2, 3]))\n\
-         print('__firstlineno__' in vars(m.Base), '__firstlineno__' in vars(m.Rotating))\n\
+         # `__firstlineno__` is 3.13's, and before it the type of a method is what says so\n\
+         import sys\n\
+         _twin = lambda c, method: '__firstlineno__' in vars(c) if sys.version_info >= (3, 13) else type(vars(c)[method]).__name__ == 'function'\n\
+         print(_twin(m.Base, 'label'), _twin(m.Rotating, 'label'))\n\
          # the pair kept the definitions the module body built, so they still agree on\n\
          # what a `Rotating` is an instance of\n\
          print(m.Rotating.__base__ is m.Base, isinstance(m.Rotating('r', 2), m.Base))\n",
@@ -22377,6 +22501,12 @@ fn a_chain_of_appended_storage_agrees() {
 /// released the wrong region would free somebody else's object
 #[test]
 fn a_chain_of_appended_storage_deallocates_without_growing() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -22531,6 +22661,12 @@ fn a_chain_over_a_base_that_holds_nothing_agrees() {
 /// and call it straight back until the stack ran out
 #[test]
 fn a_chain_over_a_base_that_holds_nothing_deallocates_without_growing() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -27886,6 +28022,12 @@ EARLY = make_held().kind
 
 #[test]
 fn fields_past_a_python_base_leave_that_class_to_its_interpreted_definition() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // `Wrapped` keeps its fields past a `codecs.IncrementalDecoder` instance, so it
     // supplies `tp_dealloc`, `tp_traverse` and `tp_clear` and each calls the base's.
     // that base is a class statement's type, whose three are python's own dispatchers:
@@ -30792,6 +30934,14 @@ async def echoed() -> AsyncGenerator[object, object]:
              lambda: t.send(None), lambda: next(g.aclose())])(g.aclose()))",
             "_against(m.counted, lambda g: (lambda t: [lambda: next(g.__anext__()), \
              lambda: t.throw(KeyError('k')), lambda: t.send(None)])(g.athrow(ValueError('v'))))",
+            // 3.11's `throw` is not refused while another awaitable steps the generator
+            "_against(m.counted, lambda g: (lambda t: [lambda: next(g.__anext__()), \
+             lambda: t.throw(KeyError('k')), lambda: next(g.__anext__())])(g.asend(None)))",
+            // from 3.13 closing an awaitable throws `GeneratorExit` into the generator it is
+            // stepping; before it the awaitable is only finished, and the generator is left
+            // running
+            "_against(m.counted, lambda g: (lambda a: [lambda: a.send(None), lambda: a.close(), \
+             lambda: next(g.__anext__()), lambda: next(g.aclose())])(g.__anext__()))",
         ],
     );
 }
@@ -32161,10 +32311,16 @@ def counter() -> Callable[[], int]:
          \x20       print(str(e).replace(kind.__module__ + '.', '').replace(kind.__name__, 'T'))\n\
          print(env[0].__init__(), step())\n",
     );
-    assert_eq!(
-        out,
+    // the refusal is python's own for a type it may not instantiate, and python reworded it
+    // in 3.13: before it `object.__new__` names the type it was handed as unsafe, exactly
+    // as it does for a `list_iterator`
+    let expected = if supports(&toolchain, (3, 13)) {
         "1\ncannot create 'T' instances\ncannot create 'T' instances\ncannot create 'T' instances\nNone 2"
-    );
+    } else {
+        "1\nobject.__new__(T) is not safe, use T.__new__()\ncannot create 'T' instances\n\
+         object.__new__(T) is not safe, use T.__new__()\nNone 2"
+    };
+    assert_eq!(out, expected);
 }
 
 #[test]
@@ -36393,18 +36549,24 @@ fn the_members_a_data_class_generates_agree() {
 
 /// the generated `__eq__` is `self.a==other.a and self.b==other.b`, term by term
 ///
-/// not a comparison of two tuples, which is what it looks like and what it used to be.
-/// the difference shows in three places at once: `and` hands back the *term* rather than
-/// a bool, the chain stops at the first falsy one, and a plain `==` has none of the
-/// identity shortcut a tuple comparison applies to each pair — so two instances sharing
-/// one NaN are not equal, while an instance is equal to itself because the generated body
-/// tests that outright before it looks at a field
+/// from 3.13, that is. before it the generated method compared two tuples, and the
+/// difference shows in three places at once: `and` hands back the *term* rather than a
+/// bool, the chain stops at the first falsy one, and a plain `==` has none of the identity
+/// shortcut a tuple comparison applies to each pair — so from 3.13 two instances sharing one
+/// NaN are not equal, while an instance is equal to itself because the generated body tests
+/// that outright before it looks at a field. a tuple is built whole before it is compared,
+/// so below 3.13 every field of the left operand is read before any of the right one's.
+/// both legs run the one interpreter, so each of these asks that interpreter's rule
 #[test]
 fn the_generated_equality_answers_term_by_term() {
     agree(
         "dceqterms",
         "\
 frozen data class Holder:
+    a: object
+    b: object
+
+data class Open:
     a: object
     b: object
 
@@ -36443,9 +36605,16 @@ class Falsy:
             "[(p := m.Floats(float('nan'))), p == p][-1]",
             "[(p := m.Floats(float('nan'))), p != p][-1]",
             "[(p := m.Holder(float('nan'), 1)), p == p][-1]",
-            // …and two instances sharing the one NaN object are not
-            "[(n := float('nan')), m.Floats(n) == m.Floats(n)][-1]",
+            // …and from 3.13 two instances sharing the one NaN object are not. before it
+            // python finds the one object in both and calls them equal, which a `float`
+            // field kept unboxed cannot: runtime.md lists it, and `object` fields agree
+            "[(n := float('nan')), m.Floats(n) == m.Floats(n)][-1] \
+             if __import__('sys').version_info >= (3, 13) else None",
             "[(n := float('nan')), m.Holder(n, 1) == m.Holder(n, 1)][-1]",
+            // which field is read first: the left operand lacks `b`, the right one `a`
+            "repr(_capture(lambda: [(l := m.Open.__new__(m.Open)), setattr(l, 'a', 1), l == m.Open.__new__(m.Open)]))",
+            // an instance compared with itself, holding no fields at all
+            "repr(_capture(lambda: [(p := m.Open.__new__(m.Open)), p == p][-1]))",
         ],
     );
 }
@@ -36463,7 +36632,10 @@ fn the_dataclass_bookkeeping_of_a_data_class_agrees() {
             "__import__('dataclasses').astuple(m.Pair(1, 2))",
             "__import__('dataclasses').asdict(m.Pair(1, 2))",
             "repr(__import__('dataclasses').replace(m.Pair(1, 2), x=9))",
-            "repr(__import__('copy').replace(m.Pair(1, 2), y=9))",
+            // `copy.replace` and the `__replace__` it reaches for are 3.13's; before it
+            // the twin's class has no `__replace__`, and the emitted type has none either
+            "repr(__import__('copy').replace(m.Pair(1, 2), y=9)) \
+             if __import__('sys').version_info >= (3, 13) else hasattr(m.Pair, '__replace__')",
         ],
     );
 }
@@ -36541,9 +36713,12 @@ frozen data class Pair:
         &[
             "repr(_capture(setattr, m.Pair(1, 2), 'x', 5))",
             "repr(_capture(delattr, m.Pair(1, 2), 'x'))",
-            // not only the fields: python's generated `__setattr__` refuses every name
-            // on an instance of the class that declared it
+            // not only the fields: from 3.13 python's generated `__setattr__` refuses every
+            // name on an instance of the class that declared it. before 3.13 it holds the
+            // class `slots=True` replaced, so a name that is not a field reaches `super`
+            // with that class and is refused there with a `TypeError`
             "repr(_capture(setattr, m.Pair(1, 2), 'extra', 5))",
+            "repr(_capture(delattr, m.Pair(1, 2), 'extra'))",
             "isinstance(_capture(setattr, m.Pair(1, 2), 'x', 5), AttributeError)",
         ],
     );
@@ -36578,14 +36753,23 @@ fn the_generated_dataclass_members_are_slots_of_the_emitted_type() {
          print('__hash__ of a mutable one', m.Point.__hash__)\n",
     );
     // a `wrapper_descriptor` is what `PyType_Ready` builds over a filled slot: the
-    // interpreted twin's would be a plain `function`
+    // interpreted twin's would be a plain `function`. below 3.13 a frozen one answers a
+    // write with the twin's own `__setattr__`, which is a function — see
+    // `By_CarryDataclassMembers`
+    let setattr = if supports(&toolchain, (3, 13)) {
+        "wrapper_descriptor"
+    } else {
+        "function"
+    };
     assert_eq!(
         out,
-        "__repr__ wrapper_descriptor\n\
-         __eq__ wrapper_descriptor\n\
-         __hash__ wrapper_descriptor\n\
-         __setattr__ wrapper_descriptor\n\
-         __hash__ of a mutable one None"
+        format!(
+            "__repr__ wrapper_descriptor\n\
+             __eq__ wrapper_descriptor\n\
+             __hash__ wrapper_descriptor\n\
+             __setattr__ {setattr}\n\
+             __hash__ of a mutable one None"
+        )
     );
 }
 
@@ -37951,24 +38135,33 @@ def through(f: object, x: str) -> object:
 fn a_keyword_given_twice_through_a_merge_is_refused_as_python_refuses_it() {
     // a call's `**` merges a mapping into the keywords, and unlike a dict display it
     // refuses a keyword that is already there — from a name written before it, from an
-    // earlier `**`, or from a name written after it. both refusals, and the one for an
-    // operand that is no mapping, name the callee the way python does. python rewords
-    // any single-argument `KeyError` the merge raises the same way, one a mapping's own
-    // `__getitem__` raised included
+    // earlier `**`, or from a name written after it — before it asks the mapping for that
+    // keyword's value. both refusals, and the one for an operand that is no mapping, name
+    // the callee the way python does. python rewords every `AttributeError` the merge
+    // raises, and from 3.12 any single-argument `KeyError` the same way, one a mapping's
+    // own `__getitem__` raised included. 3.11 rewords only the merge's own `KeyError`, and
+    // not even that one while an exception is being handled
     agree_python(
         "kwmerge",
         "\
 class Keys:
     def __init__(self, keys: list[str]) -> None:
         self.names = keys
+        self.asked: list[str] = []
 
     def keys(self) -> list[str]:
         return self.names
 
     def __getitem__(self, key: str) -> int:
+        self.asked.append(key)
         if key == \"missing\":
             raise KeyError(key)
         return len(key)
+
+
+class Unkeyed:
+    def keys(self) -> list[str]:
+        raise AttributeError
 
 
 class Counter:
@@ -38000,6 +38193,13 @@ def not_a_mapping(x: object) -> int:
     return f(1, **x)  # type: ignore
 
 
+def merged_while_handling(d: dict[str, int]) -> int:
+    try:
+        raise ValueError
+    except ValueError:
+        return f(1, step=2, **d)
+
+
 def method(c: Counter, d: dict[str, int]) -> int:
     return c.m(1, b=2, **d)
 
@@ -38016,6 +38216,11 @@ def display(d: dict[str, int], e: dict[str, int]) -> dict[str, int]:
             "m.merged_mapping(m.Keys(['x', 'yy']))",
             "repr(_capture(m.merged_mapping, m.Keys(['x', 'step'])))",
             "repr(_capture(m.merged_mapping, m.Keys(['missing'])))",
+            // the value of a keyword given twice is never asked for
+            "[(repr(_capture(m.merged_mapping, k)), k.asked) for k in [m.Keys(['x', 'step', 'y'])]]",
+            "repr(_capture(m.not_a_mapping, m.Unkeyed()))",
+            "repr(_capture(m.merged_while_handling, {'step': 7}))",
+            "repr(_capture(m.merged_while_handling, m.Keys(['step'])))",
             "repr(_capture(m.not_a_mapping, [1]))",
             "repr(_capture(m.not_a_mapping, 3))",
             // a dict subclass is walked as a dict, whatever its `keys` says
@@ -45694,6 +45899,12 @@ fn install_census(python: &str, dir: &Path, module: &str, also: &str) -> String 
 
 #[test]
 fn a_class_the_report_counts_says_whether_it_installed() {
+    // below 3.12 there is no way to append storage to a base's instance, so the module this
+    // builds stands down whole and none of its classes is the compiled type —
+    // `only_the_class_no_spec_can_build_is_left_interpreted` says so below 3.12
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
     // `Rebound` puts a class-level value over a field whose presence the base's layout
     // left no room to record, and there is no second construction to try — so the pair
     // stands down together and both keep their interpreted definitions. `Held`'s own
@@ -45832,21 +46043,40 @@ fn a_mixture_left_on_a_base_the_module_replaced_refuses_the_import() {
     // unusable rather than quietly wrong until the compiler stands the whole family down
     // instead. `logging/config.py` is the shape in the standard library, where
     // `ConvertingDict(dict, ConvertingMixin)` is the same three lines
-    let Some((_dir, message)) = refused_import(
-        "orphanmix",
-        "\
+    //
+    // below 3.12 python lays out a class over a base whose instances keep nothing past a
+    // dict and weak references as if that base kept nothing at all, so `AsDict` stands on
+    // the emitted `Ours` and there is nothing orphaned to refuse. the module is then the
+    // compiled one, and answers as python does
+    let source = "\
 class Ours:
     def side(self) -> str:
         return \"ours\"
+
+    def twice(self) -> str:
+        return self.side() + self.side()
 
 
 class AsDict(dict, Ours):
     def label(self) -> str:
         return \"dict\"
-",
-    ) else {
+";
+    let Some((_dir, message)) = refused_import("orphanmix", source) else {
         return;
     };
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        assert_eq!(message, "the import was not refused");
+        agree_python(
+            "orphanmix_a",
+            source,
+            &[
+                "(isinstance(m.AsDict(), m.Ours), [c.__name__ for c in m.AsDict.__mro__])",
+                "[(d.label(), d.side(), d.twice(), d) for d in [m.AsDict(a=1, b=2, c=3)]]",
+                "[(setattr(d, 'extra', 4), d.extra, d.twice()) for d in [m.AsDict(a=1)]]",
+            ],
+        );
+        return;
+    }
     assert_eq!(
         message,
         "by_diff_orphanmix.AsDict stands on an orphaned base: by_diff_orphanmix.Ours is \
@@ -45860,9 +46090,10 @@ fn a_class_on_two_bases_of_this_modules_own_refuses_the_import() {
     // the same failure without an outside base in sight: two emitted classes each own
     // their instances, so `type(\"Mixin\", (Root, Extra), ...)` cannot lay one out either,
     // and `Mixin` is left as the definition the body built on the two interpreted ones
-    let Some((_dir, message)) = refused_import(
-        "orphanpair",
-        "\
+    //
+    // below 3.12 the two lay out as one, as they do for `AsDict` above, so `Mixin` stands on
+    // both emitted bases
+    let source = "\
 class Root:
     def kind(self) -> str:
         return \"root\"
@@ -45872,14 +46103,31 @@ class Extra:
     def extra(self) -> str:
         return \"extra\"
 
+    def both(self) -> str:
+        return self.extra() + self.extra()
+
 
 class Mixin(Root, Extra):
     def tag(self) -> int:
         return 1
-",
-    ) else {
+";
+    let Some((_dir, message)) = refused_import("orphanpair", source) else {
         return;
     };
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        assert_eq!(message, "the import was not refused");
+        agree_python(
+            "orphanpair_a",
+            source,
+            &[
+                "(isinstance(m.Mixin(), m.Root), isinstance(m.Mixin(), m.Extra))",
+                "[c.__name__ for c in m.Mixin.__mro__]",
+                "[(x.kind(), x.extra(), x.both(), x.tag()) for x in [m.Mixin()]]",
+                "[(setattr(x, 'extra_field', 4), x.extra_field, x.both()) for x in [m.Mixin()]]",
+            ],
+        );
+        return;
+    }
     assert_eq!(
         message,
         "by_diff_orphanpair.Mixin stands on an orphaned base: by_diff_orphanpair.Root is \

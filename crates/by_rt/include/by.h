@@ -1734,7 +1734,9 @@ static inline int By_InlineIntCompare(PyObject *a, PyObject *b, int op) {
  * some class and each literal is an `int` or a `str` that refuses it. it also skips the
  * recursion guard `PyObject_RichCompare` enters, which costs one level of headroom once
  * rather than a level per round of a recursion that goes through it — the call it makes
- * next is counted either way. see runtime.md#how-deep-a-recursion-goes */
+ * next is counted either way. that holds from 3.12, where the guard is against the C stack;
+ * 3.11 counts it against the recursion limit, and there it is entered as python enters it.
+ * see runtime.md#how-deep-a-recursion-goes */
 static inline int By_RightOperandDecides(PyObject *a, PyObject *b, int op) {
     (void)b;
     return (op == Py_EQ || op == Py_NE) && a != b
@@ -1750,7 +1752,20 @@ static inline int By_RightOperandDecides(PyObject *a, PyObject *b, int op) {
 static inline PyObject *By_AskRightOperand(PyObject *a, PyObject *b, int op) {
     richcmpfunc other = Py_TYPE(b)->tp_richcompare;
     if (other == NULL) return Py_NewRef(Py_NotImplemented);
+#if PY_VERSION_HEX >= 0x030C0000
     return other(b, a, op);
+#else
+    /* 3.11 has one count for C calls and python frames, so the guard
+     * `PyObject_RichCompare` enters is a frame of the recursion limit there, and it is
+     * taken as python takes it */
+    {
+        PyObject *answer;
+        if (Py_EnterRecursiveCall(" in comparison")) return NULL;
+        answer = other(b, a, op);
+        Py_LeaveRecursiveCall();
+        return answer;
+    }
+#endif
 }
 
 /* `a <op> b` through the abstract protocol, as a bit — and 2 means an exception is set
@@ -1840,14 +1855,18 @@ static inline const char *By_TypeName(PyObject *o) {
  * out of line, because it is the rare branch beside every field read nothing proves
  * assigned, and building the message there made those reads' functions too big to
  * inline into their callers. `qualified` names the type in full, which is how a slot's
- * descriptor words it */
+ * descriptor words it from 3.13 — `%T` is 3.13's, and before it the descriptor named the
+ * type by its `tp_name`, which for the twin's class is the bare name */
 BY_COLD void By_FieldMissing(PyObject *o, const char *name, int qualified) {
+#if PY_VERSION_HEX >= 0x030D0000
     if (qualified) {
         PyErr_Format(PyExc_AttributeError, "'%T' object has no attribute '%s'", o, name);
-    } else {
-        PyErr_Format(PyExc_AttributeError, "'%s' object has no attribute '%s'", By_TypeName(o),
-                     name);
+        return;
     }
+#else
+    (void)qualified;
+#endif
+    PyErr_Format(PyExc_AttributeError, "'%s' object has no attribute '%s'", By_TypeName(o), name);
 }
 
 /* raise the `AttributeError` a descriptor with no setter raises, for a field that
@@ -4322,8 +4341,8 @@ static PyObject *By_ClassMethodCall(PyObject *fn, PyObject *const *args, size_t 
     return result;
 }
 
-static PyObject *By_Method_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf,
-                                      PyObject *kwnames) {
+static PyObject *By_Method_dispatch(PyObject *callable, PyObject *const *args, size_t nargsf,
+                                    PyObject *kwnames) {
     PyObject *fn = ((ByMethodObject *)callable)->fn;
     if (BY_LIKELY(Py_IS_TYPE(fn, &PyMethodDescr_Type))) {
         vectorcallfunc call = ((PyMethodDescrObject *)fn)->vectorcall;
@@ -4333,6 +4352,28 @@ static PyObject *By_Method_vectorcall(PyObject *callable, PyObject *const *args,
         return By_ClassMethodCall(fn, args, nargsf, kwnames);
     }
     return PyObject_Vectorcall(fn, args, nargsf, kwnames);
+}
+
+/* a call to a compiled method, which counts the frame python's method would have pushed
+ * itself, once the receiver is checked
+ *
+ * the builtin the call goes to enters a recursion of its own first. from 3.12 that is
+ * against the C stack's count, but 3.11 has one count for both, so there a call from
+ * python would have taken two frames where python's own method takes one. the frame
+ * is given back for the length of the call, which leaves the builtin's entry taking
+ * nothing and the compiled body's own count the only one, as on every later version */
+static PyObject *By_Method_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf,
+                                      PyObject *kwnames) {
+#if PY_VERSION_HEX >= 0x030C0000
+    return By_Method_dispatch(callable, args, nargsf, kwnames);
+#else
+    PyThreadState *thread = PyThreadState_Get();
+    PyObject *result;
+    thread->recursion_remaining++;
+    result = By_Method_dispatch(callable, args, nargsf, kwnames);
+    thread->recursion_remaining--;
+    return result;
+#endif
 }
 
 static PyObject *By_Method_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
@@ -7205,7 +7246,7 @@ static inline PyObject *By_DataclassRepr(PyObject *self, const By_DataField *fie
     return result;
 }
 
-/* the `__eq__` a `@dataclass` generates, which is
+/* the `__eq__` a `@dataclass` generates, which from 3.13 is
  *
  *     if self is other: return True
  *     if other.__class__ is self.__class__:
@@ -7225,7 +7266,22 @@ static inline PyObject *By_DataclassRepr(PyObject *self, const By_DataField *fie
  * something other than True or False is what the whole comparison answers with — and the
  * chain stops at the first falsy one. `__ne__` is not generated: python's own derives it
  * from this by negating, so the four ordering opcodes are refused here and `Py_NE` is the
- * negation `object.__ne__` would have produced */
+ * negation `object.__ne__` would have produced
+ *
+ * before 3.13 the generated method compares two tuples instead:
+ *
+ *     if other.__class__ is self.__class__:
+ *         return (self.a,self.b,)==(other.a,other.b,)
+ *     return NotImplemented
+ *
+ * which answers differently in all three of the places above: there is no identity test,
+ * so `p == p` reads every field of both; every field of `self` is read before any of
+ * `other`'s; and a tuple compares its items with `PyObject_RichCompareBool`, so a field
+ * shared by identity is equal whatever its `__eq__` says, and the answer is always a bool.
+ * a `float` field is kept as a number rather than an object, so two instances sharing one
+ * NaN object compare unequal here where python finds the one object in both — see
+ * runtime.md */
+#if PY_VERSION_HEX >= 0x030D0000
 static inline PyObject *By_DataclassEq(PyObject *self, PyObject *other, int op,
                                        const By_DataField *fields) {
     const By_DataField *field;
@@ -7265,6 +7321,51 @@ static inline PyObject *By_DataclassEq(PyObject *self, PyObject *other, int op,
     Py_DECREF(result);
     return PyBool_FromLong(!truthy);
 }
+#else
+/* each field of `obj` read into a tuple, in order, as `(obj.a,obj.b,)` builds it */
+static inline PyObject *By_DataclassTerms(PyObject *obj, const By_DataField *fields) {
+    Py_ssize_t count = 0;
+    Py_ssize_t at;
+    PyObject *values;
+    while (fields[count].name != NULL) count++;
+    values = PyTuple_New(count);
+    if (values == NULL) return NULL;
+    for (at = 0; at < count; at++) {
+        PyObject *value = fields[at].get(obj, NULL);
+        if (value == NULL) {
+            Py_DECREF(values);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(values, at, value);
+    }
+    return values;
+}
+
+static inline PyObject *By_DataclassEq(PyObject *self, PyObject *other, int op,
+                                       const By_DataField *fields) {
+    PyObject *mine;
+    PyObject *theirs;
+    int equal;
+    if (op != Py_EQ && op != Py_NE) Py_RETURN_NOTIMPLEMENTED;
+    if (Py_TYPE(self) != Py_TYPE(other)) Py_RETURN_NOTIMPLEMENTED;
+    mine = By_DataclassTerms(self, fields);
+    if (mine == NULL) return NULL;
+    /* an instance's fields read twice are the same objects twice in python, which keeps
+     * each in a slot. a field kept unboxed is boxed afresh on each read, so an instance
+     * compared with itself compares its one tuple with itself instead — what python
+     * reads twice it has already read once, and a read that could fail has failed */
+    theirs = self == other ? By_NewRef(mine) : By_DataclassTerms(other, fields);
+    if (theirs == NULL) {
+        Py_DECREF(mine);
+        return NULL;
+    }
+    equal = PyObject_RichCompareBool(mine, theirs, Py_EQ);
+    Py_DECREF(mine);
+    Py_DECREF(theirs);
+    if (equal < 0) return NULL;
+    return PyBool_FromLong(op == Py_EQ ? equal : !equal);
+}
+#endif
 
 /* `hash((self.a, self.b))`, which is what a frozen `@dataclass` hashes
  *
@@ -7313,7 +7414,9 @@ static inline PyObject *By_FrozenInstanceError(void) {
  *
  * python's pair refuses every name on an instance of the class that declared them, and
  * only a *subclass* instance writing a name that is not a field gets through to the
- * ordinary attribute machinery — which is why `owner` is asked about rather than assumed */
+ * ordinary attribute machinery — which is why `owner` is asked about rather than assumed.
+ * that is 3.13's pair; below it the twin's own pair stands in this slot's place, see
+ * `By_CarryDataclassMembers` */
 static inline int By_FrozenSetAttr(PyObject *self, PyObject *name, PyObject *value,
                             PyTypeObject *owner, const By_DataField *fields) {
     const By_DataField *field;
@@ -7379,6 +7482,41 @@ static inline int By_CarryDataclassMembers(PyObject *twin, PyObject *type) {
         if (PyDict_SetItemString(target, *name, value) < 0) return -1;
     }
     PyType_Modified((PyTypeObject *)type);
+#if PY_VERSION_HEX < 0x030D0000
+    /* below 3.13 a frozen data class answers a write with the twin's own `__setattr__`
+     * and `__delattr__`, in place of the slot.
+     *
+     * `slots=True` made the twin's class again and left the pair holding the class it
+     * replaced, so `type(self) is cls` never holds for any instance and a name that is not
+     * a field reaches `super(cls, self)`, which refuses it — and the same is true of an
+     * emitted instance, which is no instance of that class either. and a C-level setter
+     * would refuse something python allows: `object.__setattr__`, which the decorator's
+     * `__setstate__` restores a copy through, refuses an object whose type sets attributes
+     * in C of its own, where 3.13 asks that only of a type. assigning the pair is what a
+     * class statement does, and installs python's own dispatch over it */
+    {
+        static const char *const pair[] = {"__setattr__", "__delattr__", NULL};
+        PyTypeObject *emitted = (PyTypeObject *)type;
+        PyObject *params = PyDict_GetItemString(source, "__dataclass_params__");
+        PyObject *frozen = params == NULL ? NULL : PyObject_GetAttrString(params, "frozen");
+        int is_frozen;
+        if (params != NULL && frozen == NULL) return -1;
+        is_frozen = frozen == NULL ? 0 : PyObject_IsTrue(frozen);
+        Py_XDECREF(frozen);
+        if (is_frozen < 0) return -1;
+        if (is_frozen) {
+            unsigned long immutable = emitted->tp_flags & Py_TPFLAGS_IMMUTABLETYPE;
+            int failed = 0;
+            emitted->tp_flags &= ~Py_TPFLAGS_IMMUTABLETYPE;
+            for (name = pair; *name != NULL && !failed; name++) {
+                PyObject *value = PyDict_GetItemString(source, *name);
+                if (value != NULL) failed = PyObject_SetAttrString(type, *name, value) < 0;
+            }
+            emitted->tp_flags |= immutable;
+            if (failed) return -1;
+        }
+    }
+#endif
     return 0;
 }
 
@@ -11226,28 +11364,57 @@ done:
     return result;
 }
 
+/* the name python's own messages give `type` where they format its `tp_name`
+ *
+ * for the type a class statement makes that is its bare name. a type this compiler built
+ * from a spec carries its module in `tp_name` as well, and the bare name in `__name__`,
+ * which is what the interpreted definition's type has in both — so a heap type is named by
+ * its `__name__`, and anything else by its `tp_name` as python names it */
+static inline const char *By_TypeNameAsPython(PyTypeObject *type) {
+    if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
+        const char *name = PyUnicode_AsUTF8(((PyHeapTypeObject *)type)->ht_name);
+        if (name != NULL) return name;
+        PyErr_Clear();
+    }
+    return type->tp_name;
+}
+
 /* the error a failed merge into a call's keywords reports, in python's words
  *
- * python rewords the two errors a merge raises with a single argument, whatever raised
- * them: an `AttributeError` says the operand was no mapping, and a `KeyError` names the
- * keyword given twice. anything else is left as it was raised */
+ * python rewords two of the errors a merge raises, whatever raised them: any
+ * `AttributeError` says the operand was no mapping, and a `KeyError` with a single argument
+ * names the keyword given twice. anything else is left as it was raised.
+ *
+ * 3.11 asks the `KeyError` a narrower question: whether it still stands as the bare
+ * argument tuple it was raised with, which only one raised from C is — the merge's own, for
+ * a keyword given twice, while nothing is being handled. one a python `__getitem__` raised,
+ * or one raised inside an `except` block, is already an exception object there and is left
+ * as it is. `By_RaiseKeyError` raises exactly as the merge does, so the same question asked
+ * of it gets python's answer */
 BY_COLD void By_KeywordsMergeError(PyObject *callee, PyObject *source) {
     int attribute = PyErr_ExceptionMatches(PyExc_AttributeError);
     PyObject *type, *value, *traceback, *args, *name;
+    PyObject *key = NULL;
     if (!attribute && !PyErr_ExceptionMatches(PyExc_KeyError)) return;
     PyErr_Fetch(&type, &value, &traceback);
-    PyErr_NormalizeException(&type, &value, &traceback);
-    args = value == NULL ? NULL : ((PyBaseExceptionObject *)value)->args;
-    if (args == NULL || !PyTuple_Check(args) || PyTuple_GET_SIZE(args) != 1) {
-        PyErr_Restore(type, value, traceback);
-        return;
+    if (!attribute) {
+#if PY_VERSION_HEX >= 0x030C0000
+        PyErr_NormalizeException(&type, &value, &traceback);
+        args = value == NULL ? NULL : ((PyBaseExceptionObject *)value)->args;
+#else
+        args = value;
+#endif
+        if (args == NULL || !PyTuple_Check(args) || PyTuple_GET_SIZE(args) != 1) {
+            PyErr_Restore(type, value, traceback);
+            return;
+        }
+        key = PyTuple_GET_ITEM(args, 0);
     }
     name = By_FunctionStr(callee);
     if (name != NULL) {
-        PyObject *key = PyTuple_GET_ITEM(args, 0);
         if (attribute) {
             PyErr_Format(PyExc_TypeError, "%U argument after ** must be a mapping, not %.200s",
-                         name, Py_TYPE(source)->tp_name);
+                         name, By_TypeNameAsPython(Py_TYPE(source)));
         } else {
             PyErr_Format(PyExc_TypeError, "%U got multiple values for keyword argument '%S'",
                          name, key);
@@ -11259,15 +11426,18 @@ BY_COLD void By_KeywordsMergeError(PyObject *callee, PyObject *source) {
     Py_XDECREF(traceback);
 }
 
-/* one key of a `**` merged into a call's keywords, refusing one already there */
-static int By_MergeKeyword(PyObject *keywords, PyObject *key, PyObject *value) {
+/* whether `key` may still be merged into a call's keywords, raising for one already there
+ *
+ * asked before the value is read, as python asks it: a mapping is never asked for the value
+ * of a keyword given twice */
+static int By_KeywordIsFree(PyObject *keywords, PyObject *key) {
     int present = PyDict_Contains(keywords, key);
-    if (present < 0) return -1;
+    if (present < 0) return 0;
     if (present) {
         By_RaiseKeyError(key);
-        return -1;
+        return 0;
     }
-    return PyDict_SetItem(keywords, key, value);
+    return 1;
 }
 
 /* `**source` in a call to `callee`, merged into the keywords built so far
@@ -11284,7 +11454,7 @@ static inline char By_MergeKeywords(PyObject *keywords, PyObject *source, PyObje
         while (!failed && PyDict_Next(source, &at, &key, &value)) {
             Py_INCREF(key);
             Py_INCREF(value);
-            failed = By_MergeKeyword(keywords, key, value) < 0;
+            failed = !By_KeywordIsFree(keywords, key) || PyDict_SetItem(keywords, key, value) < 0;
             Py_DECREF(value);
             Py_DECREF(key);
         }
@@ -11295,8 +11465,9 @@ static inline char By_MergeKeywords(PyObject *keywords, PyObject *source, PyObje
         Py_XDECREF(keys);
         failed = iterator == NULL;
         while (!failed && (key = PyIter_Next(iterator)) != NULL) {
-            PyObject *value = PyObject_GetItem(source, key);
-            failed = value == NULL || By_MergeKeyword(keywords, key, value) < 0;
+            PyObject *value = By_KeywordIsFree(keywords, key) ? PyObject_GetItem(source, key)
+                                                              : NULL;
+            failed = value == NULL || PyDict_SetItem(keywords, key, value) < 0;
             Py_XDECREF(value);
             Py_DECREF(key);
         }
@@ -11714,6 +11885,21 @@ static inline void By_DropName(PyObject *dict, const char *name) {
  * module's own namespace exactly as it was, and the copy is what the pairs and the
  * later install are both read from. `staging` is that copy, a new reference, and its
  * entries are borrowed for as long as it is held */
+#if PY_VERSION_HEX < 0x030C0000
+/* a call to a native entry that enters no recursion of its own
+ *
+ * the forwarder in front of it is a python frame, and that frame is the one python's own
+ * function would have pushed, so nothing behind it counts another. 3.11 has one count for
+ * C calls and python frames, and a builtin's own call enters it, so a call from a
+ * forwarder took a second frame and a recursion reached through one stopped a level early */
+static PyObject *By_NativeEntryVectorcall(PyObject *callable, PyObject *const *args,
+                                          size_t nargsf, PyObject *kwnames) {
+    PyCFunctionObject *function = (PyCFunctionObject *)callable;
+    return ((PyCFunctionFastWithKeywords)(void (*)(void))function->m_ml->ml_meth)(
+        function->m_self, args, PyVectorcall_NARGS(nargsf), kwnames);
+}
+#endif
+
 static inline PyObject *By_BuildForwarders(PyObject *module, PyObject *dict, PyMethodDef *methods,
                                            Py_ssize_t count, const char *installer) {
     PyObject *modname, *natives, *install, *result, *staging;
@@ -11741,6 +11927,13 @@ static inline PyObject *By_BuildForwarders(PyObject *module, PyObject *dict, PyM
             Py_DECREF(staging);
             return NULL;
         }
+#if PY_VERSION_HEX < 0x030C0000
+        if ((methods[at].ml_flags & (METH_VARARGS | METH_FASTCALL | METH_NOARGS | METH_O
+                                     | METH_KEYWORDS | METH_METHOD))
+            == (METH_FASTCALL | METH_KEYWORDS)) {
+            ((PyCFunctionObject *)native)->vectorcall = By_NativeEntryVectorcall;
+        }
+#endif
         PyTuple_SET_ITEM(natives, at, native);
     }
     Py_DECREF(modname);
@@ -12719,6 +12912,15 @@ static inline PyObject *By_ThrowIntoDelegate(PyObject *self, PyObject **sent, Py
  * machine with no suspension point does not reach the frame either, but a throw does
  * finish it — see below. otherwise it is the resumption that decides, and a body that
  * catches what was thrown leaves the machine usable */
+#if PY_VERSION_HEX < 0x030C0000
+/* the exception a throw is raising at a delegation the inner iterator had no `throw` for,
+ * which 3.11 does not take as the delegation finishing — see `By_StopIterationValue`.
+ * borrowed, and only ever compared: it is set just before the frame resumes and the
+ * frame reads it at the suspension it resumes at, with nothing between that could run
+ * python, so the global interpreter lock is all the guard it needs */
+static PyObject *by_raised_past_delegation = NULL;
+#endif
+
 static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject **thrown,
                                    PyObject **returned, int64_t *state, int frame,
                                    PyObject *const *args, Py_ssize_t nargs,
@@ -12764,6 +12966,15 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject *
         Py_DECREF(instance);
         return NULL;
     }
+#if PY_VERSION_HEX < 0x030C0000
+    if (inner != NULL) {
+        PyObject *answer;
+        by_raised_past_delegation = instance;
+        answer = By_ResumeRaising(self, sent, thrown, returned, state, frame, instance, resume);
+        by_raised_past_delegation = NULL;
+        return answer;
+    }
+#endif
     return By_ResumeRaising(self, sent, thrown, returned, state, frame, instance, resume);
 }
 
@@ -12771,12 +12982,22 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject *
  *
  * a `StopIteration` raised at a frame's delegation is the delegation *finishing*: python
  * takes its value as what `yield from` or `await` evaluates to, which is how an inner
- * iterator's `throw` that ends it hands back a result */
+ * iterator's `throw` that ends it hands back a result.
+ *
+ * from 3.12 that holds for one thrown at the delegation as well, where the inner iterator
+ * has no `throw` to hand it to. 3.11 raises that one at the suspension as it raises any
+ * other exception, so it is not the delegation's value there */
 static inline PyObject *By_StopIterationValue(PyObject *exception) {
     if (exception == NULL || !PyExceptionInstance_Check(exception)
         || !PyErr_GivenExceptionMatches(exception, PyExc_StopIteration)) {
         return NULL;
     }
+#if PY_VERSION_HEX < 0x030C0000
+    if (exception == by_raised_past_delegation) {
+        by_raised_past_delegation = NULL;
+        return NULL;
+    }
+#endif
     return By_NewRef(((PyStopIterationObject *)exception)->value);
 }
 
@@ -14371,10 +14592,14 @@ static PyObject *By_AnnotatedDefinition(PyObject *self) {
     PyObject *made = function->made_type_params == NULL ? Py_None : function->made_type_params;
     PyObject *definition = PyObject_CallFunctionObjArgs(factory, values, made, NULL);
     Py_DECREF(values);
+    /* a function has type parameters from 3.12. before it nothing declares any, so the
+     * factory is handed `None` every time and never reads it */
+#if PY_VERSION_HEX >= 0x030C0000
     if (definition != NULL && function->made_type_params == NULL) {
         function->made_type_params = PyObject_GetAttrString(definition, "__type_params__");
         if (function->made_type_params == NULL) Py_CLEAR(definition);
     }
+#endif
     return definition;
 }
 
@@ -14402,8 +14627,10 @@ static inline PyObject *By_AnnotateAtDefinition(PyObject *self) {
     return self;
 }
 
+#if PY_VERSION_HEX >= 0x030C0000
 /* python makes a function's type parameters with the function, so they are made once for
- * each closure and kept */
+ * each closure and kept. a function has none before 3.12, and no `__type_params__` to
+ * answer with */
 static PyObject *By_Function_get_type_params(PyObject *self, void *closure) {
     (void)closure;
     ByFunctionObject *function = (ByFunctionObject *)self;
@@ -14432,6 +14659,7 @@ static int By_Function_set_type_params(PyObject *self, PyObject *value, void *cl
     Py_XSETREF(((ByFunctionObject *)self)->type_params, By_NewRef(value));
     return 0;
 }
+#endif
 
 #if PY_VERSION_HEX >= 0x030E0000
 /* from 3.14 python evaluates annotations when they are first asked for, through an
@@ -14650,7 +14878,9 @@ static PyGetSetDef By_Function_getset[] = {
     {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
     {"__globals__", By_Function_get_globals, NULL, NULL, NULL},
     {"__code__", By_Function_get_code, NULL, NULL, NULL},
+#if PY_VERSION_HEX >= 0x030C0000
     {"__type_params__", By_Function_get_type_params, By_Function_set_type_params, NULL, NULL},
+#endif
     {"__defaults__", By_Function_get_defaults, NULL, NULL, NULL},
     {"__kwdefaults__", By_Function_get_kwdefaults, NULL, NULL, NULL},
     {"__annotations__", By_Function_get_annotations, By_Function_set_annotations, NULL, NULL},
@@ -14659,6 +14889,41 @@ static PyGetSetDef By_Function_getset[] = {
 #endif
     {NULL, NULL, NULL, NULL, NULL},
 };
+
+/* an attribute read, with python's own wording for a name a function does not have
+ *
+ * the generic lookup names the type by its `tp_name`, which here is `by.function` where
+ * python's function says `function`. what is reworded is only the lookup's own refusal,
+ * the one that names this object and this name, so an `AttributeError` a getter raised
+ * stays as it was raised. which names a function has moves between versions —
+ * `__type_params__` is 3.12's and `__annotate__` 3.14's — so this is what a program
+ * reading one of those on an earlier version is told */
+static PyObject *By_Function_getattro(PyObject *self, PyObject *name) {
+    PyObject *found = PyObject_GenericGetAttr(self, name);
+    PyObject *type, *value, *traceback;
+    if (found != NULL || !PyErr_ExceptionMatches(PyExc_AttributeError)) return found;
+    PyErr_Fetch(&type, &value, &traceback);
+    PyErr_NormalizeException(&type, &value, &traceback);
+    if (value != NULL && PyErr_GivenExceptionMatches(value, PyExc_AttributeError)
+        && ((PyAttributeErrorObject *)value)->obj == self
+        && ((PyAttributeErrorObject *)value)->name != NULL
+        && PyUnicode_Check(((PyAttributeErrorObject *)value)->name)
+        && PyUnicode_Compare(((PyAttributeErrorObject *)value)->name, name) == 0) {
+        PyObject *message =
+            PyUnicode_FromFormat("'function' object has no attribute '%U'", name);
+        PyObject *args = message == NULL ? NULL : PyTuple_Pack(1, message);
+        Py_XDECREF(message);
+        if (args == NULL) {
+            Py_XDECREF(type);
+            Py_XDECREF(value);
+            Py_XDECREF(traceback);
+            return NULL;
+        }
+        Py_XSETREF(((PyBaseExceptionObject *)value)->args, args);
+    }
+    PyErr_Restore(type, value, traceback);
+    return NULL;
+}
 
 static PyTypeObject By_FunctionType = {
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -14669,7 +14934,7 @@ static PyTypeObject By_FunctionType = {
     .tp_vectorcall_offset = offsetof(ByFunctionObject, vectorcall),
     .tp_repr = (reprfunc)By_Function_repr,
     .tp_call = PyVectorcall_Call,
-    .tp_getattro = PyObject_GenericGetAttr,
+    .tp_getattro = By_Function_getattro,
     .tp_setattro = PyObject_GenericSetAttr,
     /* a method descriptor as python's own function is one: `obj.f()` through the type
      * calls it with `obj` in front rather than building a bound method first */

@@ -368,10 +368,12 @@ jobs:
   # to answer exactly as that interpreter does, so *which* interpreter is a first-class
   # variable and belongs in the workflow rather than in whatever a runner image ships.
   #
-  # the supported set is python 3.13 and 3.14, each in its gil and its free-threaded
-  # build. `PYTHON_VERSION` is the primary and `cargo test (linux)` runs the whole suite
-  # against it; this job covers the other three. 3.12 is deliberately absent — it is
-  # below the project's floor, and it was only ever reached because an image shipped it.
+  # the supported set is python 3.11 through 3.14, and the free-threaded builds of 3.13
+  # and 3.14 — free threading starts at 3.13, so 3.11 and 3.12 have gil builds only.
+  # `PYTHON_VERSION` is the primary and `cargo test (linux)` runs the whole suite against
+  # it; this job covers the other five. 3.11 is the floor `by_build::MINIMUM_PYTHON`
+  # states, and 3.11 and 3.12 answer differently from 3.13 in places the backend follows
+  # per version, so leaving them out would leave those branches untested.
   #
   # only the version-sensitive targets run here, because only they start an interpreter:
   #   * the six backend crates, which emit and then load real extension modules
@@ -394,8 +396,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # the backend only, for now. the transpiler's runtime tests and ty's divergence
+          # and end-to-end tests do not yet say which of their programs need a newer
+          # interpreter: a reified generic refuses to transpile below 3.12, and its pep 696
+          # defaults below 3.13; a program importing `override` needs `typing_extensions`,
+          # which a bare interpreter does not have; and the django fixture's virtualenv is
+          # 3.13's. they run here once each of those says what it needs
+          - python: "3.11"
+            backend_filter: "all()"
+            frontend: false
+          - python: "3.12"
+            backend_filter: "all()"
+            frontend: false
           - python: "3.13"
             backend_filter: "all()"
+            frontend: true
           # the free-threaded builds run the same tests, minus one that cannot be
           # observed there: `a_closure_does_not_leak_its_environment` asserts that
           # `sys.getrefcount` *rises* while a closure holds a string, and a
@@ -406,8 +421,10 @@ jobs:
           # unchanged after 20000 closures — runs and passes on both
           - python: "3.13t"
             backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
+            frontend: true
           - python: "3.14t"
             backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
+            frontend: true
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
@@ -482,8 +499,10 @@ jobs:
       # and compile C, and sharing a run with `by_transforms`' ~1800 other tests starves
       # them into failures that pass on their own
       - name: "Run the transpiler's runtime tests"
+        if: ${{ matrix.frontend }}
         run: cargo nextest run -p by_transforms -E 'binary(/_runtime$/)'
       - name: "Run ty's divergence and end-to-end tests"
+        if: ${{ matrix.frontend }}
         run: |
           cargo nextest run -p ty \
             -E 'binary(mdtest_divergence) + binary(by_e2e) + binary(django_lookup_runtime)'

@@ -2793,9 +2793,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   by_gen->by_running_async = 0;\n\
                      \x20   return NULL;\n\
                      }}\n\
-                     /* the message a second awaitable is refused with while one is stepping the generator */\n\
+                     /* the message a second awaitable is refused with while one is stepping the generator.\n\
+                     \x20* 3.11 leaves an `__anext__()` or `asend()` it refused as it was, to be tried again */\n\
                      static void {type_name}_refuse_running({type_name}_asend *by_self) {{\n\
+                     #if PY_VERSION_HEX >= 0x030C0000\n\
                      \x20   by_self->by_state = 2;\n\
+                     #else\n\
+                     \x20   if (by_self->by_mode == 1 || by_self->by_mode == 3) by_self->by_state = 2;\n\
+                     #endif\n\
                      \x20   PyErr_Format(PyExc_RuntimeError, \"%s(): asynchronous generator is already running\",\n\
                      \x20                by_self->by_mode == 1 ? \"aclose\" : by_self->by_mode == 3 ? \"athrow\" : \"anext\");\n\
                      }}\n\
@@ -2919,6 +2924,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      static PyObject *{type_name}_asend_next(PyObject *self) {{\n\
                      \x20   return {type_name}_asend_send(self, NULL);\n\
                      }}\n\
+                     /* 3.11's throw neither refuses a generator another awaitable is stepping nor marks this\n\
+                     \x20* one as being stepped, and an `athrow()` or `aclose()` it ended is not finished by it */\n\
                      static PyObject *{type_name}_asend_throw(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {{\n\
                      \x20   {type_name}_asend *by_self = ({type_name}_asend *)self;\n\
                      \x20   {struct_name} *by_gen = by_self->by_gen;\n\
@@ -2927,6 +2934,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       {type_name}_refuse_reuse(by_self);\n\
                      \x20       return NULL;\n\
                      \x20   }}\n\
+                     #if PY_VERSION_HEX >= 0x030C0000\n\
                      \x20   if (by_self->by_state == 0) {{\n\
                      \x20       if (by_gen->by_running_async) {{\n\
                      \x20           {type_name}_refuse_running(by_self);\n\
@@ -2935,13 +2943,18 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       by_self->by_state = 1;\n\
                      \x20       by_gen->by_running_async = 1;\n\
                      \x20   }}\n\
+                     #endif\n\
                      \x20   PyObject *by_step = {type_name}_gen_throw(by_gen, args, nargs);\n\
                      \x20   if (!by_closing) {{\n\
                      \x20       by_step = {type_name}_unwrap(by_gen, by_step);\n\
+                     #if PY_VERSION_HEX >= 0x030C0000\n\
                      \x20       if (by_step == NULL) {{\n\
                      \x20           by_gen->by_running_async = 0;\n\
                      \x20           by_self->by_state = 2;\n\
                      \x20       }}\n\
+                     #else\n\
+                     \x20       if (by_step == NULL && by_self->by_mode != 3) by_self->by_state = 2;\n\
+                     #endif\n\
                      \x20       return by_step;\n\
                      \x20   }}\n\
                      \x20   if (by_step != NULL && by_gen->{kind} == By_ShortFrom(1)) {{\n\
@@ -2952,8 +2965,10 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       return NULL;\n\
                      \x20   }}\n\
                      \x20   if (by_step != NULL) return by_step;\n\
+                     #if PY_VERSION_HEX >= 0x030C0000\n\
                      \x20   by_gen->by_running_async = 0;\n\
                      \x20   by_self->by_state = 2;\n\
+                     #endif\n\
                      \x20   By_EndAsyncIteration();\n\
                      \x20   if (PyErr_ExceptionMatches(PyExc_StopAsyncIteration)\n\
                      \x20       || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {{\n\
@@ -2962,8 +2977,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   }}\n\
                      \x20   return NULL;\n\
                      }}\n\
+                     /* before 3.13 closing one of these awaitables only finishes it, and throws nothing into\n\
+                     \x20* the generator */\n\
                      static PyObject *{type_name}_asend_close(PyObject *self, PyObject *by_unused) {{\n\
                      \x20   (void)by_unused;\n\
+                     #if PY_VERSION_HEX < 0x030D0000\n\
+                     \x20   (({type_name}_asend *)self)->by_state = 2;\n\
+                     \x20   Py_RETURN_NONE;\n\
+                     #else\n\
                      \x20   if ((({type_name}_asend *)self)->by_state == 2) Py_RETURN_NONE;\n\
                      \x20   PyObject *by_exit = PyExc_GeneratorExit;\n\
                      \x20   PyObject *by_step = {type_name}_asend_throw(self, &by_exit, 1);\n\
@@ -2979,6 +3000,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       Py_RETURN_NONE;\n\
                      \x20   }}\n\
                      \x20   return NULL;\n\
+                     #endif\n\
                      }}\n\
                      static PyMethodDef {type_name}_asend_methods[] = {{\n\
                      \x20   {{\"send\", (PyCFunction){type_name}_asend_send, METH_O, NULL}},\n\
