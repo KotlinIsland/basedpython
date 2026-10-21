@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use lsp_types::{LspRequestMethod, MessageDirection, Range, Request, TextDocumentIdentifier, Uri};
 use ruff_db::files::File;
 use ruff_text_size::TextRange;
-use ty_ide::{OutlineStatement, OutlineString, syntax_outline};
+use ty_ide::{OutlineList, OutlineStatement, OutlineString, syntax_outline};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::PositionEncoding;
@@ -56,6 +56,19 @@ pub(crate) struct SyntaxOutlineResponse {
     statements: Vec<Statement>,
     /// Every string literal part, in source order.
     strings: Vec<StringPart>,
+    /// Every comma-separated list of two elements or more — a call's arguments, a definition's
+    /// parameters, a display's elements, an import's names — in the order the lists start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lists: Vec<List>,
+}
+
+/// A comma-separated list.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct List {
+    /// Each element from its first token to its last: parentheses around it, and a `*` or `**`
+    /// before it, included. The `/` and bare `*` among parameters are elements of their own.
+    elements: Vec<Range>,
 }
 
 /// One statement.
@@ -74,6 +87,12 @@ pub(crate) struct Statement {
     /// On an expression statement that is a call: the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     call: Option<Call>,
+    /// On a `def` or a `class`: the name it declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<Range>,
+    /// On a `def`: the names of its parameters, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parameters: Vec<Range>,
 }
 
 /// One clause of a compound statement.
@@ -189,6 +208,11 @@ impl BackgroundDocumentRequestHandler for SyntaxOutlineRequestHandler {
                 .iter()
                 .filter_map(|string| converter.string(string))
                 .collect(),
+            lists: outline
+                .lists
+                .iter()
+                .filter_map(|list| converter.list(list))
+                .collect(),
         }))
     }
 }
@@ -243,9 +267,27 @@ impl Converter<'_> {
                             positional_only: call.positional_only,
                         })
                     }),
+                    name: statement.name.and_then(|range| self.range(range)),
+                    parameters: statement
+                        .parameters
+                        .iter()
+                        .filter_map(|range| self.range(*range))
+                        .collect(),
                 })
             })
             .collect()
+    }
+
+    /// The list, or `None` when an element of it does not map: a list missing an element is
+    /// not the same list.
+    fn list(&self, list: &OutlineList) -> Option<List> {
+        Some(List {
+            elements: list
+                .elements
+                .iter()
+                .map(|range| self.range(*range))
+                .collect::<Option<_>>()?,
+        })
     }
 
     fn string(&self, string: &OutlineString) -> Option<StringPart> {

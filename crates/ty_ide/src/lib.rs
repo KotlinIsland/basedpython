@@ -7,6 +7,7 @@ mod alignment;
 mod all_symbols;
 mod call_hierarchy;
 mod code_action;
+mod comma_list;
 mod common_aliases;
 mod complete_statement;
 mod completion;
@@ -106,8 +107,8 @@ pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, 
 pub use super_members::{OverridingMember, SuperMember, document_super_members, super_members};
 pub use symbols::{FlatSymbols, HierarchicalSymbols, SymbolId, SymbolInfo, SymbolKind};
 pub use syntax_outline::{
-    OutlineCall, OutlineClause, OutlineModifier, OutlineStatement, OutlineString, SyntaxOutline,
-    syntax_outline,
+    OutlineCall, OutlineClause, OutlineList, OutlineModifier, OutlineStatement, OutlineString,
+    SyntaxOutline, syntax_outline,
 };
 pub use test_links::{NewTest, SubjectTests, TestLink, subject_tests, test_subjects};
 pub use ty_python_semantic::types::ide_support::InheritedMethodKind;

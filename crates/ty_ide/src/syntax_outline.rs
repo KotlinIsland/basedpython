@@ -23,6 +23,7 @@ use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_b
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::Db;
+use crate::comma_list::comma_lists;
 
 /// The block structure and string literals of one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,18 @@ pub struct SyntaxOutline {
     pub statements: Vec<OutlineStatement>,
     /// Every string literal part in the file, in source order.
     pub strings: Vec<OutlineString>,
+    /// Every comma-separated list of two elements or more, in the order the lists start: a list
+    /// nested in an element of another comes after it.
+    pub lists: Vec<OutlineList>,
+}
+
+/// A comma-separated list: a call's arguments, a definition's parameters, a display's elements,
+/// the names of an `import`, `global` or `del`, the context managers of a `with`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineList {
+    /// Each element from its first token to its last: parentheses around it, and a `*` or `**`
+    /// before it, included. The `/` and bare `*` among parameters are elements of their own.
+    pub elements: Vec<TextRange>,
 }
 
 /// One statement.
@@ -46,6 +59,10 @@ pub struct OutlineStatement {
     pub modifiers: Vec<OutlineModifier>,
     /// For an expression statement that is a call, the call.
     pub call: Option<OutlineCall>,
+    /// For a `def` or a `class`, the name it declares.
+    pub name: Option<TextRange>,
+    /// For a `def`, the names of its parameters, in source order.
+    pub parameters: Vec<TextRange>,
 }
 
 /// One clause of a compound statement: `if`, `elif`, `else`, `case`, the `def` of a function.
@@ -116,6 +133,13 @@ pub fn syntax_outline(db: &dyn Db, file: PythonFile<'_>) -> SyntaxOutline {
     };
 
     let statements = builder.statements(parsed.suite());
+    let lists = comma_lists(parsed.suite(), parsed.tokens())
+        .into_iter()
+        .filter(|list| list.elements.len() >= 2)
+        .map(|list| OutlineList {
+            elements: list.elements,
+        })
+        .collect();
 
     let mut strings = StringCollector {
         source: source.as_str(),
@@ -128,6 +152,7 @@ pub fn syntax_outline(db: &dyn Db, file: PythonFile<'_>) -> SyntaxOutline {
     SyntaxOutline {
         statements,
         strings: strings.strings,
+        lists,
     }
 }
 
@@ -195,8 +220,8 @@ fn keyword_at(tokens: &Tokens, offset: TextSize) -> Option<TextRange> {
 }
 
 pub(crate) struct OutlineBuilder<'a> {
-    source: &'a str,
-    tokens: &'a Tokens,
+    pub(crate) source: &'a str,
+    pub(crate) tokens: &'a Tokens,
 }
 
 impl<'a> OutlineBuilder<'a> {
@@ -216,6 +241,8 @@ impl OutlineBuilder<'_> {
             clauses: self.clauses(stmt),
             modifiers: self.modifiers(stmt),
             call: self.call(stmt),
+            name: Self::name(stmt),
+            parameters: Self::parameters(stmt),
         }
     }
 
@@ -233,6 +260,30 @@ impl OutlineBuilder<'_> {
                 }
             })
             .collect()
+    }
+
+    /// The name a `def` or `class` declares. A trailing lambda declares none, and neither does a
+    /// definition the parser recovered without one.
+    fn name(stmt: &Stmt) -> Option<TextRange> {
+        let name = match stmt {
+            Stmt::FunctionDef(function) if !function.is_trailing_lambda => &function.name,
+            Stmt::ClassDef(class) => &class.name,
+            _ => return None,
+        };
+        (!name.range().is_empty()).then(|| name.range())
+    }
+
+    /// The names of a `def`'s parameters.
+    fn parameters(stmt: &Stmt) -> Vec<TextRange> {
+        match stmt {
+            Stmt::FunctionDef(function) if !function.is_trailing_lambda => function
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name().range())
+                .filter(|name| !name.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// The clauses of `stmt` without their bodies' outlines, which is all a family needs.
@@ -535,9 +586,13 @@ impl OutlineBuilder<'_> {
     }
 }
 
+/// One clause of a compound statement, as [`OutlineBuilder::clause_heads`] finds it.
 pub(crate) struct ClauseHead<'s> {
+    /// The clause keyword; `None` on a trailing lambda's clause.
     pub(crate) keyword: Option<TextRange>,
+    /// The `:` opening the suite, when there is one to find.
     pub(crate) colon: Option<TextRange>,
+    /// From the start of the header to the end of the body.
     pub(crate) range: TextRange,
     pub(crate) body: &'s [Stmt],
 }
@@ -1270,6 +1325,116 @@ else:
         assert_eq!(
             family(&source.replacen("break", "<CURSOR>break", 1)),
             "while@2 break@3"
+        );
+    }
+
+    /// Every list, one per line, as its elements between bars.
+    fn lists(source: &str) -> String {
+        let test = test("main.by", source);
+        let file = test.program_file(test.cursor.file).python_file(&test.db);
+        let outline = syntax_outline(&test.db, file);
+        let text = test.cursor.source.as_str();
+        let mut out = String::new();
+        for list in &outline.lists {
+            let elements: Vec<&str> = list
+                .elements
+                .iter()
+                .map(|range| &text[range.to_std_range()])
+                .collect();
+            writeln!(out, "|{}|", elements.join("|")).unwrap();
+        }
+        out
+    }
+
+    /// The names the module's definitions declare, and their parameters', depth first.
+    fn names(source: &str) -> String {
+        fn walk(statements: &[OutlineStatement], text: &str, out: &mut String) {
+            for statement in statements {
+                if let Some(name) = statement.name {
+                    write!(out, "{}", &text[name.to_std_range()]).unwrap();
+                    let parameters: Vec<&str> = statement
+                        .parameters
+                        .iter()
+                        .map(|range| &text[range.to_std_range()])
+                        .collect();
+                    if !parameters.is_empty() {
+                        write!(out, "({})", parameters.join(", ")).unwrap();
+                    }
+                    out.push('\n');
+                }
+                for clause in &statement.clauses {
+                    walk(&clause.body, text, out);
+                }
+            }
+        }
+
+        let test = test("main.by", source);
+        let file = test.program_file(test.cursor.file).python_file(&test.db);
+        let outline = syntax_outline(&test.db, file);
+        let mut out = String::new();
+        walk(&outline.statements, test.cursor.source.as_str(), &mut out);
+        out
+    }
+
+    /// An element is a node, so the commas of a lambda, a nested call or a tuple among the
+    /// arguments are not the call's own; each list of two elements or more is reported, nested
+    /// ones after the one they are in.
+    #[test]
+    fn a_list_s_elements_are_its_nodes_not_the_text_between_commas() {
+        assert_eq!(
+            lists("f(lambda a, b: a, g(c, d), (e, h), *i, k=1, **m)\n"),
+            "\
+|lambda a, b: a|g(c, d)|(e, h)|*i|k=1|**m|
+|a|b|
+|c|d|
+|e|h|
+"
+        );
+    }
+
+    /// The `/` and bare `*` among parameters are elements of their own, and the `*` and `**` of
+    /// a variadic parameter belong to it.
+    #[test]
+    fn parameters_keep_their_separators_and_stars() {
+        assert_eq!(
+            lists("def f(a, /, b: int = 1, *args, c, **kw): pass\n"),
+            "|a|/|b: int = 1|*args|c|**kw|\n"
+        );
+        assert_eq!(lists("def f(a, *, b): pass\n"), "|a|*|b|\n");
+    }
+
+    #[test]
+    fn displays_imports_and_statements_list_their_elements() {
+        assert_eq!(
+            lists(
+                "from m import a, b as c\nx = {1: 2, **d}\ny, z = [1, 2], {3, 4}\ndel x, y\nwith a as b, c:\n    pass\n"
+            ),
+            "\
+|a|b as c|
+|1: 2|**d|
+|y|z|
+|[1, 2]|{3, 4}|
+|1|2|
+|3|4|
+|x|y|
+|a as b|c|
+"
+        );
+    }
+
+    /// A list of one element has nothing to move among, and is not reported.
+    #[test]
+    fn a_list_of_one_element_is_left_out() {
+        assert_eq!(lists("f(a)\nx = [1]\n"), "");
+    }
+
+    #[test]
+    fn definitions_report_their_names_and_parameters() {
+        assert_eq!(
+            names(
+                "class C:\n    def m(self, x, *rest, **kw): pass\ndef f(): pass\nitems.each:\n    pass\n"
+            ),
+            "C\nm(self, x, rest, kw)\nf\n"
         );
     }
 }
