@@ -29,6 +29,7 @@ mod injection;
 mod inlay_hints;
 mod markup;
 mod module_rename;
+mod override_members;
 mod refactor;
 mod references;
 mod rename;
@@ -83,6 +84,10 @@ pub use markup::MarkupKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
 };
+pub use override_members::{
+    ClassMembersToOverride, MemberOverrides, MemberToOverride, members_to_override,
+    override_members,
+};
 pub use refactor::{Refactor, RefactorKind, RefactorOffer, refactor, refactors};
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};
@@ -99,6 +104,7 @@ pub use syntax_outline::{
     syntax_outline,
 };
 pub use test_links::{NewTest, SubjectTests, TestLink, subject_tests, test_subjects};
+pub use ty_python_semantic::types::ide_support::InheritedMethodKind;
 pub use type_hierarchy::{
     TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_subtypes, type_hierarchy_supertypes,
 };

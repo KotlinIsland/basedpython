@@ -238,7 +238,9 @@ fn text_size_to_lsp_position(
     source_location_to_position(&source_location)
 }
 
-fn text_range_to_lsp_range(
+/// `range` in `text`, which need not be any document's text: an edit's answer can name a range in
+/// the text its edits leave behind
+pub(crate) fn text_range_to_lsp_range(
     range: TextRange,
     text: &str,
     index: &LineIndex,
