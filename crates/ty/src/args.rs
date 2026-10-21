@@ -120,6 +120,18 @@ pub(crate) enum Command {
         /// was started in.
         #[arg(long)]
         in_build: bool,
+        /// Measure which lines run, with coverage.py, and write them to PATH as
+        /// an LCOV report.
+        ///
+        /// A transpiled module is reported against its `.by` file and lines: a
+        /// `.by` line is covered when any statement written for it ran. A `.py`
+        /// the project carries over is reported against the file in the project
+        /// rather than the staged copy that ran. The project's coverage.py
+        /// configuration applies to the project's files as they are in the
+        /// project, with `--in-build` too, and coverage.py has to be installed in
+        /// the interpreter the program runs on.
+        #[arg(long, value_name = "PATH", conflicts_with = "compiled")]
+        coverage: Option<PathBuf>,
     },
 
     /// Start a new project.

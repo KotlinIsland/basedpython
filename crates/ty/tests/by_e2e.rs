@@ -1042,6 +1042,491 @@ fn run_in_build_runs_in_the_tree_it_staged() {
     );
 }
 
+/// The interpreter the coverage tests run on, and whether it can import
+/// coverage.py: `$PYTHON` when it is set, as for every python-executing test,
+/// and `python3` otherwise.
+fn coverage_interpreter() -> (String, bool) {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let importable = Command::new(&python)
+        .args(["-c", "import coverage"])
+        .status()
+        .is_ok_and(|status| status.success());
+    (python, importable)
+}
+
+/// A project with a transpiled module that runs only partly, a hand-written
+/// `.py` the build carries over, and an entry point calling into both.
+fn project_with_partly_covered_modules(dir: &Path) {
+    let package = dir.join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    fs::write(
+        package.join("calc.by"),
+        "def add(a: int, b: int) -> int:\n    if a > 100:\n        return -1\n    return a + b\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("plain.py"),
+        "def helper() -> int:\n    return 3\n\n\ndef never() -> int:\n    return 4\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.by"),
+        "from pkg.calc import add\nfrom pkg.plain import helper\n\nprint(add(1, helper()))\n",
+    )
+    .unwrap();
+}
+
+/// The `DA:` lines of `file`'s record in an LCOV `report`, or `None` when it has
+/// no record.
+fn lcov_lines<'a>(report: &'a str, file: &Path) -> Option<Vec<&'a str>> {
+    let header = format!("SF:{}", file.display());
+    let record = report
+        .split("end_of_record")
+        .find(|record| record.lines().any(|line| line == header))?;
+    Some(
+        record
+            .lines()
+            .filter(|line| line.starts_with("DA:"))
+            .collect(),
+    )
+}
+
+/// coverage.py measures the generated python, and what reaches the report is
+/// the `.by` it was written from — the file and lines an editor shows — and the
+/// project's own `.py` rather than the staged copy of it that ran, which is gone
+/// once the run ends
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped leg must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_reports_by_lines_and_project_files() {
+    let (python, importable) = coverage_interpreter();
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    let project = dir.path().canonicalize().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args([
+            "run",
+            "--python",
+            &python,
+            "--coverage",
+            "out/report.lcov",
+            "main",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !importable {
+        eprintln!("only checking the refusal: {python} cannot import coverage");
+        assert!(
+            !output.status.success(),
+            "ran without coverage.py:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("cannot import") && stderr.contains("pip install coverage"),
+            "the refusal says neither what is missing nor how to get it:\n{stderr}"
+        );
+        assert!(!dir.path().join("out/report.lcov").exists());
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "by run --coverage failed:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "4");
+    let report = fs::read_to_string(dir.path().join("out/report.lcov")).expect("a report");
+
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/calc.by")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
+        "calc.by is reported on its own lines:\n{report}"
+    );
+    assert_eq!(
+        lcov_lines(&report, &project.join("main.by")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:4,1"]),
+        "{report}"
+    );
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/plain.py")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
+        "the staged copy is reported as the project file:\n{report}"
+    );
+    let named: Vec<&str> = report
+        .lines()
+        .filter_map(|line| line.strip_prefix("SF:"))
+        .collect();
+    assert!(
+        named
+            .iter()
+            .all(|file| Path::new(file).starts_with(&project)),
+        "a file outside the project — the runner, a staged copy — was reported: {named:?}"
+    );
+    assert!(
+        !dir.path().join(".coverage").exists(),
+        "coverage.py left a data file of its own beside the project"
+    );
+}
+
+/// The report of a `by run --coverage main` of `dir` with `python`, which can
+/// import coverage.py, after checking the run succeeded and printed `stdout`.
+fn coverage_report(dir: &Path, python: &str, stdout: &str) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args([
+            "run",
+            "--python",
+            python,
+            "--coverage",
+            "report.lcov",
+            "main",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "by run --coverage failed:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), stdout, "{stderr}");
+    fs::read_to_string(dir.join("report.lcov"))
+        .unwrap_or_else(|error| panic!("no report ({error}):\n{stderr}"))
+}
+
+/// the project's coverage configuration names project files, and a hand-written
+/// `.py` runs as its project file, so `source` takes it in and `omit` leaves it out
+/// as it does a `.by`
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_applies_the_configuration_to_project_files() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    let project = dir.path().canonicalize().unwrap();
+
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nsource = [\"pkg\"]\n",
+    )
+    .unwrap();
+    let report = coverage_report(dir.path(), &python, "4\n");
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/plain.py")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
+        "{report}"
+    );
+    assert_eq!(
+        lcov_lines(&report, &project.join("main.by")),
+        None,
+        "main.by is outside `source`:\n{report}"
+    );
+
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nomit = [\"pkg/plain.py\"]\n",
+    )
+    .unwrap();
+    let report = coverage_report(dir.path(), &python, "4\n");
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/plain.py")),
+        None,
+        "pkg/plain.py is omitted:\n{report}"
+    );
+    assert!(
+        lcov_lines(&report, &project.join("pkg/calc.by")).is_some(),
+        "{report}"
+    );
+}
+
+/// coverage.py reports a `.py` under `source` that never ran, and a `.by` that
+/// never ran is reported the same way, on every core coverage.py measures with
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_reports_a_by_module_that_never_ran() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    fs::write(
+        dir.path().join("pkg/unused.by"),
+        "def unused() -> int:\n    return 5\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nsource = [\"pkg\"]\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    for core in ["ctrace", "sysmon"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .env("COVERAGE_CORE", core)
+            .args([
+                "run",
+                "--python",
+                &python,
+                "--coverage",
+                "report.lcov",
+                "main",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{core}: by run failed:\n{stderr}");
+        assert!(
+            !stderr.contains("CoverageWarning"),
+            "{core}: coverage.py warned:\n{stderr}"
+        );
+        let report = fs::read_to_string(dir.path().join("report.lcov")).expect("a report");
+        assert_eq!(
+            lcov_lines(&report, &project.join("pkg/unused.by")),
+            Some(vec!["DA:1,0", "DA:2,0"]),
+            "{core}: {report}"
+        );
+    }
+
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nsource = [\"pkg\"]\nomit = [\"pkg/unused.by\"]\n",
+    )
+    .unwrap();
+    let report = coverage_report(dir.path(), &python, "4\n");
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/unused.by")),
+        None,
+        "pkg/unused.by is omitted:\n{report}"
+    );
+}
+
+/// `--in-build` runs the program in the staged tree, and the configuration still
+/// names the project's files: it is read where the project is
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_in_build_applies_the_configuration_to_project_files() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nsource = [\"pkg\"]\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "--in-build", "--coverage"])
+        .arg(project.join("report.lcov"))
+        .arg("main")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "by run --coverage failed:\n{stderr}"
+    );
+    let report = fs::read_to_string(project.join("report.lcov")).expect("a report");
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/calc.by")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
+        "{report}"
+    );
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/plain.py")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
+        "{report}"
+    );
+}
+
+/// a hand-written `.py` runs as its project file, so a traceback through it
+/// names that file rather than a copy in a directory gone once the run ends
+#[test]
+fn run_names_a_hand_written_module_s_project_file_in_a_traceback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("helper.py"),
+        "def fail() -> None:\n    raise ValueError(\"no\")\n\nwhere = __file__\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "import helper\n\nprint(helper.where)\nhelper.fail()\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let helper = project.join("helper.py");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        Path::new(stdout.trim()).canonicalize().ok(),
+        Some(helper.clone()),
+        "`__file__` names a staged copy:\n{stdout}\n{stderr}"
+    );
+    let raised_in = stderr
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("File \""))
+        .filter_map(|line| line.split('"').next())
+        .next_back()
+        .expect("a traceback");
+    assert_eq!(
+        Path::new(raised_in).canonicalize().ok(),
+        Some(helper),
+        "the traceback names a staged copy:\n{stderr}"
+    );
+}
+
+/// with branch coverage on, coverage.py records the arcs between lines rather
+/// than the lines, and the report still names the `.by` lines that ran
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_reports_lines_when_branches_are_measured() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.coverage.run]\nbranch = true\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let report = coverage_report(dir.path(), &python, "4\n");
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/calc.by")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
+        "{report}"
+    );
+}
+
+/// a program has not ended until its other threads have and its `atexit`
+/// handlers have run, and what they run is measured too
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_measures_threads_and_exit_handlers() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "import atexit\nimport threading\nimport time\n\ndef late():\n    time.sleep(0.2)\n    print(\"late\")\n\ndef bye():\n    print(\"bye\")\n\natexit.register(bye)\nthreading.Thread(target=late).start()\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let report = coverage_report(dir.path(), &python, "late\nbye\n");
+    let lines = lcov_lines(&report, &project.join("main.by")).expect("main.by is reported");
+    for ran in ["DA:6,1", "DA:7,1", "DA:10,1"] {
+        assert!(lines.contains(&ran), "{ran} is not covered:\n{report}");
+    }
+}
+
+/// a test runner compiles a test module itself, rewriting its assertions, so
+/// its code objects are the staged `.py`'s rather than the `.by`'s — and the
+/// report still names the `.by` and its lines
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_maps_a_module_a_test_runner_compiled() {
+    let (python, importable) = coverage_interpreter();
+    let pytest = Command::new(&python)
+        .args(["-c", "import pytest"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !importable || !pytest {
+        eprintln!("skipping: {python} cannot import both coverage and pytest");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::write(
+        dir.path().join("tests/test_calc.by"),
+        "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\ndef test_big():\n    assert add(1000, 2) == -1\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let report = project.join("report.lcov");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("run")
+        .args(["--python", &python, "--in-build", "--coverage"])
+        .arg(&report)
+        .args(["pytest", "-q", "-p", "no:cacheprovider"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        output.status.success(),
+        "by run --coverage pytest failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(&report).expect("a report");
+    assert_eq!(
+        lcov_lines(&report, &project.join("tests/test_calc.by")),
+        Some(vec!["DA:1,1", "DA:4,1", "DA:5,1", "DA:8,1", "DA:9,1"]),
+        "{report}"
+    );
+    assert_eq!(
+        lcov_lines(&report, &project.join("pkg/calc.by")),
+        Some(vec!["DA:1,1", "DA:2,1", "DA:3,1", "DA:4,1"]),
+        "{report}"
+    );
+}
+
 /// `multiprocessing`'s spawn start method — the default on macos and windows —
 /// reads `__main__.__spec__.name` to tell the child what to re-import, and falls
 /// back to running `__file__` as a *path* when there is none. `__file__` is a

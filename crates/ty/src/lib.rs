@@ -1,5 +1,6 @@
 mod args;
 mod by_commands;
+mod by_coverage;
 mod by_init;
 mod by_lowering;
 mod by_project_server;
@@ -124,6 +125,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             lowering,
             compiled,
             in_build,
+            coverage,
         } => by_commands::cmd_run(
             module.as_deref(),
             &args,
@@ -134,6 +136,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 in_build,
                 python: python.as_deref(),
                 launcher: launcher.as_deref(),
+                coverage: coverage.as_deref(),
             },
         ),
         Command::Init {

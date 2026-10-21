@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
@@ -128,9 +128,9 @@ impl LoweringArgs {
 
 /// How `by run` was invoked, beyond what it is running.
 ///
-/// The four choices a caller makes about the *process*: which interpreter, what
-/// stands in front of it, whether its modules are compiled first, and which
-/// directory it runs in. [`CompileFlags`] groups `by compile`'s for the same
+/// The choices a caller makes about the *process*: which interpreter, what
+/// stands in front of it, whether its modules are compiled first, which
+/// directory it runs in, and whether what it runs is measured. [`CompileFlags`] groups `by compile`'s for the same
 /// reason.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RunFlags<'a> {
@@ -142,6 +142,8 @@ pub(crate) struct RunFlags<'a> {
     pub(crate) python: Option<&'a Path>,
     /// `--launcher`: a program to start the interpreter through.
     pub(crate) launcher: Option<&'a Path>,
+    /// `--coverage`: where to write an LCOV report of what ran.
+    pub(crate) coverage: Option<&'a Path>,
 }
 
 #[allow(clippy::exit, clippy::print_stderr)]
@@ -157,6 +159,7 @@ pub(crate) fn cmd_run(
         in_build,
         python: python_flag,
         launcher,
+        coverage,
     } = flags;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     // one resolution of the project, for the environment and the target version
@@ -278,6 +281,17 @@ pub(crate) fn cmd_run(
         &mut staging,
         &BuildRecord::new(&root, &roots, Some(module.clone()), compiled, &config),
     )?;
+    // the project file behind each copy in the tree, for the runner to run it as
+    // and a coverage report to name: the copy is deleted with the tree when the
+    // run ends
+    let carried: BTreeMap<PathBuf, PathBuf> = staging
+        .entries()
+        .filter_map(|(staged, source)| {
+            let source = source.filter(|source| source.extension() != Some(OsStr::new("by")))?;
+            Some((staged.to_path_buf(), source.to_path_buf()))
+        })
+        .collect();
+    write_project_module(&mut staging, &root, &carried)?;
     staging.finish()?;
 
     if compiled {
@@ -367,8 +381,18 @@ pub(crate) fn cmd_run(
     // the whole project is inside it, configuration and data included, so what
     // the program makes of the tree is what it would have made of the project
     let workdir = if in_build { tmp.path() } else { cwd.as_path() };
+    command.arg(tmp.path().join(BY_RUNNER_FILENAME));
+    // what the runner measured, written outside the tree the program can see
+    let measured = match coverage {
+        Some(_) => {
+            let dir = tempfile::TempDir::new().context("failed to create temp directory")?;
+            let file = dir.path().join("measured.json");
+            command.arg("--coverage").arg(&file);
+            Some((dir, file))
+        }
+        None => None,
+    };
     let status = command
-        .arg(tmp.path().join(BY_RUNNER_FILENAME))
         .arg(&module)
         .args(args)
         .current_dir(workdir)
@@ -385,7 +409,28 @@ pub(crate) fn cmd_run(
             ),
         })?;
 
-    let code = status.code().unwrap_or(1);
+    let mut code = status.code().unwrap_or(1);
+    if let (Some(report), Some((_, file))) = (coverage, &measured) {
+        if file.is_file() {
+            let report = cwd.join(report);
+            if let Err(error) =
+                crate::by_coverage::write_report(file, &report, tmp.path(), &carried)
+            {
+                eprintln!("error: no coverage report was written: {error:#}");
+                if code == 0 {
+                    code = 1;
+                }
+            }
+        } else if code != 2 {
+            // 2 is the runner refusing to start without coverage.py, which it has
+            // said already
+            eprintln!(
+                "note: no coverage report was written: the program ended without returning \
+                 to `by run`, as `os._exit` does"
+            );
+        }
+    }
+    drop(measured);
     // drop the temp dir explicitly: `process::exit` skips destructors, so
     // exiting while it's still in scope would leak the directory
     drop(tmp);
@@ -1785,14 +1830,80 @@ fn write_traceback_runtime(
     // through the staging, so that a project of its own with this name is
     // reported as the collision it is rather than silently overwritten by a shim
     // it knows nothing about
-    staging.write(Path::new(BY_RUNNER_FILENAME), None, BY_RUNNER_SRC)
+    staging.write(Path::new(BY_RUNNER_FILENAME), None, BY_RUNNER_SRC)?;
+    staging.write(
+        Path::new(BY_COVERAGE_PLUGIN_FILENAME),
+        None,
+        BY_COVERAGE_PLUGIN_SRC,
+    )
+}
+
+/// the coverage.py plugin `by run --coverage` measures with, which the runner
+/// names by its module name
+const BY_COVERAGE_PLUGIN_FILENAME: &str = "_by_coverage_plugin.py";
+
+const BY_COVERAGE_PLUGIN_SRC: &str = r#"# generated by `by run` — the `.by` modules a run can leave out, for coverage.py
+import os
+
+import coverage
+
+from _by_sourcemap import SOURCEMAP
+
+
+class _ByModules(coverage.CoveragePlugin):
+    """The `.by` files transpiled into the tree, as files coverage.py looks for
+    under its `source` to report the ones that never ran, as it does a `.py`.
+
+    It traces nothing: a `.by` module that runs is compiled under its `.by` path
+    and lines, and measured like any python file."""
+
+    def file_tracer(self, filename):
+        return None
+
+    def find_executable_files(self, src_dir):
+        within = os.path.join(os.path.realpath(src_dir), "")
+        for by_path, _ in SOURCEMAP.values():
+            if os.path.realpath(by_path).startswith(within):
+                yield by_path
+
+
+def coverage_init(reg, options):
+    reg.add_file_tracer(_ByModules())
+"#;
+
+/// the runner's record of the project the tree was staged from
+const BY_PROJECT_FILENAME: &str = "_by_project.py";
+
+/// writes `_by_project.py`: the project's root, and the project file each
+/// hand-written module in the tree is a copy of, which the runner runs it as
+fn write_project_module(
+    staging: &mut Staging,
+    root: &Path,
+    carried: &BTreeMap<PathBuf, PathBuf>,
+) -> anyhow::Result<()> {
+    // a json string is a python string literal, escapes included
+    let modules: BTreeMap<String, String> = carried
+        .iter()
+        .filter(|(_, source)| source.extension() == Some(OsStr::new("py")))
+        .map(|(staged, source)| (staged.display().to_string(), source.display().to_string()))
+        .collect();
+    let text = format!(
+        "# generated by `by run` — the project this tree was staged from\n\
+         ROOT = {}\n\
+         CARRIED = {}\n",
+        serde_json::to_string(&root.display().to_string())?,
+        serde_json::to_string(&modules)?,
+    );
+    staging.write(Path::new(BY_PROJECT_FILENAME), None, &text)
 }
 
 const BY_RUNNER_SRC: &str = r#"# generated by `by run` — runs the target module with .by-aware tracebacks
+import atexit
 import dis
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
 import linecache
 import os
 import sys
@@ -1800,6 +1911,7 @@ import traceback
 import types
 import warnings
 
+from _by_project import CARRIED, ROOT
 from _by_sourcemap import DIGESTS, SOURCEMAP
 
 # index the sourcemap by realpath so symlinked temp dirs (e.g. /tmp on macOS)
@@ -1812,6 +1924,13 @@ _BY_SOURCES = {os.path.realpath(info[0]): py for py, info in SOURCEMAP.items()}
 
 # this file, whose frames are never the program's
 _RUNNER = os.path.realpath(__file__)
+# the tree the project was staged into, which this file is at the top of
+_TREE = os.path.dirname(_RUNNER)
+# the hand-written `.py` files carried over into the tree, each with the project
+# file it is a copy of
+_CARRIED = {
+    os.path.realpath(os.path.join(_TREE, staged)): source for staged, source in CARRIED.items()
+}
 
 # entries already checked against their digests, so each file is read at most
 # once no matter how many frames it contributes
@@ -1960,13 +2079,34 @@ def _excepthook(etype, evalue, tb):
     sys.stderr.write("".join(traceback.format_exception_only(etype, evalue)))
 
 
-def _by_source_of(origin):
-    # the .by file a staged .py was transpiled from, or None for anything else —
-    # a hand-written .py carried over verbatim, or a module from site-packages
+def _project_file_of(origin):
+    # the project file a staged module stands for: the .by a staged .py was
+    # transpiled from, or the hand-written .py it is a copy of. None for anything
+    # else, such as a module from site-packages
     if not origin:
         return None
-    entry = _BY_MAP.get(os.path.realpath(origin))
-    return None if entry is None else entry[1][0]
+    real = os.path.realpath(origin)
+    entry = _BY_MAP.get(real)
+    return _CARRIED.get(real) if entry is None else entry[1][0]
+
+
+def _project_code(origin):
+    """The staged module at `origin` compiled as the project file it stands for, or
+    `None` when it stands for none, which leaves it to python's own loader.
+
+    A hand-written `.py` is a copy, so it is compiled from its text under the
+    project file's path: what python derives from the code object — a traceback,
+    `inspect`, what coverage.py measures — names the file the author wrote, as it
+    does for a `.by`."""
+    code = _by_code(origin)
+    if code is not None:
+        return code
+    project_file = _CARRIED.get(os.path.realpath(origin)) if origin else None
+    if project_file is None:
+        return None
+    with open(origin, "rb") as handle:
+        source = handle.read()
+    return compile(source, project_file, "exec", dont_inherit=True)
 
 
 def _varint(out, value):
@@ -2129,13 +2269,14 @@ def _by_code(origin):
 
 
 class _ByLoader:
-    """Wraps a staged module's loader to name its `.by` source as `__file__`.
+    """Wraps a staged module's loader to name its project file as `__file__`.
 
     The program is run out of a directory of transpiled copies, so every path
     python derives from a module's origin — `__file__`, and anything a tool walks
     up from it to find — names a temporary file in a directory that is deleted
-    when the run ends. The `.by` the module was written as is the answer to every
-    question those paths are asked, so it is what the module reports.
+    when the run ends. The file the module was written as, a `.by` or a
+    hand-written `.py`, is the answer to every question those paths are asked, so
+    it is what the module reports.
 
     This is the loader of a module some other loader stands behind — a test runner
     that rewrites assertions as it compiles. It is left to that loader, and only its
@@ -2170,8 +2311,9 @@ class _ByLoader:
 class _BySourceLoader(importlib.machinery.SourceFileLoader):
     """The loader of a staged module python's own loader would load.
 
-    It compiles the module with `_by_code`, under the `.by` path and lines, and
-    names the `.by` as `__file__`, like `_ByLoader`. It is python's own source
+    It compiles the module with `_project_code`, under its project file's path —
+    and a `.by`'s lines — and names that file as `__file__`, like `_ByLoader`. It
+    is python's own source
     loader rather than a wrapper around one, so that executing the module is
     python's own `exec_module`, whose frames python removes from a traceback raised
     while importing: what a failed import shows is the line that imported and the
@@ -2189,7 +2331,7 @@ class _BySourceLoader(importlib.machinery.SourceFileLoader):
         module = sys.modules.get(fullname)
         if module is not None and getattr(module, "__loader__", None) is self:
             module.__file__ = self._by_path
-        code = _by_code(self.get_filename(fullname))
+        code = _project_code(self.get_filename(fullname))
         if code is not None:
             return code
         return super().get_code(fullname)
@@ -2208,7 +2350,7 @@ class _ByFinder:
             spec = find(fullname, path, target)
             if spec is None:
                 continue
-            by_path = _by_source_of(getattr(spec, "origin", None))
+            by_path = _project_file_of(getattr(spec, "origin", None))
             if by_path is not None and type(spec.loader) is importlib.machinery.SourceFileLoader:
                 spec.loader = _BySourceLoader(spec.loader.name, spec.loader.path, by_path)
             elif by_path is not None and spec.loader is not None:
@@ -2257,7 +2399,7 @@ def _run_as_main(module):
     code = spec.loader.get_code(module)
     if code is None:
         raise ImportError("module " + repr(module) + " has no code to run", name=module)
-    by_path = _by_source_of(spec.origin) or spec.origin
+    by_path = _project_file_of(spec.origin) or spec.origin
     sys.argv[0] = by_path
     main_module = types.ModuleType("__main__")
     main_module.__file__ = by_path
@@ -2274,11 +2416,150 @@ def _run_as_main(module):
     exec(code, main_module.__dict__)
 
 
+def _start_coverage(report):
+    """Measure the program with coverage.py, and write what ran to `report` once the
+    program has ended: after its other threads and its own `atexit` handlers, which
+    python runs before the ones registered ahead of them."""
+    try:
+        import coverage
+        from coverage.exceptions import CoverageWarning
+    except ImportError:
+        sys.stderr.write(
+            "error: `by run --coverage` measures with coverage.py, which "
+            f"{sys.executable} cannot import\n"
+            "  install it into that environment: `uv add --dev coverage`, or "
+            f"`{sys.executable} -m pip install coverage`\n"
+        )
+        sys.exit(2)
+    # the project's coverage configuration names the project's files, which is what
+    # every module runs as, so it is read, and its relative paths resolved, where
+    # the project is. a program run in the tree (`--in-build`) is in the project's
+    # directory that the tree's directory is a copy of
+    here = os.getcwd()
+    within = os.path.relpath(os.path.realpath(here), _TREE)
+    project_dir = here if within.split(os.sep)[0] == os.pardir else os.path.join(ROOT, within)
+    os.chdir(project_dir)
+    try:
+        # no data file: what was measured is read back below, and a `.coverage` left
+        # in the directory the program ran in would be a second, unmapped report of it
+        measurement = coverage.Coverage(data_file=None)
+        measurement.set_option(
+            "run:plugins", [*measurement.get_option("run:plugins"), "_by_coverage_plugin"]
+        )
+        with warnings.catch_warnings():
+            # a core that runs no plugin's tracer says so, and the plugin traces
+            # nothing: it only lists the `.by` files, which coverage.py asks it for
+            # whatever the core
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Plugin file tracers \(_by_coverage_plugin\._ByModules\) aren't supported",
+                category=CoverageWarning,
+            )
+            measurement.start()
+    finally:
+        os.chdir(here)
+    atexit.register(_write_coverage, measurement, report)
+
+
+def _analysed(measurement, filename):
+    """The statements of `filename` and those of them that ran, as coverage.py counts
+    them, or `None` for a file coverage.py cannot read as python."""
+    try:
+        _, statements, _, missing, _ = measurement.analysis2(filename)
+    except Exception:
+        # a file python ran that has no python source to read: code compiled from a
+        # string under a made-up filename, which coverage.py's own report skips too
+        return None
+    return statements, sorted(set(statements) - set(missing))
+
+
+def _generated_analysis(measurement, filename, lines):
+    """The statements of the generated `.py` at `filename` and those of them `lines`
+    ran, as coverage.py's report reads them: each line that ran is put on the
+    statement it is part of. `None` when coverage.py cannot read the file."""
+    from coverage.exceptions import NoSource
+    from coverage.python import PythonFileReporter
+
+    try:
+        reporter = PythonFileReporter(filename, measurement)
+        statements = reporter.lines()
+    except NoSource:
+        return None
+    return statements, reporter.translate_lines(lines) & statements
+
+
+def _write_coverage(measurement, report):
+    """What ran, with every line of a transpiled module moved to its `.by` line.
+
+    coverage.py records a module by the filename and lines of its code objects. one
+    `_by_code` compiled is already the `.by` with its lines, and one another loader
+    compiled — a test runner rewriting assertions — is the staged `.py` with its own.
+    either way the statements are the generated python's, so each module's lines are
+    put back on its `.py`, analysed there, and only then moved through the sourcemap
+    to the `.by`. a `.by` line is covered when any statement written for it ran.
+
+    every other file is reported as coverage.py measured it, staged copies included:
+    `by run` puts those back where they came from once the run ends.
+    """
+    measurement.stop()
+    data = measurement.get_data()
+    ran = {}
+    files = {}
+    for measured in data.measured_files():
+        real = os.path.realpath(measured)
+        lines = data.lines(measured) or []
+        if real in _BY_SOURCES:
+            key = _BY_SOURCES[real]
+            by_lines = set(lines)
+            generated = SOURCEMAP[key][1]
+            ran.setdefault(key, set()).update(
+                index + 1
+                for index, line in enumerate(generated)
+                if line is not None and line + 1 in by_lines
+            )
+        elif real in _BY_MAP:
+            ran.setdefault(_BY_MAP[real][0], set()).update(lines)
+        else:
+            analysed = _analysed(measurement, measured)
+            if analysed is not None:
+                files[measured] = {"statements": analysed[0], "executed": analysed[1]}
+    for key, lines in ran.items():
+        if key in _STALE:
+            # its `.by` was saved over during the run, so no line of it is the line
+            # this ran as
+            continue
+        by_path, generated = SOURCEMAP[key]
+        analysed = _generated_analysis(measurement, key, lines)
+        if analysed is None:
+            continue
+        statements, executed = (
+            {
+                generated[number - 1] + 1
+                for number in numbers
+                if 0 < number <= len(generated) and generated[number - 1] is not None
+            }
+            for numbers in analysed
+        )
+        entry = files.setdefault(by_path, {"statements": [], "executed": []})
+        entry["statements"] = sorted(statements.union(entry["statements"]))
+        entry["executed"] = sorted(executed.union(entry["executed"]))
+    with open(report, "w", encoding="utf-8") as handle:
+        json.dump({"files": files}, handle)
+
+
 def main():
     sys.excepthook = _excepthook
     sys.meta_path.insert(0, _ByFinder())
+    # `by run --coverage` names where to write what ran in front of the module,
+    # where no module name can be
+    report = None
+    if sys.argv[1] == "--coverage":
+        report = sys.argv[2]
+        del sys.argv[1:3]
     module = sys.argv[1]
     sys.argv = sys.argv[1:]
+    if report is not None:
+        _start_coverage(report)
     try:
         _run_as_main(module)
     except SystemExit:

@@ -38,6 +38,23 @@ there, beside every file the build carries over unchanged, `pyproject.toml`
 included — so a path naming one of its modules resolves, and a tool reports
 paths relative to a tree laid out like the project.
 
+### `--coverage`
+
+measure which lines the program runs and write them as an LCOV report:
+
+```sh
+by run --coverage coverage.lcov main
+by run --coverage coverage.lcov --in-build pytest
+```
+
+the report names the files you wrote: a transpiled module by its `.by` and the
+`.by` lines its statements came from, and a `.py` the build carries over by the
+file in the project rather than the staged copy that ran. measuring is
+coverage.py's, so it has to be installed in the interpreter the program runs on,
+and the project's coverage.py configuration applies: its `source`, `include` and
+`omit` name the project's files as they are in the project, with `--in-build`
+too
+
 ## `by build`
 
 transpile every `.by` file in the project to `build/`, mirroring the module
