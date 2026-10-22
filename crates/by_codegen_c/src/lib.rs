@@ -1109,11 +1109,8 @@ fn emit_absent_values_new(module: &ModuleIr, class: &ClassIr) -> String {
     format!(
         "static PyObject *{owner_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items);\n\
          static PyObject *{type_name}_new(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {{\n\
-         \x20   (void)self; (void)kwnames;\n\
-         \x20   PyTypeObject *by_type = By_NewTarget({type_name}_OBJ, args, PyVectorcall_NARGS(nargs));\n\
-         \x20   if (by_type == NULL) return NULL;\n\
-         \x20   By_AdoptAllocator(by_type, {type_name}_OBJ, {owner_name}_alloc);\n\
-         \x20   return PyType_GenericNew(by_type, NULL, NULL);\n}}\n\n\
+         \x20   (void)self;\n\
+         \x20   return By_ObjectNew({type_name}_OBJ, {owner_name}_alloc, args, nargs, kwnames);\n}}\n\n\
          static PyMethodDef {type_name}_new_def =\n\
          \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){type_name}_new, METH_FASTCALL | METH_KEYWORDS, NULL}};\n\n"
     )
@@ -1538,6 +1535,18 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         }),
         i32::from(class.inherited_init)
     );
+    // python runs the `__init__` its class was given — the one `@dataclass` generates, or
+    // the one the transpiler writes for an accessor block's storage — in a frame of its own,
+    // and pushing that frame is where a construction at the recursion limit raises. nothing
+    // here calls back into python, so the frame is taken and given straight back. a class
+    // with no `__init__` of its own reaches `object.__init__`, which pushes none
+    if !class.inherited_init {
+        out.push_str(
+            "    { ByDepth by_depth = By_DepthHere();\n\
+             \x20     if (BY_UNLIKELY(By_DepthEnter(by_depth))) return -1;\n\
+             \x20     By_DepthLeave(by_depth); }\n",
+        );
+    }
     // a field the constructor takes no parameter for but the class body gave a value still
     // has to be written, and an accessor block's storage is that: the twin writes it at
     // the top of an `__init__` the transpiler injected for exactly this
@@ -1806,11 +1815,23 @@ fn emit_written_init(module: &ModuleIr, init: &Function) -> String {
         .params()
         .first()
         .map_or_else(|| "PyObject *".to_string(), |decl| ctype(module, &decl.ty));
+    // the frame python pushes for the `__init__` a construction runs, counted as the
+    // method's own wrapper counts it — see `emit_wrapper`. a body on a cycle is handed the
+    // depth, so the calls round the cycle count against the same one
+    let (body, depth) = if is_recursive(init) {
+        (depth_symbol(module, init), "by_depth, ")
+    } else {
+        (init.native_symbol(module.name.dotted()), "")
+    };
+    out.push_str(
+        "    ByDepth by_depth = By_DepthHere();\n\
+         \x20   if (BY_UNLIKELY(By_DepthEnter(by_depth))) goto by_init_error;\n",
+    );
     let _ = writeln!(
         out,
-        "    {{ {} by_result = {}(({receiver})selfobj{arguments});",
+        "    {{ {} by_result = {body}({depth}({receiver})selfobj{arguments});\n\
+         \x20     By_DepthLeave(by_depth);",
         ctype(module, &init.ret),
-        init.native_symbol(module.name.dotted())
     );
     if init.convention.can_fail() {
         let _ = writeln!(
@@ -2676,7 +2697,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         let _ = writeln!(
             out,
             "static PyMethodDef {type_name}_new_def =\n\
-             \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){symbol}, METH_FASTCALL | METH_KEYWORDS, NULL}};\n"
+             \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){symbol}, METH_FASTCALL | METH_KEYWORDS, {}}};\n",
+            method_doc(new)
         );
     }
 
@@ -12099,6 +12121,15 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 );
             }
         }
+        // and the docstring, which the adoption leaves behind for the same reason. before
+        // any class decorator init applies, which may write one of its own
+        for (slot, class) in twins.iter().enumerate() {
+            let _ = writeln!(
+                adopt_init,
+                "    if (By_CarryDoc(by_twin[{slot}], {}_OBJ) < 0) return -1;",
+                class.type_name(module.name.dotted())
+            );
+        }
         // the dataclass bookkeeping the adoption above leaves behind because it is spelled
         // as a dunder. it has no slot, so nothing about it can disagree with one — and it
         // is a `dataclasses.Field` dict rather than code, which is why it is carried
@@ -12843,6 +12874,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
     for class in &module.classes {
         let type_name = class.type_name(module.name.dotted());
         let _ = writeln!(strip_docs, "    By_StripDocsAtOO({type_name}_methods);");
+        // a written `__new__` is in no table either, for the reason `publishes_new` gives
+        if publishes_new(class).is_some() {
+            let _ = writeln!(strip_docs, "    By_StripDocAtOO(&{type_name}_new_def);");
+        }
         // a property's halves are in no table, so each is named on its own
         for property in &class.properties {
             let symbol = property_symbol(&type_name, &property.name);

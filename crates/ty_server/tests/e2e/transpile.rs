@@ -88,6 +88,40 @@ fn transpiling_a_fragment_answers_rather_than_panicking() -> Result<()> {
     Ok(())
 }
 
+/// A fragment is analysed at the project's python version, as the whole document is.
+/// `frozendict` is a builtin from 3.15, past ty's newest python, so the conversion its
+/// annotation makes is only written where the analysis knows it.
+#[test]
+fn a_fragment_is_analysed_at_the_project_s_version() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/main.by");
+    let content = "a: frozendict[str, str] = {}\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(main, content)?
+        .with_file(
+            SystemPath::new("ty.toml"),
+            "[environment]\npython-version = \"3.15\"\n",
+        )?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, content, 1);
+    let uri = server.file_uri(main);
+
+    let response = server
+        .send_request_await::<Transpile>(params(&uri, Some(content)))
+        .expect("the server answered nothing at all");
+
+    let generated = response.source.expect("no generated source");
+    assert!(
+        generated.contains("= frozendict()"),
+        "unexpected output:\n{generated}"
+    );
+    Ok(())
+}
+
 /// The whole-document path, which goes through the project database — and then
 /// still builds one of its own, because a pre-pass rewrote the source it lowers.
 /// `enum class` is such a pre-pass.

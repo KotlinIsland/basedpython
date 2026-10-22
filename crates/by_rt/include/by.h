@@ -5948,8 +5948,38 @@ static int By_SettlesInPlace(PyObject *value, const By_Twins *twins, int depth) 
     return same;
 }
 
-/* put `rekeyed` — `(key, replacement)` pairs — in place of those keys of an exact dict, in
- * the order the dict holds them, and say whether that was done
+/* whether every way python has of writing to `container` is `base`'s own, so a write made
+ * through the C API is the one any of its own operations would make
+ *
+ * a subclass that writes one of them may keep its own account of what it holds beside the
+ * table — `OrderedDict` keeps its order in a list of its own — and a write that went past
+ * that account would leave it describing members the table no longer holds */
+static int By_WritesAsBase(PyObject *container, PyTypeObject *base) {
+    static const char *const dict_writes[] = {"__setitem__", "__delitem__", "clear", "update",
+                                              "pop", "popitem", "setdefault", "__ior__", NULL};
+    static const char *const set_writes[] = {"add", "discard", "remove", "clear", "update",
+                                             "pop", "difference_update", "intersection_update",
+                                             "symmetric_difference_update", "__ior__", "__iand__",
+                                             "__isub__", "__ixor__", NULL};
+    const char *const *name;
+    PyTypeObject *type = Py_TYPE(container);
+    if (type == base) return 1;
+    for (name = base == &PyDict_Type ? dict_writes : set_writes; *name != NULL; name++) {
+        PyObject *key = PyUnicode_InternFromString(*name);
+        int same;
+        if (key == NULL) {
+            PyErr_Clear();
+            return 0;
+        }
+        same = _PyType_Lookup(type, key) == _PyType_Lookup(base, key);
+        Py_DECREF(key);
+        if (!same) return 0;
+    }
+    return 1;
+}
+
+/* put `rekeyed` — `(key, replacement)` pairs — in place of those keys of a dict whose writes
+ * are `dict`'s own, in the order the dict holds them, and say whether that was done
  *
  * a dict is keyed on what an object hashes as, so a key is replaced by building the
  * mapping again rather than by a removal and an insertion, which would move the entry to
@@ -5990,8 +6020,9 @@ static int By_RekeyDict(PyObject *dict, PyObject *rekeyed) {
  * instance one of them built is moved onto it — because a mapping keyed on a class or on
  * one of its instances is asked with what the class makes *now*: `TABLE[Pair(1, 2)]`
  * builds its key with the compiled class, and a dispatch table is asked with
- * `type(obj)`. only an exact dict is keyed again (see `By_RekeyDict`): a subclass may
- * keep its own account of its keys beside the table, and is refused where a key moves */
+ * `type(obj)`. only a dict whose writes are all `dict`'s own is keyed again (see
+ * `By_RekeyDict` and `By_WritesAsBase`): a subclass that writes one of its own may keep its
+ * own account of its keys beside the table, and is refused where a key moves */
 static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth) {
     /* the keys first: a value is settled one at a time and anything at all may run while
      * that happens, so nothing may be walking the dict itself */
@@ -6017,7 +6048,8 @@ static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth)
             continue;
         }
         if (moved != key) {
-            PyObject *pair = PyDict_CheckExact(dict) ? PyTuple_Pack(2, key, moved) : NULL;
+            PyObject *pair =
+                By_WritesAsBase(dict, &PyDict_Type) ? PyTuple_Pack(2, key, moved) : NULL;
             if (pair == NULL || (rekeyed == NULL && (rekeyed = PyList_New(0)) == NULL)
                 || PyList_Append(rekeyed, pair) < 0) {
                 PyErr_Clear();
@@ -6045,6 +6077,154 @@ static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth)
         Py_DECREF(rekeyed);
     }
     return settled;
+}
+
+/* the slot of a set's table holding `member` itself, or -1 */
+static Py_ssize_t By_SetSlotOf(PySetObject *table, PyObject *member) {
+    Py_ssize_t slot;
+    for (slot = 0; slot <= table->mask; slot++) {
+        if (table->table[slot].key == member) return slot;
+    }
+    return -1;
+}
+
+/* settle every member of a set, and hand back the set that holds them settled — the set
+ * itself where it could be written in place, or NULL where a member is refused
+ *
+ * a set is hashed on its members, so a member is replaced without moving any other where
+ * that can be done: a replacement that hashes as the member it replaces takes the member's
+ * own entry, so the set iterates in the order it did. where one hashes differently the set
+ * is built again from its members — aside first, and the original only emptied and filled
+ * from that once every member has gone in, so a member that cannot be hashed leaves the set
+ * as it was. a replacement equal to a member already there, or to another replacement, is a
+ * refusal, since one of the two would be lost.
+ *
+ * a `frozenset` is written in place too where every replacement keeps its member's hash,
+ * which is all its own hash is made of; where one does not, a settled copy stands in its
+ * place, as a tuple's does. a subclass is written only where every write it has is `set`'s
+ * own (see `By_WritesAsBase`), and a `frozenset` subclass, which has its own say in what it
+ * is made from, is refused where a member moves */
+static PyObject *By_SettledSet(PyObject *set, const By_Twins *twins, int depth) {
+    PySetObject *table = (PySetObject *)set;
+    PyObject *members = PyList_New(0);
+    PyObject *hashes = PyList_New(0);
+    PyObject *stood = NULL;
+    PyObject *answer = NULL;
+    Py_ssize_t at, size;
+    int settled = 1, moved = 0, rehashed = 0;
+    int frozen = PyFrozenSet_Check(set);
+    if (members == NULL || hashes == NULL) goto refused;
+    /* the members first, with the hash each is filed under: settling one can run arbitrary
+     * code, so nothing may be walking the table itself */
+    for (at = 0; at <= table->mask; at++) {
+        PyObject *key = table->table[at].key;
+        PyObject *hash;
+        /* an empty slot, or the marker a removed member leaves, which is filed under the
+         * one hash no member can have */
+        if (key == NULL || table->table[at].hash == -1) continue;
+        hash = PyLong_FromSsize_t(table->table[at].hash);
+        if (hash == NULL || PyList_Append(hashes, hash) < 0 || PyList_Append(members, key) < 0) {
+            Py_XDECREF(hash);
+            goto refused;
+        }
+        Py_DECREF(hash);
+    }
+    size = PyList_GET_SIZE(members);
+    if (size != PySet_GET_SIZE(set)) goto refused;
+    stood = PyList_New(size);
+    if (stood == NULL) goto refused;
+    for (at = 0; at < size; at++) {
+        PyObject *member = PyList_GET_ITEM(members, at);
+        PyObject *stands = By_SettledValue(member, twins, depth);
+        if (stands == NULL) {
+            settled = 0;
+            stands = By_NewRef(member);
+        }
+        if (stands != member) {
+            Py_hash_t hash = PyObject_Hash(stands);
+            if (hash == -1 && PyErr_Occurred()) {
+                PyErr_Clear();
+                settled = 0;
+            }
+            moved = 1;
+            if (hash != PyLong_AsSsize_t(PyList_GET_ITEM(hashes, at))) rehashed = 1;
+        }
+        PyList_SET_ITEM(stood, at, stands);
+    }
+    if (!settled) goto refused;
+    if (!moved) {
+        answer = By_NewRef(set);
+        goto done;
+    }
+    if (frozen ? !PyFrozenSet_CheckExact(set) : !By_WritesAsBase(set, &PySet_Type)) {
+        goto refused;
+    }
+    /* each member being replaced is still where this read it, and no replacement is equal
+     * to a member already there or to another replacement */
+    if (PySet_GET_SIZE(set) != size) goto refused;
+    {
+        PyObject *replacements = PySet_New(NULL);
+        Py_ssize_t count = 0;
+        if (replacements == NULL) goto refused;
+        for (at = 0; at < size; at++) {
+            PyObject *member = PyList_GET_ITEM(members, at);
+            PyObject *stands = PyList_GET_ITEM(stood, at);
+            if (stands == member) continue;
+            count++;
+            if (By_SetSlotOf(table, member) < 0 || PySet_Contains(set, stands) != 0
+                || PySet_Add(replacements, stands) < 0) {
+                Py_DECREF(replacements);
+                goto refused;
+            }
+        }
+        if (PySet_GET_SIZE(replacements) != count) {
+            Py_DECREF(replacements);
+            goto refused;
+        }
+        Py_DECREF(replacements);
+    }
+    if (!rehashed) {
+        for (at = 0; at < size; at++) {
+            PyObject *member = PyList_GET_ITEM(members, at);
+            PyObject *stands = PyList_GET_ITEM(stood, at);
+            if (stands == member) continue;
+            table->table[By_SetSlotOf(table, member)].key = By_NewRef(stands);
+            Py_DECREF(member);
+        }
+        answer = By_NewRef(set);
+        goto done;
+    }
+    if (frozen) {
+        answer = PyFrozenSet_New(stood);
+        if (answer == NULL || PySet_GET_SIZE(answer) != size) {
+            Py_CLEAR(answer);
+            goto refused;
+        }
+        goto done;
+    }
+    {
+        PyObject *rebuilt = PySet_New(stood);
+        PyObject *filled;
+        if (rebuilt == NULL) goto refused;
+        if (PySet_Clear(set) < 0) {
+            Py_DECREF(rebuilt);
+            goto refused;
+        }
+        filled = PyNumber_InPlaceOr(set, rebuilt);
+        Py_DECREF(rebuilt);
+        if (filled == NULL) goto refused;
+        Py_DECREF(filled);
+        answer = By_NewRef(set);
+        goto done;
+    }
+refused:
+    PyErr_Clear();
+    answer = NULL;
+done:
+    Py_XDECREF(members);
+    Py_XDECREF(hashes);
+    Py_XDECREF(stood);
+    return answer;
 }
 
 /* settle every item of a list, in place, and say whether the list now holds no twin */
@@ -6695,24 +6875,7 @@ static PyObject *By_SettledValue(PyObject *value, const By_Twins *twins, int dep
         return By_SettleDictValues(value, twins, depth - 1) ? By_NewRef(value)
                                                                          : NULL;
     }
-    /* a set's members are what it is hashed on, so one holding a twin is refused rather
-     * than settled — the same reason a dict's keys are */
-    if (PyAnySet_Check(value)) {
-        PyObject *members = PySequence_List(value);
-        Py_ssize_t at;
-        int settled = 1;
-        if (members == NULL) {
-            PyErr_Clear();
-            return NULL;
-        }
-        for (at = 0; settled && at < PyList_GET_SIZE(members); at++) {
-            if (!By_SettlesInPlace(PyList_GET_ITEM(members, at), twins, depth - 1)) {
-                settled = 0;
-            }
-        }
-        Py_DECREF(members);
-        return settled ? By_NewRef(value) : NULL;
-    }
+    if (PyAnySet_Check(value)) return By_SettledSet(value, twins, depth - 1);
     if (PyFunction_Check(value)) {
         return By_SettleFunction(value, twins, depth - 1) ? By_NewRef(value)
                                                                        : NULL;
@@ -7458,6 +7621,34 @@ static inline int By_FrozenSetAttr(PyObject *self, PyObject *name, PyObject *val
     return PyObject_GenericSetAttr(self, name, value);
 }
 
+/* the docstring a class statement wrote, carried off the twin's class
+ *
+ * python keeps a class's `__doc__` in its own dict: the string its body opens with, or
+ * `None` where the body opens with none, or whatever a decorator wrote over that —
+ * `@dataclass` writes the class's signature where the body wrote no docstring. an emitted
+ * type is built from tables holding none of it, so it answers the twin's. the twin was
+ * compiled at the level this interpreter runs at, so under `-OO` that is the `None` python
+ * answers.
+ *
+ * a type that already holds something of its own under the name — the descriptor of a
+ * field spelled `__doc__` — keeps it, since replacing that would leave the field with no
+ * way to be read */
+static inline int By_CarryDoc(PyObject *twin, PyObject *type) {
+    PyObject *doc, *own;
+    if (twin == NULL || type == NULL) return 0;
+    if (!PyType_Check(twin) || !PyType_Check(type)) return 0;
+    if (((PyTypeObject *)twin)->tp_dict == NULL || ((PyTypeObject *)type)->tp_dict == NULL)
+        return 0;
+    doc = PyDict_GetItemString(((PyTypeObject *)twin)->tp_dict, "__doc__");
+    if (doc == NULL) return PyErr_Occurred() ? -1 : 0;
+    own = PyDict_GetItemString(((PyTypeObject *)type)->tp_dict, "__doc__");
+    if (own == NULL && PyErr_Occurred()) return -1;
+    if (own != NULL && own != Py_None) return 0;
+    if (PyDict_SetItemString(((PyTypeObject *)type)->tp_dict, "__doc__", doc) < 0) return -1;
+    PyType_Modified((PyTypeObject *)type);
+    return 0;
+}
+
 /* the dataclass bookkeeping that has no slot to fill, carried off the twin's class
  *
  * `__dataclass_fields__` is a dict of `dataclasses.Field` objects and `__dataclass_params__`
@@ -7478,9 +7669,6 @@ static inline int By_CarryDataclassMembers(PyObject *twin, PyObject *type) {
         /* `copy.replace` reaches for this, and the function it names calls
          * `dataclasses.replace`, which is carried above */
         "__replace__",
-        /* `@dataclass` writes the class's signature here where the body wrote no
-         * docstring, and leaves the docstring alone where it did */
-        "__doc__",
         /* the field names `slots=True` declares, which `copyreg` reads to learn what an
          * instance with no dict holds — and so what `copy` and `pickle` hand over */
         "__slots__",
@@ -10228,8 +10416,8 @@ static PyObject *By_NativeEntryVectorcall(PyObject *callable, PyObject *const *a
  * and python's own allocation of a subclass calls no `__new__` at all. from 3.12 a
  * builtin's entry is against the C stack and counts none of the limit anyway, so this is
  * how every later version already counts — see `By_NativeEntryVectorcall` */
-static inline PyObject *By_NativeEntryFunction(PyMethodDef *def) {
-    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+static inline PyObject *By_NativeEntryFunctionOf(PyMethodDef *def, PyObject *self) {
+    PyObject *function = PyCFunction_NewEx(def, self, NULL);
 #if PY_VERSION_HEX < 0x030C0000
     if (function != NULL
         && (def->ml_flags & (METH_VARARGS | METH_FASTCALL | METH_NOARGS | METH_O | METH_KEYWORDS
@@ -10239,6 +10427,11 @@ static inline PyObject *By_NativeEntryFunction(PyMethodDef *def) {
     }
 #endif
     return function;
+}
+
+/* `By_NativeEntryFunctionOf` with no receiver of its own */
+static inline PyObject *By_NativeEntryFunction(PyMethodDef *def) {
+    return By_NativeEntryFunctionOf(def, NULL);
 }
 
 /* publish a written `__new__` by *assigning* it onto the finished type
@@ -10268,6 +10461,31 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
     return stored;
 }
 
+/* the `tp_new` a class statement gives a class whose `__new__` is written in python: the
+ * slot that looks the name up and calls it
+ *
+ * cpython does not export it. every class whose `__new__` is anything but a builtin bound
+ * to a type is given it, so one such class is made to read it off — once, as the entry
+ * that needs it is published, so that no construction near the recursion limit is the
+ * one to make it */
+static newfunc by_dispatching_new = NULL;
+static PyObject *by_dunder_new = NULL;
+
+static int By_SettleDispatchingNew(void) {
+    PyObject *probe;
+    if (by_dunder_new == NULL) {
+        by_dunder_new = PyUnicode_InternFromString("__new__");
+        if (by_dunder_new == NULL) return -1;
+    }
+    if (by_dispatching_new != NULL) return 0;
+    probe = PyObject_CallFunction((PyObject *)&PyType_Type, "s(){sO}", "by_dispatching_new",
+                                  "__new__", Py_None);
+    if (probe == NULL) return -1;
+    by_dispatching_new = ((PyTypeObject *)probe)->tp_new;
+    Py_DECREF(probe);
+    return 0;
+}
+
 /* publish the `__new__` that hands an interpreted subclass the allocator of the layout it
  * extends, while the class itself keeps `object`'s `tp_new`
  *
@@ -10280,40 +10498,45 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
  *
  * a subclass is what the entry is for. the `class` statement that makes one finds a
  * `__new__` among its bases and installs the dispatcher that looks the name up, so every
- * construction of the subclass comes through here and is handed the allocator first */
+ * construction of the subclass comes through here and is handed the allocator first.
+ *
+ * python's class has no `__new__` of its own, so `C.__new__` is `object.__new__`, and the
+ * entry stands in for that: a builtin bound to `object`, as python's is, carrying its
+ * docstring and signature, and answering every call as `By_ObjectNew` does */
 static inline int By_PublishAllocatingNew(PyObject *type, PyMethodDef *def) {
     PyTypeObject *owner = (PyTypeObject *)type;
-    PyObject *function = By_NativeEntryFunction(def);
+    if (By_SettleDispatchingNew() < 0) return -1;
+    PyObject *object_new = _PyType_Lookup(&PyBaseObject_Type, by_dunder_new);
+    if (object_new != NULL && PyCFunction_Check(object_new)) {
+        def->ml_doc = ((PyCFunctionObject *)object_new)->m_ml->ml_doc;
+    }
+    PyObject *function = By_NativeEntryFunctionOf(def, (PyObject *)&PyBaseObject_Type);
     if (function == NULL) return -1;
-    PyObject *published = PyStaticMethod_New(function);
+    int stored = PyDict_SetItemString(owner->tp_dict, "__new__", function);
     Py_DECREF(function);
-    if (published == NULL) return -1;
-    int stored = PyDict_SetItemString(owner->tp_dict, "__new__", published);
-    Py_DECREF(published);
     if (stored == 0) PyType_Modified(owner);
     return stored;
 }
 
-/* the class a published `__new__` is asked to allocate, refused where python's own
- * `__new__` refuses it: missing, not a class, or not built on `owner` */
-static inline PyTypeObject *By_NewTarget(PyObject *owner, PyObject *const *args, Py_ssize_t nargs) {
-    const char *name = ((PyTypeObject *)owner)->tp_name;
-    if (nargs < 1) {
-        PyErr_Format(PyExc_TypeError, "%s.__new__(): not enough arguments", name);
-        return NULL;
+/* the `tp_new` python gives `type`
+ *
+ * the entry `By_PublishAllocatingNew` puts in a class's dict is one python's class does not
+ * have, and a `class` statement reads it as a written `__new__`: a class built on it is
+ * given the dispatcher where python leaves it the `tp_new` it inherited. python keeps the
+ * inherited one where the `__new__` a class finds is a builtin bound to a type, and the
+ * entry is a builtin bound to `object`, so such a class answers as its base does */
+static newfunc By_PythonTpNew(PyTypeObject *type) {
+    while (type->tp_base != NULL && (type->tp_flags & Py_TPFLAGS_HEAPTYPE)
+           && type->tp_new == by_dispatching_new) {
+        PyObject *found = _PyType_Lookup(type, by_dunder_new);
+        if (found == NULL || !PyCFunction_CheckExact(found)
+            || PyCFunction_GET_SELF(found) != (PyObject *)&PyBaseObject_Type
+            || strcmp(((PyCFunctionObject *)found)->m_ml->ml_name, "__new__") != 0) {
+            break;
+        }
+        type = type->tp_base;
     }
-    if (!PyType_Check(args[0])) {
-        PyErr_Format(PyExc_TypeError, "%s.__new__(X): X is not a type object (%s)", name,
-                     Py_TYPE(args[0])->tp_name);
-        return NULL;
-    }
-    PyTypeObject *subtype = (PyTypeObject *)args[0];
-    if (!PyType_IsSubtype(subtype, (PyTypeObject *)owner)) {
-        PyErr_Format(PyExc_TypeError, "%s.__new__(%s): %s is not a subtype of %s", name,
-                     subtype->tp_name, subtype->tp_name, name);
-        return NULL;
-    }
-    return subtype;
+    return type->tp_new;
 }
 
 /* `obj.__weakref__`: the head of the weak references made of the object, or `None`
@@ -10345,6 +10568,65 @@ static inline void By_AdoptAllocator(PyTypeObject *type, PyObject *owner, allocf
         && PyType_IsSubtype(type, (PyTypeObject *)owner)) {
         type->tp_alloc = alloc;
     }
+}
+
+/* the body of the entry `By_PublishAllocatingNew` publishes: `object.__new__`, asked of a
+ * class built on `owner` after handing it `alloc`
+ *
+ * every refusal is python's own, in its words, and is decided as python would decide it for
+ * the class it would have built. the one place that differs is the dispatcher: a class
+ * built on `owner` reaches this through the dispatcher the entry made it, where python's
+ * would have kept `object`'s `tp_new` — and python's `object.__new__` refuses arguments
+ * beyond the class for a class whose `tp_new` is the dispatcher. the allocation is
+ * `object`'s own, abstract methods refused included */
+static PyObject *By_ObjectNew(PyObject *owner, allocfunc alloc, PyObject *const *args,
+                              Py_ssize_t nargsf, PyObject *kwnames) {
+    Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+    PyTypeObject *subtype;
+    PyTypeObject *staticbase;
+    PyObject *empty;
+    PyObject *made;
+    newfunc object_new = PyBaseObject_Type.tp_new;
+    if (nargs < 1) {
+        PyErr_SetString(PyExc_TypeError, "object.__new__(): not enough arguments");
+        return NULL;
+    }
+    if (!PyType_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "object.__new__(X): X is not a type object (%s)",
+                     Py_TYPE(args[0])->tp_name);
+        return NULL;
+    }
+    subtype = (PyTypeObject *)args[0];
+    if (By_SettleDispatchingNew() < 0) return NULL;
+    /* the most derived base whose `__new__` is not written in python has to be one that
+     * allocates as `object` does, or `object.__new__(dict)` would hand back a dict nothing
+     * initialised */
+    staticbase = subtype;
+    while (staticbase != NULL && By_PythonTpNew(staticbase) == by_dispatching_new) {
+        staticbase = staticbase->tp_base;
+    }
+    if (staticbase != NULL && By_PythonTpNew(staticbase) != object_new) {
+        PyErr_Format(PyExc_TypeError, "object.__new__(%s) is not safe, use %s.__new__()",
+                     subtype->tp_name, staticbase->tp_name);
+        return NULL;
+    }
+    if (nargs > 1 || (kwnames != NULL && PyTuple_GET_SIZE(kwnames) > 0)) {
+        if (By_PythonTpNew(subtype) != object_new) {
+            PyErr_SetString(PyExc_TypeError,
+                            "object.__new__() takes exactly one argument (the type to instantiate)");
+            return NULL;
+        }
+        if (subtype->tp_init == PyBaseObject_Type.tp_init) {
+            PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", subtype->tp_name);
+            return NULL;
+        }
+    }
+    By_AdoptAllocator(subtype, owner, alloc);
+    empty = PyTuple_New(0);
+    if (empty == NULL) return NULL;
+    made = object_new(subtype, empty, NULL);
+    Py_DECREF(empty);
+    return made;
 }
 
 /* publish the `__init_subclass__` that hands every interpreted subclass the allocator of
@@ -14937,6 +15219,31 @@ static PyObject *By_Function_default_half(PyObject *self, Py_ssize_t half) {
     return answer;
 }
 
+/* `f.__closure__`: `None` where the definition captures nothing, as python's is
+ *
+ * a definition that does capture names has its cells in python, and a compiled one keeps
+ * those names in one environment its siblings share, where a write to one is a write every
+ * sibling sees. a tuple of new cells would hold the values the names have now and go on
+ * holding them, and a write to `cell_contents` would reach nothing, so such a function
+ * refuses the attribute rather than answer with cells that only look like its own */
+static PyObject *By_Function_get_closure(PyObject *self, void *closure) {
+    (void)closure;
+    PyObject *code = By_Function_get_code(self, NULL);
+    PyObject *free;
+    Py_ssize_t captured;
+    if (code == NULL) return NULL;
+    free = PyCode_GetFreevars((PyCodeObject *)code);
+    Py_DECREF(code);
+    if (free == NULL) return NULL;
+    captured = PyTuple_GET_SIZE(free);
+    Py_DECREF(free);
+    if (captured == 0) Py_RETURN_NONE;
+    PyErr_SetString(PyExc_AttributeError,
+                    "'function' object has no attribute '__closure__': a compiled closure "
+                    "keeps the names it captures in an environment rather than in cells");
+    return NULL;
+}
+
 static PyObject *By_Function_get_defaults(PyObject *self, void *closure) {
     (void)closure;
     return By_Function_default_half(self, 0);
@@ -14974,6 +15281,7 @@ static PyGetSetDef By_Function_getset[] = {
     {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
     {"__globals__", By_Function_get_globals, NULL, NULL, NULL},
     {"__code__", By_Function_get_code, NULL, NULL, NULL},
+    {"__closure__", By_Function_get_closure, NULL, NULL, NULL},
 #if PY_VERSION_HEX >= 0x030C0000
     {"__type_params__", By_Function_get_type_params, By_Function_set_type_params, NULL, NULL},
 #endif

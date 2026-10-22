@@ -1646,7 +1646,8 @@ pub(crate) fn cmd_transpile(
             }
         }
     } else {
-        by_transforms::transpile(&source, &config).map_err(|e| anyhow::anyhow!("{e}"))?
+        by_transforms::transpile_analysed_at(&source, &config, config.min_version)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
     };
 
     print!("{output}");

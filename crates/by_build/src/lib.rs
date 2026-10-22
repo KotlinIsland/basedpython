@@ -325,11 +325,35 @@ fn lower(
     toolchain: Option<&Toolchain>,
 ) -> Result<by_ir::function::ModuleIr> {
     finish(
-        by_irbuild::module_from_source(source, module_name, options.lowering()),
+        by_irbuild::module_from_source_at(
+            source,
+            module_name,
+            options.lowering(),
+            fallback_config(options, toolchain).min_version,
+        ),
         source,
         options,
         toolchain,
     )
+}
+
+/// the config the interpreted fallback is transpiled with, and the version both halves of
+/// the module are analysed at
+///
+/// the version has to be the *interpreter's*, because the fallback runs inside the
+/// extension at import time — emitting syntax the interpreter cannot parse makes the whole
+/// module fail to load, taking every function with it. the compiled half is analysed at
+/// the same one: a `sys.version_info` test settles which branch binds a name, and analysed
+/// at a newer python the module laid a value out as the branch the interpreter never takes
+/// binds it, then refused the value the interpreter's own branch bound
+fn fallback_config(options: &Options, toolchain: Option<&Toolchain>) -> by_transforms::Config {
+    let mut config = options.fallback.clone().unwrap_or_default();
+    if let Some((major, minor)) = toolchain.and_then(|toolchain| toolchain.version)
+        && let Ok(parsed) = format!("{major}.{minor}").parse()
+    {
+        config.min_version = parsed;
+    }
+    config
 }
 
 /// apply the gates, optimize, and attach the interpreted fallback
@@ -395,25 +419,21 @@ fn finish(
     // `JustFloat = float` locally instead of emitting a
     // `from ty_extensions import ...` that has no module behind it
     //
-    // the version has to be the *interpreter's*, because this python runs inside
-    // the extension at import time — emitting syntax the interpreter cannot parse
-    // makes the whole module fail to load, taking every function with it
-    // a `.py` source is already what runs: it is its own fallback
+    // the module is analysed at the interpreter's version, as the compiled half is: a
+    // lowering that asks what a name is, such as the conversion a `frozendict`
+    // annotation makes on 3.15, has to be answered by the interpreter's builtins rather
+    // than by ty's newest python's. a `.py` source is already what runs: it is its own
+    // fallback
     let twin = if options.language == by_irbuild::Language::Python {
         source.to_string()
     } else {
-        let mut config = options.fallback.clone().unwrap_or_default();
+        let mut config = fallback_config(options, toolchain);
         // the compiled functions read the module's globals by name, and a deferred
         // `from` import is in them only once something has read it
         config.defer_from_imports = false;
-        if let Some((major, minor)) = toolchain.and_then(|toolchain| toolchain.version)
-            && let Ok(parsed) = format!("{major}.{minor}").parse()
-        {
-            config.min_version = parsed;
-        }
-        by_transforms::transpile(source, &config).map_err(|error| {
-            anyhow::anyhow!("could not transpile for the interpreted fallback: {error}")
-        })?
+        by_transforms::transpile_analysed_at(source, &config, config.min_version).map_err(
+            |error| anyhow::anyhow!("could not transpile for the interpreted fallback: {error}"),
+        )?
     };
     // a decorator module init applies to the native definition would otherwise run here
     // too, over the twin's — once for each definition rather than once for the name
@@ -659,5 +679,27 @@ mod tests {
         let error = build_module(&module, &toolchain(), &dir).unwrap_err();
         assert!(error.to_string().contains("not well-formed"));
         assert!(!dir.exists(), "nothing is written for ill-formed IR");
+    }
+
+    /// `frozendict` is a builtin from 3.15, past ty's newest python, so the conversion its
+    /// annotation makes is only written where the module is analysed at the interpreter's
+    /// version. no interpreter is run: the one named is only asked to compile the twin,
+    /// and an artefact without that runs the source
+    #[test]
+    fn the_twin_is_analysed_at_the_interpreter_s_version() {
+        let toolchain = Toolchain::from_probe(
+            "by-build-no-such-python",
+            r#"{"cc": ["cc"], "include": [], "libdir": [], "ext_suffix": ".so", "platform": "linux", "version": "3.15"}"#,
+        )
+        .unwrap();
+        let module = lower(
+            "a: frozendict[str, str] = {}\n",
+            "twin_version",
+            &Options::default(),
+            Some(&toolchain),
+        )
+        .unwrap();
+        let twin = module.fallback_source.unwrap_or_default();
+        assert!(twin.contains("frozendict()"), "{twin}");
     }
 }

@@ -705,9 +705,24 @@ isinstance(ORIGIN, Pair)  # both: True
 TABLE[Pair(1, 2)]  # both: "a"
 ```
 
-what is still left as the body left it is a value nothing here can write: a member of a
-set, which it is hashed on, and a key of a dict *subclass*, which may keep its own account
-of its keys beside the table. those still hold the interpreted class's instance
+a member of a set moves too. one whose replacement hashes as it did takes its own entry,
+so the set iterates in the order it did. where one hashes differently — an instance hashed
+on its identity — the set is built again from its members and iterates in whatever order
+that gives, as python's did in the order the members' addresses gave it. a `frozenset` is
+written in place where every member keeps its hash, and is otherwise settled as a copy, as
+a tuple is, so a module-level name holding one goes on holding the original. a subclass of
+`dict` or `set` moves the same way where every write it has is its base's own.
+
+what is still left as the body left it is a key of a dict, or a member of a set, whose class
+writes one of its own — `OrderedDict` keeps its order in a list beside the table, and a
+write past that would leave the two disagreeing — and a member of a `frozenset` subclass.
+those still hold the interpreted class's instance:
+
+```python
+ORDERED = OrderedDict({Pair(1, 2): "a"})
+
+ORDERED[Pair(1, 2)]  # python: "a"; compiled: KeyError
+```
 
 ### what the body wrote over a definition's name
 
@@ -959,6 +974,33 @@ sys.setrecursionlimit(100)
 mod.nested_depth(98)  # python: RecursionError; compiled: 98
 ```
 
+a construction counts the frame of the `__init__` it runs, as python's does, a generated one
+included. from 3.13 python also specialises a construction a call site makes often, where
+the class's `__init__` is a plain python function given every argument by position and its
+instances keep their attributes inline, and the specialised form takes a second frame for
+the return from `__init__`. a compiled class is never constructed that way, and neither is
+a class written on one the module extends, so a recursion that goes round through such a
+construction reaches the limit a level later for each one:
+
+```python
+class Node:
+    def __init__(self, f: Callable[[int], int], n: int) -> None:
+        self.v = f(n)
+
+
+# from another module, on 3.13 or later
+def down(n):
+    return 0 if n == 0 else mod.Node(down, n - 1).v + 1
+
+
+sys.setrecursionlimit(100)
+down(40)  # python: RecursionError; compiled: 40
+```
+
+python's own answer moves with how warm the call site is and with how the call is spelled —
+`mod.Node(down, n=n - 1)` is not specialised, and counts the one frame — so there is no
+one depth to match
+
 `==` and `!=` are one more such call. where the left operand's type has no comparison of
 its own, python's answer is whatever the right operand's type says, and a compiled module
 asks that type directly instead of going through `PyObject_RichCompare` — which leaves out
@@ -1104,9 +1146,9 @@ mod.Scale().get()  # python: 10; compiled: 3
 a dunder python calls through a type slot — `__init__`, `__eq__`, `__len__` and the rest
 — is not one of those methods. the class holds the `wrapper_descriptor` cpython makes for
 the slot, which is what `object.__init__` is too, so it says nothing about the `def` it was
-compiled from: it has no `__annotations__`, `__defaults__` or `__code__`, and what reads
-those reads the slot's own description instead. `inspect.signature` of the class itself
-finds no signature at all:
+compiled from: it has no `__annotations__`, `__defaults__` or `__code__`, its `__doc__` is
+the slot's own rather than the docstring, and what reads those reads the slot's own
+description instead. `inspect.signature` of the class itself finds no signature at all:
 
 ```python
 class Point:
@@ -1117,6 +1159,7 @@ class Point:
 
 # from another module
 mod.Point.__init__.__annotations__  # python: {'x': int, 'y': int, 'return': None}; compiled: AttributeError
+mod.Point.__init__.__doc__  # python: None; compiled: 'Initialize self.  See help(type(self)) for accurate signature.'
 typing.get_type_hints(mod.Point.__init__)  # python: {'x': int, 'y': int, 'return': NoneType}; compiled: {}
 inspect.signature(mod.Point.__init__)  # python: (self, x: int, y: int = 0) -> None; compiled: (self, /, *args, **kwargs)
 inspect.signature(mod.Point)  # python: (x: int, y: int = 0) -> None; compiled: ValueError
@@ -1322,6 +1365,26 @@ generates and a slot for every field, so what counts as written afterwards is wh
 from the class the decorator handed back. `setattr(Point, "__repr__", f)` after a
 `data class Point`, or a write over one of its fields, leaves the module interpreted, and
 what the decorator wrote itself does not
+
+### the `__new__` a class with an unset field publishes
+
+a compiled class with an `int` field that may not have been set publishes a `__new__` of
+its own, which hands a subclass made outside the module the allocator that marks the field
+unset. python's class has none, so `C.__new__` is `object.__new__`, and the entry answers
+as that does: it is a builtin bound to `object`, with its docstring and signature, and it
+refuses what `object.__new__` refuses, in the same words. what can tell the two apart is
+the entry itself:
+
+```python
+class Box:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+# from another module
+"__new__" in vars(mod.Box)  # python: False; compiled: True
+mod.Box.__new__ is object.__new__  # python: True; compiled: False
+```
 
 ### an interpreted subclass whose `__init_subclass__` does not chain up
 
@@ -1530,6 +1593,32 @@ alive() is not None  # python: False; compiled: True, for as long as `kept` live
 a cell for each captured name would close this, and that is a different shape for every
 closure a compiled frame makes
 
+### a nested function's closure
+
+python gives each name a nested function captures a cell, and answers `f.__closure__` with
+a tuple of them, or `None` where it captures nothing. a compiled nested function keeps the
+names its frame's closures capture in one environment they share — see
+[what a closure keeps alive](#what-a-closure-keeps-alive) — and has no cells to hand over.
+cells made for the asking would hold the values the names have when they are made, and a
+later write to the name, or to a cell's `cell_contents`, would not reach the other. so one
+that captures nothing answers `None`, as python's does, and one that captures a name has no
+`__closure__` at all:
+
+```python
+def outer(k: int):
+    def inner(x: int) -> int:
+        return x + k
+
+    return inner
+
+
+# from another module
+mod.outer(1).__closure__  # python: (<cell ...>,); compiled: AttributeError
+inspect.getclosurevars(mod.outer(1))  # python: ClosureVars(nonlocals={'k': 1}, ...); compiled: TypeError
+```
+
+`inspect.getclosurevars` refuses any compiled function, which is not a `types.FunctionType`
+
 ### a frozen field written through `object.__setattr__`
 
 python's `frozen data class` refuses a write in `__setattr__` and leaves each field
@@ -1686,6 +1775,30 @@ mod.fold(33)  # python: RecursionError; compiled: 33
 
 python's own answer moves with how warm the call site is, so there is no one depth to
 match; counting each such call would put a cost on every call into a builtin
+
+a dunder python calls through a type slot is held as the slot's wrapper — see
+[a dunder a slot answers](#a-dunder-a-slot-answers) — and calling one by name,
+`Base.__init__(self, …)`, `super().__init__(…)` or `Node.__len__(n)`, is a call into that
+builtin, which 3.11 counts. the compiled body counts the frame python's `def` would have
+pushed as well, so on 3.11 a recursion that goes round through such a call reaches the
+limit a level earlier than python's for each one:
+
+```python
+class Node:
+    def __init__(self, f: Callable[[int], int], n: int) -> None:
+        self.v = f(n)
+
+
+# from another module, on 3.11
+def down(n):
+    node = mod.Node.__new__(mod.Node)
+    mod.Node.__init__(node, down, n - 1) if n else None
+    return node.v + 1 if n else 0
+
+
+sys.setrecursionlimit(100)
+down(40)  # python: 40; compiled: RecursionError
+```
 
 a data class's `==` compares two tuples of its fields below 3.13, and a tuple finds two
 identical objects equal without asking them. a `float` field is kept as a number rather
