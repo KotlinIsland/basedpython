@@ -22,6 +22,10 @@ use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::{SourceTextError, source_text};
+use ruff_python_ast as ast;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
+use ruff_python_parser::{UnsupportedSyntaxError, UnsupportedSyntaxErrorKind};
+use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
@@ -519,22 +523,84 @@ fn check_file_inner(
             .map(|error| Diagnostic::invalid_syntax(source_file, &error.error, error)),
     );
 
-    diagnostics.extend(parsed_ref.unsupported_syntax_errors().iter().map(|error| {
-        let mut error = Diagnostic::invalid_syntax(source_file, error, error);
-        add_inferred_python_version_hint_to_diagnostic(
-            db,
-            source_file,
-            &mut error,
-            "parsing syntax",
-        );
-        error
-    }));
+    let (type_diagnostics, template_literal_types) = check_types_with(db, file, external);
 
-    diagnostics.extend(check_types_with(db, file, external));
+    let lowered_fstrings = outermost_template_literal_types(
+        parsed_ref.syntax(),
+        parsed_ref.unsupported_syntax_errors(),
+        &template_literal_types,
+    );
+    diagnostics.extend(
+        parsed_ref
+            .unsupported_syntax_errors()
+            .iter()
+            .filter(|error| !is_written_in(error, &lowered_fstrings))
+            .map(|error| {
+                let mut error = Diagnostic::invalid_syntax(source_file, error, error);
+                add_inferred_python_version_hint_to_diagnostic(
+                    db,
+                    source_file,
+                    &mut error,
+                    "parsing syntax",
+                );
+                error
+            }),
+    );
+
+    diagnostics.extend(type_diagnostics);
 
     diagnostics.sort_unstable_by(|a, b| a.rendering_sort_key(db).cmp(&b.rendering_sort_key(db)));
 
     Ok(diagnostics.into_boxed_slice())
+}
+
+/// basedpython: the f-strings standing outside any other f-string that are template literal
+/// types, when one holds a pep 701 f-string error
+///
+/// which syntax the lowering rewrites is the parser's to say, in
+/// `UnsupportedSyntaxErrorKind::is_lowered_by_basedpython`, and it holds a pep 701 f-string to
+/// python 3.12. a template literal type is the exception, which only the checker can tell apart:
+/// the lowering writes the `str` or `Literal[...]` it means in place of the whole f-string, so
+/// none of the f-string's syntax reaches the python. an f-string nested in one goes with it, and
+/// one nested in an f-string the python keeps is kept, so the outermost f-string decides
+fn outermost_template_literal_types(
+    module: &ast::ModModule,
+    errors: &[UnsupportedSyntaxError],
+    template_literal_types: &[TextRange],
+) -> Vec<TextRange> {
+    struct Outermost(Vec<TextRange>);
+
+    impl<'a> SourceOrderVisitor<'a> for Outermost {
+        fn visit_expr(&mut self, expr: &'a ast::Expr) {
+            if let ast::Expr::FString(fstring) = expr {
+                self.0.push(fstring.range);
+            } else {
+                walk_expr(self, expr);
+            }
+        }
+    }
+
+    if template_literal_types.is_empty()
+        || !errors
+            .iter()
+            .any(|error| matches!(error.kind, UnsupportedSyntaxErrorKind::Pep701FString(_)))
+    {
+        return Vec::new();
+    }
+    let mut outermost = Outermost(Vec::new());
+    outermost.visit_body(&module.body);
+    outermost
+        .0
+        .retain(|range| template_literal_types.contains(range));
+    outermost.0
+}
+
+/// whether `error` is a pep 701 f-string error written in one of `fstrings`
+fn is_written_in(error: &UnsupportedSyntaxError, fstrings: &[TextRange]) -> bool {
+    matches!(error.kind, UnsupportedSyntaxErrorKind::Pep701FString(_))
+        && fstrings
+            .iter()
+            .any(|fstring| fstring.contains_range(error.range))
 }
 
 #[derive(Debug, Clone, get_size2::GetSize)]

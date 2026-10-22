@@ -91,6 +91,58 @@ def tagged(template: object) -> object:
 greeting = tagged"hello {1 + 1}"
 ```
 
+### A bracketless `except`
+
+The types of an `except` clause that leaves out their parentheses are written as the parenthesized
+tuple they are, which every version parses:
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+def parse(text: str) -> int:
+    try:
+        return int(text)
+    except ValueError, TypeError:
+        return 0
+
+assert parse("x") == 0
+```
+
+### A template literal type
+
+An f-string in a type expression is a template literal type, which is written as the `str` or
+`Literal[...]` it means, so none of the f-string's own syntax reaches the python. It may reuse its
+quote inside a replacement field before 3.12:
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```by
+def greet(greeting: f"{"hi" | "hello"} {str}") -> str:
+    return greeting
+
+assert greet("hi there") == "hi there"
+```
+
+### An f-string the python keeps
+
+An f-string value is written into the python as it stands, so it reuses its quote only from 3.12:
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```by
+name = "world"
+greeting = f"{"hello"} {name}"  # error: [invalid-syntax] "Cannot reuse outer quote character in f-strings on Python 3.11 (syntax was added in Python 3.12)"
+```
+
 ### A `match` statement
 
 A `match` statement is lowered to a chain of `if` statements whose tests bind what the patterns

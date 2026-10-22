@@ -179,3 +179,11 @@ the emitted annotation is read back from the checker, so it cannot disagree with
 what basedpython decided the pattern meant. the lowering is one-way: a `str`
 annotation carries no evidence that it was ever a pattern, so
 [reverse transpilation](../development/reverse-transforms.md) leaves it alone
+
+none of the f-string reaches the python, so neither does its syntax. a hole may
+reuse the f-string's own quotes whatever python the output is for, which an
+f-string *value* can only do from python 3.12:
+
+```by
+kind: f"{"get" | "set"}-{int}"   # fine on a python 3.11 target
+```

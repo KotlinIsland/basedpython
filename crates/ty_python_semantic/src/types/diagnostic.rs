@@ -4225,6 +4225,10 @@ struct InferenceUses {
     /// the sites that write module-level names into code that runs, whose names are checked
     /// once the file is inferred ([`crate::types::runtime_reads`])
     runtime_read_checks: Vec<RuntimeReadCheck>,
+    /// every f-string inferred as a template literal type. the transpiler writes each as the
+    /// `str` or `Literal[...]` it means, so none of the f-string's own syntax reaches the
+    /// python, whatever version that python is for
+    template_literal_types: Vec<TextRange>,
 }
 
 /// reports a bare call of the reified generic function `name` whose specialization cannot be
@@ -4492,7 +4496,20 @@ impl TypeCheckDiagnostics {
             uses.scope_reads.extend(&other_uses.scope_reads);
             uses.runtime_read_checks
                 .extend_from_slice(&other_uses.runtime_read_checks);
+            uses.template_literal_types
+                .extend_from_slice(&other_uses.template_literal_types);
         }
+    }
+
+    /// basedpython: records that `range` is an f-string inferred as a template literal type
+    pub(super) fn record_template_literal_type(&mut self, range: TextRange) {
+        self.uses_mut().template_literal_types.push(range);
+    }
+
+    pub(crate) fn template_literal_types(&self) -> &[TextRange] {
+        self.uses
+            .as_ref()
+            .map_or(&[], |uses| &uses.template_literal_types)
     }
 
     pub(super) fn extend_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
@@ -4556,6 +4573,7 @@ impl TypeCheckDiagnostics {
             uses.extension_modules.shrink_to_fit();
             uses.scope_reads.shrink_to_fit();
             uses.runtime_read_checks.shrink_to_fit();
+            uses.template_literal_types.shrink_to_fit();
         }
         self.diagnostics.shrink_to_fit();
     }

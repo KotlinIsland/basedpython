@@ -19,7 +19,7 @@ use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_python_ast::helpers::{MemberVisibility, TypeModifier};
 use ruff_python_ast::name::Name;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 use smallvec::smallvec_inline;
 use ty_module_resolver::{
     ImportingFile, KnownModule, Module, ModuleName, file_to_module, resolve_module,
@@ -280,10 +280,11 @@ mod property_tests;
 pub(crate) mod subscript;
 
 pub fn check_types(db: &dyn Db, file: ProgramFile<'_>) -> Vec<Diagnostic> {
-    check_types_with(db, file, Vec::new())
+    check_types_with(db, file, Vec::new()).0
 }
 
-/// [`check_types`], with lint diagnostics worked out elsewhere folded in.
+/// [`check_types`], with lint diagnostics worked out elsewhere folded in, and the range of
+/// every f-string inferred as a template literal type.
 ///
 /// See [`crate::check_file_with`] for what `external` is and why its suppressions
 /// are applied here rather than where it was computed.
@@ -291,7 +292,7 @@ pub(crate) fn check_types_with(
     db: &dyn Db,
     file: ProgramFile<'_>,
     external: Vec<Diagnostic>,
-) -> Vec<Diagnostic> {
+) -> (Vec<Diagnostic>, Vec<TextRange>) {
     let source_file = file.file(db);
     let _span = tracing::trace_span!("check_types", ?source_file).entered();
     tracing::debug!("Checking file '{path}'", path = source_file.path(db));
@@ -327,6 +328,7 @@ pub(crate) fn check_types_with(
 
     report_external(db, source_file, external, &mut diagnostics);
 
+    let template_literal_types = diagnostics.template_literal_types().to_vec();
     let diagnostics = check_suppressions(db, file.python_file(db), diagnostics);
 
     let elapsed = start.elapsed();
@@ -337,7 +339,7 @@ pub(crate) fn check_types_with(
         );
     }
 
-    diagnostics
+    (diagnostics, template_literal_types)
 }
 
 /// Apply `file`'s suppression comments to diagnostics computed outside this crate.

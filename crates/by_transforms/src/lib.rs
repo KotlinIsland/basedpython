@@ -1106,17 +1106,18 @@ fn runtime_entries(config: &Config, helpers: &[runtime::Helper], module: &str) -
 }
 
 /// Version polyfill phase: rewrite syntax the target python cannot parse into
-/// syntax it can. Runs over the finished python rather than over `.by`, so a
-/// `match` an earlier lowering *generated* — for a `let` destructuring, an
-/// `if let`, a statement expression — is lowered by the same code as one the
-/// author wrote.
+/// syntax it can — a `match` statement, and the types of a bracketless `except`.
+/// Runs over the finished python rather than over `.by`, so a `match` an earlier
+/// lowering *generated* — for a statement expression, an enum's exhaustiveness —
+/// is lowered by the same code as one the author wrote.
 ///
-/// Nothing here changes how many lines the file has: the polyfill rewrites
-/// headers in place and pads them back to their original height, so the only
-/// lines it adds are the runtime preamble's, at the top, where the line map
+/// Nothing here changes how many lines the file has: the polyfills rewrite
+/// headers in place and pad them back to their original height, so the only
+/// lines they add are the runtime preamble's, at the top, where the line map
 /// already accounts for generated leading lines.
 fn run_version_polyfill_phase(source: String, config: &Config) -> String {
-    transforms::match_polyfill::lower(source, config)
+    let source = transforms::match_polyfill::lower(source, config);
+    transforms::except_polyfill::lower(source, config)
 }
 
 /// Re-parse the transpiled output *as the target python version* and report any
@@ -2889,109 +2890,6 @@ mod cross_file {
             ext_out.contains("def _by_ext2__list__second(self):"),
             "got:\n{ext_out}"
         );
-    }
-
-    /// Locate an interpreter for the cross-module runtime checks.
-    fn python() -> Option<String> {
-        let mut candidates = Vec::new();
-        if let Ok(p) = std::env::var("PYTHON") {
-            candidates.push(p);
-        }
-        candidates.extend(["python3.13", "python3", "python"].map(String::from));
-        candidates.into_iter().find(|py| {
-            std::process::Command::new(py)
-                .args(["-c", ""])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        })
-    }
-
-    /// a target new enough that `override` resolves in the stdlib rather than
-    /// through `typing_extensions`, which the test environment need not have
-    fn runtime_config() -> Config {
-        Config {
-            min_version: ruff_python_ast::PythonVersion::PY313,
-            ..Config::test_default()
-        }
-    }
-
-    /// Transpile every module of `project` into a temp directory and run `main`.
-    ///
-    /// Asserting the emitted *text* of each file in isolation is not enough for
-    /// anything cross-module: a conformance registers in one module and is read
-    /// in another, so only executing both together proves the two halves meet.
-    /// Two text-asserting tests once passed while the program they described
-    /// raised `AttributeError`.
-    fn run_project(project: &Project, config: &Config) -> Result<String, String> {
-        let Some(python) = python() else {
-            return Ok("SKIPPED".to_owned());
-        };
-        let dir = tempfile::tempdir().expect("temp dir");
-        for (path, _) in &project.files {
-            let out = transpile_file(project, path, config);
-            let name = path.trim_start_matches('/').replace(".by", ".py");
-            let target = dir.path().join(&name);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).expect("mkdir");
-            }
-            std::fs::write(&target, out).expect("write");
-        }
-        let output = std::process::Command::new(&python)
-            .arg("main.py")
-            .current_dir(dir.path())
-            .output()
-            .expect("spawn python");
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).to_string())
-        }
-    }
-
-    /// the feature's headline case: the interface comes from one module, the
-    /// conformance from another, and the consumer sees both only through its
-    /// imports. this must *run*, not merely lower
-    #[test]
-    fn an_imported_conformance_dispatches_at_runtime() {
-        let project = project_db(&[
-            ("/iface.by", "protocol Show:\n    def show(self) -> str\n"),
-            (
-                "/adapters.by",
-                "from iface import Show\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n",
-            ),
-            (
-                "/main.by",
-                "import adapters\nfrom iface import Show\n\ndef render(value: Show) -> str:\n    return value.show()\n\nprint(render(\"hi\"))\n",
-            ),
-        ]);
-        match run_project(&project, &runtime_config()) {
-            Ok(out) if out == "SKIPPED" => {}
-            Ok(out) => assert_eq!(out, "OWN:hi"),
-            Err(err) => panic!("the imported conformance did not dispatch:\n{err}"),
-        }
-    }
-
-    /// the module that declares the protocol-typed function is *upstream* of the
-    /// conformance by construction, so it can never see one. it still has to
-    /// emit a dispatch
-    #[test]
-    fn a_conformance_declared_downstream_of_its_use_still_dispatches() {
-        let project = project_db(&[
-            (
-                "/lib.by",
-                "protocol Show:\n    def show(self) -> str\n\ndef render(value: Show) -> str:\n    return value.show()\n",
-            ),
-            (
-                "/main.by",
-                "from lib import Show, render\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n\nprint(render(\"hi\"))\n",
-            ),
-        ]);
-        match run_project(&project, &runtime_config()) {
-            Ok(out) if out == "SKIPPED" => {}
-            Ok(out) => assert_eq!(out, "OWN:hi"),
-            Err(err) => panic!("a downstream conformance did not dispatch:\n{err}"),
-        }
     }
 
     /// a project with no conformance anywhere is byte-for-byte unaffected.

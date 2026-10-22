@@ -1209,6 +1209,8 @@ impl UnsupportedSyntaxErrorKind {
             | UnsupportedSyntaxErrorKind::StarAnnotation
             | UnsupportedSyntaxErrorKind::StarExpressionInIndex
             | UnsupportedSyntaxErrorKind::LazyImportStatement => true,
+            // the types of a bracketless `except` are written as the parenthesized tuple they are
+            UnsupportedSyntaxErrorKind::UnparenthesizedExceptionTypes => true,
             // the `match` lowering writes each pattern as a test built of assignment
             // expressions, in which a unary `+` is an ordinary operator
             UnsupportedSyntaxErrorKind::Match
@@ -1229,12 +1231,14 @@ impl UnsupportedSyntaxErrorKind {
             | UnsupportedSyntaxErrorKind::StarTuple(_)
             | UnsupportedSyntaxErrorKind::RelaxedDecorator(_)
             | UnsupportedSyntaxErrorKind::PositionalOnlyParameter
-            | UnsupportedSyntaxErrorKind::Pep701FString(_)
             | UnsupportedSyntaxErrorKind::ParenthesizedContextManager
             | UnsupportedSyntaxErrorKind::UnpackingInComprehension(_)
             | UnsupportedSyntaxErrorKind::UnparenthesizedUnpackInFor
-            | UnsupportedSyntaxErrorKind::UnparenthesizedExceptionTypes
             | UnsupportedSyntaxErrorKind::TemplateStrings => false,
+            // an f-string is kept, but one that is a template literal type is written as the `str`
+            // or `Literal[...]` it means, so none of its syntax reaches the python. what is a type
+            // expression only the checker knows, so it is the checker that lets those through
+            UnsupportedSyntaxErrorKind::Pep701FString(_) => false,
         }
     }
 

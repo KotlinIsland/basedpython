@@ -58,6 +58,8 @@ except (TimeoutError, ConnectionRefusedError):
     ...
 ```
 
+the same goes for `except*`
+
 ### template strings / t-strings (PEP 750)
 
 `t'...'` literals produce `string.templatelib.Template` objects. below 3.14 there is no runtime
