@@ -193,7 +193,8 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
         match self.anchor(db) {
             DynamicNamedTupleAnchor::CollectionsDefinition { definition, .. }
             | DynamicNamedTupleAnchor::TypingDefinition(definition) => Some(*definition),
-            DynamicNamedTupleAnchor::ScopeOffset { .. } => None,
+            DynamicNamedTupleAnchor::ScopeOffset { .. }
+            | DynamicNamedTupleAnchor::Anonymous { .. } => None,
         }
     }
 
@@ -202,7 +203,8 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
         match self.anchor(db) {
             DynamicNamedTupleAnchor::CollectionsDefinition { definition, .. }
             | DynamicNamedTupleAnchor::TypingDefinition(definition) => definition.scope(db),
-            DynamicNamedTupleAnchor::ScopeOffset { scope, .. } => *scope,
+            DynamicNamedTupleAnchor::ScopeOffset { scope, .. }
+            | DynamicNamedTupleAnchor::Anonymous { scope, .. } => *scope,
         }
     }
 
@@ -220,6 +222,10 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
             }
             DynamicNamedTupleAnchor::ScopeOffset { offset, .. } => {
                 DynamicClassHeaderAnchor::ScopeOffset(*offset)
+            }
+            // every form of this shape makes the class, so no one of them is its header
+            DynamicNamedTupleAnchor::Anonymous { .. } => {
+                DynamicClassHeaderAnchor::ScopeOffset(DynamicClassScopeOffset::Node(0))
             }
         };
         dynamic_class_header_range(db, self.scope(db), anchor)
@@ -463,7 +469,8 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
 
         match self.anchor(db) {
             DynamicNamedTupleAnchor::CollectionsDefinition { spec, .. }
-            | DynamicNamedTupleAnchor::ScopeOffset { spec, .. } => *spec,
+            | DynamicNamedTupleAnchor::ScopeOffset { spec, .. }
+            | DynamicNamedTupleAnchor::Anonymous { spec, .. } => *spec,
             DynamicNamedTupleAnchor::TypingDefinition(definition) => deferred_spec(db, *definition),
         }
     }
@@ -537,6 +544,15 @@ pub enum DynamicNamedTupleAnchor<'db> {
         offset: DynamicClassScopeOffset,
         spec: NamedTupleSpec<'db>,
     },
+
+    /// basedpython: the class an anonymous named tuple form `(name: T, ...)` or
+    /// `(name=v, ...)` makes, which no call the program makes can produce. its identity
+    /// is its shape: every form in a module with the same spec is the same class, anchored
+    /// at the module's scope
+    Anonymous {
+        scope: ScopeId<'db>,
+        spec: NamedTupleSpec<'db>,
+    },
 }
 
 impl<'db> DynamicNamedTupleAnchor<'db> {
@@ -562,6 +578,21 @@ impl<'db> DynamicNamedTupleAnchor<'db> {
                 offset: *offset,
                 spec: spec.recursive_type_normalized_impl(db, env, div, nested)?,
             }),
+            Self::Anonymous { scope, spec } => Some(Self::Anonymous {
+                scope: *scope,
+                spec: spec.recursive_type_normalized_impl(db, env, div, nested)?,
+            }),
+        }
+    }
+
+    /// the field specification an anonymous named tuple form made this class from, or
+    /// `None` for a named tuple the program makes itself
+    pub(crate) fn anonymous_spec(&self) -> Option<NamedTupleSpec<'db>> {
+        match self {
+            Self::Anonymous { spec, .. } => Some(*spec),
+            Self::CollectionsDefinition { .. }
+            | Self::TypingDefinition(_)
+            | Self::ScopeOffset { .. } => None,
         }
     }
 }

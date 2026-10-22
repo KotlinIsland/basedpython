@@ -17,7 +17,7 @@ use super::{
     MaterializationKind, SubclassOfType, Type, TypeAliasType,
 };
 use crate::place::PlaceAndQualifiers;
-use crate::types::class::{DynamicNamedTupleAnchor, GenericAlias, StaticClassLiteral};
+use crate::types::class::{GenericAlias, StaticClassLiteral};
 use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, IteratorConstraintsExtension, OwnedConstraintSet,
 };
@@ -1261,29 +1261,12 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         source: ClassType<'db>,
         target: ClassType<'db>,
     ) -> Option<ConstraintSet<'db, 'c>> {
-        let source_nt = match source.class_literal(db) {
-            ClassLiteral::DynamicNamedTuple(nt)
-                if nt.name(db).as_str().starts_with("_AnonNamedTuple_") =>
-            {
-                nt
-            }
-            _ => return None,
+        let anonymous_spec = |class: ClassType<'db>| match class.class_literal(db) {
+            ClassLiteral::DynamicNamedTuple(nt) => nt.anchor(db).anonymous_spec(),
+            _ => None,
         };
-        let target_nt = match target.class_literal(db) {
-            ClassLiteral::DynamicNamedTuple(nt)
-                if nt.name(db).as_str().starts_with("_AnonNamedTuple_") =>
-            {
-                nt
-            }
-            _ => return None,
-        };
-        let spec_of = |nt: crate::types::class::DynamicNamedTupleLiteral<'db>| match nt.anchor(db) {
-            DynamicNamedTupleAnchor::CollectionsDefinition { spec, .. }
-            | DynamicNamedTupleAnchor::ScopeOffset { spec, .. } => Some(*spec),
-            DynamicNamedTupleAnchor::TypingDefinition(_) => None,
-        };
-        let source_spec = spec_of(source_nt)?;
-        let target_spec = spec_of(target_nt)?;
+        let source_spec = anonymous_spec(source)?;
+        let target_spec = anonymous_spec(target)?;
         let source_fields = source_spec.fields(db);
         let target_fields = target_spec.fields(db);
         if source_fields.len() != target_fields.len() {
