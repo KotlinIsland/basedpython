@@ -35,9 +35,13 @@ source (.by)
   │        when X is not yet stdlib at the configured min Python version
   │
   ├─ phase 2b  anon-named-tuple cleanup
-  │     └─ re-run `anon_named_tuple` on the post-lowering output to catch anon-NT
-  │        spans copied verbatim by other transforms (e.g. the PEP-695 polyfill).
-  │        bounded to a few iterations
+  │     └─ re-run `anon_named_tuple` and the inline-protocol lowering on the
+  │        post-lowering output to catch spans copied verbatim by other transforms
+  │        (e.g. the PEP-695 polyfill). bounded to a few iterations. an output that
+  │        spells no anonymous named tuple and no inline protocol is passed over
+  │        after a parse, without a db or any type inference: the checker makes an
+  │        anonymous named tuple type only from such a form, so no plain tuple in
+  │        it can need constructing as one
   │
   ├─ phase 2c  lazy-import marking
   │     └─ lower imports to the `lazy` keyword (3.15+) or a runtime polyfill
@@ -51,11 +55,9 @@ source (.by)
   │
   └─ phase 3  syntax verification
         ├─ parse the final output as `.py` — any parse error aborts with a
-        │  source-annotated diagnostic (the span is mapped back to `.by`)
-        ├─ scan the AST for leftover basedpython-only flags
-        │  (`is_anon_named_tuple`, `is_anon_named_tuple_value`, `is_typeof`).
-        │  a leftover flag means a transform failed to lower its construct; the
-        │  pipeline aborts rather than emit syntactically-valid-but-wrong Python
+        │  source-annotated diagnostic (the span is mapped back to `.by`). a
+        │  python parse rejects every basedpython-only form, so this is also
+        │  what catches one a transform failed to lower
         ├─ reject a call to one of the transpiler's own runtime helpers that the
         │  module never got. a transform emits the call and records the need in
         │  two different places, and forgetting the second half produces python
