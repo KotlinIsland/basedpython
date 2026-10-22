@@ -1,6 +1,6 @@
 ---
 source: crates/ruff_python_parser/tests/fixtures.rs
-input_file: crates/ruff_python_parser/resources/valid/expressions/identity_compare.py
+input_file: crates/ruff_python_parser/resources/invalid/expressions/identity_compare.py
 ---
 ## AST
 
@@ -8,20 +8,20 @@ input_file: crates/ruff_python_parser/resources/valid/expressions/identity_compa
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..410,
+        range: 0..337,
         body: [
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 234..241,
+                    range: 161..168,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 234..241,
+                            range: 161..168,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 234..235,
+                                    range: 161..162,
                                     id: Name("x"),
                                     ctx: Load,
                                 },
@@ -33,7 +33,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 240..241,
+                                        range: 167..168,
                                         id: Name("y"),
                                         ctx: Load,
                                     },
@@ -53,15 +53,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 242..249,
+                    range: 169..176,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 242..249,
+                            range: 169..176,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 242..243,
+                                    range: 169..170,
                                     id: Name("x"),
                                     ctx: Load,
                                 },
@@ -73,7 +73,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 248..249,
+                                        range: 175..176,
                                         id: Name("y"),
                                         ctx: Load,
                                     },
@@ -93,15 +93,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 388..401,
+                    range: 315..328,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 388..401,
+                            range: 315..328,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 388..389,
+                                    range: 315..316,
                                     id: Name("a"),
                                     ctx: Load,
                                 },
@@ -114,7 +114,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 394..395,
+                                        range: 321..322,
                                         id: Name("b"),
                                         ctx: Load,
                                     },
@@ -122,7 +122,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 400..401,
+                                        range: 327..328,
                                         id: Name("c"),
                                         ctx: Load,
                                     },
@@ -143,15 +143,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 402..409,
+                    range: 329..336,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 402..409,
+                            range: 329..336,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 402..403,
+                                    range: 329..330,
                                     id: Name("a"),
                                     ctx: Load,
                                 },
@@ -163,7 +163,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 408..409,
+                                        range: 335..336,
                                         id: Name("b"),
                                         ctx: Load,
                                     },
@@ -184,3 +184,47 @@ Module(
     },
 )
 ```
+## Errors
+
+  |
+1 | # basedpython identity-comparison operators. python has no such operator, so a
+2 | # `.py` file spelling one is a syntax error, while the comparison keeps its shape
+3 | x === y
+  |   ^^^ Syntax Error: identity operator `===` is not valid in .py files
+4 | x !== y
+  |
+
+
+  |
+2 | # `.py` file spelling one is a syntax error, while the comparison keeps its shape
+3 | x === y
+4 | x !== y
+  |   ^^^ Syntax Error: identity operator `!==` is not valid in .py files
+5 |
+6 | # chained with each other. a chain mixing in the `is` keyword is rejected in
+  |
+
+
+  |
+6 | # chained with each other. a chain mixing in the `is` keyword is rejected in
+7 | # basedpython mode, and has its own test in `parser::tests`
+8 | a === b !== c
+  |   ^^^ Syntax Error: identity operator `===` is not valid in .py files
+9 | a !== b
+  |
+
+
+  |
+6 | # chained with each other. a chain mixing in the `is` keyword is rejected in
+7 | # basedpython mode, and has its own test in `parser::tests`
+8 | a === b !== c
+  |         ^^^ Syntax Error: identity operator `!==` is not valid in .py files
+9 | a !== b
+  |
+
+
+  |
+7 | # basedpython mode, and has its own test in `parser::tests`
+8 | a === b !== c
+9 | a !== b
+  |   ^^^ Syntax Error: identity operator `!==` is not valid in .py files

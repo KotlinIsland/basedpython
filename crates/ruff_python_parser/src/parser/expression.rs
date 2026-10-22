@@ -2315,6 +2315,9 @@ impl<'src> Parser<'src> {
             CmpOp::Is => {
                 // accept either `is` or `===`; bump whichever the lexer emitted
                 if self.at(TokenKind::EqEqEqual) {
+                    self.error_if_not_basedpython(
+                        "identity operator `===` is not valid in .py files".to_string(),
+                    );
                     (TokenKind::EqEqEqual, None)
                 } else {
                     (TokenKind::Is, None)
@@ -2323,6 +2326,9 @@ impl<'src> Parser<'src> {
             CmpOp::IsNot => {
                 // accept either `is not` or `!==`; bump whichever the lexer emitted
                 if self.at(TokenKind::BangEqEqual) {
+                    self.error_if_not_basedpython(
+                        "identity operator `!==` is not valid in .py files".to_string(),
+                    );
                     (TokenKind::BangEqEqual, None)
                 } else {
                     (TokenKind::Is, Some(TokenKind::Not))

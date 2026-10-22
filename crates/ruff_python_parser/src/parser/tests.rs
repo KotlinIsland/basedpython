@@ -72,6 +72,28 @@ fn identity_operators_are_recorded_per_operator() {
     );
 }
 
+/// `===` and `!==` are basedpython's identity operators. python has no such
+/// operator, so a `.py` file spelling one is a syntax error there, as every
+/// other basedpython-only form is
+#[test]
+fn identity_operators_are_not_python() {
+    for source in ["a === b\n", "a !== b\n", "a == b === c\n"] {
+        let parsed = parse_module(source);
+        let Err(error) = parsed else {
+            panic!("expected a syntax error for {source:?}");
+        };
+        assert!(
+            matches!(&error.error, ParseErrorType::BasedPythonOnly(message) if message.contains("is not valid in .py files")),
+            "{source:?}: {error}"
+        );
+    }
+    assert!(
+        parse_basedpython_module_with_errors("a === b !== c\n")
+            .errors()
+            .is_empty()
+    );
+}
+
 #[test]
 fn a_type_test_may_not_be_chained() {
     // python chains `a is int is str` into `a is int and int is str`, whose
