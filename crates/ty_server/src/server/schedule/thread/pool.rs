@@ -44,19 +44,36 @@ struct Job {
 }
 
 impl Pool {
+    /// A pool whose queue holds a few jobs, so that handing it more waits for a thread to take
+    /// one.
     pub(crate) fn new(threads: NonZeroUsize) -> Pool {
+        let capacity = std::cmp::min(usize::from(threads) * 2, 4);
+        Self::with_queue(threads, "ty:worker", crossbeam::channel::bounded(capacity))
+    }
+
+    /// A pool whose queue holds every job it is handed, so that handing it one never waits,
+    /// however long the job before it runs. For work that may run for long, and that the main
+    /// loop must be able to go on handing out, and cancelling, meanwhile.
+    pub(crate) fn unbounded(threads: NonZeroUsize, name: &str) -> Pool {
+        Self::with_queue(threads, name, crossbeam::channel::unbounded())
+    }
+
+    fn with_queue(
+        threads: NonZeroUsize,
+        name: &str,
+        (job_sender, job_receiver): (Sender<Job>, Receiver<Job>),
+    ) -> Pool {
         const INITIAL_PRIORITY: ThreadPriority = ThreadPriority::Worker;
 
         let threads = usize::from(threads);
 
-        let (job_sender, job_receiver) = crossbeam::channel::bounded(std::cmp::min(threads * 2, 4));
         let extant_tasks = Arc::new(AtomicUsize::new(0));
 
         let mut handles = Vec::with_capacity(threads);
         for i in 0..threads {
             let handle = Builder::new(INITIAL_PRIORITY)
                 .stack_size(STACK_SIZE)
-                .name(format!("ty:worker:{i}"))
+                .name(format!("{name}:{i}"))
                 .spawn({
                     let extant_tasks = Arc::clone(&extant_tasks);
                     let job_receiver: Receiver<Job> = job_receiver.clone();

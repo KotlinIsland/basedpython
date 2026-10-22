@@ -24,6 +24,12 @@ pub(in crate::server) enum BackgroundSchedule {
     /// The default for any request that isn't in the critical path of the user typing.
     #[default]
     Worker,
+    /// The task searches the whole workspace for something an editor shows without being asked,
+    /// such as the usage counts drawn above declarations, and may take as long as the workspace is
+    /// large. Such tasks run one at a time on a thread of their own, queued for as long as it
+    /// takes, so that however many an editor asks for, every worker stays free for the requests
+    /// someone is waiting on. A search runs its own work in parallel.
+    Search,
 }
 
 /// A [`Task`] is a future that has not yet started, and it is the job of

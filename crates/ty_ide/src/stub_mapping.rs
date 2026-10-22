@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use itertools::Either;
 use ruff_db::system::SystemPathBuf;
 use ty_python_semantic::{ResolvedDefinition, map_stub_definition};
@@ -12,15 +14,17 @@ use crate::cached_vendored_root;
 /// docstrings for functions that resolve to stubs.
 pub(crate) struct StubMapper<'db> {
     db: &'db dyn ty_python_semantic::Db,
-    cached_vendored_root: Option<SystemPathBuf>,
+    /// Worked out when a definition is first mapped, not when the mapper is made: it reads the
+    /// environment, under a lock every thread shares, and a search of the workspace makes a mapper
+    /// for every file it looks at, most of which have nothing to map.
+    cached_vendored_root: OnceCell<Option<SystemPathBuf>>,
 }
 
 impl<'db> StubMapper<'db> {
     pub(crate) fn new(db: &'db dyn ty_python_semantic::Db) -> Self {
-        let cached_vendored_root = cached_vendored_root(db);
         Self {
             db,
-            cached_vendored_root,
+            cached_vendored_root: OnceCell::new(),
         }
     }
 
@@ -42,7 +46,10 @@ impl<'db> StubMapper<'db> {
         &self,
         def: &ResolvedDefinition<'db>,
     ) -> Option<Vec<ResolvedDefinition<'db>>> {
-        map_stub_definition(self.db, def, self.cached_vendored_root.as_deref())
+        let cached_vendored_root = self
+            .cached_vendored_root
+            .get_or_init(|| cached_vendored_root(self.db));
+        map_stub_definition(self.db, def, cached_vendored_root.as_deref())
     }
 
     /// Map multiple `ResolvedDefinitions`, applying stub-to-source mapping to each.

@@ -568,14 +568,23 @@ its name, and the counts named in the request's `counts`:
 so the count is the number of places the click on it goes to, when a client
 sends that request from the name. a method with implementations is marked
 `abstract` when it is an `@abstractmethod` or a protocol member with no body,
-so that what overrides it implements it. each count is a search of the
-workspace per declaration, and a count not named is not worked out
+so that what overrides it implements it. a count not named is not worked out
+
+each count is a search of the workspace, made for all the declarations of the
+document in one pass: each file is read once, and searched for each declaration
+whose name it holds. the searches run one at a time, on a thread of their own,
+so however many a client has asked for, the requests someone is waiting on,
+such as a hover or a completion, never queue behind them. a count the client
+cancels stops where it is, its work in parallel included, so a client that asks
+again on every edit and cancels the ask the edit made stale leaves no searches
+running behind it
 
 a count depends on every file of the workspace, and the server announces no
-change to it: a client asks again after any document of the workspace changes.
-it is not a `textDocument/codeLens`, since a client that draws lenses asks for
-them again only when their own document changes. like the other document
-requests it takes `textHash`
+change to it: a client asks again after any document of the workspace changes,
+and asks for every count it draws in one request. it is not a
+`textDocument/codeLens`, since a client that draws lenses asks for them again
+only when their own document changes. like the other document requests it takes
+`textHash`
 
 ## tests and what they test
 

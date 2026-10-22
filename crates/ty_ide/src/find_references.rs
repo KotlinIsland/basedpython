@@ -1,5 +1,5 @@
 use crate::goto::find_goto_target;
-use crate::references::{FixtureReferenceTarget, ReferencesMode, references};
+use crate::references::{FixtureReferenceTarget, ReferencesMode, references, references_to_each};
 use crate::{Db, ReferenceTarget};
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_python_ast::AnyNodeRef;
@@ -36,6 +36,46 @@ pub fn find_references(
     // Get the definitions for the symbol at the cursor position
     let goto_target = find_goto_target(&model, &module, offset)?;
     references(db, file, &goto_target, mode)
+}
+
+/// What [`find_references`] answers at each of `offsets` in `file`, found with one pass over the
+/// project's files for all of them rather than one pass each (see [`references_to_each`]).
+pub(crate) fn find_references_to_each(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offsets: &[TextSize],
+    include_declaration: bool,
+) -> Vec<Option<Vec<ReferenceTarget>>> {
+    let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db));
+    let module = parsed.load(db);
+    let model = SemanticModel::new(db, file);
+
+    let mode = if include_declaration {
+        ReferencesMode::References
+    } else {
+        ReferencesMode::ReferencesSkipDeclaration
+    };
+
+    // an explicit fixture name is searched for on its own, as `find_references` does
+    let mut found: Vec<Option<Vec<ReferenceTarget>>> = offsets.iter().map(|_| None).collect();
+    let mut goto_targets = Vec::with_capacity(offsets.len());
+    for (index, &offset) in offsets.iter().enumerate() {
+        if let Some(target) = explicit_fixture_name_at_offset(&model, &module, offset) {
+            found[index] = target.references(db, file, mode);
+            goto_targets.push(None);
+        } else {
+            goto_targets.push(find_goto_target(&model, &module, offset));
+        }
+    }
+    for (index, references) in references_to_each(db, file, &goto_targets, mode)
+        .into_iter()
+        .enumerate()
+    {
+        if goto_targets[index].is_some() {
+            found[index] = references;
+        }
+    }
+    found
 }
 
 /// Returns a target for the explicit fixture name at `offset`.

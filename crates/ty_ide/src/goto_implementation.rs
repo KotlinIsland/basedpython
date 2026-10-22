@@ -116,6 +116,80 @@ pub fn goto_implementation(
     })
 }
 
+/// What [`goto_implementation`] answers at each of `offsets` in `file`, found with one pass over
+/// the project's files for all of them rather than one pass each.
+///
+/// Each file is scanned once, for every target in turn; the same scan of the same files as
+/// [`goto_implementation`] makes for each target, so each finds the same implementations, in the
+/// same order.
+pub(crate) fn implementations_at_each(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offsets: &[TextSize],
+) -> Vec<Option<NavigationTargets>> {
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let model = SemanticModel::new(db, file);
+    let finders: Vec<_> = offsets
+        .iter()
+        .map(|&offset| {
+            let goto_target = find_goto_target(&model, &module, offset)?;
+            prepare_implementations_finder_for_goto_target(&model, &goto_target)
+        })
+        .collect();
+    if finders.iter().all(Option::is_none) {
+        return finders.iter().map(|_| None).collect();
+    }
+    let source_file = file.file(db);
+    let program = file.program(db);
+
+    let mut candidate_files: Vec<File> = db
+        .project()
+        .files(db)
+        .iter()
+        .filter(|candidate| *candidate != source_file)
+        .collect();
+    candidate_files.push(source_file);
+
+    // per file, each finder's implementations in it, by index into `finders`
+    let batches = candidate_files
+        .into_par_iter()
+        .map_with_db(db, |db, file| {
+            let file = ProgramFile::new(db, file, program);
+            finders
+                .iter()
+                .enumerate()
+                .filter_map(|(index, finder)| {
+                    let definitions = finder.as_ref()?.implementations_for_file(db, file);
+                    let targets = definitions_to_implementation_targets(db, definitions);
+                    (!targets.is_empty()).then_some((index, targets))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut implementation_targets: Vec<Option<Vec<NavigationTarget>>> = finders
+        .into_iter()
+        .map(|finder| {
+            finder.map(|finder| {
+                definitions_to_implementation_targets(db, finder.into_initial_definitions())
+            })
+        })
+        .collect();
+    for (index, targets) in batches.into_iter().flatten() {
+        if let Some(found) = &mut implementation_targets[index] {
+            found.extend(targets);
+        }
+    }
+    implementation_targets
+        .into_iter()
+        .map(|targets| {
+            targets
+                .filter(|targets| !targets.is_empty())
+                .map(|targets| targets.into_iter().collect())
+        })
+        .collect()
+}
+
 /// Select and prepare the appropriate `ImplementationsFinder` for `goto_target`.
 fn prepare_implementations_finder_for_goto_target<'db>(
     model: &SemanticModel<'db>,

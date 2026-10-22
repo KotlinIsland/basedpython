@@ -3,9 +3,8 @@ use lsp_server::RequestId;
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt::Formatter;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Instant;
+use ty_project::parallel::CancellationScope;
 
 /// Tracks the pending requests between client and server.
 pub(crate) struct RequestQueue {
@@ -142,19 +141,28 @@ impl PendingRequest {
 
 /// Token to cancel a specific request.
 ///
-/// Can be shared between threads to check for cancellation *after* a request has been scheduled.
+/// Can be shared between threads to check for cancellation *after* a request has been scheduled,
+/// and stops a request that is already running: the computations it [scopes](Self::scope) are
+/// cancelled with it.
 #[derive(Debug, Default)]
-pub(crate) struct RequestCancellationToken(Arc<AtomicBool>);
+pub(crate) struct RequestCancellationToken(CancellationScope);
 
 impl RequestCancellationToken {
     /// Returns true if the request was cancelled.
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
+        self.0.is_cancelled()
     }
 
-    /// Signals that the request should not be processed because it was cancelled.
+    /// The request's computations: those on a database registered with it, and on the database
+    /// clones of the parallel work started inside it.
+    pub(crate) fn scope(&self) -> &CancellationScope {
+        &self.0
+    }
+
+    /// Signals that the request should not be processed because it was cancelled, and stops the
+    /// computations of one that is running.
     fn cancel(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.0.cancel();
     }
 
     fn clone(this: &Self) -> Self {

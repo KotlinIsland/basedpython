@@ -14,7 +14,7 @@ use crate::goto::{Definitions, GotoTarget};
 use crate::{Db, ReferenceKind, ReferenceTarget};
 use rayon::prelude::*;
 use ruff_db::files::File;
-use ruff_db::parsed::parsed_module;
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast::find_node::{CoveringNode, covering_node};
 use ruff_python_ast::token::Tokens;
 use ruff_python_ast::{
@@ -97,41 +97,175 @@ pub(crate) fn references(
     mode: ReferencesMode,
 ) -> Option<Vec<ReferenceTarget>> {
     let model = SemanticModel::new(db, file);
-    let target_text = goto_target.to_string()?.into_owned();
-
-    let target_definitions = goto_target
-        .definitions(&model, mode.to_import_alias_resolution())?
-        .goto_declaration(&model, goto_target)?;
-    let import_alias_resolution = mode.to_import_alias_resolution();
-    // An identifier can have both ordinary Python references and pytest fixture references.
-    // Keep its Python definitions alongside any fixture roots used for the same search.
-    let fixture_target = matches!(
-        mode,
-        ReferencesMode::References | ReferencesMode::ReferencesSkipDeclaration
-    )
-    .then(|| FixtureReferenceTarget::from_goto_target(&model, goto_target, &target_text))
-    .flatten();
-    let fixture_resolution = fixture_target.map(|target| target.resolution);
-
-    let is_externally_visible_symbol =
-        has_any_external_visible_definitions(db, &target_definitions);
-
-    let is_parameter = parameter_owner_is_externally_visible(db, &target_definitions);
-
-    let search = LocalReferenceSearch {
-        target_text,
-        target_definitions,
-        import_alias_resolution,
-        fixture_resolution,
-    };
+    let prepared = PreparedSearch::new(db, &model, goto_target, mode)?;
     references_for_search(
         db,
         file,
-        &search,
+        &prepared.search,
         mode,
-        is_externally_visible_symbol,
-        is_parameter,
+        prepared.is_externally_visible_symbol,
+        prepared.is_parameter,
     )
+}
+
+/// What [`references`] answers for each of `goto_targets`, all of them in `file`, with the
+/// searches across the project done in one pass over its files rather than one pass per target.
+///
+/// A file is read, and searched for each target whose name it contains, once; [`references`]
+/// reads every file once per target. What each target is found to be referenced by is the same:
+/// the same search is made for it in the same files. A target that is a pytest fixture is
+/// searched for on its own, since its search reaches files outside the project.
+pub(crate) fn references_to_each(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    goto_targets: &[Option<GotoTarget>],
+    mode: ReferencesMode,
+) -> Vec<Option<Vec<ReferenceTarget>>> {
+    let model = SemanticModel::new(db, file);
+    let prepared: Vec<_> = goto_targets
+        .iter()
+        .map(|goto_target| {
+            goto_target
+                .as_ref()
+                .and_then(|goto_target| PreparedSearch::new(db, &model, goto_target, mode))
+        })
+        .collect();
+    let search_across_files = matches!(
+        mode,
+        ReferencesMode::References
+            | ReferencesMode::ReferencesSkipDeclaration
+            | ReferencesMode::RenameMultiFile
+    );
+
+    let mut found: Vec<Option<Vec<ReferenceTarget>>> = vec![None; prepared.len()];
+    // the targets searched for across the project together, by index into `prepared`
+    let mut together = Vec::new();
+    for (index, prepared) in prepared.iter().enumerate() {
+        let Some(prepared) = prepared else {
+            continue;
+        };
+        if search_across_files
+            && prepared.is_externally_visible_symbol
+            && prepared.search.fixture_resolution.is_none()
+        {
+            together.push(index);
+        } else {
+            found[index] = references_for_search(
+                db,
+                file,
+                &prepared.search,
+                mode,
+                prepared.is_externally_visible_symbol,
+                prepared.is_parameter,
+            );
+        }
+    }
+    if together.is_empty() {
+        return found;
+    }
+    let searches: Vec<&LocalReferenceSearch> = together
+        .iter()
+        .filter_map(|&index| prepared[index].as_ref())
+        .map(|prepared| &prepared.search)
+        .collect();
+
+    // the targets' own file first, as `references_for_search` has it
+    let mut references: Vec<Vec<ReferenceTarget>> = searches
+        .iter()
+        .map(|search| references_for_file(db, file, search, mode))
+        .collect();
+
+    let source_file = file.file(db);
+    let program = file.program(db);
+    let files: Vec<_> = db
+        .project()
+        .files(db)
+        .iter()
+        .filter(|other| *other != source_file)
+        .collect();
+    let minimum_job_len = minimum_parallel_job_len(files.len(), MAX_MIN_FILES_PER_PARALLEL_JOB);
+    let in_other_files = files
+        .into_par_iter()
+        .with_min_len(minimum_job_len)
+        .map_with_db(db, |db, other_file| {
+            let source = ruff_db::source::source_text(db, other_file);
+            let named: Vec<_> = (0..searches.len())
+                .filter(|&search| contains_identifier(&source, &searches[search].target_text))
+                .collect();
+            if named.is_empty() {
+                return Vec::new();
+            }
+            let other_file = ProgramFile::new(db, other_file, program);
+            let parsed = parsed_module(db, other_file.python_file(db));
+            let module = parsed.load(db);
+            let model = SemanticModel::new(db, other_file);
+            named
+                .into_iter()
+                .map(|search| {
+                    (
+                        search,
+                        references_in_module(&model, &module, searches[search], mode),
+                    )
+                })
+                .collect()
+        })
+        .collect::<Vec<_>>();
+    for (search, in_file) in in_other_files.into_iter().flatten() {
+        references[search].extend(in_file);
+    }
+
+    for (index, references) in together.into_iter().zip(references) {
+        found[index] = (!references.is_empty()).then_some(references);
+    }
+    found
+}
+
+/// The search [`references`] makes for a target, prepared from what is at the target.
+struct PreparedSearch<'db> {
+    search: LocalReferenceSearch<'db>,
+    is_externally_visible_symbol: bool,
+    is_parameter: bool,
+}
+
+impl<'db> PreparedSearch<'db> {
+    fn new(
+        db: &dyn Db,
+        model: &SemanticModel<'db>,
+        goto_target: &GotoTarget,
+        mode: ReferencesMode,
+    ) -> Option<Self> {
+        let target_text = goto_target.to_string()?.into_owned();
+
+        let target_definitions = goto_target
+            .definitions(model, mode.to_import_alias_resolution())?
+            .goto_declaration(model, goto_target)?;
+        let import_alias_resolution = mode.to_import_alias_resolution();
+        // An identifier can have both ordinary Python references and pytest fixture references.
+        // Keep its Python definitions alongside any fixture roots used for the same search.
+        let fixture_target = matches!(
+            mode,
+            ReferencesMode::References | ReferencesMode::ReferencesSkipDeclaration
+        )
+        .then(|| FixtureReferenceTarget::from_goto_target(model, goto_target, &target_text))
+        .flatten();
+        let fixture_resolution = fixture_target.map(|target| target.resolution);
+
+        let is_externally_visible_symbol =
+            has_any_external_visible_definitions(db, &target_definitions);
+
+        let is_parameter = parameter_owner_is_externally_visible(db, &target_definitions);
+
+        Some(Self {
+            search: LocalReferenceSearch {
+                target_text,
+                target_definitions,
+                import_alias_resolution,
+                fixture_resolution,
+            },
+            is_externally_visible_symbol,
+            is_parameter,
+        })
+    }
 }
 
 fn references_for_search(
@@ -293,10 +427,20 @@ fn references_for_file(
     let parsed = parsed_module(db, file.python_file(db));
     let module = parsed.load(db);
     let model = SemanticModel::new(db, file);
+    references_in_module(&model, &module, search, mode)
+}
+
+/// [`references_for_file`] with the file's module and model already at hand.
+fn references_in_module(
+    model: &SemanticModel<'_>,
+    module: &ParsedModuleRef,
+    search: &LocalReferenceSearch<'_>,
+    mode: ReferencesMode,
+) -> Vec<ReferenceTarget> {
     let mut references = Vec::new();
 
     let mut finder = LocalReferencesFinder {
-        model: &model,
+        model,
         search,
         references: &mut references,
         mode,

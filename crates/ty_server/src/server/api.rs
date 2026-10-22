@@ -255,7 +255,7 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::DocumentUsageCountsRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentUsageCountsRequestHandler,
         >(
-            req, BackgroundSchedule::Worker
+            req, BackgroundSchedule::Search
         ),
         // both are asked by someone waiting on a shortcut they pressed
         requests::OverridableMembersRequestHandler::METHOD => {
@@ -456,9 +456,12 @@ where
                 return;
             }
 
+            // the parallel work the request starts stops when the client cancels it
             if let Err(error) = ruff_db::panic::catch_unwind(|| {
                 let snapshot = snapshot;
-                R::handle_request(&id, snapshot.0, client, params);
+                cancellation_token
+                    .scope()
+                    .enter(|| R::handle_request(&id, snapshot.0, client, params));
             }) {
                 panic_response::<R>(&id, client, &error, retry, log_guidance);
             }
@@ -543,8 +546,12 @@ where
                 return;
             }
 
+            // a cancellation from the client stops the request where it is, whether on this
+            // thread or in the parallel work it starts
+            let scope = cancellation_token.scope();
+            scope.register(&db);
             if let Err(error) = ruff_db::panic::catch_unwind(|| {
-                salsa::attach(&db, || {
+                scope.enter(|| salsa::attach(&db, || {
                     if let Some(asked) = asked
                         && !holds_text(&db, &document, asked)
                     {
@@ -556,7 +563,7 @@ where
                         return;
                     }
                     R::handle_request(&id, &db, document, client, params);
-                });
+                }));
             }) {
                 panic_response::<R>(&id, client, &error, retry, log_guidance);
             }
