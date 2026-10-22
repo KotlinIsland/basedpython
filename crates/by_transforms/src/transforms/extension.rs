@@ -269,15 +269,18 @@ impl<'a> ExtensionBlockPass<'a> {
             }
             first_member = false;
 
-            let kind = member_kind(func, source);
-            // real decorators other than `property` are kept (dedented to the
-            // module level); `property` and the synthetic modifier markers are
-            // consumed by the lowering itself
+            // the kind every call of the member was resolved as, so the backing function takes
+            // the receiver those calls pass it
+            let kind = types
+                .extension_member_kind(class, func.name.as_str())
+                .unwrap_or_else(|| member_kind(func, source));
+            // real decorators are kept (dedented to the module level), except one that decides
+            // how the member binds its receiver: the backing function is called with the
+            // receiver already chosen, so `@classmethod` there would make it uncallable. those
+            // and the synthetic modifier markers are consumed by the lowering itself
             for decorator in &func.decorator_list {
-                if is_synthetic_decorator(source, decorator) {
-                    continue;
-                }
-                if matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "property")
+                if is_synthetic_decorator(source, decorator)
+                    || types.decides_receiver_binding(decorator)
                 {
                     continue;
                 }
