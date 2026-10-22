@@ -32,13 +32,17 @@
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_parameter, walk_stmt, walk_with_item};
 use ruff_python_ast::{self as ast, Expr, Parameter, PySourceType, Stmt, TypeParam, WithItem};
 use ruff_python_stdlib::identifiers::is_identifier;
+use ty_python_semantic::SemanticModel;
 use ty_python_semantic::reified::{reified_class_reads, reified_type_param_names};
+use ty_python_semantic::types::ide_support::repeated_underscore_read_of;
+use ty_python_semantic::types::repeated_underscore::RepeatedUnderscoreRead;
 
 use crate::mapper::{Decline, Lowered};
 
 /// whether this function's body may be lowered at all
 pub(crate) fn gate_function(
     source_type: PySourceType,
+    model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
 ) -> Lowered<()> {
     // a reified type parameter is a runtime value the *specialization step* supplies,
@@ -52,57 +56,60 @@ pub(crate) fn gate_function(
             "`{first}` is a reified type parameter, and a specialization has no emitted function to rebuild"
         )));
     }
-    if reads_a_repeated_underscore(function) {
-        return Err(Decline::new(
-            "a body reading a repeated `_` parameter reads the first of them, where ty reads the last",
-        ));
+    if let Some(read) = repeated_underscore_read(model, function) {
+        return Err(Decline::new(format!(
+            "{}, which has no one parameter to lower it to",
+            read.message()
+        )));
     }
     let mut scanner = Scanner { found: None };
     scanner.walk_function(function);
     scanner.into_result()
 }
 
-/// whether `function` repeats the parameter `_` and its body reads that name
+/// the first read of `_` in `function` that may read one of a parameter list's repeated
+/// `_`s — ty's answer, the one it reports and the transpiler refuses, so a module that
+/// reaches the lowering through a transpiled build never holds one
 ///
-/// python refuses a repeated parameter, so the transpiler keeps the first `_` and
-/// numbers the rest — a read of `_` is the first parameter's value. ty binds each
-/// parameter in turn and takes the read for the *last* one, so a lowering built on
-/// ty's type for the read would treat one parameter's value as the other's type.
-/// a body that only ignores its `_` parameters is unaffected, and is lowered under the
-/// numbered names
-fn reads_a_repeated_underscore(function: &ast::StmtFunctionDef) -> bool {
-    struct Reads {
-        found: bool,
+/// python binds `_` to the first of the parameters and ty to the last, so such a read has
+/// no one meaning. a read that only a rebinding of `_` reaches reads that rebinding, and
+/// `del _` takes no value, so neither is one
+fn repeated_underscore_read(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Option<RepeatedUnderscoreRead> {
+    struct Reads<'m, 'db> {
+        model: &'m SemanticModel<'db>,
+        found: Option<RepeatedUnderscoreRead>,
     }
-    impl<'a> Visitor<'a> for Reads {
+    impl Reads<'_, '_> {
+        fn ask(&mut self, name: &ast::ExprName) {
+            if self.found.is_none() && name.id == "_" {
+                self.found = repeated_underscore_read_of(self.model, name);
+            }
+        }
+    }
+    impl<'a> Visitor<'a> for Reads<'_, '_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            // `_ += 1` reads `_` before it binds it
             if let Stmt::AugAssign(node) = stmt
-                && matches!(node.target.as_ref(), Expr::Name(name) if name.id == "_")
+                && let Expr::Name(name) = node.target.as_ref()
             {
-                self.found = true;
+                self.ask(name);
             }
             walk_stmt(self, stmt);
         }
 
         fn visit_expr(&mut self, expr: &'a Expr) {
             if let Expr::Name(name) = expr
-                && name.id == "_"
-                && !name.ctx.is_store()
+                && name.ctx.is_load()
             {
-                self.found = true;
+                self.ask(name);
             }
             walk_expr(self, expr);
         }
     }
-    let underscores = function
-        .parameters
-        .iter()
-        .filter(|parameter| parameter.name() == "_")
-        .count();
-    if underscores < 2 {
-        return false;
-    }
-    let mut reads = Reads { found: false };
+    let mut reads = Reads { model, found: None };
     reads.visit_body(&function.body);
     reads.found
 }

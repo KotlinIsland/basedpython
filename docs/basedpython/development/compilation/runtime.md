@@ -1053,6 +1053,27 @@ an instance answers the same either way. a descriptor is the one place a generic
 read finds a field held outside a dict, so taking them away would mean a read of every
 attribute going through a lookup of the class's own
 
+### the name python's messages give a class with a dunder field
+
+python's own messages name a class by the name its `class` statement gave it —
+`'Box' object is not callable`, `cannot unpack non-iterable Box object` — and a compiled
+class answers the same. a class that writes a field spelled as a dunder is the exception:
+it is built as a static type, which carries its module in the name those messages print,
+since that name is where a static type's `__module__` is read from. its `__module__`,
+`repr` and pickling are python's:
+
+```python
+class Tagged:
+    def __init__(self, v: int) -> None:
+        self.__tag__ = v
+
+
+mod.Tagged(1)()  # python: TypeError: 'Tagged' object is not callable; compiled: TypeError: 'mod.Tagged' object is not callable
+```
+
+a static type is what keeps the dunder a field: a class built the other way reads its
+`__module__` and `__doc__` out of its own dict, where such a field's descriptor would stand
+
 ### a method is not a `function`
 
 a class holds each method it compiled as a `by.method_descriptor` rather than a
@@ -1523,7 +1544,7 @@ frozen data class Fixed:
 
 
 f = Fixed(1)
-object.__setattr__(f, "n", 2)  # python: stored; compiled: AttributeError: attribute 'n' of 'mod.Fixed' objects is not writable
+object.__setattr__(f, "n", 2)  # python: stored; compiled: AttributeError: attribute 'n' of 'Fixed' objects is not writable
 object.__delattr__(f, "n")  # python: deleted; compiled: the same AttributeError
 ```
 

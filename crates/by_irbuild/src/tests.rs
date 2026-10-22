@@ -1156,14 +1156,12 @@ def outer(xs: list[list[int]], y: list[int]) -> object:
 #[test]
 fn a_body_reading_a_repeated_underscore_parameter_declines() {
     // python's `_` is the first of the parameters, the transpiler numbering the rest,
-    // where ty takes a read of it for the last one. a body that ignores them all is
-    // lowered, and a nested frame reading the name counts as a read
+    // where ty takes a read of it for the last one. a transpiled build refuses such a read,
+    // and a lowering reached without one declines it, asking ty which reads they are. a
+    // nested frame reading the name counts as a read
     assert_eq!(
         declines(
             "\
-def ignores(_: int, _: str) -> int:
-    return 1
-
 def reads(_: int, _: str) -> object:
     return _
 
@@ -1175,13 +1173,80 @@ def captures(_: int, _: str) -> int:
     def inner() -> object:
         return _
     return 0
+
+def on_one_path(_: int, _: int, flag: bool) -> int:
+    if flag:
+        _ = 5
+    return _
 "
         ),
-        ["reads", "adds", "captures"]
+        ["reads", "adds", "captures", "on_one_path"]
             .map(|name| (
                 name.to_string(),
-                "a body reading a repeated `_` parameter reads the first of them, where ty reads the last"
-                    .to_string()
+                format!(
+                    "reading a repeated `_` parameter of `{name}`, which has no one parameter to lower it to"
+                )
+            ))
+            .to_vec()
+    );
+}
+
+#[test]
+fn a_body_binding_a_repeated_underscore_before_reading_it_is_lowered() {
+    // a write gives `_` a local of its own, so a read only a write reaches is not a read of
+    // any parameter, and `del _` reads no value. ty accepts all of these, and none of them
+    // is declined
+    assert_eq!(
+        declines(
+            "\
+_ = 5
+
+def ignores(_: int, _: str) -> int:
+    return 1
+
+def rebinds(_: int, _: str) -> int:
+    _ = 7
+    return _
+
+def deletes(_: int, _: str) -> int:
+    del _
+    return 1
+
+def declares_global(_: int, _: str) -> int:
+    def module() -> int:
+        global _
+        return _
+    return module()
+
+def binds_its_own(_: int, _: str) -> list[int]:
+    return [_ * 2 for _ in range(3)]
+"
+        ),
+        []
+    );
+}
+
+#[test]
+fn an_init_of_repeated_underscore_fields_declines_as_any_init_does() {
+    // `init(let _: int, let _: int)` stands for a `self._ = _` the parser writes for each
+    // parameter, and the transpiler writes the second as `self._ = _2`. no `init(...)` is
+    // lowered yet, so this one declines for that reason alone — a lowering of it has to
+    // read each of those assignments by the name its own parameter takes, or both read
+    // the first
+    assert_eq!(
+        declines(
+            "\
+class Named:
+    init(let a: int, let b: int)
+
+class Pair:
+    init(let _: int, let _: int)
+"
+        ),
+        ["Named", "Pair"]
+            .map(|name| (
+                name.to_string(),
+                "this modifier changes what the definition is bound as, not what it is".to_string()
             ))
             .to_vec()
     );

@@ -155,6 +155,26 @@ def _warned_into_safely(module, fn, *args):
     registry = module.__dict__.get('__warningregistry__', {})
     return (raised, sorted(key[0] for key in registry if isinstance(key, tuple)))
 
+# what a call left unraisable with every warning turned into an error: a warning issued
+# while an object is finalized has nowhere to raise, and is reported to
+# `sys.unraisablehook` instead. the object it is reported against and the context python
+# writes around that object's repr both name the type, which the two legs spell
+# differently, so they are reduced to whether there is one
+def _unraisable_from(fn, *args):
+    import sys
+    seen = []
+    saved = sys.unraisablehook
+    sys.unraisablehook = lambda u: seen.append((
+        type(u.exc_value).__name__, str(u.exc_value),
+        u.err_msg and u.err_msg.split(' <', 1)[0], u.object is None))
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            fn(*args)
+    finally:
+        sys.unraisablehook = saved
+    return seen
+
 # what a warning carried as its `source`, which is the object `tracemalloc` hangs an
 # allocation traceback off. it reaches the record and nothing else, so it is asked for
 # separately — and without the file name, since a declined function's frames are named
@@ -2979,6 +2999,60 @@ fn a_native_recursion_entered_through_its_forwarder_follows_the_recursion_limit(
             "_at_the_limit(m.ping, 100)",
             "_at_the_limit(m.entered, 100)",
         ],
+    );
+}
+
+#[test]
+fn a_published_new_or_init_subclass_follows_the_recursion_limit() {
+    // a written `__new__` and the `__init_subclass__` a class extended in its module carries
+    // are published as builtins over the compiled entries. python 3.11 counts a call into a
+    // builtin against the recursion limit, and the body behind it counts the frame python's
+    // own would, so there a construction or a subclass made near the limit raised a level
+    // early
+    let Some(compiled) = agree_python_built(
+        "reclimitnew",
+        "\
+class Made:
+    def __new__(cls, v: int) -> 'Made':
+        return object.__new__(cls)
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+class MadeLeaf(Made):
+    pass
+
+
+class Root:
+    def __init__(self, n: int) -> None:
+        self.count = n
+
+
+class Leaf(Root):
+    pass
+",
+        &[
+            "(lambda nest: (_deepest(lambda n: nest(n, lambda: m.Made(1)), 100), \
+             _deepest(lambda n: nest(n, lambda: type('Sub', (m.Made,), {})(1)), 100), \
+             _deepest(lambda n: nest(n, lambda: type('Sub', (m.Root,), {})), 100))) \
+             (lambda n, act: (lambda f: f(f, n))(lambda f, k: f(f, k - 1) if k else act()))",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_reclimitnew as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.Made)['__new__']).__name__, type(vars(m.Root)['__init_subclass__']).__name__)\n",
+        ),
+        "staticmethod classmethod"
     );
 }
 
@@ -13911,7 +13985,7 @@ fn a_data_class_is_slotted_as_its_twin_is() {
         out,
         "wrapper_descriptor wrapper_descriptor wrapper_descriptor wrapper_descriptor \
          wrapper_descriptor\n\
-         attribute 'n' of 'by_diff_dcslots.Fixed' objects is not writable 1"
+         attribute 'n' of 'Fixed' objects is not writable 1"
     );
 }
 
@@ -18707,13 +18781,20 @@ def through_the_base(a: A) -> int:
 }
 
 #[test]
-fn a_base_named_override_reading_underscore_declines() {
-    // an override that took its names from the base binds `_` to the first of them at the
-    // top of its body, and a read of `_` finds that. the compiled build declines any body
-    // that reads a repeated `_`, so this one runs from its interpreted definition and the
-    // two builds answer alike
-    let Some(compiled) = agree_in(
-        "underscorebaseread",
+fn a_base_named_override_reading_underscore_is_refused() {
+    // an override's `_`s take the base's names, but its body still spells them all `_`, so a
+    // read of `_` there cannot say which parameter it means. the transpiler refuses it, and
+    // the build with it, rather than leave the method to an interpreted definition that
+    // reads the first of them
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = Scratch::new("by_diff_underscorebaseread_c".to_string());
+    let options = Options {
+        fallback: Some(Config::default()),
+        ..Options::default()
+    };
+    let error = build_source(
         "\
 class A:
     def m(self, x: int, y: int) -> int:
@@ -18723,11 +18804,96 @@ class C(A):
     def m(self, _: int, _: int) -> int:
         return _ + 1
 ",
+        "underscorebaseread",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .expect_err("a read of a repeated `_` is not compiled");
+    assert!(
+        format!("{error:#}").contains("reading a repeated `_` parameter of `m`"),
+        "expected the refusal, got {error:#}"
+    );
+
+    // the same override ignoring its `_`s takes the base's names, and compiles
+    let Some(compiled) = agree_in(
+        "underscorebaseignored",
+        "\
+class A:
+    def m(self, x: int, y: int) -> int:
+        return x * 100 + y
+
+class C(A):
+    def m(self, _: int, _: int) -> int:
+        return 1
+",
         &[
             "str(__import__('inspect').signature(m.C().m))",
             "(m.C().m(3, 4), m.C().m(x=3, y=4), m.C().m(3, y=4))",
         ],
-        true,
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorebaseignored as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(m.C.__dict__['m']).__name__)\n",
+        ),
+        "method_descriptor"
+    );
+}
+
+#[test]
+fn a_repeated_underscore_bound_again_before_its_read_compiles() {
+    // a write gives `_` a local of its own, so a read that only the write reaches reads
+    // what was written rather than any of the parameters. every way of binding a name is
+    // such a write, and each body compiles
+    let Some(compiled) = agree_in(
+        "underscorerebound",
+        "\
+import tempfile
+
+def assigns(_: int, _: str) -> int:
+    _ = 7
+    return _
+
+def retypes(_: int, _: str) -> str:
+    _ = 'own'
+    return _ + '!'
+
+def starred(_: int, *_: str) -> int:
+    _ = 5
+    return _
+
+def unpacks(_: int, _: str) -> int:
+    a, _ = 1, 2
+    return a + _
+
+def loops(_: int, _: str) -> int:
+    total = 0
+    for _ in range(3):
+        total += _
+    return total
+
+def walrus(_: int, _: str) -> int:
+    if (_ := 3) > 0:
+        return _
+    return 0
+
+def with_(_: int, _: str) -> bool:
+    with tempfile.TemporaryFile() as _:
+        return _.closed
+",
+        &[
+            "(m.assigns(1, 'a'), m.retypes(1, 'a'), m.starred(1, 'a', 'b'), m.unpacks(1, 'a'))",
+            "(m.loops(1, 'a'), m.walrus(1, 'a'), m.with_(1, 'a'))",
+        ],
+        false,
         by_irbuild::Language::BasedPython,
     ) else {
         return;
@@ -18739,11 +18905,169 @@ class C(A):
         run(
             &python,
             &compiled,
-            "import by_diff_underscorebaseread as m\n\
+            "import by_diff_underscorerebound as m\n\
              assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
-             print(type(m.C.__dict__['m']).__name__, m.C.m.__code__.co_filename)\n",
+             print({f.__code__.co_filename for f in (m.assigns, m.retypes, m.starred, m.unpacks, m.loops, m.walrus, m.with_)})\n",
         ),
-        "function <string>"
+        "{'<by native forwarder>'}"
+    );
+}
+
+#[test]
+fn deleting_a_repeated_underscore_compiles() {
+    // `del _` takes no value, so it reads none of the parameters. it unbinds the name the
+    // first of them has in the python, and a read after it finds nothing
+    let Some(compiled) = agree_in(
+        "underscoredeleted",
+        "\
+def deletes(_: int, _: str) -> int:
+    del _
+    return 1
+
+def deletes_then_binds(_: int, _: str) -> int:
+    del _
+    _ = 4
+    return _
+",
+        &["(m.deletes(1, 'a'), m.deletes_then_binds(1, 'a'))"],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscoredeleted as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print({f.__code__.co_filename for f in (m.deletes, m.deletes_then_binds)})\n",
+        ),
+        "{'<by native forwarder>'}"
+    );
+}
+
+#[test]
+fn a_nested_scope_beside_a_repeated_underscore_compiles() {
+    // a nested function that binds `_` on every path before its read, one that declares it
+    // `global`, and a comprehension or function binding a `_` of its own each read
+    // something other than the parameters, so each compiles
+    let Some(compiled) = agree_in(
+        "underscorenested",
+        "\
+_ = 5
+
+def rebinds_nonlocal(_: int, _: str) -> int:
+    def inner() -> int:
+        nonlocal _
+        _ = 9
+        return _
+    return inner()
+
+def declares_global(_: int, _: str) -> int:
+    def module() -> int:
+        global _
+        return _
+    return module()
+
+def binds_its_own(_: int, _: str) -> list[int]:
+    def g(_: bytes) -> bytes:
+        return _
+    assert g(b'a') == b'a'
+    return [_ * 2 for _ in range(3)]
+",
+        &["(m.rebinds_nonlocal(1, 'a'), m.declares_global(1, 'a'), m.binds_its_own(1, 'a'), m._)"],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorenested as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print({f.__code__.co_filename for f in (m.rebinds_nonlocal, m.declares_global, m.binds_its_own)})\n",
+        ),
+        "{'<by native forwarder>'}"
+    );
+}
+
+#[test]
+fn an_override_binding_or_deleting_underscore_compiles() {
+    // an override's `_`s take the base's names in the python, which binds `_` to the first
+    // of them at the top of a body that mentions it. a body that binds `_` before reading
+    // it, or deletes it, reads none of the parameters, and compiles — and `del _` finds the
+    // compiled method's `_` bound on entry too, as the python's is
+    let Some(compiled) = agree_in(
+        "underscorebaseown",
+        "\
+from typing import Iterator
+
+class A:
+    def m(self, x: int, y: str) -> str:
+        return y
+
+class Deletes(A):
+    def m(self, _: int, _: str) -> str:
+        del _
+        return 'deleted'
+
+class Binds(A):
+    def m(self, _: int, _: str) -> str:
+        _ = 'own'
+        return _
+
+class DeletesThenBinds(A):
+    def m(self, _: int, _: str) -> str:
+        del _
+        _ = 'again'
+        return _
+
+class Shares(A):
+    def m(self, _: int, _: str) -> str:
+        _ = 'outer'
+        def inner() -> str:
+            return _
+        return inner()
+
+class Each:
+    def g(self, x: int, y: int) -> Iterator[int]:
+        yield x
+
+class Generates(Each):
+    def g(self, _: int, _: int) -> Iterator[int]:
+        _ = 3
+        yield _
+",
+        &[
+            "(m.Deletes().m(1, 'a'), m.Deletes().m(x=1, y='a'), m.Binds().m(1, 'a'), m.Binds().m(x=1, y='a'))",
+            "(m.DeletesThenBinds().m(1, 'a'), m.Shares().m(1, 'a'), list(m.Generates().g(1, 2)))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorebaseown as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print({type(c.__dict__[name]).__name__ for c, name in ((m.Deletes, 'm'), (m.Binds, 'm'), (m.DeletesThenBinds, 'm'), (m.Shares, 'm'), (m.Generates, 'g'))})\n",
+        ),
+        "{'method_descriptor'}"
     );
 }
 
@@ -27375,7 +27699,7 @@ class Deep:
         out,
         "{'peer': <class 'by_diff_annreach.Node'>, 'plain': list[int]} True\n\
          False\n\
-         refused type object 'by_diff_annreach.Deep' has no attribute '__annotations__'\n\
+         refused type object 'Deep' has no attribute '__annotations__'\n\
          sealed\n\
          no base\n\
          method_descriptor method_descriptor"
@@ -27446,7 +27770,7 @@ class Fine:
     );
     assert_eq!(
         out,
-        "refused type object 'by_diff_annlost.Node' has no attribute '__annotations__'\n\
+        "refused type object 'Node' has no attribute '__annotations__'\n\
          {'plain': <class 'int'>}\n\
          method_descriptor method_descriptor"
     );
@@ -30943,6 +31267,90 @@ async def echoed() -> AsyncGenerator[object, object]:
             "_against(m.counted, lambda g: (lambda a: [lambda: a.send(None), lambda: a.close(), \
              lambda: next(g.__anext__()), lambda: next(g.aclose())])(g.__anext__()))",
         ],
+    );
+}
+
+#[test]
+fn a_coroutine_dropped_unawaited_warns() {
+    // python reports a coroutine dropped before it ever ran, and one the filters turn into
+    // an error is reported as unraisable, which 3.14 says it was finalizing the coroutine
+    let Some(compiled) = agree_python_built(
+        "corounawaited",
+        "\
+async def answer() -> int:
+    return 1
+",
+        &[
+            "_warnings_from(lambda: m.answer())",
+            "_unraisable_from(lambda: m.answer())",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_corounawaited as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             c = m.answer()\n\
+             print(type(c).__name__)\n\
+             c.close()\n",
+        ),
+        "answer$gen"
+    );
+}
+
+#[test]
+fn an_async_generator_s_awaitable_dropped_unstepped_warns() {
+    // from 3.13 python reports an awaitable of an async generator that is dropped before it
+    // was ever stepped: `coroutine method 'asend' of 'numbers' was never awaited`, naming
+    // `asend` for `__anext__()` too. one that was stepped, or closed, is not reported, and
+    // before 3.13 none is
+    let Some(compiled) = agree_python_built(
+        "agenunawaited",
+        "\
+from collections.abc import AsyncIterator
+
+
+async def numbers() -> AsyncIterator[int]:
+    yield 1
+
+
+class Box:
+    async def items(self) -> AsyncIterator[int]:
+        yield 2
+",
+        &[
+            "_warnings_from(lambda: m.numbers().asend(None))",
+            "_warnings_from(lambda: m.numbers().__anext__())",
+            "_warnings_from(lambda: m.numbers().athrow(ValueError))",
+            "_warnings_from(lambda: m.numbers().aclose())",
+            "_warnings_from(lambda: m.Box().items().asend(None))",
+            "_warnings_from(lambda: m.numbers().asend(None).close())",
+            "_warnings_from(lambda: [next(m.numbers().asend(None), None)])",
+            // a warning the filters turn into an error is reported as unraisable, which 3.14
+            // says it was finalizing the generator
+            "_unraisable_from(lambda: m.numbers().asend(None))",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_agenunawaited as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(m.numbers()).__name__, type(m.Box().items()).__name__)\n",
+        ),
+        "numbers$gen items$gen"
     );
 }
 
@@ -46306,5 +46714,48 @@ def name_of(c: Color) -> str:
             "type(m.Color.Red) is m.Color",
             "m.Color.Red == m.Color.Green",
         ],
+    );
+}
+
+#[test]
+fn a_compiled_class_is_named_bare_in_python_s_messages() {
+    // python's own messages name a type by its `tp_name`, which a `class` statement leaves
+    // the bare name: `'Box' object is not callable`. a compiled class answers the same,
+    // while its `repr`, `__module__` and pickling still carry the module
+    let Some(compiled) = agree_python_built(
+        "barename",
+        "\
+class Box:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+class Small(Box):
+    pass
+",
+        &[
+            "[str(_capture(f)) for f in (lambda: m.Box(1)(), lambda: m.Small(1)(), \
+             lambda: [*m.Box(1)], lambda: (lambda a, b: 0)(*m.Box(1)), \
+             lambda: [x for x, y in [m.Box(1)]], lambda: len(m.Box(1)), lambda: iter(m.Box(1)), \
+             lambda: m.Box(1)[0], lambda: m.Box(1) + 1)]",
+            "(repr(m.Box), repr(m.Small), m.Box.__module__, m.Box.__name__, m.Box.__qualname__)",
+            "(repr(m.Box(1)).split(' at ')[0], type(m.Small(1)).__name__)",
+            "(lambda p: p.loads(p.dumps(m.Small(3))).v)(__import__('pickle'))",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_barename as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print([type(c.__dict__['__init__']).__name__ for c in (m.Box,)], type(m.Small.__init__).__name__)\n",
+        ),
+        "['wrapper_descriptor'] wrapper_descriptor"
     );
 }

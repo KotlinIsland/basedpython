@@ -1838,6 +1838,26 @@ static inline PyObject *By_ObjRichCompare(PyObject *a, PyObject *b, int op) {
     return PyObject_RichCompare(a, b, op);
 }
 
+/* name a class built from a spec as a `class` statement names one: by its bare name
+ *
+ * python's own messages print a type's `tp_name` — `'Box' object is not callable`,
+ * `cannot unpack non-iterable Box object` — which a `class` statement leaves the bare
+ * name, and a spec the dotted one it was given. a heap type answers `__module__`,
+ * `__name__` and `__qualname__` out of its dict and its own fields rather than out of
+ * `tp_name`, so pointing it at the bare name changes those messages and nothing else:
+ * `repr`, pickling and `__module__` are as they were. it is what assigning
+ * `type.__name__` does to a class, and the storage is the same — the type's own name
+ * object, which lives as long as the type does. a static type reads its module off the
+ * front of `tp_name`, and is left as it is */
+static inline int By_BareTypeName(PyObject *cls) {
+    if (!PyType_Check(cls) || !PyType_HasFeature((PyTypeObject *)cls, Py_TPFLAGS_HEAPTYPE))
+        return 0;
+    const char *bare = PyUnicode_AsUTF8(((PyHeapTypeObject *)cls)->ht_name);
+    if (bare == NULL) return -1;
+    ((PyTypeObject *)cls)->tp_name = bare;
+    return 0;
+}
+
 /* the type python names in an `AttributeError`
  *
  * the instance's *own* type, not the class that declared the field: a subclass
@@ -4525,7 +4545,10 @@ static PyTypeObject By_MethodType = {
 
 /* settle `by_method_type`: the type an earlier module shared, or else this module's own,
  * readied and shared. the key carries the layout's version, so two modules only ever
- * share a type whose objects they both read the same way */
+ * share a type whose objects they both read the same way. a call is not the type's to
+ * answer: it goes through the `vectorcall` each object carries, which is the one the module
+ * that made the object wrote, so what a call counts against the recursion limit is never
+ * the first module's */
 static int By_FindMethodType(void) {
     PyInterpreterState *interpreter;
     PyObject *state, *found;
@@ -8045,11 +8068,15 @@ static int By_VerifyClass(const char *module, PyObject *dict, const char *name,
         for (at = 0; at < base_count; at++) {
             if (bases[at] == NULL || !PyType_Check(bases[at])) continue;
             if (!By_HasBase(stands, bases[at])) {
+                /* named in full, as `repr` names a class: its `tp_name` is the bare name */
+                PyObject *base_name = PyType_GetQualName((PyTypeObject *)bases[at]);
+                if (base_name == NULL) return -1;
                 PyErr_Format(PyExc_ImportError,
-                             "%s.%s stands on an orphaned base: %s is what this module's "
+                             "%s.%s stands on an orphaned base: %s.%U is what this module's "
                              "own base of that name means and is not among its __bases__, "
                              "so isinstance answers False where python answers True",
-                             module, name, ((PyTypeObject *)bases[at])->tp_name);
+                             module, name, module, base_name);
+                Py_DECREF(base_name);
                 return -1;
             }
         }
@@ -10179,6 +10206,41 @@ static inline Py_hash_t By_HashResult(PyObject *value) {
     return hash;
 }
 
+#if PY_VERSION_HEX < 0x030C0000
+/* a call to a native entry that enters no recursion of its own
+ *
+ * the forwarder in front of it is a python frame, and that frame is the one python's own
+ * function would have pushed, so nothing behind it counts another. 3.11 has one count for
+ * C calls and python frames, and a builtin's own call enters it, so a call from a
+ * forwarder took a second frame and a recursion reached through one stopped a level early */
+static PyObject *By_NativeEntryVectorcall(PyObject *callable, PyObject *const *args,
+                                          size_t nargsf, PyObject *kwnames) {
+    PyCFunctionObject *function = (PyCFunctionObject *)callable;
+    return ((PyCFunctionFastWithKeywords)(void (*)(void))function->m_ml->ml_meth)(
+        function->m_self, args, PyVectorcall_NARGS(nargsf), kwnames);
+}
+#endif
+
+/* a builtin over `def`, one of the class's own entries, that counts no frame on its way in
+ *
+ * what python counts for the call is counted behind it, or is nothing: a written `__new__`
+ * counts the frame its body is, an `__init_subclass__` goes on up to the one python calls,
+ * and python's own allocation of a subclass calls no `__new__` at all. from 3.12 a
+ * builtin's entry is against the C stack and counts none of the limit anyway, so this is
+ * how every later version already counts — see `By_NativeEntryVectorcall` */
+static inline PyObject *By_NativeEntryFunction(PyMethodDef *def) {
+    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+#if PY_VERSION_HEX < 0x030C0000
+    if (function != NULL
+        && (def->ml_flags & (METH_VARARGS | METH_FASTCALL | METH_NOARGS | METH_O | METH_KEYWORDS
+                             | METH_METHOD))
+               == (METH_FASTCALL | METH_KEYWORDS)) {
+        ((PyCFunctionObject *)function)->vectorcall = By_NativeEntryVectorcall;
+    }
+#endif
+    return function;
+}
+
 /* publish a written `__new__` by *assigning* it onto the finished type
  *
  * not through the spec. a `tp_new` filled from a slot table is a C function, and python
@@ -10196,7 +10258,7 @@ static inline Py_hash_t By_HashResult(PyObject *value) {
  * the class arrives as the first argument rather than as a receiver, and the dispatcher
  * puts it there */
 static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
-    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    PyObject *function = By_NativeEntryFunction(def);
     if (function == NULL) return -1;
     PyObject *published = PyStaticMethod_New(function);
     Py_DECREF(function);
@@ -10221,7 +10283,7 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
  * construction of the subclass comes through here and is handed the allocator first */
 static inline int By_PublishAllocatingNew(PyObject *type, PyMethodDef *def) {
     PyTypeObject *owner = (PyTypeObject *)type;
-    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    PyObject *function = By_NativeEntryFunction(def);
     if (function == NULL) return -1;
     PyObject *published = PyStaticMethod_New(function);
     Py_DECREF(function);
@@ -10299,7 +10361,7 @@ static inline void By_AdoptAllocator(PyTypeObject *type, PyObject *owner, allocf
  * fills no slot, so nothing else about the type changes by its being there */
 static inline int By_PublishInitSubclass(PyObject *type, PyMethodDef *def) {
     PyTypeObject *owner = (PyTypeObject *)type;
-    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    PyObject *function = By_NativeEntryFunction(def);
     if (function == NULL) return -1;
     PyObject *published = PyClassMethod_New(function);
     Py_DECREF(function);
@@ -11885,21 +11947,6 @@ static inline void By_DropName(PyObject *dict, const char *name) {
  * module's own namespace exactly as it was, and the copy is what the pairs and the
  * later install are both read from. `staging` is that copy, a new reference, and its
  * entries are borrowed for as long as it is held */
-#if PY_VERSION_HEX < 0x030C0000
-/* a call to a native entry that enters no recursion of its own
- *
- * the forwarder in front of it is a python frame, and that frame is the one python's own
- * function would have pushed, so nothing behind it counts another. 3.11 has one count for
- * C calls and python frames, and a builtin's own call enters it, so a call from a
- * forwarder took a second frame and a recursion reached through one stopped a level early */
-static PyObject *By_NativeEntryVectorcall(PyObject *callable, PyObject *const *args,
-                                          size_t nargsf, PyObject *kwnames) {
-    PyCFunctionObject *function = (PyCFunctionObject *)callable;
-    return ((PyCFunctionFastWithKeywords)(void (*)(void))function->m_ml->ml_meth)(
-        function->m_self, args, PyVectorcall_NARGS(nargsf), kwnames);
-}
-#endif
-
 static inline PyObject *By_BuildForwarders(PyObject *module, PyObject *dict, PyMethodDef *methods,
                                            Py_ssize_t count, const char *installer) {
     PyObject *modname, *natives, *install, *result, *staging;
@@ -13019,7 +13066,8 @@ static inline void By_CloseUnraisable(PyObject *self) {
  * coroutine over as the warning's `source` — which is what `tracemalloc` hangs the
  * allocation traceback off. the stack level is the frame the coroutine was dropped in,
  * the same one python's `stacklevel=2` reaches from the helper it warns through. a failure
- * to warn has nowhere to go and is reported as unraisable, as python reports it */
+ * to warn has nowhere to go and is reported as unraisable, as python reports it: against the
+ * coroutine, which 3.14 says it was finalizing */
 static inline void By_WarnUnawaitedCoroutine(PyObject *coroutine, const char *qualname) {
     PyObject *warnings = PyImport_ImportModule("warnings");
     PyObject *warn = warnings == NULL ? NULL : PyObject_GetAttrString(warnings, "warn");
@@ -13036,10 +13084,58 @@ static inline void By_WarnUnawaitedCoroutine(PyObject *coroutine, const char *qu
     Py_XDECREF(message);
     Py_XDECREF(warn);
     if (result == NULL) {
+#if PY_VERSION_HEX >= 0x030E0000
+        PyErr_FormatUnraisable("Exception ignored while finalizing coroutine %R", coroutine);
+#else
         PyErr_WriteUnraisable(coroutine);
+#endif
         return;
     }
     Py_DECREF(result);
+}
+
+/* python's `RuntimeWarning` for one of an async generator's awaitables dropped before it
+ * was ever stepped: `__anext__()` and `asend()` report themselves as `asend`, and
+ * `athrow()` and `aclose()` under their own names. python only warns from 3.13
+ *
+ * the warning is issued the way `By_WarnUnawaitedCoroutine` issues its own, with the
+ * generator as the `source`. a failure to warn is reported as unraisable against the
+ * generator, which 3.14 says it was finalizing */
+static inline void By_WarnUnawaitedAgenMethod(PyObject *agen, const char *method,
+                                              const char *qualname) {
+    PyObject *exc_type, *exc_value, *exc_tb;
+    PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
+    PyObject *warnings = PyImport_ImportModule("warnings");
+    PyObject *warn = warnings == NULL ? NULL : PyObject_GetAttrString(warnings, "warn");
+    Py_XDECREF(warnings);
+    PyObject *method_name = warn == NULL ? NULL : PyUnicode_FromString(method);
+    PyObject *qualified = method_name == NULL ? NULL : PyUnicode_FromString(qualname);
+    PyObject *message =
+        qualified == NULL
+            ? NULL
+            : PyUnicode_FromFormat("coroutine method %R of %R was never awaited", method_name,
+                                   qualified);
+    PyObject *level = message == NULL ? NULL : PyLong_FromLong(1);
+    PyObject *result = NULL;
+    if (level != NULL) {
+        PyObject *args[] = {message, PyExc_RuntimeWarning, level, agen};
+        result = PyObject_Vectorcall(warn, args, 4, NULL);
+    }
+    Py_XDECREF(level);
+    Py_XDECREF(message);
+    Py_XDECREF(qualified);
+    Py_XDECREF(method_name);
+    Py_XDECREF(warn);
+    if (result == NULL) {
+#if PY_VERSION_HEX >= 0x030E0000
+        PyErr_FormatUnraisable("Exception ignored while finalizing async generator %R", agen);
+#else
+        PyErr_WriteUnraisable(agen);
+#endif
+    } else {
+        Py_DECREF(result);
+    }
+    PyErr_Restore(exc_type, exc_value, exc_tb);
 }
 
 /* `close()`: throw `GeneratorExit` in and accept the three legal outcomes, answering
