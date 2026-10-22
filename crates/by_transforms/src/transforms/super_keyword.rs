@@ -93,6 +93,15 @@ fn first_lambda_param_name(
         .map(|p| crate::python_parameter_name(params, &p.parameter, written).to_string())
 }
 
+/// whether `base`, an attribute's base, is the keyword: `super` or `super[T]`
+fn is_super_keyword(base: &Expr) -> bool {
+    let name = match base {
+        Expr::Subscript(subscript) => subscript.value.as_ref(),
+        other => other,
+    };
+    matches!(name, Expr::Name(name) if name.id.as_str() == "super")
+}
+
 impl State<'_> {
     /// the receiver of the function or lambda the walk is inside, when it has one
     fn receiver(&self) -> Option<String> {
@@ -142,6 +151,20 @@ impl<'ast> Visitor<'ast> for &State<'_> {
                 .push(first_lambda_param_name(lambda, self.written));
             walk_expr(self, expr);
             self.self_stack.borrow_mut().pop();
+            return;
+        }
+        // an attribute of the keyword is never assigned or deleted: a `super()` object has no
+        // attributes of its own, and does not pass a write on to the class it reads past, so the
+        // python the keyword lowers to raises `AttributeError` whatever the attribute
+        if let Expr::Attribute(attribute) = expr
+            && matches!(attribute.ctx, ExprContext::Store | ExprContext::Del)
+            && is_super_keyword(&attribute.value)
+        {
+            self.errors.borrow_mut().push(format!(
+                "`{}` cannot be assigned or deleted: a `super()` object has no attributes of its \
+                 own to write",
+                render_expr(expr)
+            ));
             return;
         }
         // the targeted keyword is the base of an attribute access, `super[T].x`. anywhere else
@@ -430,6 +453,26 @@ mod tests {
             error.contains("reads its receiver from the first parameter"),
             "got: {error}"
         );
+    }
+
+    /// a `super()` object has no attributes of its own to write, so a store or a deletion
+    /// through the keyword is refused rather than written as one that raises
+    #[test]
+    fn an_attribute_of_super_written_or_deleted_is_refused() {
+        for statement in [
+            "super.x = 1",
+            "super.x += 1",
+            "del super.x",
+            "super[B].x = 1",
+            "for super.x in []: pass",
+        ] {
+            let source = format!("class C(A, B):\n    def f(self):\n        {statement}\n");
+            let error = transpile(&source, &Config::test_default()).unwrap_err();
+            assert!(
+                error.contains("cannot be assigned or deleted"),
+                "{statement}: {error}"
+            );
+        }
     }
 
     #[test]

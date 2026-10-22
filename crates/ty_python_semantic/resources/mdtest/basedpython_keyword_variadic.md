@@ -426,13 +426,14 @@ def h(cb: (**kwargs: str) -> int):
 ## `(**TD)` unpacks a `TypedDict`
 
 a bare name in the `**` position is an unpack — the same reading a parameter pack gets. the
-`TypedDict`'s keys become keyword parameters, matching `def f(**kwargs: Unpack[TD])`
+`TypedDict`'s keys become keyword parameters, matching `def f(**kwargs: Unpack[TD])`. a dict literal
+type is closed, so no other keyword is accepted
 
 ```by
 type TD = {"a": int}
 
 def f(fn: (**TD) -> None):
-    reveal_type(fn)  # revealed: (*, a: int, **kwargs: object) -> None
+    reveal_type(fn)  # revealed: (*, a: int) -> None
     fn(a=1)
     fn()  # error: [missing-argument]
     fn(a="wrong")  # error: [invalid-argument-type]
@@ -453,10 +454,10 @@ def labelled(fn: (**kwargs: Unpack[TD]) -> None): ...
 
 def anonymous(fn: (**: Unpack[TD]) -> None): ...
 
-reveal_type(base)  # revealed: def base(*, a: int, **kwargs: object)
-reveal_type(bare)  # revealed: def bare(fn: (*, a: int, **kwargs: object) -> None)
-reveal_type(labelled)  # revealed: def labelled(fn: (*, a: int, **kwargs: object) -> None)
-reveal_type(anonymous)  # revealed: def anonymous(fn: (*, a: int, **kwargs: object) -> None)
+reveal_type(base)  # revealed: def base(*, a: int)
+reveal_type(bare)  # revealed: def bare(fn: (*, a: int) -> None)
+reveal_type(labelled)  # revealed: def labelled(fn: (*, a: int) -> None)
+reveal_type(anonymous)  # revealed: def anonymous(fn: (*, a: int) -> None)
 ```
 
 ## `(**P)` unpacks a protocol's data members

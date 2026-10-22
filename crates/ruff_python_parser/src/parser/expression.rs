@@ -1443,7 +1443,22 @@ impl<'src> Parser<'src> {
                     self.error_if_not_basedpython(
                         "custom string tags are not valid in .py files".to_string(),
                     );
+                    let held_before = self.unsupported_syntax_errors.len();
                     let template = self.parse_strings();
+                    // the tag's lowering writes the template for whatever python the file
+                    // targets, so the template is not held to the python that has t-strings. a
+                    // t-string written inside one of its fields is not the tag's, and still is
+                    let parts: Vec<TextRange> = match &template {
+                        Expr::TString(tstring) => tstring.value.iter().map(Ranged::range).collect(),
+                        _ => Vec::new(),
+                    };
+                    let mut index = 0;
+                    self.unsupported_syntax_errors.retain(|error| {
+                        index += 1;
+                        index <= held_before
+                            || error.kind != UnsupportedSyntaxErrorKind::TemplateStrings
+                            || !parts.contains(&error.range)
+                    });
                     let arguments = ast::Arguments {
                         range: template.range(),
                         node_index: AtomicNodeIndex::NONE,

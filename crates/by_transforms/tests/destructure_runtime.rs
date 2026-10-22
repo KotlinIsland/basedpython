@@ -11,7 +11,8 @@
 //!
 //! No third-party packages are needed, so the program is transpiled for whichever
 //! interpreter runs it; if none is found the test skips, and says so, rather than
-//! fails.
+//! fails. A destructuring is written as a `match` statement, so the program needs
+//! python 3.10, and an older target is refused
 
 use std::process::Command;
 
@@ -229,7 +230,7 @@ fn run(python: &Interpreter, program: &str) {
 
 #[test]
 fn destructuring_runs_correctly() {
-    let Some(python) = python(PythonVersion::PY39) else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
 
@@ -238,8 +239,36 @@ fn destructuring_runs_correctly() {
 
 #[test]
 fn a_subject_written_over_several_lines_keeps_its_grouping() {
-    let Some(python) = python(PythonVersion::PY39) else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
     run(&python, MULTI_LINE);
+}
+
+/// every binding position, each on its own, refused on a target without `match`
+#[test]
+fn destructuring_is_refused_below_3_10() {
+    let forms = [
+        "let (a, b) := (1, 2)\n",
+        "for int(n) in [1]:\n    pass\n",
+        "with open('f') as int(n):\n    pass\n",
+        "def f(int(n): int):\n    pass\n",
+        "class C:\n    let (a, b) := (1, 2)\n",
+    ];
+    for min_version in [PythonVersion::PY38, PythonVersion::PY39] {
+        for form in forms {
+            let config = Config {
+                min_version,
+                ..Config::default()
+            };
+            let error = transpile(form, &config).expect_err(&format!("{form:?} on {min_version}"));
+            assert!(
+                error.starts_with(&format!(
+                    "Cannot use a destructuring pattern, which is written as a `match` statement, \
+                     on Python {min_version} (syntax was added in Python 3.10)"
+                )),
+                "{form:?} on {min_version}: {error}"
+            );
+        }
+    }
 }

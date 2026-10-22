@@ -235,3 +235,37 @@ class B(A):
 
 assert B().a == 2
 ```
+
+## `super` in a `NamedTuple` method
+
+A `NamedTuple` class cannot use `super()` in its methods, and the keyword is written as a `super()`
+call, so it is reported the same way.
+
+```by
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: int
+
+    def describe(self) -> str:
+        # error: [super-call-in-named-tuple-method]
+        return super.__repr__()
+```
+
+## an attribute of `super` is not assigned or deleted
+
+A `super()` object has no attributes of its own, and does not pass an assignment or a deletion on to
+the class it reads past, so python raises `AttributeError` for either. The keyword is that object
+wherever it is an attribute's base, so a write through it is reported as one through `super()` is.
+
+```by
+class A:
+    x: int = 0
+
+class B(A):
+    def f(self):
+        super.x = 1  # error: [invalid-assignment] "Cannot assign to attribute `x`"
+        super.x += 1  # error: [invalid-assignment] "Cannot assign to attribute `x`"
+        del super.x  # error: [invalid-assignment] "Cannot delete attribute `x`"
+        del super().x  # error: [invalid-assignment] "Cannot delete attribute `x`"
+```

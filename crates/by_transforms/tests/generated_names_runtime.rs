@@ -25,10 +25,11 @@ use by_transforms::{Config, PythonVersion, transpile};
 mod common;
 mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
-/// basedpython whose module-level `assert`s exercise every lowering that mints
-/// a temporary, in both namespaces that record what is assigned in them.
-const PROGRAM: &str = r#"
+/// what both programs below share: the values they destructure and match, and the
+/// helpers that find a lowering's temporaries in a namespace
+const COMMON: &str = r#"
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -63,27 +64,16 @@ def machinery(names: object) -> list[str]:
 # underscores and no trailing pair is name-mangled onto the class
 def recorded(names: object) -> list[str]:
     return [n for n in machinery(names) if not (n.startswith("__") and n.endswith("__"))]
+"#;
 
+/// basedpython whose module-level `assert`s exercise every lowering that mints a temporary
+/// for any target, in both namespaces that record what is assigned in them
+const ANY_TARGET: &str = r#"
 # a plain class body: every temporary would be a class attribute
 class Holder:
-    let Point(hx, hy) := origin() else:
-        raise TypeError
-
-    if let Point(iax, iay) := origin():
-        pass
-
     match origin():
         case Point(mx, my) and object():
             pass
-
-    if let Point(x=int() and 0, y=ay) := origin():
-        pass
-
-    for Point(fx, fy) in one_point():
-        pass
-
-    with borrow(origin()) as Point(wx, wy):
-        pass
 
     seen.append(maybe() ?? 0)
 
@@ -93,12 +83,7 @@ class Holder:
         else:
             2
 
-assert (Holder.hx, Holder.hy) == (0, 0), "a class-body `let` binds its captures"
-assert (Holder.iax, Holder.iay) == (0, 0), "so does an `if let`"
-assert (Holder.mx, Holder.my) == (0, 0), "so does a `match` with a conjunction"
-assert Holder.ay == 0, "so does a hoisted conjunction"
-assert (Holder.fx, Holder.fy) == (1, 2), "so does a `for` pattern"
-assert (Holder.wx, Holder.wy) == (0, 0), "so does a `with` pattern"
+assert (Holder.mx, Holder.my) == (0, 0), "a `match` with a conjunction binds its captures"
 assert Holder.chosen == 1, "a class-body statement expression still yields"
 assert seen == [7], "a class-body `??` still evaluates"
 assert not recorded(vars(Holder)), "no temporary is an ordinary class attribute"
@@ -108,24 +93,9 @@ assert not recorded(vars(Holder)), "no temporary is an ordinary class attribute"
 enum class Colour:
     case Red, Green
 
-    let Point(ex, ey) := origin() else:
-        raise TypeError
-
-    if let Point(bx, by) := origin():
-        pass
-
     match origin():
         case Point(cx, cy) and object():
             pass
-
-    if let Point(x=int() and 0, y=ny) := origin():
-        pass
-
-    for Point(gx, gy) in one_point():
-        pass
-
-    with borrow(origin()) as Point(vx, vy):
-        pass
 
     seen.append(maybe() ?? 0)
 
@@ -145,17 +115,67 @@ assert not machinery(n.name for n in Colour), "or a variant the enum iterates"
 print("ok")
 "#;
 
-#[test]
-fn generated_names_stay_out_of_the_namespace() {
-    let Some(python) = python(PythonVersion::PY39) else {
-        return;
-    };
+/// the same for every destructuring, which needs python 3.10
+const DESTRUCTURING: &str = r#"
+class Holder:
+    let Point(hx, hy) := origin() else:
+        raise TypeError
 
+    if let Point(iax, iay) := origin():
+        pass
+
+    if let Point(x=int() and 0, y=ay) := origin():
+        pass
+
+    for Point(fx, fy) in one_point():
+        pass
+
+    with borrow(origin()) as Point(wx, wy):
+        pass
+
+assert (Holder.hx, Holder.hy) == (0, 0), "a class-body `let` binds its captures"
+assert (Holder.iax, Holder.iay) == (0, 0), "so does an `if let`"
+assert Holder.ay == 0, "so does a hoisted conjunction"
+assert (Holder.fx, Holder.fy) == (1, 2), "so does a `for` pattern"
+assert (Holder.wx, Holder.wy) == (0, 0), "so does a `with` pattern"
+assert not recorded(vars(Holder)), "no temporary is an ordinary class attribute"
+
+enum class Colour:
+    case Red, Green
+
+    let Point(ex, ey) := origin() else:
+        raise TypeError
+
+    if let Point(bx, by) := origin():
+        pass
+
+    if let Point(x=int() and 0, y=ny) := origin():
+        pass
+
+    for Point(gx, gy) in one_point():
+        pass
+
+    with borrow(origin()) as Point(vx, vy):
+        pass
+
+assert Colour.Red.name == "Red" and Colour.Green.name == "Green", (
+    "the declared variants are still the enum's own"
+)
+assert not recorded(vars(Colour)), "no temporary is an ordinary name in the enum"
+assert not machinery(Colour.__members__), "and none of them became a member"
+assert not machinery(n.name for n in Colour), "or a variant the enum iterates"
+
+print("ok")
+"#;
+
+/// transpile `body` after [`COMMON`] for the interpreter that runs it, and run it
+fn run(python: &Interpreter, body: &str) {
+    let program = format!("{COMMON}{body}");
     let config = Config {
         min_version: python.version,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(&program, &config).expect("transpile should succeed");
 
     let output = Command::new(&python.command)
         .arg("-c")
@@ -170,4 +190,20 @@ fn generated_names_stay_out_of_the_namespace() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
+fn generated_names_stay_out_of_the_namespace() {
+    let Some(python) = python(PythonVersion::PY39) else {
+        return;
+    };
+    run(&python, ANY_TARGET);
+}
+
+#[test]
+fn destructuring_names_stay_out_of_the_namespace() {
+    let Some(python) = python(PythonVersion::PY310) else {
+        return;
+    };
+    run(&python, DESTRUCTURING);
 }

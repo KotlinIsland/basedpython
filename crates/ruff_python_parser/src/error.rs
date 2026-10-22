@@ -1002,7 +1002,7 @@ pub enum UnsupportedSyntaxErrorKind {
     /// ## Examples
     ///
     /// ```by
-    /// let Point(x, y) := origin  # error before 3.8, where no `match` can be written
+    /// let Point(x, y) := origin  # error before 3.10
     /// ```
     Destructuring,
 }
@@ -1210,15 +1210,19 @@ impl UnsupportedSyntaxErrorKind {
             | UnsupportedSyntaxErrorKind::StarExpressionInIndex
             | UnsupportedSyntaxErrorKind::LazyImportStatement => true,
             // the `match` lowering writes each pattern as a test built of assignment
-            // expressions, in which a unary `+` is an ordinary operator. a destructuring is
-            // written as a `match`, so it goes wherever one goes
+            // expressions, in which a unary `+` is an ordinary operator
             UnsupportedSyntaxErrorKind::Match
-            | UnsupportedSyntaxErrorKind::UnaryPlusMatchPattern
-            | UnsupportedSyntaxErrorKind::Destructuring => {
+            | UnsupportedSyntaxErrorKind::UnaryPlusMatchPattern => {
                 UnsupportedSyntaxErrorKind::Match.is_unsupported(target_version)
                     && UnsupportedSyntaxErrorKind::Walrus.is_supported(target_version)
             }
-            UnsupportedSyntaxErrorKind::Walrus
+            // a destructuring is written as a `match`, but is not lowered where a `match` is.
+            // the `match` lowering leaves the temporaries it binds behind, as attributes of a
+            // class whose body it is written in, and unbinding them takes a statement that has
+            // no source line of its own to go on. the lowering of a `match` leaves nothing of
+            // it in the output to re-parse, so the transpiler refuses it on the source
+            UnsupportedSyntaxErrorKind::Destructuring
+            | UnsupportedSyntaxErrorKind::Walrus
             | UnsupportedSyntaxErrorKind::ExceptStar
             | UnsupportedSyntaxErrorKind::UnparenthesizedNamedExpr(_)
             | UnsupportedSyntaxErrorKind::ParenthesizedKeywordArgumentName

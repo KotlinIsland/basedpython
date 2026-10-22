@@ -132,7 +132,7 @@ fn run(python: &Interpreter, program: &str) {
 
 #[test]
 fn if_let_chains_run_correctly() {
-    let Some(python) = python(PythonVersion::PY39) else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
 
@@ -141,8 +141,34 @@ fn if_let_chains_run_correctly() {
 
 #[test]
 fn a_subject_written_over_several_lines_keeps_its_grouping() {
-    let Some(python) = python(PythonVersion::PY39) else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
     run(&python, MULTI_LINE);
+}
+
+/// an `if let` and an `elif let` are written as a `match` statement, so a target without one
+/// refuses them
+#[test]
+fn if_let_is_refused_below_3_10() {
+    let forms = [
+        "x = [1]\nif let [a] := x:\n    pass\n",
+        "x = [1]\nif x:\n    pass\nelif let [a] := x:\n    pass\n",
+    ];
+    for min_version in [PythonVersion::PY38, PythonVersion::PY39] {
+        for form in forms {
+            let config = Config {
+                min_version,
+                ..Config::default()
+            };
+            let error = transpile(form, &config).expect_err(&format!("{form:?} on {min_version}"));
+            assert!(
+                error.starts_with(&format!(
+                    "Cannot use a destructuring pattern, which is written as a `match` statement, \
+                     on Python {min_version} (syntax was added in Python 3.10)"
+                )),
+                "{form:?} on {min_version}: {error}"
+            );
+        }
+    }
 }

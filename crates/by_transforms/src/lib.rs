@@ -197,6 +197,7 @@ fn transpile_with_report(
     if config.is_python {
         return Ok((source.to_owned(), RuntimeRequirements::default()));
     }
+    verify_destructuring_target(source, config).map_err(|e| e.message)?;
 
     // one db over the original source, shared by the qualification phase below
     // and — as long as nothing rewrites the source — by phase 0's type-aware
@@ -423,6 +424,7 @@ pub fn transpile_typed_with_report(
             RuntimeRequirements::default(),
         ));
     }
+    verify_destructuring_target(original_source, config)?;
 
     let parsed = ruff_db::parsed::parsed_module(
         db,
@@ -1158,6 +1160,38 @@ fn verify_target_syntax(source: &str, config: &Config) -> Result<(), TranspileEr
         });
     }
     Ok(())
+}
+
+/// refuse a destructuring written for a target that has no `match` statement, as `by check`
+/// reports it there
+///
+/// a destructuring is written as a `match` statement, which the `match` lowering rewrites for a
+/// target from 3.8, so [`verify_target_syntax`] finds nothing of it in the output. the parser
+/// holds it to 3.10 all the same, in `UnsupportedSyntaxErrorKind::is_lowered_by_basedpython`,
+/// which decides the version for this check and the checker both. every other kind is checked
+/// on the output, which is the python the target runs
+fn verify_destructuring_target(source: &str, config: &Config) -> Result<(), TranspileError> {
+    let source_type = if config.is_stub {
+        ruff_python_ast::PySourceType::BasedPythonStub
+    } else {
+        ruff_python_ast::PySourceType::BasedPython
+    };
+    let options =
+        ruff_python_parser::ParseOptions::from(source_type).with_target_version(config.min_version);
+    let parsed = ruff_python_parser::parse_unchecked(source, options);
+    let Some(first) = parsed
+        .unsupported_syntax_errors()
+        .iter()
+        .find(|error| error.kind == ruff_python_parser::UnsupportedSyntaxErrorKind::Destructuring)
+    else {
+        return Ok(());
+    };
+    Err(TranspileError {
+        kind: TranspileErrorKind::InvalidSyntax,
+        message: first.to_string(),
+        output_range: None,
+        by_range: Some(first.range),
+    })
 }
 
 /// Splice `preamble` into `body` where generated lines belong: after the module
