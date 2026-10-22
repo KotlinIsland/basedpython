@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -3432,6 +3433,62 @@ fn build_emits_every_file_it_can_past_a_broken_one() {
         "the broken file still fails the build:\n{stderr}"
     );
     assert!(stderr.contains("broken.by"), "got:\n{stderr}");
+}
+
+/// the modules are transpiled in parallel and handed over in source order. a
+/// build reports every module it could not emit, in that order, while a run
+/// stops at the first one: the program cannot run without it, so nothing after
+/// it is reported or run
+#[test]
+fn transpile_failures_are_reported_in_source_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // each module takes over the name the runtime's `Some(...)` wrapper is
+    // provided under, which the transpile refuses. `by check` has nothing to say
+    // about it, so a run gets as far as transpiling
+    let refused = "from typing import Optional\n\nx = Some(3)\nprint(x!)\n";
+    // the first module is the larger, so it is the last to finish: an order
+    // the transpiles finished in would put it after `b.by`
+    let mut larger = String::new();
+    for i in 0..400 {
+        let _ = write!(larger, "\ndef f{i}(x: int) -> int:\n    return x + {i}\n");
+    }
+    fs::write(dir.path().join("a.by"), format!("{refused}{larger}")).unwrap();
+    fs::write(dir.path().join("b.by"), refused).unwrap();
+    fs::write(dir.path().join("main.by"), "print('main ran')\n").unwrap();
+    let by = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by")
+    };
+    let refusals = |stderr: &str| -> Vec<String> {
+        let lines: Vec<&str> = stderr.lines().collect();
+        lines
+            .windows(2)
+            .filter(|pair| pair[0].starts_with("error[transpile-refused]"))
+            .map(|pair| pair[1].trim().to_owned())
+            .collect()
+    };
+
+    let build = by(&["build"]);
+    let stderr = String::from_utf8_lossy(&build.stderr);
+    assert!(!build.status.success(), "{stderr}");
+    assert_eq!(
+        refusals(&stderr),
+        ["--> a.by:1:20", "--> b.by:1:20"],
+        "got:\n{stderr}"
+    );
+
+    let run = by(&["run", "main"]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert_eq!(refusals(&stderr), ["--> a.by:1:20"], "got:\n{stderr}");
+    assert!(
+        !String::from_utf8_lossy(&run.stdout).contains("main ran"),
+        "the program ran past a module it could not transpile"
+    );
 }
 
 /// `by build` walks the project's own file set, so `src.exclude` applies to it

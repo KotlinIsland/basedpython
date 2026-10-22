@@ -15,8 +15,11 @@
 //! This is a workaround and worth naming as one. The nesting belongs to the
 //! transpiler, not to any request, so the fix that would remove this is for a
 //! type-aware pass to be handed a database rather than construct one. Until then
-//! every caller that already holds one attached has to arrange not to be — the same
-//! reason `by_stage::emit`'s transpile loop cannot be parallelised.
+//! every caller that already holds one attached has to arrange not to be. A
+//! re-stage also reads its own clone of the project database on the thread it is
+//! called from, which inside a handler would be a second database attached over
+//! the session's. `by_stage::emit` arranges the same thing for its parallel
+//! transpile, by not attaching a job's database for the whole job.
 
 use std::panic::AssertUnwindSafe;
 

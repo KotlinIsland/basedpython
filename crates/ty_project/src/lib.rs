@@ -19,6 +19,7 @@ use ruff_db::diagnostic::{
     Annotation, Diagnostic, DiagnosticId, Severity, Span, SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::{File, system_path_to_file};
+use ruff_db::panic::PanicActivity;
 use ruff_db::parsed::parsed_module;
 use ruff_db::system::{SystemPath, SystemPathBuf, deduplicate_nested_paths};
 use rustc_hash::FxHashSet;
@@ -1092,7 +1093,7 @@ pub(crate) fn check_file_impl(
     let source_file = file.file(db);
     {
         let db = AssertUnwindSafe(db);
-        match catch(&**db, source_file, || {
+        match catch_panic(&**db, source_file, PanicActivity::Checking, || {
             let script = Script::for_file(*db, source_file);
             if let Some(script) = script
                 && !script.has_valid_settings(*db)
@@ -1196,7 +1197,17 @@ impl Iterator for ProjectFilesIter<'_> {
 
 impl FusedIterator for ProjectFilesIter<'_> {}
 
-fn catch<F, R>(db: &dyn Db, file: File, f: F) -> Result<R, Diagnostic>
+/// Run `f`, the work of `activity` on `file`, and report a panic in it as a `panic` diagnostic
+/// against the file rather than unwinding.
+///
+/// A cancellation is not a panic and is resumed, except for a panic propagated from a query
+/// another thread was running, which is reported against this file too.
+pub fn catch_panic<F, R>(
+    db: &dyn Db,
+    file: File,
+    activity: PanicActivity,
+    f: F,
+) -> Result<R, Diagnostic>
 where
     F: FnOnce() -> R + UnwindSafe,
 {
@@ -1227,7 +1238,7 @@ where
                 }
             }
 
-            let message = error.to_diagnostic_message(Some(file.path(db)));
+            let message = error.to_diagnostic_message(activity, Some(file.path(db)));
             let mut diagnostic = Diagnostic::new(DiagnosticId::Panic, Severity::Fatal, message);
             diagnostic.add_bug_sub_diagnostics("%5Bpanic%5D");
 
@@ -1269,16 +1280,58 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::check_file_impl;
     use crate::db::Db as _;
     use crate::db::testing::TestDb;
     use crate::{IncludeResult, ProjectMetadata};
+    use crate::{catch_panic, check_file_impl};
+    use ruff_db::diagnostic::DiagnosticId;
     use ruff_db::files::system_path_to_file;
+    use ruff_db::panic::PanicActivity;
     use ruff_db::source::source_text;
     use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem as _, SystemPath, SystemPathBuf};
     use ruff_db::testing::assert_function_query_was_not_run;
     use ty_python_semantic::Db as _;
     use ty_python_semantic::types::check_types;
+
+    /// a query this file's work waited on panicked on another thread: that is a panic to
+    /// report against this file too, not a cancellation to hand back to the caller
+    #[test]
+    fn a_panic_propagated_from_another_thread_is_reported() -> ruff_db::system::Result<()> {
+        let project = ProjectMetadata::new("test", SystemPathBuf::from("/"));
+        let mut db = TestDb::new(project);
+        db.write_file("test.py", "")?;
+        let file = system_path_to_file(&db, "test.py").unwrap();
+
+        let caught = catch_panic(&db, file, PanicActivity::Transpiling, || {
+            std::panic::resume_unwind(Box::new(salsa::Cancelled::PropagatedPanic))
+        });
+
+        let diagnostic = caught.expect_err("the propagated panic is reported");
+        assert_eq!(diagnostic.id(), DiagnosticId::Panic);
+        let message = diagnostic.headline_message();
+        assert!(message.contains("when transpiling"), "{message}");
+        Ok(())
+    }
+
+    /// a pending write cancels the work, and the caller is the one that knows what to do about
+    /// that, so it goes back unchanged
+    #[test]
+    fn a_cancellation_is_handed_back() -> ruff_db::system::Result<()> {
+        let project = ProjectMetadata::new("test", SystemPathBuf::from("/"));
+        let mut db = TestDb::new(project);
+        db.write_file("test.py", "")?;
+        let file = system_path_to_file(&db, "test.py").unwrap();
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            catch_panic(&db, file, PanicActivity::Transpiling, || {
+                std::panic::resume_unwind(Box::new(salsa::Cancelled::PendingWrite))
+            })
+        }));
+
+        let payload = unwound.expect_err("the cancellation unwound past the catch");
+        assert!(payload.downcast_ref::<salsa::Cancelled>().is_some());
+        Ok(())
+    }
 
     #[test]
     fn check_file_skips_type_checking_when_file_cant_be_read() -> ruff_db::system::Result<()> {

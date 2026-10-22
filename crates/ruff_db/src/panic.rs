@@ -35,12 +35,34 @@ impl std::fmt::Display for Payload {
     }
 }
 
+/// What was being done to a file when it panicked, as a panic diagnostic says it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicActivity {
+    Checking,
+    Transpiling,
+}
+
+impl std::fmt::Display for PanicActivity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PanicActivity::Checking => "checking",
+            PanicActivity::Transpiling => "transpiling",
+        })
+    }
+}
+
 impl PanicError {
     pub fn resume_unwind(self) -> ! {
         std::panic::resume_unwind(self.payload.0)
     }
 
-    pub fn to_diagnostic_message(&self, path: Option<impl std::fmt::Display>) -> String {
+    /// The message a panic diagnostic carries, saying what was being done to `path`
+    /// when it panicked
+    pub fn to_diagnostic_message(
+        &self,
+        activity: PanicActivity,
+        path: Option<impl std::fmt::Display>,
+    ) -> String {
         use std::fmt::Write;
 
         let mut message = String::new();
@@ -51,7 +73,7 @@ impl PanicError {
         }
 
         if let Some(path) = path {
-            let _ = write!(&mut message, " when checking `{path}`");
+            let _ = write!(&mut message, " when {activity} `{path}`");
         }
 
         let _ = write!(&mut message, ": `{payload}`", payload = self.payload);

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::io::Write;
 use std::path::Path;
 
-use ruff_db::panic::PanicError;
+use ruff_db::panic::{PanicActivity, PanicError};
 use rustc_hash::FxHashMap;
 
 use ruff_db::diagnostic::{
@@ -31,7 +31,10 @@ pub fn create_panic_diagnostic(error: &PanicError, path: Option<&Path>) -> Diagn
     let mut diagnostic = Diagnostic::new(
         DiagnosticId::Panic,
         Severity::Fatal,
-        error.to_diagnostic_message(path.as_ref().map(|path| path.display())),
+        error.to_diagnostic_message(
+            PanicActivity::Checking,
+            path.as_ref().map(|path| path.display()),
+        ),
     );
 
     diagnostic.sub(SubDiagnostic::new(

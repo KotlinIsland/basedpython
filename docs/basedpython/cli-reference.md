@@ -136,7 +136,11 @@ artifacts and exit status answer different questions. everything that could be
 emitted is emitted, sourcemap and package markers included; the exit status says
 whether anything was *reported*. so a build that prints an error exits 1 while
 still leaving a usable `build/`, and `by build && pytest build/tests` runs the tests
-only against a tree the checker had nothing to say about
+only against a tree the checker had nothing to say about. when a reported
+diagnostic is fatal the exit status is 101 instead, as it is for `by check`. the
+fatal one is `panic`, reported when `by` itself panicked while checking or
+transpiling a file, so a script can tell a crash in `by` from a problem in the
+code. `by run`, `by compile` and `by transpile <dir>` answer the same way
 
 writes the transpiled python to the project root's `build/` — wherever in the
 project it is run, as `by compile` does too; `--out DIR` names another directory,

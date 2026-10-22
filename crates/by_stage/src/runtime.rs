@@ -28,7 +28,7 @@ use ruff_db::system::{System, SystemPath};
 
 /// the copies a build writes
 ///
-/// claimed for every module rather than only those that turned out to call a
+/// recorded for every module rather than only those that turned out to call a
 /// helper: `by restage` recomputes modules against a tree an earlier build
 /// wrote, and an edit that newly reaches for a helper has to find the copy there
 #[derive(Debug, Default)]
@@ -38,15 +38,29 @@ pub struct RuntimeLayout {
 }
 
 impl RuntimeLayout {
-    /// record that `source`, landing at `relative` in the module tree, needs the
-    /// runtime, and answer the module it imports it from — or `None` for a module
-    /// in no package, which gets the definitions pasted in
-    pub(crate) fn claim(
-        &mut self,
-        relative: &Path,
-        source: &Path,
-        system: &dyn System,
-    ) -> Option<String> {
+    /// record that a module importing `package`'s copy was transpiled, whether or
+    /// not the transpile succeeded
+    pub(crate) fn record(&mut self, package: &RuntimePackage) {
+        self.packages.insert(package.0.clone());
+    }
+
+    /// where each copy goes within the module tree
+    pub fn files(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.packages
+            .iter()
+            .map(|package| Path::new(package).join(by_transforms::runtime::FILE_NAME))
+    }
+}
+
+/// the package whose copy of the runtime a module imports
+#[derive(Debug)]
+pub(crate) struct RuntimePackage(String);
+
+impl RuntimePackage {
+    /// the package `source`, landing at `relative` in the module tree, imports the
+    /// runtime from — or `None` for a module in no package, which gets the
+    /// definitions pasted in
+    pub(crate) fn of(relative: &Path, source: &Path, system: &dyn System) -> Option<Self> {
         let mut components = relative.components();
         let first = components.next()?;
         // a `relative` of one component is the module's own file name: it sits at
@@ -59,15 +73,12 @@ impl RuntimeLayout {
         if !is_package(&module_tree_base(relative, source).join(package), system) {
             return None;
         }
-        self.packages.insert(package.to_owned());
-        Some(format!("{package}.{}", by_transforms::runtime::MODULE_NAME))
+        Some(Self(package.to_owned()))
     }
 
-    /// where each copy goes within the module tree
-    pub fn files(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        self.packages
-            .iter()
-            .map(|package| Path::new(package).join(by_transforms::runtime::FILE_NAME))
+    /// the module the copy is imported as
+    pub(crate) fn module(&self) -> String {
+        format!("{}.{}", self.0, by_transforms::runtime::MODULE_NAME)
     }
 }
 
@@ -117,14 +128,16 @@ mod tests {
             Self { root, system }
         }
 
-        fn claim(&self, layout: &mut RuntimeLayout, relative: &str) -> Option<String> {
+        fn record(&self, layout: &mut RuntimeLayout, relative: &str) -> Option<String> {
             let source = self
                 .root
                 .path()
                 .join("src")
                 .join(relative)
                 .with_extension("by");
-            layout.claim(Path::new(relative), &source, &self.system)
+            let package = RuntimePackage::of(Path::new(relative), &source, &self.system)?;
+            layout.record(&package);
+            Some(package.module())
         }
     }
 
@@ -133,7 +146,7 @@ mod tests {
     fn a_root_module_gets_the_definitions_pasted_in() {
         let project = Project::with(&["src/main.by"]);
         let mut layout = RuntimeLayout::default();
-        assert_eq!(project.claim(&mut layout, "main.py"), None);
+        assert_eq!(project.record(&mut layout, "main.py"), None);
         assert_eq!(layout.files().count(), 0);
     }
 
@@ -142,7 +155,7 @@ mod tests {
         let project = Project::with(&["src/pkg/__init__.py", "src/pkg/a.by"]);
         let mut layout = RuntimeLayout::default();
         assert_eq!(
-            project.claim(&mut layout, "pkg/a.py").as_deref(),
+            project.record(&mut layout, "pkg/a.py").as_deref(),
             Some("pkg._by_runtime")
         );
         assert_eq!(
@@ -157,7 +170,7 @@ mod tests {
         let project = Project::with(&["src/pkg/__init__.by", "src/pkg/a.by"]);
         let mut layout = RuntimeLayout::default();
         assert_eq!(
-            project.claim(&mut layout, "pkg/a.py").as_deref(),
+            project.record(&mut layout, "pkg/a.py").as_deref(),
             Some("pkg._by_runtime")
         );
     }
@@ -168,7 +181,7 @@ mod tests {
     fn a_module_in_no_package_gets_the_definitions_pasted_in() {
         let project = Project::with(&["src/scripts/tool.by"]);
         let mut layout = RuntimeLayout::default();
-        assert_eq!(project.claim(&mut layout, "scripts/tool.py"), None);
+        assert_eq!(project.record(&mut layout, "scripts/tool.py"), None);
         assert_eq!(layout.files().count(), 0);
     }
 
@@ -178,7 +191,7 @@ mod tests {
         let project = Project::with(&["src/pkg/__init__.py", "src/pkg/sub/deep/a.by"]);
         let mut layout = RuntimeLayout::default();
         assert_eq!(
-            project.claim(&mut layout, "pkg/sub/deep/a.py").as_deref(),
+            project.record(&mut layout, "pkg/sub/deep/a.py").as_deref(),
             Some("pkg._by_runtime")
         );
         assert_eq!(
@@ -191,9 +204,9 @@ mod tests {
     fn each_package_carries_its_own() {
         let project = Project::with(&["src/one/__init__.py", "src/two/__init__.py"]);
         let mut layout = RuntimeLayout::default();
-        project.claim(&mut layout, "one/a.py");
-        project.claim(&mut layout, "two/b.py");
-        project.claim(&mut layout, "one/c.py");
+        project.record(&mut layout, "one/a.py");
+        project.record(&mut layout, "two/b.py");
+        project.record(&mut layout, "one/c.py");
         assert_eq!(
             layout.files().collect::<Vec<_>>(),
             vec![
@@ -204,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unclaimed_layout_writes_nothing() {
+    fn an_unrecorded_layout_writes_nothing() {
         assert_eq!(RuntimeLayout::default().files().count(), 0);
     }
 }

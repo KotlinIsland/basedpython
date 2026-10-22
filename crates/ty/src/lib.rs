@@ -69,12 +69,13 @@ where
     // type inference recurses with the shape of the program it is checking, so
     // how deep a file it can survive is decided by the stack it runs on. the
     // rayon pool asks for `STACK_SIZE`, but the thread a process starts on gets a
-    // platform default — 1 MiB on windows — and the commands that check on the
-    // calling thread rather than through the pool (`run`, `build`, `transpile`,
-    // `compile`) were overflowing it there. so the whole command runs on a thread
-    // this codebase has sized for the job, wherever it is dispatched to. a command
-    // does more per term than a check does, since it lowers the expression as well
-    // as inferring it, and `STACK_SIZE` is sized to leave room for that
+    // platform default — 1 MiB on windows — and a command that infers on the
+    // calling thread rather than through the pool (a single-file `transpile`,
+    // `compile`'s check and lowering) overflowed it there. so the whole command
+    // runs on a thread this codebase has sized for the job, wherever it is
+    // dispatched to. a command does more per term than a check does, since it
+    // lowers the expression as well as inferring it, and `STACK_SIZE` is sized to
+    // leave room for that
     std::thread::scope(|scope| {
         let command = std::thread::Builder::new()
             .stack_size(STACK_SIZE)
