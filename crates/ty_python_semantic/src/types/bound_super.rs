@@ -3,7 +3,10 @@
 use crate::ProgramEnvironment;
 use itertools::{Either, Itertools};
 use ruff_db::diagnostic::Diagnostic;
+use ruff_db::parsed::ParsedModuleRef;
 use ruff_python_ast::{AnyNodeRef, name::Name};
+use ty_python_core::SemanticIndex;
+use ty_python_core::scope::{NodeWithScopeKind, ScopeId};
 
 use crate::{
     Db, DisplaySettings,
@@ -12,7 +15,7 @@ use crate::{
         BoundTypeVarInstance, ClassBase, ClassType, DivergentType, DynamicType,
         IntersectionBuilder, KnownClass, MemberLookupErrorKind, MemberLookupPolicy,
         MemberLookupResult, SpecialFormType, SubclassOfInner, SubclassOfType, Type,
-        TypeVarBoundOrConstraints, UnionBuilder, UnsafeUnionType,
+        TypeVarBoundOrConstraints, UnionBuilder, UnsafeUnionType, binding_type,
         constraints::ConstraintSet,
         context::InferContext,
         diagnostic::{INVALID_SUPER_ARGUMENT, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS},
@@ -23,6 +26,33 @@ use crate::{
         visitor,
     },
 };
+
+/// The receiver zero-argument `super()` reads where it is written in `scope`: the first parameter
+/// of the function or lambda `scope` is, as python takes the first argument of the frame it runs
+/// in. `None` where `scope` is no function — a class body, a module, a comprehension — or one
+/// with no parameter.
+pub(crate) fn implicit_super_receiver<'db>(
+    db: &'db dyn Db,
+    index: &SemanticIndex<'db>,
+    scope: ScopeId<'db>,
+    module: &ParsedModuleRef,
+) -> Option<Type<'db>> {
+    let first_param = match scope.node(db) {
+        NodeWithScopeKind::Function(function) => function.node(module).parameters.iter().next(),
+        NodeWithScopeKind::Lambda(lambda) => lambda
+            .node(module)
+            .parameters
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .next(),
+        _ => None,
+    }?;
+    Some(binding_type(
+        db,
+        index.expect_single_definition(first_param),
+    ))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TypeVarOwnerContext<'db> {

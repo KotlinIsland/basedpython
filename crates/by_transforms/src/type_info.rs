@@ -1977,7 +1977,7 @@ fn resolvable_in_output(
 }
 
 /// the root names `text` reads, or `None` when it is not an expression at all
-fn names_read(text: &str) -> Option<Vec<String>> {
+pub(crate) fn names_read(text: &str) -> Option<Vec<String>> {
     let parsed = parse_expression(text).ok()?;
     let mut names = NameCollector(Vec::new());
     ruff_python_ast::visitor::Visitor::visit_expr(&mut names, parsed.expr());

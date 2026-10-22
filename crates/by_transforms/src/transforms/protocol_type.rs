@@ -213,6 +213,23 @@ mod tests {
         );
     }
 
+    /// a member's type carries a type modifier as any other type does. `final` has no python
+    /// spelling and is written as the type it marks, without the blanks the keyword was replaced
+    /// with in the source, which a quoted type cannot start with
+    #[test]
+    fn a_type_modifier_on_a_member() {
+        let out = transpile(
+            "def f(x: protocol(a: final int; def m(self) -> final str)) -> None: ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("    a: \"int\"\n"), "got: {out}");
+        assert!(
+            out.contains("    def m(self) -> \"str\": ...\n"),
+            "got: {out}"
+        );
+    }
+
     /// the synthesized class is written into the preamble and names `Protocol` as it is
     /// defined, so that import stays above it even when the module imports `Protocol` itself —
     /// folding it into the module's own line would leave the class with no such name

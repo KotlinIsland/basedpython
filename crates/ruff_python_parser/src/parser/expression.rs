@@ -1311,7 +1311,7 @@ impl<'src> Parser<'src> {
                 return self.parse_parenthesized_expression(context);
             }
             TokenKind::Lsqb => self.parse_list_like_expression(context),
-            TokenKind::Lbrace => self.parse_set_or_dict_like_expression(),
+            TokenKind::Lbrace => self.parse_set_or_dict_like_expression(context),
 
             kind => {
                 if kind.is_keyword() {
@@ -3400,7 +3400,7 @@ impl<'src> Parser<'src> {
     /// - <https://docs.python.org/3/reference/expressions.html#set-displays>
     /// - <https://docs.python.org/3/reference/expressions.html#dictionary-displays>
     /// - <https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries>
-    fn parse_set_or_dict_like_expression(&mut self) -> Expr {
+    fn parse_set_or_dict_like_expression(&mut self, outer: ExpressionContext) -> Expr {
         // test_ok pep_798_unpacking_comprehensions_py315
         // # parse_options: {"target-version": "3.15"}
         // [*x for x in y]
@@ -3450,6 +3450,11 @@ impl<'src> Parser<'src> {
 
         let after_brace = self.node_start();
 
+        // basedpython: a dict in a type expression is a typed dict literal, whose values (and
+        // `**: T` extra-items type) are types, so they may carry a type modifier as any other
+        // type position does
+        let value_context = ExpressionContext::default().inheriting_type_expression(outer);
+
         if self.at(TokenKind::DoubleStar) {
             self.bump(TokenKind::DoubleStar);
             // basedpython `**: T` extra-items marker in a typed-dict literal.
@@ -3457,7 +3462,9 @@ impl<'src> Parser<'src> {
             // can distinguish it from regular `**other_dict` unpacking
             if self.at(TokenKind::Colon) {
                 self.bump(TokenKind::Colon);
-                let inner = self.parse_conditional_expression_or_higher().expr;
+                let inner = self
+                    .parse_conditional_expression_or_higher_impl(value_context)
+                    .expr;
                 let inner_range = inner.range();
                 let outer_range = self.node_range(after_brace);
                 let inner_starred = Expr::Starred(ast::ExprStarred {
@@ -3472,7 +3479,12 @@ impl<'src> Parser<'src> {
                     range: outer_range,
                     node_index: AtomicNodeIndex::NONE,
                 });
-                return Expr::Dict(self.parse_dictionary_expression(None, outer_starred, start));
+                return Expr::Dict(self.parse_dictionary_expression(
+                    None,
+                    outer_starred,
+                    start,
+                    value_context,
+                ));
             }
             // Handle dictionary unpacking. Here, the grammar is `'**' bitwise_or`
             // which requires limiting the expression.
@@ -3510,10 +3522,16 @@ impl<'src> Parser<'src> {
                     Some(value.expr),
                     dict_value.expr,
                     start,
+                    value_context,
                 ));
             }
 
-            return Expr::Dict(self.parse_dictionary_expression(None, value.expr, start));
+            return Expr::Dict(self.parse_dictionary_expression(
+                None,
+                value.expr,
+                start,
+                value_context,
+            ));
         }
 
         // For dictionary expressions, the key uses the `expression` rule while for
@@ -3584,7 +3602,7 @@ impl<'src> Parser<'src> {
                     );
                     value
                 } else {
-                    self.parse_conditional_expression_or_higher()
+                    self.parse_conditional_expression_or_higher_impl(value_context)
                 };
 
                 if matches!(self.current_token_kind(), TokenKind::Async | TokenKind::For) {
@@ -3598,6 +3616,7 @@ impl<'src> Parser<'src> {
                         Some(key_or_element.expr),
                         value.expr,
                         start,
+                        value_context,
                     ))
                 }
             }
@@ -4958,11 +4977,15 @@ impl<'src> Parser<'src> {
     /// Parses a dictionary expression.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#dictionary-displays>
+    ///
+    /// `value_context` is the context each value is parsed in, which carries a type expression's
+    /// position onto a typed dict literal's values
     fn parse_dictionary_expression(
         &mut self,
         key: Option<Expr>,
         value: Expr,
         start: TextSize,
+        value_context: ExpressionContext,
     ) -> ast::ExprDict {
         if !self.at_sequence_end() {
             self.expect(TokenKind::Comma);
@@ -4979,7 +5002,9 @@ impl<'src> Parser<'src> {
                 // dictionary unpacking
                 if parser.at(TokenKind::Colon) {
                     parser.bump(TokenKind::Colon);
-                    let inner = parser.parse_conditional_expression_or_higher().expr;
+                    let inner = parser
+                        .parse_conditional_expression_or_higher_impl(value_context)
+                        .expr;
                     let inner_range = inner.range();
                     let outer_range = parser.node_range(doublestar_start);
                     let inner_starred = Expr::Starred(ast::ExprStarred {
@@ -5012,7 +5037,9 @@ impl<'src> Parser<'src> {
 
                 items.push(ast::DictItem {
                     key: Some(key),
-                    value: parser.parse_conditional_expression_or_higher().expr,
+                    value: parser
+                        .parse_conditional_expression_or_higher_impl(value_context)
+                        .expr,
                 });
             }
         });

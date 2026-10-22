@@ -721,10 +721,12 @@ fn run_cleanup_round(
     let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
         src,
         written,
+        quotes,
         &model,
         config.clone(),
         synthesized.clone(),
     );
+    anon.annotations_evaluated = annotations_evaluated(module.suite(), config);
     for stmt in module.suite() {
         anon.visit_stmt(stmt);
     }

@@ -163,8 +163,9 @@ anywhere a type expression appears: a variable annotation, a parameter, a return
 type, a [type alias](../development/how-transpilation-works.md) value, a type
 parameter's bound or default, a [`cast`](cast.md) target, an
 [inline protocol](inline-protocol.md) member, an
-[anonymous named tuple](anonymous-named-tuple.md) field, and nested inside a
-subscript, a `Callable[[…], R]` parameter list or a parenthesis
+[anonymous named tuple](anonymous-named-tuple.md) field, a
+[typed dict literal](typed-dict-literal.md) value or its `**: T` extra items, and
+nested inside a subscript, a `Callable[[…], R]` parameter list or a parenthesis
 
 each member of a [type mapping](type-mappings.md) is its own type position, so
 a modifier may be written inside one: `T in (literal str, literal int)`

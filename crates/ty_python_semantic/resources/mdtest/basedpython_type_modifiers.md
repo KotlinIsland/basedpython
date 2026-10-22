@@ -369,6 +369,17 @@ def f(p: (m: literal str)) -> None:
     reveal_type(p.m)  # revealed: LiteralString
 ```
 
+## a modifier in a typed dict literal field
+
+A typed dict literal's values are the types of its fields, so each carries a modifier as any other
+type does, and so does the `**: T` type of its extra items.
+
+```by
+def f(p: {"m": literal str, "n": final int, **: final str}) -> None:
+    reveal_type(p["m"])  # revealed: LiteralString
+    reveal_type(p["n"])  # revealed: final int
+```
+
 ## a modifier on a `cast` target
 
 The right operand of a cast is the type being cast to, so it is a type expression.

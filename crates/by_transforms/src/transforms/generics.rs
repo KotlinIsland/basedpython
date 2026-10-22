@@ -3270,7 +3270,8 @@ mod tests {
     /// `literal str` is the one type modifier python can spell, as `LiteralString`, so a
     /// polyfilled type parameter carries it in its bound, its tuple bound and its constraints,
     /// as the native spelling does from 3.12. the other modifiers have no spelling and erase,
-    /// there as everywhere, leaving the padding the keyword was blanked to
+    /// there as everywhere: a constraint copied from the source keeps the padding the keyword
+    /// was blanked to, and a tuple bound, which is written out, is written without it
     #[test]
     fn a_literal_string_modifier_reaches_a_polyfilled_type_parameter() {
         check_at(
@@ -3290,7 +3291,7 @@ mod tests {
                 _T = TypeVar(\"_T\", bound=LiteralString)
                 def bounded(t: _T) -> _T:
                     return t
-                _T_1 = TypeVar(\"_T_1\", bound=tuple[LiteralString,         int])
+                _T_1 = TypeVar(\"_T_1\", bound=tuple[LiteralString, int])
                 def in_a_tuple(t: _T_1) -> _T_1:
                     return t
                 _T_2 = TypeVar(\"_T_2\", LiteralString,         int)
@@ -3316,7 +3317,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import LiteralString
-                def in_a_tuple[T: tuple[LiteralString,         int]](t: T) -> T:
+                def in_a_tuple[T: tuple[LiteralString, int]](t: T) -> T:
                     return t
                 def constrained[T: (LiteralString, int)](t: T) -> T:
                     return t

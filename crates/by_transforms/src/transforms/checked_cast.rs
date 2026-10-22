@@ -274,8 +274,10 @@ impl TypeAwarePass for CheckedCastPass<'_> {
             super::ast_driver::Lowering::DynamicKeyword,
             super::ast_driver::Lowering::FloatConst,
             super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::LiteralString,
             super::ast_driver::Lowering::LiteralType,
             super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::ProtocolType,
             super::ast_driver::Lowering::SymbolicTypeOp,
             super::ast_driver::Lowering::TemplateType,
             super::ast_driver::Lowering::TupleLiteralType,
@@ -349,6 +351,42 @@ mod tests {
         let out = check("def f(a: object):\n    b = a cast? int\n");
         assert!(out.contains("b = _try_cast(a, int)"), "got:\n{out}");
         assert!(out.contains("def _try_cast"), "got:\n{out}");
+    }
+
+    /// below 3.10 a union written with `|` is lowered to `Union[...]` wherever python evaluates
+    /// it, a cast target among them. a target the cast checks is written as the check, which
+    /// stands for the whole union, and one it keeps passes the lowered union through
+    #[test]
+    fn a_union_target_below_3_10() {
+        let config = Config {
+            min_version: PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        let out = transpile(
+            indoc::indoc! {"
+                from typing import Protocol
+
+                class Get[T](Protocol):
+                    def get(self) -> T: ...
+
+                def f(a: object):
+                    b = a cast? list[int] | str
+                    c = a cast? Get[int] | str
+                    d = a cast! int | str
+            "},
+            &config,
+        )
+        .unwrap();
+        for check in [
+            "b = _try_cast_pred(a, lambda _by_cast_value: ",
+            "c = _try_cast_pred(a, lambda _by_cast_value: ",
+        ] {
+            assert!(out.contains(check), "got:\n{out}");
+        }
+        assert!(
+            out.contains("d = _checked_cast(a, (int, str))"),
+            "got:\n{out}"
+        );
     }
 
     #[test]

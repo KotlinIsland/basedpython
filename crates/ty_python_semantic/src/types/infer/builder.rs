@@ -14831,6 +14831,30 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: `super[T]` standing as an attribute's base, `super[T].x`, is the `super` keyword
+    /// targeted at `T`, which the attribute is looked up past. its slice is inferred as the class
+    /// it names, which is the type the subscript is given, and the attribute load builds the
+    /// bound super from it ([`Self::basedpython_super_value_type`]). `None` for any other
+    /// expression: anywhere else `super[T]` is the subscript of the name, as python reads it
+    fn basedpython_super_subscript(&mut self, value: &ast::Expr) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let ast::Expr::Subscript(subscript) = value else {
+            return None;
+        };
+        let ast::Expr::Name(name) = subscript.value.as_ref() else {
+            return None;
+        };
+        if name.id.as_str() != "super" {
+            return None;
+        }
+        self.infer_expression(&subscript.value, TypeContext::default());
+        let target = self.infer_expression(&subscript.slice, TypeContext::default());
+        self.store_expression_type(value, target);
+        Some(target)
+    }
+
     /// basedpython: compute the bound-super type for `super` / `super[T]`
     /// when used as an attribute base. returns `None` when `value` does not
     /// match the sugar form, when there is no enclosing class, or when the
@@ -14853,30 +14877,38 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             _ => return None,
         };
 
-        // `super` needs the implicit arguments a method supplies — the `__class__`
-        // cell and the receiver. directly in a class body there is neither, so
-        // `super().x` there raises at runtime; report it rather than lower it
-        let reaches_a_function = self
-            .index
-            .ancestor_scopes(self.scope().file_scope_id(db))
-            .take_while(|(_, ancestor)| ancestor.node().as_class().is_none())
-            .any(|(_, ancestor)| ancestor.node().as_function().is_some());
-        // both unavailable cases answer `Unknown` rather than declining: falling
-        // through would let the ordinary attribute load report a second, less
-        // useful `Class `super` has no attribute …` on top of this one
-        if !reaches_a_function {
+        // `super` reads its implicit arguments where it is written, as zero-argument `super()`
+        // does and as the lowering passes them: the `__class__` cell of the class around it, and
+        // the first parameter of the function or lambda it is written in. a class body or a
+        // comprehension is no such function, so `super().x` there raises at runtime; report it
+        // rather than lower it
+        //
+        // each unavailable case answers `Unknown` rather than declining: falling through would
+        // let the ordinary attribute load report a second, less useful `Class `super` has no
+        // attribute …` on top of this one
+        let scope = self.scope();
+        let unavailable = match scope.node(db) {
+            NodeWithScopeKind::Function(_) | NodeWithScopeKind::Lambda(_) => None,
+            NodeWithScopeKind::ListComprehension(_)
+            | NodeWithScopeKind::SetComprehension(_)
+            | NodeWithScopeKind::DictComprehension(_)
+            | NodeWithScopeKind::GeneratorExpression(_) => Some(
+                "Cannot determine implicit arguments for `super` in a comprehension, \
+                 which reads them from the function python runs it as",
+            ),
+            _ => Some("Cannot determine implicit arguments for `super` outside a method"),
+        };
+        if let Some(message) = unavailable {
             if let Some(builder) = self
                 .context
                 .report_lint(&UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, value)
             {
-                builder.into_diagnostic(
-                    "Cannot determine implicit arguments for `super` outside a method",
-                );
+                builder.into_diagnostic(message);
             }
             return Some(Type::unknown());
         }
 
-        let Some(enclosing) = nearest_enclosing_class(db, self.index, self.scope()) else {
+        let Some(enclosing) = nearest_enclosing_class(db, self.index, scope) else {
             // in a function, but no class encloses it — `super` has a `__class__`
             // cell to read only inside a method, so this is the same failure
             if let Some(builder) = self
@@ -14890,8 +14922,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             return Some(Type::unknown());
         };
+        let Some(owner_type) = crate::types::bound_super::implicit_super_receiver(
+            db,
+            self.index,
+            scope,
+            self.module(),
+        ) else {
+            if let Some(builder) = self
+                .context
+                .report_lint(&UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, value)
+            {
+                builder.into_diagnostic(
+                    "Cannot determine implicit arguments for `super`: \
+                     the function it is written in has no parameter to read the receiver from",
+                );
+            }
+            return Some(Type::unknown());
+        };
         let enclosing_class = ClassLiteral::Static(enclosing).default_specialization(db);
-        let owner_type = Type::instance(db, env, enclosing_class);
 
         let pivot_class_type = match target_class {
             None => Type::from(enclosing_class),
@@ -14912,7 +14960,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         };
 
-        crate::types::bound_super::BoundSuperType::build(db, env, pivot_class_type, owner_type).ok()
+        match crate::types::bound_super::BoundSuperType::build(
+            db,
+            env,
+            pivot_class_type,
+            owner_type,
+        ) {
+            Ok(bound_super) => Some(bound_super),
+            Err(error) => {
+                error.report_diagnostic(&self.context, value.into());
+                Some(Type::unknown())
+            }
+        }
     }
 
     /// Resolve `receiver` to the type the next link of a basedpython optional chain must be
@@ -14966,8 +15025,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &mut self,
         attribute: &ast::ExprAttribute,
     ) -> Result<Type<'db>, Type<'db>> {
-        let value_type =
-            self.infer_maybe_standalone_expression(&attribute.value, TypeContext::default());
+        let value_type = match self.basedpython_super_subscript(&attribute.value) {
+            Some(target) => target,
+            None => {
+                self.infer_maybe_standalone_expression(&attribute.value, TypeContext::default())
+            }
+        };
         let (value_type, in_chain) = self.basedpython_chain_receiver(&attribute.value, value_type);
         self.infer_attribute_load_chained(attribute, value_type, in_chain)
     }

@@ -23,6 +23,17 @@ method context (it pulls the enclosing class from the `__class__` cell), so
 `super.x` outside a method is a runtime error — exactly like the python it
 lowers to
 
+the receiver is read where `super` is written, as `super()` reads it: the first
+parameter of the function or lambda around it. a lambda passes its own first
+argument, not the method's, and a lambda with no parameter, or a comprehension,
+has no receiver to pass and is reported:
+
+```by
+class B(A):
+    def f(self):
+        g = lambda other: super.greet()  # `other` is the receiver
+```
+
 the keyword is the base of an attribute access, and it is the builtin `super`
 there even where the module binds the name to something else. read anywhere
 else, `super` is the name as python reads it:
@@ -36,7 +47,8 @@ class B(A):
 ## targeted form — `super[T].x`
 
 `super[T].x` resolves `x` against the MRO entry that **precedes** `T` in the
-enclosing class' MRO
+enclosing class' MRO. like the bare form, `super[T]` is the keyword only as the
+base of an attribute access; anywhere else it is a subscript of the name
 
 example:
 

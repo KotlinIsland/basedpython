@@ -396,20 +396,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             is_type_decoration: _,
         } = subscript;
 
-        // basedpython: `super[T]` is sugar for `super(<MRO predecessor of T>, self)`
-        // and must not be type-checked as a regular subscript expression. infer
-        // the slice as a type so `reveal_type` etc. behave, then return the
-        // pivot class type — the attribute lookup against the bound super is
-        // performed in `infer_attribute_load`
-        if self.is_basedpython_file()
-            && let ast::Expr::Name(name) = value.as_ref()
-            && name.id.as_str() == "super"
-        {
-            self.infer_expression(value, TypeContext::default());
-            let slice_ty = self.infer_expression(slice, TypeContext::default());
-            return slice_ty;
-        }
-
         match ctx {
             ExprContext::Load => self
                 .infer_subscript_load(subscript, tcx)

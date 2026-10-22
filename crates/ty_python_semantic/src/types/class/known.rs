@@ -3,8 +3,8 @@ use crate::{
     place::{DefinedPlace, Definedness, Place, known_module_symbol},
     types::{
         Binding, ClassLiteral, ClassType, GenericContext, KnownInstanceType, StaticClassLiteral,
-        SubclassOfType, Type, binding_type,
-        bound_super::{BoundSuperError, BoundSuperType},
+        SubclassOfType, Type,
+        bound_super::{BoundSuperError, BoundSuperType, implicit_super_receiver},
         class::CodeGeneratorKind,
         constraints::{ConstraintSet, ConstraintSetBuilder},
         context::InferContext,
@@ -21,7 +21,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 use ty_module_resolver::{ImportingFile, KnownModule, file_to_module};
-use ty_python_core::{SemanticIndex, Truthiness, scope::NodeWithScopeKind};
+use ty_python_core::{SemanticIndex, Truthiness};
 
 /// Non-exhaustive enumeration of known classes (e.g. `builtins.int`, `typing.Any`, ...) to allow
 /// for easier syntax when interacting with very common classes.
@@ -2325,31 +2325,13 @@ impl KnownClass {
                             return;
                         }
 
-                        // The type of the first parameter if the given scope is function-like (i.e. function or lambda).
-                        // `None` if the scope is not function-like, or has no parameters.
-                        let first_param = match scope.node(db) {
-                            NodeWithScopeKind::Function(f) => {
-                                f.node(module).parameters.iter().next()
-                            }
-                            NodeWithScopeKind::Lambda(l) => l
-                                .node(module)
-                                .parameters
-                                .as_ref()
-                                .into_iter()
-                                .flatten()
-                                .next(),
-                            _ => None,
-                        };
-
-                        let Some(first_param) = first_param else {
+                        let Some(first_param) = implicit_super_receiver(db, index, scope, module)
+                        else {
                             BoundSuperError::UnavailableImplicitArguments
                                 .report_diagnostic(context, call_expression.into());
                             overload.set_return_type(Type::unknown());
                             return;
                         };
-
-                        let definition = index.expect_single_definition(first_param);
-                        let first_param = binding_type(context.db(), definition);
 
                         let bound_super = BoundSuperType::build(
                             db,

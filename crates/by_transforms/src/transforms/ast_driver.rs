@@ -1574,7 +1574,7 @@ pub(crate) fn run_against_source<'a>(
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
-        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, config.clone());
+        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, quotes, config.clone());
 
     // Order matters: passes that read source ranges via `text_edits` mode
     // must run BEFORE passes that mutate the AST (which zero source ranges
@@ -2921,18 +2921,30 @@ mod subsumed_lowerings {
             |leaf| format!("def f(x: protocol(a: {leaf})) -> None: ..."),
             |lowered| format!("a: \"{lowered}\""),
         ));
-        // a dict literal type's values are not read as type expressions, so a modifier
-        // cannot stand in one
-        let dict_fields: Vec<Lowering> = fields
-            .iter()
-            .copied()
-            .filter(|lowering| *lowering != Lowering::LiteralString)
-            .collect();
         cases.extend(leaves(
             "TypedDictLiteralPass",
-            &dict_fields,
+            &fields,
             |leaf| format!("def f(x: {{\"a\": {leaf}}}) -> None: ..."),
             |lowered| format!("a: \"{lowered}\""),
+        ));
+        // a static cast keeps its target as written, so the target's own lowering passes through
+        // it. a checked one writes a check in its place, which stands for the lowered type too
+        cases.extend(leaves(
+            "CheckedCastPass",
+            super::super::callable::TYPE_EXPRESSION,
+            |leaf| format!("def f(x: object) -> None:\n    z = x cast {leaf}"),
+            |lowered| format!("z = cast({lowered}, x)"),
+        ));
+        cases.push(case(
+            "CheckedCastPass",
+            &[
+                Lowering::AnonNamedTuple,
+                Lowering::ProtocolType,
+                Lowering::TypedDictLiteral,
+            ],
+            "def f(x: object) -> None:\n    a = x cast (p: int)\n    b = x cast protocol(n: int)\n    c = x cast {\"k\": int}\n",
+            &["a = cast(_AnonNamedTuple_", "b = cast(_Protocol_", "c = cast(_TypedDict_"],
+            &["(p: int", "protocol(n", "{\"k\""],
         ));
         cases.push(case(
             "CallableSyntaxPass",

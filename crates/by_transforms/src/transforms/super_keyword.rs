@@ -4,7 +4,11 @@
 //! - `super.x`       → `super().x`
 //! - `super[T].x`    → `super(<C>.__mro__[<C>.__mro__.index(<T>) - 1], <self>).x`
 //!   where `<C>` is the enclosing class name and `<self>` is the first
-//!   parameter name of the enclosing method.
+//!   parameter of the function or lambda the keyword is written in — the
+//!   receiver zero-argument `super()` reads there, and the one the checker types.
+//!
+//! either form is the keyword only as an attribute's base. anywhere else `super` and
+//! `super[T]` are the name and its subscript, as python reads them.
 //!
 //! the keyword is always the builtin `super`, so in a module that binds the name `super`
 //! itself — a parameter, a global — the call reads the builtin under a name of its own
@@ -40,12 +44,14 @@ impl AstPass for SuperKeyword<'_> {
             edits: RefCell::new(Vec::new()),
             class_stack: RefCell::new(Vec::new()),
             self_stack: RefCell::new(Vec::new()),
+            errors: RefCell::new(Vec::new()),
         };
         let mut visitor = &state;
         for stmt in &module.body {
             visitor.visit_stmt(stmt);
         }
         ctx.text_edits.extend(state.edits.into_inner());
+        ctx.errors.extend(state.errors.into_inner());
     }
 }
 
@@ -55,7 +61,10 @@ struct State<'src> {
     builtin_super: String,
     edits: RefCell<Vec<(TextRange, String)>>,
     class_stack: RefCell<Vec<String>>,
-    self_stack: RefCell<Vec<String>>,
+    /// the receiver of each function or lambda the walk is inside, innermost last: the name its
+    /// first positional parameter is bound to, or `None` for one with no such parameter
+    self_stack: RefCell<Vec<Option<String>>>,
+    errors: RefCell<Vec<String>>,
 }
 
 /// the name the receiver is bound to in the python, which a repeated `_` may have changed
@@ -71,13 +80,31 @@ fn first_param_name(
         .map(|p| crate::python_parameter_name(params, &p.parameter, written).to_string())
 }
 
+/// the name a lambda's receiver is bound to in the python: its first positional parameter
+fn first_lambda_param_name(
+    lambda: &ruff_python_ast::ExprLambda,
+    written: WrittenNames,
+) -> Option<String> {
+    let params = lambda.parameters.as_deref()?;
+    params
+        .posonlyargs
+        .first()
+        .or_else(|| params.args.first())
+        .map(|p| crate::python_parameter_name(params, &p.parameter, written).to_string())
+}
+
 impl State<'_> {
+    /// the receiver of the function or lambda the walk is inside, when it has one
+    fn receiver(&self) -> Option<String> {
+        self.self_stack.borrow().last().cloned().flatten()
+    }
+
     /// the builtin `super` called with the arguments the bare keyword stands for
     fn bare(&self) -> String {
         if self.builtin_super == "super" {
             return "super()".to_owned();
         }
-        match self.self_stack.borrow().last() {
+        match self.receiver() {
             Some(receiver) => format!("{}(__class__, {receiver})", self.builtin_super),
             // a function with no parameter to read the receiver from fails as zero-argument
             // `super()` does there, raising `RuntimeError`
@@ -97,21 +124,30 @@ impl<'ast> Visitor<'ast> for &State<'_> {
                 self.class_stack.borrow_mut().pop();
             }
             Stmt::FunctionDef(f) => {
-                let pushed = first_param_name(f, self.written);
-                if let Some(name) = &pushed {
-                    self.self_stack.borrow_mut().push(name.clone());
-                }
+                self.self_stack
+                    .borrow_mut()
+                    .push(first_param_name(f, self.written));
                 walk_stmt(self, stmt);
-                if pushed.is_some() {
-                    self.self_stack.borrow_mut().pop();
-                }
+                self.self_stack.borrow_mut().pop();
             }
             _ => walk_stmt(self, stmt),
         }
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Subscript(s) = expr
+        // a lambda reads `super`'s receiver from its own first parameter, as a `def` does
+        if let Expr::Lambda(lambda) = expr {
+            self.self_stack
+                .borrow_mut()
+                .push(first_lambda_param_name(lambda, self.written));
+            walk_expr(self, expr);
+            self.self_stack.borrow_mut().pop();
+            return;
+        }
+        // the targeted keyword is the base of an attribute access, `super[T].x`. anywhere else
+        // `super[T]` is the subscript of the name, as the checker reads it
+        if let Expr::Attribute(attribute) = expr
+            && let Expr::Subscript(s) = attribute.value.as_ref()
             && let Expr::Name(n) = s.value.as_ref()
             && n.id.as_str() == "super"
         {
@@ -121,12 +157,16 @@ impl<'ast> Visitor<'ast> for &State<'_> {
                 .last()
                 .cloned()
                 .unwrap_or_default();
-            let self_name = self
-                .self_stack
-                .borrow()
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "self".to_owned());
+            let Some(self_name) = self.receiver() else {
+                // written as an argument the receiver would have to be some other binding of
+                // the name, an enclosing function's, which is not the one python reads
+                self.errors.borrow_mut().push(format!(
+                    "`{}` reads its receiver from the first parameter of the function it is \
+                     written in, and it has none",
+                    render_expr(&attribute.value)
+                ));
+                return;
+            };
             let target_src = render_expr(&s.slice);
             let replacement = format!(
                 "{}({cls}.__mro__[{cls}.__mro__.index({target_src}) - 1], {self_name})",
@@ -334,6 +374,61 @@ mod tests {
                     def h(self):
                         return super
             "},
+        );
+    }
+
+    /// `super[T]` is the keyword only as an attribute's base. anywhere else it is the subscript
+    /// of the name, as the checker reads it
+    #[test]
+    fn a_subscript_of_super_that_is_no_attribute_base_is_the_name() {
+        unchanged(indoc! {"
+            super = {1: \"one\"}
+
+            class B(A):
+                def f(self):
+                    return super[1]
+        "});
+    }
+
+    /// a lambda passes its own first parameter as the receiver, as zero-argument `super()`
+    /// written in it would, not the method's
+    #[test]
+    fn a_lambda_passes_its_own_receiver() {
+        check(
+            indoc! {"
+                super = 5
+
+                class C(A, B):
+                    def f(this):
+                        return lambda other: super.x + super[B].y
+            "},
+            indoc! {"
+                from builtins import super as super2
+                super = 5
+
+                class C(A, B):
+                    def f(this):
+                        return lambda other: super2(__class__, other).x + super2(C.__mro__[C.__mro__.index(B) - 1], other).y
+            "},
+        );
+    }
+
+    /// with no parameter there is no receiver to write, and an enclosing function's would be
+    /// another one than python reads
+    #[test]
+    fn a_targeted_super_with_no_receiver_is_refused() {
+        let error = transpile(
+            indoc! {"
+                class C(A, B):
+                    def f(self):
+                        return lambda: super[B].y
+            "},
+            &Config::test_default(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("reads its receiver from the first parameter"),
+            "got: {error}"
         );
     }
 

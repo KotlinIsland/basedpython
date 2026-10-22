@@ -178,9 +178,15 @@ assert set(typing.get_type_hints(decorated[0])) == {"a", "b", "return"}, "annota
 # the signature is what every framework reads to decide what a function wants —
 # a query parameter, a fixture, a validated argument — so the rebuild must not
 # perturb it. `getfullargspec` is checked too: it is the other reader in the wild
+#
+# the signature is compared with that of a twin no loop rebuilds, which reads its annotations
+# back as the target writes them: as strings below 3.10, which the module gets
+# `from __future__ import annotations` for
 import inspect
+def unrebuilt(a: int, b: str = "b") -> str:
+    return b
 assert list(inspect.signature(decorated[0]).parameters) == ["a", "b"], "the signature is exact"
-assert str(inspect.signature(decorated[0])) == "(a: int, b: str = 'b') -> str", (
+assert str(inspect.signature(decorated[0])) == str(inspect.signature(unrebuilt)), (
     "annotations and defaults read back unchanged"
 )
 assert inspect.getfullargspec(decorated[0]).args == ["a", "b"], "argspec is exact"

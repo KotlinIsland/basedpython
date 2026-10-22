@@ -3248,6 +3248,9 @@ fn basedpython_type_modifier_in_nested_type_positions() {
         "def f(**kwargs: final int): ...\n",
         "a: list[literal str]\n",
         "type X = literal str\n",
+        "a: {\"k\": literal str}\n",
+        "a: {\"k\": int, **: final int}\n",
+        "a: {**: literal str}\n",
     ] {
         let parsed = parse_basedpython_module(source);
         let mut found = false;
