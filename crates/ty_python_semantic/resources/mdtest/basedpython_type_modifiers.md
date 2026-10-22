@@ -295,13 +295,17 @@ def f(a: literal str, b: final int, c: literal list[*]) -> None:
 
 ## modifiers in a type parameter's bound, constraints and default
 
-A bound is a type expression like any other, and so is each element of a constraint tuple.
+A bound is a type expression like any other, and so is each element of a tuple bound and each member
+of a type mapping's constraints.
 
 ```by
 def bounded[T: literal str](t: T) -> T:
     return t
 
-def constrained[T: (literal str, literal int)](t: T) -> T:
+def in_a_tuple[T: (literal str, literal int)](t: T) -> T:
+    return t
+
+def constrained[T in (literal str, literal int)](t: T) -> T:
     return t
 
 def defaulted[T: literal int = literal int](t: T) -> T:

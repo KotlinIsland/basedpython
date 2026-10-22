@@ -397,6 +397,22 @@ def _by_loop_bind(**_by_values):
 # --- string templates and graphemes ----------------------------------------
 
 
+# a t-string field's source text, as the interpreter running it reports one
+#
+# a lowered field's text keeps the whitespace before the `=`, conversion, format spec
+# or `}` that ends the field, which is what python reports from 3.14.8 on. 3.14.0 to
+# 3.14.7 dropped it (python/cpython#154719), so there it is dropped here too, or a
+# lowered field would report different text from an untouched field beside it. an
+# interpreter older than 3.14 has no t-strings and so no form of its own, and keeps
+# the newer one
+def _by_field_text(_text):
+    from sys import version_info
+
+    if (3, 14) <= version_info < (3, 14, 8):
+        return _text.rstrip()
+    return _text
+
+
 # PEP 750 `Template` / `Interpolation` polyfill for runtimes before 3.14
 #
 # matches the `string.templatelib` shape a tag relies on: `Template.strings`
@@ -404,10 +420,13 @@ def _by_loop_bind(**_by_values):
 # `Template.interpolations` is the replacement fields, and `Template.values`
 # is their evaluated values. iterating a `Template` yields the segments and
 # interpolations interleaved in source order, the same as the stdlib type
+#
+# the lowering builds every `_Interpolation` with its field's source text in the form
+# python 3.14.8 reports, which `_by_field_text` matches to the interpreter
 class _Interpolation:
     def __init__(self, value, expression, conversion=None, format_spec=""):
         self.value = value
-        self.expression = expression
+        self.expression = _by_field_text(expression)
         self.conversion = conversion
         self.format_spec = format_spec
 
@@ -451,31 +470,28 @@ class _Template:
 # `None` a field nothing lowered, which keeps the interpolation python built and so
 # stays byte-identical to what python would have reported
 #
-# the author's text keeps the whitespace before the `=`, conversion, format spec or
-# `}` that ends the field, which is what python reports from 3.14.8 on. 3.14.0 to
-# 3.14.7 dropped it (python/cpython#154719), so there it is dropped here too, or a
-# lowered field would report different text from an untouched field beside it
+# the author's text is written as python 3.14.8 reports it, which `_by_field_text`
+# matches to the interpreter running it
 #
 # the import is made here rather than at the top of the file because this module is
 # shared with runtimes that have no `string.templatelib`. only a t-string can reach
 # this helper, and a t-string needs 3.14
 def _by_template(_t, _exprs):
     from string.templatelib import Interpolation, Template
-    from sys import version_info
 
-    _drops_trailing_space = version_info < (3, 14, 8)
     _strings = _t.strings
     _parts = []
     for _index, _field in enumerate(_t.interpolations):
         _parts.append(_strings[_index])
         _expr = _exprs[_index]
-        if _expr is not None and _drops_trailing_space:
-            _expr = _expr.rstrip()
         _parts.append(
             _field
             if _expr is None
             else Interpolation(
-                _field.value, _expr, _field.conversion, _field.format_spec
+                _field.value,
+                _by_field_text(_expr),
+                _field.conversion,
+                _field.format_spec,
             )
         )
     _parts.append(_strings[-1])
@@ -814,7 +830,10 @@ def _by_specialize(alias, origin, depth=0):
     if not isinstance(klass, type):
         return None
     args = getattr(alias, "__args__", ())
-    params = getattr(klass, "__type_params__", ())
+    # a class the pep 695 polyfill wrote declares its parameters through
+    # `Generic[...]`, which records them in `__parameters__` and leaves
+    # `__type_params__` empty, or absent before 3.12
+    params = getattr(klass, "__type_params__", ()) or getattr(klass, "__parameters__", ())
     if not args:
         defaulted = _by_type_param_defaults(params)
         if defaulted is not params:

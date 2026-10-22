@@ -8,6 +8,7 @@
 //! exiting 0. That is exactly what an mdtest cannot see, so it is checked here.
 
 mod common;
+mod interpreters;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -255,28 +256,24 @@ print("ok")
 "#;
 
 fn run(program: &str) {
-    run_with(
-        program,
-        &Config {
-            min_version: PythonVersion::PY313,
-            ..Config::default()
-        },
-    );
+    run_with(program, SoundnessPositions::defaults());
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-fn run_with(program: &str, config: &Config) {
-    let Some(python) = common::python() else {
-        eprintln!("skipping anon named tuple runtime test: no interpreter found");
+/// `program` transpiled for the interpreter that runs it, with the soundness checks at
+/// `soundness`
+fn run_with(program: &str, soundness: SoundnessPositions) {
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
 
-    let transpiled = transpile(program, config).expect("transpile should succeed");
+    let config = Config {
+        min_version: python.version,
+        soundness,
+        ..Config::default()
+    };
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -356,20 +353,17 @@ fn built_values_pass_every_soundness_check() {
         NESTED_AND_UNION_PROGRAM,
         UNCHANGED_PROGRAM,
     ] {
-        run_with(
-            program,
-            &Config {
-                min_version: PythonVersion::PY313,
-                soundness: SoundnessPositions::all(),
-                ..Config::default()
-            },
-        );
+        run_with(program, SoundnessPositions::all());
     }
 }
 
-/// transpile every one of `files` as one project, into a fresh directory under the cargo temp
-/// dir, or the first transpile error
-fn transpile_project(name: &str, files: &[(&str, &str)]) -> Result<PathBuf, String> {
+/// transpile every one of `files` as one project for `target`, into a fresh directory under the
+/// cargo temp dir, or the first transpile error
+fn transpile_project(
+    name: &str,
+    target: PythonVersion,
+    files: &[(&str, &str)],
+) -> Result<PathBuf, String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     // a stale directory from an earlier run would mask a transpile failure
     let _ = fs::remove_dir_all(&dir);
@@ -383,7 +377,7 @@ fn transpile_project(name: &str, files: &[(&str, &str)]) -> Result<PathBuf, Stri
         db.write_file(path, source).expect("write file failed");
     }
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: target,
         ..Config::default()
     };
     for (path, _) in files {
@@ -400,17 +394,13 @@ fn transpile_project(name: &str, files: &[(&str, &str)]) -> Result<PathBuf, Stri
 /// this module, as a class declared from the checker's field types: the other module's class
 /// is named by its own transpilation, which this one cannot see
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_literal_for_another_modules_named_tuple_is_built() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping anon named tuple runtime test: no interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     let dir = transpile_project(
         "anon_named_tuple_cross_module",
+        python.version,
         &[
             (
                 "/shapes.by",
@@ -423,7 +413,7 @@ fn a_literal_for_another_modules_named_tuple_is_built() {
         ],
     )
     .expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("main.py")
         .current_dir(&dir)
         .output()
@@ -443,6 +433,7 @@ fn a_literal_for_another_modules_named_tuple_is_built() {
 fn a_field_the_module_cannot_spell_is_refused() {
     let error = transpile_project(
         "anon_named_tuple_unspellable_field",
+        PythonVersion::PY313,
         &[
             (
                 "/callbacks.by",

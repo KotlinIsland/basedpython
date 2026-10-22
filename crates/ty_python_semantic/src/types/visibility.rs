@@ -354,6 +354,39 @@ pub(crate) fn resolves_to_module_scope<'db>(
     file: ProgramFile<'db>,
     reference: &ast::ExprName,
 ) -> Option<bool> {
+    name_resolution(db, file, reference).map(|resolution| {
+        matches!(
+            resolution,
+            NameResolution::Module | NameResolution::DeclaredGlobal
+        )
+    })
+}
+
+/// basedpython: where python finds the binding of a name
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameResolution {
+    /// a pep 695 type-parameter list binds it
+    TypeParameter,
+    /// a scope on the way to its binding declares it `global`
+    DeclaredGlobal,
+    /// the module binds it, reached with no `global` declaration
+    Module,
+    /// a function, lambda, comprehension, class body or type alias binds it
+    Local,
+    /// no scope binds it: it is a builtin, or unbound
+    Unbound,
+}
+
+/// basedpython: where python finds the binding of the name `reference` reads or writes.
+/// `None` when ty did not index the reference
+///
+/// a class body is flow-sensitive here as python is: a read the body has not yet bound
+/// resolves outward, and one it binds on some paths only is the class's
+pub(crate) fn name_resolution<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    reference: &ast::ExprName,
+) -> Option<NameResolution> {
     let index = crate::semantic_index(db, file);
     let reference_scope = index.try_expression_scope_id(&ast::ExprRef::from(reference))?;
     for (ancestor_id, scope) in index.ancestor_scopes(reference_scope) {
@@ -369,21 +402,29 @@ pub(crate) fn resolves_to_module_scope<'db>(
         };
         // `global count` hands the name to the module, whatever this scope does
         if symbol.is_global() {
-            return Some(true);
+            return Some(NameResolution::DeclaredGlobal);
         }
         // a binding, or a bare annotation, makes the name local to its scope
         if !(symbol.is_bound() || symbol.is_declared()) {
             continue;
         }
-        if scope.kind() == ScopeKind::Class && reference.ctx.is_load() {
-            match class_scope_binding(db, scope_id, reference) {
-                ClassBinding::Unbound => continue,
-                ClassBinding::Bound | ClassBinding::Maybe => return Some(false),
-            }
+        if scope.kind() == ScopeKind::Class
+            && reference.ctx.is_load()
+            && class_scope_binding(db, scope_id, reference) == ClassBinding::Unbound
+        {
+            continue;
         }
-        return Some(scope.kind() == ScopeKind::Module);
+        return Some(match scope.kind() {
+            ScopeKind::Module => NameResolution::Module,
+            ScopeKind::TypeParams => NameResolution::TypeParameter,
+            ScopeKind::Class
+            | ScopeKind::Function
+            | ScopeKind::Lambda
+            | ScopeKind::Comprehension
+            | ScopeKind::TypeAlias => NameResolution::Local,
+        });
     }
-    Some(false)
+    Some(NameResolution::Unbound)
 }
 
 /// basedpython: whether the name `reference` reads is read in a class body's own

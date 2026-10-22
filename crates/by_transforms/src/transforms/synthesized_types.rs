@@ -48,6 +48,7 @@ pub(crate) const CLASS_BODY: &[Lowering] = &[
     Lowering::DynamicKeyword,
     Lowering::FloatConst,
     Lowering::SymbolicTypeOp,
+    Lowering::LiteralString,
     Lowering::Typeof,
     Lowering::AnonNamedTuple,
     Lowering::ProtocolType,

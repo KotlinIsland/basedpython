@@ -71,6 +71,7 @@ pub(crate) use self::signatures::Signature;
 pub use self::signatures::{ParameterDefault, ParameterKind};
 pub(crate) use self::subclass_of::{SubclassOfInner, SubclassOfType};
 pub(crate) use self::type_expansion::expand_type;
+pub use self::visibility::NameResolution;
 pub(crate) use crate::diagnostic::add_inferred_python_version_hint_to_diagnostic;
 use crate::django_settings;
 use crate::place::{

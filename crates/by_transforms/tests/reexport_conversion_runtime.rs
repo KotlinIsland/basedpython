@@ -14,11 +14,6 @@
 //! packages are needed; if no `python3` is found the test skips rather than
 //! fails.
 
-#![expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,6 +24,7 @@ use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
 use ty_project::{ProjectMetadata, TestDb};
 
 mod common;
+mod interpreters;
 use common::python;
 
 const PACKAGE_INIT: &str = "from .geometry export Dp\n";
@@ -79,9 +75,9 @@ fn build_db() -> TestDb {
     db
 }
 
-/// transpile every file of the project through the typed pipeline into a fresh
+/// transpile every file of the project for `target` through the typed pipeline into a fresh
 /// directory under the cargo temp dir, keeping the package layout
-fn build_case(case: &str) -> PathBuf {
+fn build_case(case: &str, target: PythonVersion) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
     // a stale directory from an earlier run would mask a transpile failure
     let _ = fs::remove_dir_all(&dir);
@@ -89,7 +85,7 @@ fn build_case(case: &str) -> PathBuf {
 
     let db = build_db();
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: target,
         ..Config::default()
     };
     for (path, _) in FILES {
@@ -104,13 +100,12 @@ fn build_case(case: &str) -> PathBuf {
 
 #[test]
 fn conversion_through_a_re_export_resolves_at_runtime() {
-    let Some(python) = python() else {
-        eprintln!("skipping re-export conversion runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
-    let dir = build_case("reexport_conversion");
+    let dir = build_case("reexport_conversion", python.version);
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("main.py")
         .current_dir(&dir)
         .output()

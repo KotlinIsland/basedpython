@@ -220,6 +220,21 @@ produced python. every other modifier is erased:
 | `d: final int`         | `d: int`                 |
 | `e: final str`         | `e: str`                 |
 
+it is written as `LiteralString` wherever the type is, a tuple type or a type
+parameter's bound and constraints among them, and so the `TypeVar` a type
+parameter is [polyfilled](polyfills.md) to below 3.12 is bound by it too:
+
+```by
+def f[T: literal str](t: T) -> T:
+    return t
+```
+
+```python
+_T = TypeVar("_T", bound=LiteralString)
+def f(t: _T) -> _T:
+    return t
+```
+
 the `LiteralString` import is added once per module and [polyfilled](polyfills.md)
 to `typing_extensions` below 3.11
 

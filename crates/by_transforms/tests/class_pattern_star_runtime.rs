@@ -11,15 +11,18 @@
 //! the star reads the last of `__match_args__` whatever its length, and that a
 //! trailing star matches exactly what leaving it out matches.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// basedpython whose module-level `assert`s exercise the runtime contract of a
 /// class pattern's starred wildcard.
@@ -112,14 +115,14 @@ assert start_and_stop(line) == (0, 2), "a keyword after the star is unaffected"
 print("ok")
 "#;
 
-fn run(python: &str, min_version: PythonVersion) {
+fn run(python: &Interpreter, min_version: PythonVersion) {
     let config = Config {
         min_version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -135,29 +138,19 @@ fn run(python: &str, min_version: PythonVersion) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn starred_class_patterns_read_the_positions_they_name() {
-    let Some(python) = python() else {
-        eprintln!("skipping starred class pattern runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
-    run(&python, PythonVersion::PY313);
+    run(&python, python.version);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn starred_class_patterns_run_under_the_match_polyfill() {
     // below 3.10 the emitted `match` is itself rewritten into an `if` chain, so
     // the filled-in wildcards are read by the polyfill's `__match_args__` helper
     // rather than by python's own `MATCH_CLASS`
-    let Some(python) = python() else {
-        eprintln!("skipping starred class pattern polyfill test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, PythonVersion::PY39);

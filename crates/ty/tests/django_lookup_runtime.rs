@@ -13,21 +13,21 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// a django small enough to read and complete enough for both halves: ty
-/// recognizes the model, the fields and the manager from it (the `KnownClass`
-/// names have to be *defined* in django's own module paths, on a third-party
-/// search path, hence the site-packages layout), and it runs, recording the
-/// keywords a lookup call is handed
+/// the stubs of a django small enough to read: ty recognizes the model, the
+/// fields and the manager from them (the `KnownClass` names have to be *defined*
+/// in django's own module paths, on a third-party search path, hence the
+/// site-packages layout). the modules beside them, [`MOCK_DJANGO_RUNTIME`], are
+/// what runs
 const MOCK_DJANGO: &[(&str, &str)] = &[
-    ("django/__init__.py", ""),
+    ("django/__init__.pyi", ""),
     // `from django.db import models` reads `models` as an attribute of the
     // package, which only exists once the submodule is imported
     (
-        "django/db/__init__.py",
+        "django/db/__init__.pyi",
         "from django.db import models as models\n",
     ),
     (
-        "django/db/models/__init__.py",
+        "django/db/models/__init__.pyi",
         "from django.db.models.base import Model as Model\n\
          from django.db.models.fields import CharField as CharField, DateField as DateField\n\
          from django.db.models.fields.json import JSONField as JSONField\n\
@@ -36,7 +36,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          from django.db.models.query import Q as Q, QuerySet as QuerySet\n",
     ),
     (
-        "django/db/models/base.py",
+        "django/db/models/base.pyi",
         "from typing import Any, ClassVar, Self\n\
          \n\
          from django.db.models.manager import Manager\n\
@@ -51,7 +51,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          \x20       cls.objects = Manager()\n",
     ),
     (
-        "django/db/models/manager.py",
+        "django/db/models/manager.pyi",
         "from typing import Any\n\
          \n\
          from django.db.models.query import QuerySet\n\
@@ -69,7 +69,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          \x20   pass\n",
     ),
     (
-        "django/db/models/query.py",
+        "django/db/models/query.pyi",
         "from typing import Any\n\
          \n\
          \n\
@@ -82,7 +82,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          \x20       self.recorded = recorded or {}\n",
     ),
     (
-        "django/db/models/fields/__init__.py",
+        "django/db/models/fields/__init__.pyi",
         "from typing import Any\n\
          \n\
          \n\
@@ -107,7 +107,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
     // the key/index transforms live on `JSONField`, which is recognized by the
     // module it is declared in, so the mock has to declare it in that module too
     (
-        "django/db/models/fields/json.py",
+        "django/db/models/fields/json.pyi",
         "from typing import Any\n\
          \n\
          from django.db.models.fields import Field\n\
@@ -118,7 +118,7 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          \x20   _pyi_private_get_type: Any\n",
     ),
     (
-        "django/db/models/fields/related.py",
+        "django/db/models/fields/related.pyi",
         "from typing import Any\n\
          \n\
          from django.db.models.fields import Field\n\
@@ -131,6 +131,113 @@ const MOCK_DJANGO: &[(&str, &str)] = &[
          \x20   _pyi_private_get_type: Any\n\
          \n\
          \x20   def __init__(self, to: Any, on_delete: Any = None, **kwargs: Any) -> None: ...\n",
+    ),
+];
+
+/// the modules [`MOCK_DJANGO`] describes, generic through `typing.Generic` so
+/// that they run on every version the transpiler targets: the lowering writes a
+/// field's construction as the specialization it checked, `CharField[str, str]`.
+/// a manager records the keywords a lookup call is handed
+const MOCK_DJANGO_RUNTIME: &[(&str, &str)] = &[
+    ("django/__init__.py", ""),
+    (
+        "django/db/__init__.py",
+        "from django.db import models as models\n",
+    ),
+    (
+        "django/db/models/__init__.py",
+        "from django.db.models.base import Model as Model\n\
+         from django.db.models.fields import CharField as CharField, DateField as DateField\n\
+         from django.db.models.fields.json import JSONField as JSONField\n\
+         from django.db.models.fields.related import CASCADE as CASCADE, ForeignKey as ForeignKey\n\
+         from django.db.models.manager import Manager as Manager\n\
+         from django.db.models.query import Q as Q, QuerySet as QuerySet\n",
+    ),
+    (
+        "django/db/models/base.py",
+        "from django.db.models.manager import Manager\n\
+         \n\
+         \n\
+         class Model:\n\
+         \x20   def __init_subclass__(cls, **kwargs):\n\
+         \x20       super().__init_subclass__(**kwargs)\n\
+         \x20       cls.objects = Manager()\n",
+    ),
+    (
+        "django/db/models/manager.py",
+        "from typing import Generic, TypeVar\n\
+         \n\
+         from django.db.models.query import QuerySet\n\
+         \n\
+         _M = TypeVar(\"_M\")\n\
+         \n\
+         \n\
+         class BaseManager(Generic[_M]):\n\
+         \x20   def filter(self, *args, **kwargs):\n\
+         \x20       return QuerySet(kwargs)\n\
+         \n\
+         \x20   def exclude(self, *args, **kwargs):\n\
+         \x20       return QuerySet(kwargs)\n\
+         \n\
+         \n\
+         class Manager(BaseManager[_M]):\n\
+         \x20   pass\n",
+    ),
+    (
+        "django/db/models/query.py",
+        "from typing import Generic, TypeVar\n\
+         \n\
+         _M = TypeVar(\"_M\")\n\
+         _Row = TypeVar(\"_Row\")\n\
+         \n\
+         \n\
+         class Q:\n\
+         \x20   def __init__(self, **kwargs):\n\
+         \x20       pass\n\
+         \n\
+         \n\
+         class QuerySet(Generic[_M, _Row]):\n\
+         \x20   def __init__(self, recorded=None):\n\
+         \x20       self.recorded = recorded or {}\n",
+    ),
+    (
+        "django/db/models/fields/__init__.py",
+        "from typing import Generic, TypeVar\n\
+         \n\
+         _ST = TypeVar(\"_ST\")\n\
+         _GT = TypeVar(\"_GT\")\n\
+         \n\
+         \n\
+         class Field(Generic[_ST, _GT]):\n\
+         \x20   def __init__(self, **kwargs):\n\
+         \x20       pass\n\
+         \n\
+         \n\
+         class CharField(Field[_ST, _GT]):\n\
+         \x20   pass\n\
+         \n\
+         \n\
+         class DateField(Field[_ST, _GT]):\n\
+         \x20   pass\n",
+    ),
+    (
+        "django/db/models/fields/json.py",
+        "from django.db.models.fields import Field, _GT, _ST\n\
+         \n\
+         \n\
+         class JSONField(Field[_ST, _GT]):\n\
+         \x20   pass\n",
+    ),
+    (
+        "django/db/models/fields/related.py",
+        "from django.db.models.fields import Field, _GT, _ST\n\
+         \n\
+         CASCADE = \"cascade\"\n\
+         \n\
+         \n\
+         class ForeignKey(Field[_ST, _GT]):\n\
+         \x20   def __init__(self, to, on_delete=None, **kwargs):\n\
+         \x20       pass\n",
     ),
 ];
 
@@ -188,9 +295,10 @@ label("json key and field", Doc.objects.filter(name == "n", data["key"] == 1))
 print("calls", calls)
 "#;
 
-/// a CPython 3.13, provisioned through uv the way the divergence harness does:
-/// the mock django uses pep 695 generics and pep 696 defaults, whose runtime
-/// floor is 3.13
+/// the interpreter the lowered program runs on: `$PYTHON` when it is set, which
+/// is the interpreter the run was pinned to, and otherwise a CPython 3.13
+/// provisioned through uv the way the divergence harness does. the project
+/// targets whichever version it is
 #[cfg(not(windows))]
 fn python() -> Option<String> {
     if let Ok(path) = std::env::var("PYTHON") {
@@ -221,16 +329,32 @@ fn python() -> Option<String> {
     std::env::var("PYTHON").ok()
 }
 
-/// where a venv keeps its installed packages, in the layout the host platform
-/// actually uses: `<sys.prefix>/Lib/site-packages` on windows, and
-/// `<sys.prefix>/lib/pythonX.Y/site-packages` everywhere else. ty resolves the
-/// directory the same way, and looks for the windows one directly rather than
-/// scanning `lib/`, so a unix layout hands it nothing to find
-fn site_packages() -> &'static str {
+/// the `major.minor` version of `python`
+fn python_version(python: &str) -> String {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
+        ])
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        output.status.success(),
+        "{python} could not say its version"
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// where a venv of python `version` keeps its installed packages, in the layout
+/// the host platform actually uses: `<sys.prefix>/Lib/site-packages` on windows,
+/// and `<sys.prefix>/lib/pythonX.Y/site-packages` everywhere else. ty resolves
+/// the directory the same way, and looks for the windows one directly rather
+/// than scanning `lib/`, so a unix layout hands it nothing to find
+fn site_packages(version: &str) -> String {
     if cfg!(windows) {
-        ".venv/Lib/site-packages"
+        ".venv/Lib/site-packages".to_owned()
     } else {
-        ".venv/lib/python3.13/site-packages"
+        format!(".venv/lib/python{version}/site-packages")
     }
 }
 
@@ -262,7 +386,7 @@ fn transpile(project: &Path, module: &str) -> String {
 fn lookup_expressions_hand_django_the_keywords_they_spell() {
     let Some(python) = python() else {
         eprintln!(
-            "skipping django lookup runtime test: no python 3.13 found \
+            "skipping django lookup runtime test: no interpreter found \
              (set PYTHON to one, or make `uv` available)"
         );
         return;
@@ -270,22 +394,27 @@ fn lookup_expressions_hand_django_the_keywords_they_spell() {
 
     let project = tempfile::tempdir().expect("tempdir");
     let root = project.path();
+    // the project targets the interpreter that runs it, so the lowered program
+    // is written for that version
+    let version = python_version(&python);
     // ty only reads django's `KnownClass` names off a third-party search path,
     // so the mock lives in a venv's site-packages rather than beside the source
-    let site_packages = site_packages();
-    for (relative, contents) in MOCK_DJANGO {
+    let site_packages = site_packages(&version);
+    for (relative, contents) in MOCK_DJANGO.iter().chain(MOCK_DJANGO_RUNTIME) {
         write(root, &format!("{site_packages}/{relative}"), contents);
     }
     write(
         root,
         ".venv/pyvenv.cfg",
-        "home = /usr/bin\nversion = 3.13.0\n",
+        &format!("home = /usr/bin\nversion = {version}.0\n"),
     );
     write(
         root,
         "pyproject.toml",
-        "[project]\nname = \"probe\"\nversion = \"0\"\nrequires-python = \">=3.13\"\n\n\
-         [tool.ty.environment]\npython = \".venv\"\npython-version = \"3.13\"\n",
+        &format!(
+            "[project]\nname = \"probe\"\nversion = \"0\"\nrequires-python = \">={version}\"\n\n\
+             [tool.ty.environment]\npython = \".venv\"\npython-version = \"{version}\"\n"
+        ),
     );
     write(root, "models.by", MODELS);
     write(root, "main.by", MAIN);
@@ -303,7 +432,7 @@ fn lookup_expressions_hand_django_the_keywords_they_spell() {
     let output = Command::new(&python)
         .arg("main.py")
         .current_dir(&lowered)
-        .env("PYTHONPATH", root.join(site_packages).as_os_str())
+        .env("PYTHONPATH", root.join(&site_packages).as_os_str())
         .output()
         .expect("failed to spawn python");
     assert!(

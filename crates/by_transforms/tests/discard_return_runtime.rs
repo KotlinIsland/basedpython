@@ -16,9 +16,12 @@
 //! - attributes still answer, so a framework reading `cb.__name__` off a wrapped
 //!   callback gets the wrapped function's name rather than an `AttributeError`
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
+
+mod common;
+mod interpreters;
 
 /// basedpython whose module-level `assert`s exercise the adapter end to end
 const PROGRAM: &str = r#"
@@ -134,42 +137,18 @@ assert plain === silent
 print("ok")
 "#;
 
-/// the first interpreter that accepts `probe`
-fn python_supporting(probe: &str) -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3.13", "python3"].map(String::from));
-
-    candidates.into_iter().find(|py| {
-        Command::new(py)
-            .args(["-c", probe])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn discarded_returns_run_correctly() {
-    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
-        eprintln!("skipping discard-return runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

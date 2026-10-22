@@ -12,15 +12,17 @@
 //! either fails to parse or parses as a statement of its own, and the program quietly
 //! computes something else
 //!
-//! no third-party packages are needed, so any `python3` will do; if none is found the
-//! test skips rather than fails
+//! no third-party packages are needed, so the program is transpiled for whichever interpreter
+//! runs it; if none is found the test skips, and says so, rather than fails
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// operands written over several lines, one per early-exit form
 const MULTI_LINE_OPERANDS: &str = r#"
@@ -149,13 +151,13 @@ assert incremented(Node(None)) is None
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -171,28 +173,16 @@ fn run(python: &str, program: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn an_operand_written_over_several_lines_keeps_its_grouping() {
-    let Some(python) = python() else {
-        eprintln!("skipping statement expression runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, MULTI_LINE_OPERANDS);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_propagated_operand_written_over_several_lines_keeps_its_grouping() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_propagated_operand_written_over_several_lines_keeps_its_grouping`: no `python3` interpreter found"
-        );
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, PROPAGATE_MULTI_LINE);

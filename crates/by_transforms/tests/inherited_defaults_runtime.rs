@@ -5,15 +5,18 @@
 //! to the same value. Asserting on the lowered *text* cannot see that: a default written in
 //! the wrong place still parses, and a call binding the wrong value still runs.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is found the test
-//! skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// each shape a default can be declared in, taken by an override that declares none
 const INHERITED: &str = r#"
@@ -96,13 +99,13 @@ assert B(7).a == 7, "and an argument still wins"
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -119,7 +122,7 @@ fn run(python: &str, program: &str) {
 
 #[test]
 fn an_override_is_callable_without_the_argument_the_base_defaulted() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, INHERITED);
@@ -127,7 +130,7 @@ fn an_override_is_callable_without_the_argument_the_base_defaulted() {
 
 #[test]
 fn a_default_reaches_every_override_down_the_chain() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, CHAIN);
@@ -135,7 +138,7 @@ fn a_default_reaches_every_override_down_the_chain() {
 
 #[test]
 fn a_parameter_after_an_inherited_default_still_binds() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, RELAXED_ORDER);
@@ -143,7 +146,7 @@ fn a_parameter_after_an_inherited_default_still_binds() {
 
 #[test]
 fn an_init_shorthand_takes_the_default_its_base_declares() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, INIT_SHORTHAND);

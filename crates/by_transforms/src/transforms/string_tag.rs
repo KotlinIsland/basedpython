@@ -31,6 +31,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
     ConversionFlag, Expr, ExprCall, InterpolatedStringElement, ModModule, PythonVersion, Stmt,
 };
+use ruff_python_trivia::CommentRanges;
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::Config;
@@ -41,12 +42,17 @@ use super::template_expression;
 
 pub(crate) struct StringTagPass<'src> {
     source: &'src str,
+    comments: &'src CommentRanges,
     config: Config,
 }
 
 impl<'src> StringTagPass<'src> {
-    pub(crate) fn new(source: &'src str, config: Config) -> Self {
-        Self { source, config }
+    pub(crate) fn new(source: &'src str, comments: &'src CommentRanges, config: Config) -> Self {
+        Self {
+            source,
+            comments,
+            config,
+        }
     }
 }
 
@@ -55,6 +61,7 @@ impl AstPass for StringTagPass<'_> {
         let native = self.config.min_version >= PythonVersion::PY314;
         let mut state = State {
             source: self.source,
+            comments: self.comments,
             native,
             text_edits: Vec::new(),
             template_edits: Vec::new(),
@@ -74,6 +81,7 @@ impl AstPass for StringTagPass<'_> {
 
 struct State<'src> {
     source: &'src str,
+    comments: &'src CommentRanges,
     native: bool,
     text_edits: Vec<(TextRange, String)>,
     template_edits: Vec<(TextRange, Vec<Fragment>)>,
@@ -156,7 +164,11 @@ impl State<'_> {
                         frags.push(Fragment::Src(interp.expression.range()));
                         frags.push(Fragment::Lit(format!(
                             ", {}",
-                            string_repr(template_expression::author_text(self.source, interp))
+                            string_repr(&template_expression::field_text(
+                                self.source,
+                                self.comments,
+                                interp
+                            ))
                         )));
                         let conversion = conversion_arg(interp.conversion);
                         let format_spec = interp

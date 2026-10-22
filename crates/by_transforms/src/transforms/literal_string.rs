@@ -19,6 +19,13 @@
 //! Reading the *marker's* inferred type, rather than matching the spelling of
 //! the type it wraps, is what makes this agree with the checker by construction:
 //! a shadowed `str` never reduces to `LiteralString`, so it never rewrites here.
+//!
+//! A lowering that writes a type whole — a tuple type, a callable arrow, a
+//! polyfilled type parameter's bound — prints the type from the blanked source,
+//! where a marker's keyword is gone. Each rewrite is therefore also a
+//! [type substitution](super::ast_driver::PassContext::type_substitutions), which
+//! such a lowering writes in the marker's place, and the walk that finds them goes
+//! on into those types rather than stopping at them.
 
 use ruff_python_ast::helpers::{TypeModifier, type_modifier_marker};
 use ruff_python_ast::{Expr, Stmt};
@@ -45,6 +52,11 @@ impl LiteralStringRewrites {
         self.ranges
             .iter()
             .map(|range| (*range, self.literal_string.clone()))
+    }
+
+    /// the same rewrites, as the substitutions a lowering that writes a type whole applies
+    pub(crate) fn substitutions(&self) -> impl Iterator<Item = (TextRange, String)> + '_ {
+        self.edits()
     }
 
     /// whether `range` falls inside a rewritten marker. The blanking pass emits
@@ -83,6 +95,11 @@ struct Collector<'a> {
 }
 
 impl TypeExprVisitor for Collector<'_> {
+    /// a type one lowering writes whole writes the substitutions found inside it
+    fn descends_into_wholly_lowered(&self) -> bool {
+        true
+    }
+
     fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
         if let Some((TypeModifier::Literal, _)) = type_modifier_marker(expr)
             && self.types.is_literal_string(expr)
@@ -146,6 +163,27 @@ mod tests {
             indoc! {"
                 from typing_extensions import LiteralString
                 def f(x: LiteralString) -> LiteralString: ...
+            "},
+        );
+    }
+
+    /// a type another lowering writes whole — a tuple type, a callable arrow — writes the
+    /// `LiteralString` inside it too
+    #[test]
+    fn inside_a_type_written_whole() {
+        check(
+            "a: (literal str, int)\n",
+            indoc! {"
+                from typing_extensions import LiteralString
+                a: tuple[LiteralString, int]
+            "},
+        );
+        check(
+            "def f(g: (literal str) -> literal str) -> None: ...\n",
+            indoc! {"
+                from typing import Callable
+                from typing_extensions import LiteralString
+                def f(g: Callable[[LiteralString], LiteralString]) -> None: ...
             "},
         );
     }

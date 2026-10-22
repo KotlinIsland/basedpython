@@ -7,6 +7,7 @@
 //! check` clean and nothing failing until something reads the hints. A field naming a type
 //! parameter has to read the one the generic declares, from module scope, where the class is.
 
+mod common;
 mod interpreters;
 
 use std::process::Command;
@@ -45,21 +46,21 @@ class C[T]:
     def get(self) -> {"a": T}: ...
 
 
-assert typing.get_type_hints(typing.get_type_hints(C.get)["return"])["a"] === C.__type_params__[0]
+assert typing.get_type_hints(typing.get_type_hints(C.get)["return"])["a"] === C.__parameters__[0]
 print("ok")
 "#;
 
 #[test]
 fn a_synthesized_type_inside_another_is_its_class() {
-    let Some(python) = interpreters::oldest(
-        PythonVersion::PY313,
+    let Some(python) = common::python_with(
+        PythonVersion::PY39,
         "import typing_extensions",
         "with `typing_extensions`",
     ) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
@@ -74,5 +75,4 @@ fn a_synthesized_type_inside_another_is_its_class() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
-    interpreters::ran(&python, PythonVersion::PY313);
 }

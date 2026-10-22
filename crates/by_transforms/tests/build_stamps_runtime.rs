@@ -7,15 +7,16 @@
 //! would notice. The awkward values are the point of this test.
 
 mod common;
+mod interpreters;
 
 use std::collections::BTreeMap;
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
-fn config(stamps: &[(&str, &str)]) -> Config {
+fn config(target: PythonVersion, stamps: &[(&str, &str)]) -> Config {
     Config {
-        min_version: PythonVersion::PY313,
+        min_version: target,
         stamps: stamps
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -24,18 +25,14 @@ fn config(stamps: &[(&str, &str)]) -> Config {
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn run(program: &str, stamps: &[(&str, &str)]) {
-    let Some(python) = common::python() else {
-        eprintln!("skipping build stamp runtime test: no interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
 
-    let transpiled = transpile(program, &config(stamps)).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let transpiled =
+        transpile(program, &config(python.version, stamps)).expect("transpile should succeed");
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

@@ -4232,25 +4232,46 @@ fn transpile_directory_round_trips_through_build() {
     );
 }
 
-/// An interpreter new enough to run a reified class: the specializer reads the
-/// class's own `__type_params__`, which needs the native PEP 695 header.
-fn python_at_least_312() -> Option<String> {
-    // `$PYTHON` is what pins the interpreter for every python-executing test,
-    // so an explicit one is the answer whether or not it is new enough — a run
-    // that pinned an old interpreter should say so rather than quietly pick
-    // another
-    if let Ok(pinned) = std::env::var("PYTHON") {
-        return Some(pinned);
+/// an interpreter of python `3.minor` or later, for a test whose program needs it: `needs` says
+/// why. none is a skip, said so
+///
+/// `$PYTHON` is what pins the interpreter for every python-executing test, so an explicit one is
+/// the answer whenever it is new enough, and a skip when it is not: a run that pinned an old
+/// interpreter is asking about that interpreter, and quietly picking another would answer a
+/// question nobody asked
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn python_at_least(minor: u8, needs: &str) -> Option<String> {
+    let new_enough = |python: &str| {
+        Command::new(python)
+            .args([
+                "-c",
+                &format!("import sys; sys.exit(sys.version_info < (3, {minor}))"),
+            ])
+            .output()
+            .is_ok_and(|out| out.status.success())
+    };
+    let found = match std::env::var("PYTHON") {
+        Ok(pinned) => Some(pinned).filter(|pinned| new_enough(pinned)),
+        Err(_) => ["python3.13", "python3.12", "python3"]
+            .into_iter()
+            .find(|python| new_enough(python))
+            .map(str::to_owned),
+    };
+    if found.is_none() {
+        eprintln!("skipping: no python 3.{minor}+ interpreter, which {needs}");
     }
-    ["python3.13", "python3.12", "python3"]
-        .into_iter()
-        .find(|python| {
-            Command::new(python)
-                .args(["-c", "import sys; sys.exit(sys.version_info < (3, 12))"])
-                .output()
-                .is_ok_and(|out| out.status.success())
-        })
-        .map(str::to_owned)
+    found
+}
+
+/// an interpreter new enough to run a reified generic: reification keeps the native pep 695
+/// type-parameter list, which python has from 3.12, and the transpiler refuses one for an older
+/// target rather than write a program that cannot run there (see
+/// `reified_generic_below_312_is_refused_rather_than_run`)
+fn python_at_least_312() -> Option<String> {
+    python_at_least(12, "a reified generic needs")
 }
 
 /// transpile with `--min-version 3.13` — reified generics require native PEP
@@ -4312,15 +4333,10 @@ a.f()
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn reified_class_reads_its_type_argument_at_runtime() {
     // the whole contract end to end: an instance built from `A[int]` answers
     // `int` when its method reads the class's type parameter
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -4354,6 +4370,50 @@ a.f()
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "<class 'int'>"
+    );
+}
+
+/// below 3.12 python has no native type-parameter list for a reified generic to keep, so
+/// `by run` refuses the program rather than run one that cannot read its type argument. a 3.11
+/// interpreter makes 3.11 the target, as `--min-version 3.11` does here on any interpreter
+#[test]
+fn reified_generic_below_312_is_refused_rather_than_run() {
+    let Some(python) = python_at_least(11, "the program is built for") else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def f(self):
+        print(T)
+
+print(\"ran\")
+A[int]().f()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--min-version", "3.11", "main"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "by run should refuse:\n{stderr}");
+    assert!(
+        stderr.contains("reified generic class `A` requires python 3.12 or newer"),
+        "the refusal should name the class and the version it needs:\n{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "",
+        "nothing should run"
     );
 }
 
@@ -4875,12 +4935,41 @@ x(a)
     );
 }
 
+/// the interpreter `by run` picks outside an environment — `$PYTHON`, and `python3` when nothing
+/// pins one — when a program writing `override` can run on it: the transpiler takes it from
+/// `typing` from 3.12, and from `typing_extensions` below, which a bare interpreter does not
+/// have. none is a skip, said so
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn python_running_override() -> Option<String> {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let runs = Command::new(&python)
+        .args([
+            "-c",
+            "import sys\nif sys.version_info < (3, 12): import typing_extensions",
+        ])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !runs {
+        eprintln!(
+            "skipping: `{python}` is older than 3.12 and has no `typing_extensions`, which the \
+             program's `override` comes from there"
+        );
+    }
+    runs.then_some(python)
+}
+
 /// the headline case: a concrete subclass fixes its type arguments in
 /// `__orig_bases__`, so the runtime probe confirms it — even across the
 /// `list` -> `Sequence` boundary, which pure `__mro__` introspection can't see
 /// but `issubclass` + the recorded arguments can
 #[test]
 fn parametric_is_concrete_subclass_confirms_across_origins() {
+    let Some(python) = python_running_override() else {
+        return;
+    };
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
@@ -4906,6 +4995,7 @@ print(object() is Sequence[int])
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
+        .env("PYTHON", &python)
         .current_dir(dir.path())
         .output()
         .expect("failed to spawn by");
@@ -4971,10 +5061,6 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_a_reified_generic_tests_the_type_argument() {
     // a reified type parameter carries the type the caller chose, so the guard
     // tests exactly that rather than the ceiling: `PermissionError` is an
@@ -4982,7 +5068,6 @@ fn raises_guard_of_a_reified_generic_tests_the_type_argument() {
     // the specialization is applied after the guard decorator, so this also says
     // the guard kept `rethrow[...]` answering
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5030,15 +5115,10 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_a_reified_class_reads_the_receiver() {
     // a class's type argument belongs to the instance, so a method's guard asks
     // the receiver it was called on for it
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5088,10 +5168,6 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_an_unreified_parameter_tests_its_ceiling() {
     // nothing carries `T` at runtime here, and asking for it would mean reifying
     // the parameter — an option that adds a check must not change the shape of
@@ -5099,8 +5175,7 @@ fn raises_guard_of_an_unreified_parameter_tests_its_ceiling() {
     // an `OSError` passes, anything else does not. built for 3.9, the generic
     // `def` goes through the pep 695 polyfill, whose `TypeVar` definitions have
     // to land above the guard
-    let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
+    let Some(python) = python_at_least(9, "the program is built for") else {
         return;
     };
 
@@ -5154,16 +5229,11 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_a_reified_generic_method_reads_the_bound_instance() {
     // a method that is itself reified is wrapped in `generic`, which binds the
     // receiver and passes the rest on: the class's argument comes from the
     // instance the method was looked up on, not from whatever is passed first
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5214,15 +5284,10 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_a_nested_function_tests_a_class_parameter_at_its_ceiling() {
     // `inner` is not a method, so its first argument is not a receiver and the
     // class's argument cannot be read off it: the guard tests the bound instead
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5271,15 +5336,10 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_of_a_nested_function_reads_an_enclosing_reified_argument() {
     // the guard on `inner` is evaluated inside a call of `outer`, where `T` is
     // already the argument `outer` was specialized with
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5327,16 +5387,11 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_tests_a_subscripted_type_argument_by_its_origin() {
     // `isinstance` refuses `MyErr[int]`, and a guard that raised `TypeError`
     // there would replace the exception the function legitimately raised. the
     // shallow test is the origin, as `list[str]` is tested as `list`
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -5387,15 +5442,10 @@ def main():
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test prints why it was skipped"
-)]
 fn raises_guard_keeps_a_reified_generic_documented() {
     // the guard wraps a reified generic in an object of its own, which must not
     // answer for the function's docstring with its own
     let Some(python) = python_at_least_312() else {
-        eprintln!("skipping: no python 3.12+ interpreter available");
         return;
     };
 
@@ -6703,15 +6753,17 @@ fn interpreter_version(python: &Path) -> (u8, u8) {
 }
 
 /// the version of the interpreter `by run` would pick, so a test can name one
-/// that is definitely newer
+/// that is definitely newer. outside an environment that is `$PYTHON`, and
+/// `python3` when nothing pins one
 fn running_python_version() -> (u8, u8) {
-    let output = Command::new("python3")
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let output = Command::new(python)
         .args([
             "-c",
             "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')",
         ])
         .output()
-        .expect("python3 is needed to run this test");
+        .expect("an interpreter is needed to run this test");
     let rendered = String::from_utf8_lossy(&output.stdout);
     let mut parts = rendered.split_whitespace();
     let major = parts.next().unwrap().parse().unwrap();

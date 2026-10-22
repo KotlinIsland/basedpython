@@ -10,20 +10,18 @@
 //! whose name the enclosing function also binds must not lower to `nonlocal x` +
 //! `x: Final = …`, which python rejects at compile time.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
-
-#![expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// a block declares `it=None` whatever its callback passes, so a callback that
 /// passes fewer arguments than the block declares can still call it — the
@@ -87,14 +85,14 @@ assert seen == ["NESTED", "morgan", "2", "1"], seen
 print("ok")
 "#;
 
-fn run_program(python: &str, program: &str, what: &str) {
+fn run_program(python: &Interpreter, program: &str, what: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -111,8 +109,7 @@ fn run_program(python: &str, program: &str, what: &str) {
 
 #[test]
 fn a_callback_passing_fewer_arguments_can_still_call_the_block() {
-    let Some(python) = python() else {
-        eprintln!("skipping block-scoping runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, UNFILLED_PARAMETERS_PROGRAM, "unfilled-parameters");
@@ -120,8 +117,7 @@ fn a_callback_passing_fewer_arguments_can_still_call_the_block() {
 
 #[test]
 fn let_inside_a_block_is_a_block_local() {
-    let Some(python) = python() else {
-        eprintln!("skipping block-scoping runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, BLOCK_LET_PROGRAM, "block-`let`");

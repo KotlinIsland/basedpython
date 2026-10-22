@@ -1,10 +1,10 @@
 //! Runtime divergence tests for the **pep 695 polyfill** target.
 //!
-//! Every other runtime test transpiles at `PY313`, where type parameters are
-//! native and the polyfill never runs. That left the default output target
-//! (`--min-version 3.10`) — the one a user gets without passing a flag —
-//! untested at runtime, and three separate lowerings reached it emitting python
-//! that raises on import while `by check` reported nothing:
+//! The other runtime tests transpile for the interpreter they run on, which reaches
+//! the polyfill only on an interpreter older than 3.12. These run it on purpose, at
+//! targets below 3.12 — the default output target (`--min-version 3.10`), the one a
+//! user gets without passing a flag, among them. Three separate lowerings reached it
+//! emitting python that raised on import while `by check` reported nothing:
 //!
 //! - a callable arrow (`(T) -> R`) rendered `Callable[[T], R]`, keeping the
 //!   pre-polyfill parameter names while the polyfill bound `_T` / `_R`
@@ -20,6 +20,7 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
+mod common;
 mod interpreters;
 use interpreters::Interpreter;
 
@@ -311,6 +312,80 @@ assert Box().put(1) == 1
 print("ok")
 "#;
 
+/// a class body runs its annotations as the class is made, in a loop or a `with` as anywhere
+/// else, so each has to read the type variable the polyfill declared
+const COMPOUND_STATEMENT_RENAMES: &str = r#"
+import contextlib
+import typing
+
+class Box[T]:
+    for _i in range(1):
+        looped: list[T]
+    with contextlib.nullcontext() as _f:
+        opened: T
+    try:
+        tried: T
+    except Exception:
+        pass
+
+hints = typing.get_type_hints(Box)
+declared = Box.__parameters__[0]
+assert hints["looped"] == list[declared], hints
+assert hints["opened"] === declared, hints
+assert hints["tried"] === declared, hints
+print("ok")
+"#;
+
+/// type modifiers in a type parameter's bound, tuple bound, constraints and default. `literal
+/// str` is `LiteralString`, the one modifier python can spell, so the runtime `TypeVar` carries
+/// it; the others have no spelling and erase to the type they modify, and a lower bound has none
+/// either, so a range is its upper end
+const MODIFIED_BOUNDS: &str = r#"
+import sys
+import typing
+
+if sys.version_info >= (3, 11):
+    from typing import LiteralString
+else:
+    from typing_extensions import LiteralString
+
+def bounded[T: literal str](t: T) -> T:
+    return t
+
+def in_a_tuple[T: (literal str, literal int)](t: T) -> T:
+    return t
+
+def constrained[T in (literal str, literal int)](t: T) -> T:
+    return t
+
+def defaulted[T: literal int = literal int](t: T) -> T:
+    return t
+
+def ranged[T: literal int..object](t: T) -> T:
+    return t
+
+class Box[T: literal str]:
+    def get(self, t: T) -> T:
+        return t
+
+type Alias[T: literal str] = list[T]
+
+def parameter(f: object) -> typing.Any:
+    return typing.get_type_hints(f)["t"]
+
+assert parameter(bounded).__bound__ === LiteralString, parameter(bounded).__bound__
+assert parameter(in_a_tuple).__bound__ == tuple[LiteralString, int], parameter(in_a_tuple).__bound__
+assert parameter(constrained).__constraints__ == (LiteralString, int), (
+    parameter(constrained).__constraints__
+)
+assert parameter(defaulted).__bound__ === int, parameter(defaulted).__bound__
+assert parameter(defaulted).__default__ === int, parameter(defaulted).__default__
+assert parameter(ranged).__bound__ === object, parameter(ranged).__bound__
+assert parameter(Box.get).__bound__ === LiteralString, parameter(Box.get).__bound__
+assert Alias.__type_params__[0].__bound__ === LiteralString, Alias.__type_params__
+print("ok")
+"#;
+
 /// a method whose bound reads a name of its class. the declaration reads it through the class,
 /// so it is at module scope with the others: `typing.get_type_hints` finds it, and so does a
 /// function nested in the method, whose annotations are evaluated when the method runs on a
@@ -436,6 +511,14 @@ fn run_on_oldest(program: &str, target: PythonVersion, extensions: bool) {
     }
 }
 
+/// run `program`, transpiled for the version of the interpreter it runs on, which is the pinned
+/// one when there is one. see [`common::python`]
+fn run_at_its_own_version(program: &str) {
+    if let Some(interpreter) = common::python(PythonVersion::PY39) {
+        run_at(&interpreter, program, interpreter.version);
+    }
+}
+
 /// the target the polyfill lowers for on `interpreter`: 3.10, the one a user gets without
 /// asking, or the interpreter's own version when that is older
 fn polyfill_target(interpreter: &Interpreter) -> PythonVersion {
@@ -494,7 +577,7 @@ fn polyfilled_dependent_bounds_run() {
 #[test]
 fn some_parameters_run_at_every_version() {
     run_on_oldest(SOME_PARAMETERS, PythonVersion::PY310, false);
-    run_on_oldest(SOME_PARAMETERS, PythonVersion::PY313, false);
+    run_at_its_own_version(SOME_PARAMETERS);
 }
 
 /// an interpreter without `type.__or__` is the only one that can tell a union spelled for
@@ -563,24 +646,37 @@ fn a_module_binding_the_type_variables_runs() {
 #[test]
 fn defaulted_parameter_specifications_and_variadics_run() {
     run_polyfilled_with_extensions(DEFAULTED_PACKS);
-    run_on_oldest(DEFAULTED_PACKS, PythonVersion::PY313, false);
+    run_at_its_own_version(DEFAULTED_PACKS);
 }
 
 #[test]
 fn a_hoisted_type_names_its_generics_type_variable() {
     run_on_oldest(HOISTED_TYPES, PythonVersion::PY39, false);
-    run_on_oldest(HOISTED_TYPES, PythonVersion::PY313, false);
+    run_at_its_own_version(HOISTED_TYPES);
 }
 
 #[test]
 fn a_module_binding_the_typing_names_runs() {
     run_on_oldest(OWN_TYPING_NAMES, PythonVersion::PY39, true);
-    run_on_oldest(OWN_TYPING_NAMES, PythonVersion::PY313, false);
+    run_at_its_own_version(OWN_TYPING_NAMES);
 }
 
 #[test]
 fn a_method_type_variable_resolves_in_type_hints() {
     run_on_oldest(METHOD_TYPE_VARIABLES, PythonVersion::PY39, false);
+}
+
+#[test]
+fn a_type_variable_read_in_a_compound_statement_resolves() {
+    run_on_oldest(COMPOUND_STATEMENT_RENAMES, PythonVersion::PY39, false);
+    run_at_its_own_version(COMPOUND_STATEMENT_RENAMES);
+}
+
+/// below 3.12 the polyfill writes each `TypeVar` itself, and from 3.12 python does
+#[test]
+fn a_modified_bound_is_the_type_it_means_at_runtime() {
+    run_polyfilled_with_extensions(MODIFIED_BOUNDS);
+    run_at_its_own_version(MODIFIED_BOUNDS);
 }
 
 /// 3.10 and 3.11 evaluate annotations when the function is defined, which a nested function

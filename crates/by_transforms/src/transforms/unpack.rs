@@ -9,6 +9,12 @@
 //!
 //! `d[*a]`                          → `d[(*a,)]`
 //!
+//! From 3.11 python unpacks a type with the star itself, by iterating it — which the
+//! `typing_extensions.TypeAliasType` a `type` alias is polyfilled as below 3.12 cannot do. a
+//! starred type alias keeps the `Unpack[...]` spelling until 3.12:
+//!
+//! `tuple[int, *Pair]`              → `tuple[int, Unpack[Pair]]`
+//!
 //! Also lowers basedpython's pack forwarding, which no python version accepts:
 //!
 //! `def f(**kwargs: **Kwargs)`      → `def f(**kwargs: Kwargs.kwargs)`
@@ -49,22 +55,48 @@ impl<'src> UnpackSyntax<'src> {
     }
 }
 
-/// the ranges of the subscripts that are type expressions — the ones whose starred elements
-/// are spelled `Unpack[...]` rather than as the tuple python reads a starred subscript as
+/// what the type checker says about the stars of a module, read before any pass rewrites it
 #[derive(Default)]
-pub(crate) struct TypeSubscripts(HashSet<TextRange>);
+pub(crate) struct TypeSubscripts {
+    /// the ranges of the subscripts that are type expressions — the ones whose starred elements
+    /// are spelled `Unpack[...]` rather than as the tuple python reads a starred subscript as
+    types: HashSet<TextRange>,
+    /// the ranges of the stars whose operand is a type alias
+    unpacked_aliases: HashSet<TextRange>,
+}
 
-/// which subscripts in `stmts` are type expressions, as the type checker reads them
+/// which subscripts in `stmts` are type expressions, and which stars unpack a type alias, as the
+/// type checker reads them
 pub(crate) fn collect_type_subscripts(stmts: &[Stmt], types: &dyn TypeInfo) -> TypeSubscripts {
+    struct Aliases<'a> {
+        types: &'a dyn TypeInfo,
+        found: HashSet<TextRange>,
+    }
+    impl Visitor<'_> for Aliases<'_> {
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Starred(starred) = expr
+                && self.types.is_type_alias(&starred.value)
+            {
+                self.found.insert(starred.range());
+            }
+            walk_expr(self, expr);
+        }
+    }
     let mut subscripts = TypeSubscripts::default();
     walk_type_positions(stmts, Some(types), &mut subscripts);
+    let mut aliases = Aliases {
+        types,
+        found: HashSet::new(),
+    };
+    aliases.visit_body(stmts);
+    subscripts.unpacked_aliases = aliases.found;
     subscripts
 }
 
 impl TypeExprVisitor for TypeSubscripts {
     fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
         if let Expr::Subscript(subscript) = expr {
-            self.0.insert(subscript.range());
+            self.types.insert(subscript.range());
         }
         Recurse::Descend
     }
@@ -88,7 +120,7 @@ impl AstPass for UnpackSyntax<'_> {
         }
         ctx.text_edits.extend(pack.edits.into_inner());
 
-        if self.config.min_version >= PythonVersion::PY311 {
+        if self.config.min_version >= PythonVersion::PY312 {
             return;
         }
         let mut state = State {
@@ -97,6 +129,7 @@ impl AstPass for UnpackSyntax<'_> {
             needs_import: false,
             lowered_varargs: pack.lowered_varargs,
             type_subscripts: &self.type_subscripts,
+            star_syntax: self.config.min_version >= PythonVersion::PY311,
         };
         for stmt in &module.body {
             state.visit_stmt(stmt);
@@ -192,9 +225,21 @@ struct State<'a> {
     needs_import: bool,
     lowered_varargs: Vec<TextRange>,
     type_subscripts: &'a TypeSubscripts,
+    /// whether the target has pep 646's star in a subscript, so only a star python cannot
+    /// carry out at runtime, one unpacking a type alias, is spelled `Unpack[...]`
+    star_syntax: bool,
 }
 
 impl State<'_> {
+    /// whether `starred` is spelled `Unpack[...]` on this target
+    fn lowers(&self, starred: &ruff_python_ast::ExprStarred) -> bool {
+        !self.star_syntax
+            || self
+                .type_subscripts
+                .unpacked_aliases
+                .contains(&starred.range())
+    }
+
     /// `d[*a]` → `d[(*a,)]` and `d[*a, b]` → `d[(*a, b)]`: the tuple python 3.11 builds
     /// for a starred subscript, which earlier versions only accept parenthesized
     fn parenthesize_value_slice(&self, slice: &ruff_python_ast::ExprTuple) {
@@ -207,6 +252,9 @@ impl State<'_> {
     }
 
     fn rewrite_subscript_starred(&mut self, starred: &ruff_python_ast::ExprStarred) {
+        if !self.lowers(starred) {
+            return;
+        }
         self.needs_import = true;
         let star_range = star_token_range(starred.range());
         self.edits
@@ -223,7 +271,7 @@ impl State<'_> {
             return;
         };
         // a forwarded `ParamSpec` already became `P.args`, which is not an unpack
-        if self.lowered_varargs.contains(&starred.range()) {
+        if self.lowered_varargs.contains(&starred.range()) || !self.lowers(starred) {
             return;
         }
         self.needs_import = true;
@@ -255,10 +303,11 @@ impl<'ast> Visitor<'ast> for State<'_> {
                 walk_expr(self, expr);
                 return;
             }
-            let is_type = self.type_subscripts.0.contains(&s.range());
+            let is_type = self.type_subscripts.types.contains(&s.range());
             match s.slice.as_ref() {
                 Expr::Tuple(t)
                     if !is_type
+                        && !self.star_syntax
                         && !t.parenthesized
                         && !t.has_parameter_shape()
                         && t.elts.iter().any(Expr::is_starred_expr) =>
@@ -368,6 +417,29 @@ mod tests {
         assert!(
             output.contains("**kwargs: _Kwargs.kwargs"),
             "unexpected output:\n{output}"
+        );
+    }
+
+    /// a star is carried out by iterating what it unpacks, which the
+    /// `typing_extensions.TypeAliasType` a type alias is below 3.12 cannot do, so a starred
+    /// alias keeps the `Unpack[...]` spelling on 3.11, in a subscript and on `*args` alike
+    #[test]
+    fn a_starred_type_alias_is_spelled_unpack_on_311() {
+        check_py311(
+            indoc! {"
+                type Pair = (int, str)
+                x: tuple[int, *Pair] = (1, 2, \"a\")
+                def f(*args: *Pair): ...
+                def g(*args: *tuple[int, ...]): ...
+            "},
+            indoc! {"
+                from typing import Unpack
+                from typing_extensions import TypeAliasType
+                Pair = TypeAliasType(\"Pair\", tuple[int, str])
+                x: tuple[int, Unpack[Pair]] = (1, 2, \"a\")
+                def f(*args: Unpack[Pair]): ...
+                def g(*args: *tuple[int, ...]): ...
+            "},
         );
     }
 
