@@ -4830,13 +4830,20 @@ impl<'src> Parser<'src> {
 
         self.expect(TokenKind::Rpar);
 
-        // do not lift this tuple to is_anon_named_tuple even when it has
-        // plain `name: T` fields — markers (`/`, `*`) signal the user
-        // wants parameter-spec semantics (positional-only / keyword-only),
-        // which conflicts with the implicit NamedTuple synthesis. anon-NT
-        // lifting is reserved for tuples without markers (the existing
-        // `(name: T, ...)` and `(int, name: T)` mixed dispatch upstream)
-        let is_anon_named_tuple = false;
+        // a tuple with no marker (`/`, `*`) and no variadic is an anonymous named tuple
+        // whenever it has a `name: T` field, wherever the field comes — `(int, str,
+        // name: T)` as much as the `(int, name: T)` dispatched upstream. a marker or a
+        // variadic says the tuple is a parameter list, which no named tuple can spell
+        let is_anon_named_tuple = slash.is_none()
+            && star.is_none()
+            && elts
+                .iter()
+                .any(|elt| matches!(elt, Expr::Named(named) if named.label().is_some()))
+            && !elts.iter().any(|elt| match elt {
+                Expr::Starred(_) => true,
+                Expr::Named(named) => matches!(*named.target, Expr::Starred(_)),
+                _ => false,
+            });
 
         ast::ExprTuple {
             elts,
@@ -4846,7 +4853,7 @@ impl<'src> Parser<'src> {
             parenthesized: true,
             is_anon_named_tuple,
             is_anon_named_tuple_value: false,
-            is_parameter_shape: true,
+            is_parameter_shape: !is_anon_named_tuple,
             callable_shape: CallableParameterShape {
                 slash,
                 star,
