@@ -203,6 +203,25 @@ assert kind(built) == type(built).__name__, "a named tuple passed as a tuple sta
 print("ok")
 "#;
 
+/// a named field after more than one positional field, or after a modifier, makes the same
+/// anonymous named tuple a named field right after the first does: the annotation is the class
+/// a literal under it is built as, not a plain tuple
+const NAMED_AFTER_POSITIONALS_PROGRAM: &str = r#"
+def later(p: (int, str, name: bytes)) -> bytes:
+    return p.name
+
+
+def borrowed(p: (int, local b: str)) -> str:
+    return p.b
+
+
+assert later.__annotations__["p"]._fields == ("arg0", "arg1", "name"), "after two positional fields"
+assert borrowed.__annotations__["p"]._fields == ("arg0", "b"), "after a modifier"
+assert later((1, "a", b"x")) == b"x", "built"
+assert borrowed((1, "y")) == "y", "built"
+print("ok")
+"#;
+
 fn run(program: &str) {
     run_with(
         program,
@@ -279,6 +298,11 @@ fn a_plain_tuple_is_built_wherever_one_is_expected() {
 #[test]
 fn a_nested_field_and_a_union_arm_are_built() {
     run(NESTED_AND_UNION_PROGRAM);
+}
+
+#[test]
+fn a_named_field_anywhere_makes_an_anonymous_named_tuple() {
+    run(NAMED_AFTER_POSITIONALS_PROGRAM);
 }
 
 #[test]

@@ -1967,6 +1967,48 @@ fn test_anon_named_tuple_mixed_type() {
     insta::assert_debug_snapshot!(parsed.syntax());
 }
 
+/// a named field makes the tuple an anonymous named tuple wherever it comes, not only right after
+/// the first positional one, while a marker or a variadic keeps it a parameter list
+#[test]
+fn test_anon_named_tuple_named_field_after_positionals() {
+    let annotation_tuple = |source: &str| {
+        let parsed = parse_basedpython_module(source);
+        let Some(Stmt::AnnAssign(assign)) = parsed.suite().first().cloned() else {
+            panic!("expected an annotated assignment in {source:?}");
+        };
+        let Expr::Tuple(tuple) = *assign.annotation else {
+            panic!("expected a tuple annotation in {source:?}");
+        };
+        tuple
+    };
+    for source in [
+        "a: (int, str, name: bytes)\n",
+        "a: (int, local b: str)\n",
+        "a: (int, str, name: bytes, int)\n",
+        "a: (int, (b := str), name: bytes)\n",
+    ] {
+        let tuple = annotation_tuple(source);
+        assert!(tuple.is_anon_named_tuple, "{source:?}");
+        assert!(!tuple.is_parameter_shape, "{source:?}");
+    }
+    // a parenthesized walrus is a positional element, not a field: it binds its target
+    let tuple = annotation_tuple("a: (int, (b := str), name: bytes)\n");
+    let Expr::Named(walrus) = &tuple.elts[1] else {
+        panic!("expected the walrus as the second element");
+    };
+    assert!(walrus.label().is_none());
+    for source in [
+        "a: (int, /, name: str)\n",
+        "a: (int, *, name: str)\n",
+        "a: (int, *args: str)\n",
+        "a: (int, **kw: str)\n",
+    ] {
+        let tuple = annotation_tuple(source);
+        assert!(!tuple.is_anon_named_tuple, "{source:?}");
+        assert!(tuple.is_parameter_shape, "{source:?}");
+    }
+}
+
 #[test]
 fn test_inline_protocol_type() {
     let source = "a: protocol(a: int; b: str; def f(self) -> int)\n";

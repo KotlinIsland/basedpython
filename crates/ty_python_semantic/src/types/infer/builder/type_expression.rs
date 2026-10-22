@@ -1017,40 +1017,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .unwrap_or(class_lit);
                 }
 
-                // basedpython parameter-shape tuple in type position. three
-                // sub-cases:
-                //   * variadic (`(*args: T)`, `(int, *args: T, str)`,
-                //     `(*: T)`): emit a real variable-length tuple type so
-                //     assignability matches `tuple[T, ...]` semantics
-                //   * fixed with markers (`(int, /, name: T)`): the markers
-                //     signal parameter-spec semantics — drop names and emit
-                //     a heterogeneous `tuple[...]`. matches the forward
-                //     transpile lowering
-                //   * fixed without markers but with named fields
-                //     (`(int, name: T)`): handled upstream by
-                //     `is_anon_named_tuple` dispatch
                 if tuple.has_parameter_shape() {
-                    if let Some(ty) = self.lower_parameter_shape_to_tuple_type(tuple) {
-                        return ty;
-                    }
-                    let has_markers =
-                        tuple.parameter_slash().is_some() || tuple.parameter_star().is_some();
-                    if has_markers {
-                        let elt_tys: Vec<Type<'db>> = tuple
-                            .elts
-                            .iter()
-                            .map(|e| match e {
-                                ast::Expr::Named(n) => self.infer_type_expression(&n.value),
-                                _ => self.infer_type_expression(e),
-                            })
-                            .collect();
-                        return Type::heterogeneous_tuple(self.db(), env, elt_tys);
-                    }
-                    let class_lit = self
-                        .synthesize_anon_named_tuple_class(tuple, /* is_type_form = */ true);
-                    return class_lit
-                        .to_instance_approximation(self.db(), env)
-                        .unwrap_or(class_lit);
+                    return self.infer_parameter_shape_tuple_type_expression(tuple);
                 }
 
                 // basedpython: parenthesized tuples are valid type
@@ -1911,6 +1879,59 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 ty
             }
         }
+    }
+
+    /// basedpython: a parameter-shape tuple in type position. two sub-cases:
+    ///   * variadic (`(*args: T)`, `(int, *args: T, str)`, `(*: T)`): a real variable-length
+    ///     tuple type, so assignability matches `tuple[T, ...]` semantics
+    ///   * fixed with markers (`(int, /, name: T)`): the names are dropped, giving a
+    ///     heterogeneous `tuple[...]`
+    ///
+    /// a tuple with named fields and neither is an anonymous named tuple, which the parser flags
+    /// and [`Self::infer_type_expression_no_store`] handles. a keyword variadic collects keyword
+    /// arguments, which a tuple has no place for, so it is only valid in a parameter list
+    ///
+    /// kept out of [`Self::infer_type_expression_no_store`], which recurses once per nesting
+    /// level of a type expression: an unoptimized build gives every local of every arm its own
+    /// stack slot in that one frame
+    // an optimizing build would inline it back into that frame
+    #[inline(never)]
+    fn infer_parameter_shape_tuple_type_expression(&mut self, tuple: &ast::ExprTuple) -> Type<'db> {
+        if let Some(keyword_variadic) = tuple.elts.iter().find(|elt| is_keyword_variadic(elt)) {
+            if let Some(builder) = self
+                .context
+                .report_lint(&INVALID_TYPE_FORM, keyword_variadic)
+            {
+                builder.into_diagnostic(
+                    "A keyword variadic is only valid in a callable's parameter list, not in a \
+                     tuple type",
+                );
+            }
+            for elt in &tuple.elts {
+                let annotation = match elt {
+                    ast::Expr::Named(named) => &*named.value,
+                    ast::Expr::Starred(starred) => match &*starred.value {
+                        ast::Expr::Starred(inner) => &*inner.value,
+                        value => value,
+                    },
+                    _ => elt,
+                };
+                self.infer_type_expression(annotation);
+            }
+            return Type::unknown();
+        }
+        if let Some(ty) = self.lower_parameter_shape_to_tuple_type(tuple) {
+            return ty;
+        }
+        let elt_tys: Vec<Type<'db>> = tuple
+            .elts
+            .iter()
+            .map(|e| match e {
+                ast::Expr::Named(n) => self.infer_type_expression(&n.value),
+                _ => self.infer_type_expression(e),
+            })
+            .collect();
+        Type::heterogeneous_tuple(self.db(), self.program_environment(), elt_tys)
     }
 
     /// basedpython: the callable type of a method member of an inline protocol,
@@ -5267,6 +5288,22 @@ fn is_narrowing_predicate_place(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::Name(_) => true,
         ast::Expr::Attribute(attribute) => is_narrowing_predicate_place(&attribute.value),
+        _ => false,
+    }
+}
+
+/// basedpython: whether `elt`, an element of a parameter-shape tuple, is a keyword variadic —
+/// `**name: T`, `**: T` or a bare `**P` — rather than the bare-star `*: *`, which shares the
+/// outer shape of the last two
+fn is_keyword_variadic(elt: &ast::Expr) -> bool {
+    match elt {
+        ast::Expr::Named(named) => matches!(
+            &*named.target,
+            ast::Expr::Starred(starred) if starred.value.is_starred_expr()
+        ),
+        ast::Expr::Starred(starred) => {
+            starred.value.is_starred_expr() && !is_top_star_marker(&starred.value)
+        }
         _ => false,
     }
 }

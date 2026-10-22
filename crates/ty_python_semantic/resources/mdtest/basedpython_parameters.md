@@ -38,6 +38,20 @@ callable usage and is dropped when the tuple is used as a tuple type.
 c: (int, /, name: str)
 ```
 
+## a keyword variadic is not a tuple type
+
+A keyword variadic `**: T` collects keyword arguments, which a tuple has no place for, so it is only
+valid in a callable's parameter list. Written in a tuple type it is rejected, whether or not the
+tuple also has a marker or a positional variadic.
+
+```by
+a: (int, **kw: str)  # error: [invalid-type-form]
+b: (**: str)  # error: [invalid-type-form]
+c: (int, /, **kw: str)  # error: [invalid-type-form]
+d: (int, *, name: str, **kw: bytes)  # error: [invalid-type-form]
+e: (int, *args: str, **kw: bytes)  # error: [invalid-type-form]
+```
+
 ## variadic tuple assignment
 
 A tuple value with arbitrarily many elements is assignable to a `(*: T)` annotation since the
