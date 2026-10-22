@@ -145,7 +145,7 @@ use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::soundness::{CheckKind, CheckTarget};
 use ty_python_semantic::types::soundness_sites::SiteCheck;
 use ty_python_semantic::types::{KnownClass, SpecialFormType, Type, TypeDefinition, TypeQualifier};
-use ty_python_semantic::{HasType, SemanticModel};
+use ty_python_semantic::{HasType, LoweringModel, SemanticModel};
 
 /// lower every module-level function ty can represent natively
 ///
@@ -155,7 +155,7 @@ use ty_python_semantic::{HasType, SemanticModel};
 pub fn build_module(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
-    model: &SemanticModel<'_>,
+    model: &LoweringModel<'_>,
     suite: &[Stmt],
     module_name: impl Into<ModuleName>,
     options: impl Into<LowerOptions>,

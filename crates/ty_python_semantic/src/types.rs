@@ -181,6 +181,7 @@ mod call;
 pub mod call_type_forms;
 mod callable;
 pub mod character;
+pub(crate) mod check_order;
 mod class;
 mod class_base;
 pub mod classinfo_spelling;
@@ -239,6 +240,7 @@ pub(crate) mod relation;
 mod relation_error;
 pub mod repeated_underscore;
 mod restricted;
+pub(crate) mod runtime_reads;
 pub(crate) mod runtime_spelling;
 mod safe_variance;
 mod set_theoretic;
@@ -298,18 +300,15 @@ pub(crate) fn check_types_with(
     let index = semantic_index(db, file);
     let mut diagnostics = TypeCheckDiagnostics::default();
 
-    for scope_id in index.scope_ids() {
-        // Scopes that may require type context are inferred during the inference of
-        // their outer scope.
-        if scope_id.accepts_type_context(db) {
-            continue;
-        }
-
-        let result = infer_scope_types(db, scope_id, TypeContext::default());
-
+    check_order::infer_file_in_check_order(db, file, |_, result| {
         if let Some(scope_diagnostics) = result.diagnostics() {
             diagnostics.extend(scope_diagnostics);
         }
+    });
+    // basedpython: whether a name a lowering writes into code holds there the binding the
+    // checker resolved is asked once the file is inferred
+    for checks in runtime_reads::file_runtime_read_checks(db, file) {
+        diagnostics.extend(&checks.diagnostics);
     }
 
     // basedpython: an import may be used only through an extension it makes applicable,

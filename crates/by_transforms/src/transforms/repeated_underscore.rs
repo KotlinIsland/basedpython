@@ -98,7 +98,7 @@ pub(crate) fn collect(suite: &[Stmt], types: &dyn TypeInfo, slash: bool) -> Unde
 /// reads the same answer: [`WrittenNames::with_lowerings`] these, and every name and `/`
 /// it writes is the transpiler's
 pub fn repeated_underscore_lowerings(
-    model: &ty_python_semantic::SemanticModel<'_>,
+    model: &ty_python_semantic::LoweringModel<'_>,
     suite: &[Stmt],
 ) -> UnderscoreLowerings {
     collect(suite, model, true)

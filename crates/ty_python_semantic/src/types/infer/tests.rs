@@ -854,6 +854,37 @@ class Form(Outer):
     handle.join().expect("regression test thread panicked")
 }
 
+/// basedpython: a type test at a module's own level is checked against what the class it names
+/// holds when the program runs, which reads every condition the module goes on to make, each
+/// `assert` below the test among them. asked during the module's own inference, each of those
+/// would be inferred inside the inference of the next, and the stack would grow with them
+#[test]
+fn module_level_type_test_before_many_asserts_does_not_overflow_stack() -> anyhow::Result<()> {
+    const ASSERTS: usize = 2_000;
+    let handle = std::thread::Builder::new()
+        .name("module-level-type-test-stack-test".into())
+        // far less than ty's worker threads have, so a stack that grows with the asserts
+        // overflows at any optimization level, while one that does not fits with room to spare
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| -> anyhow::Result<()> {
+            let mut db = setup_db();
+            let mut source = String::from(
+                "class Shown: ...\n\ndef make() -> object:\n    return Shown()\n\n\
+                 value = make()\nflag = value is Shown\n",
+            );
+            for _ in 0..ASSERTS {
+                source.push_str("assert make()\n");
+            }
+            db.write_file("src/a.by", source)?;
+
+            assert_file_diagnostics(&db, "src/a.by", &[]);
+
+            Ok(())
+        })?;
+
+    handle.join().expect("regression test thread panicked")
+}
+
 #[test]
 fn implicit_attribute_preserves_terminal_narrowing_after_many_calls() -> anyhow::Result<()> {
     let mut db = setup_db();

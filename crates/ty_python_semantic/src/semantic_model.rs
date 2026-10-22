@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use compact_str::CompactString;
 use ruff_db::PythonFile;
 use ruff_db::files::{File, FilePath};
@@ -21,15 +23,17 @@ use crate::place::imported_symbol;
 use crate::place::{builtins_module_scope, implicit_builtins_symbol_scope};
 use crate::types::AnonNamedTupleClass;
 use crate::types::TypeExpressionFlags;
+use crate::types::check_order::{InferredInCheckOrder, infer_file_in_check_order};
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
+use crate::types::reified_infer::WrittenTarget;
 use crate::types::runtime_spelling::RuntimeSite;
+use crate::types::soundness::CastCheck;
 use crate::types::{
     ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
     SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
-    class_pattern_positional_sources, infer_complete_scope_types, infer_scope_types,
-    inferred_declaration,
+    class_pattern_positional_sources, infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
@@ -69,21 +73,6 @@ impl<'db> SemanticModel<'db> {
 
     pub fn db(&self) -> &'db dyn Db {
         self.db
-    }
-
-    /// basedpython: infers every scope of the file, each before the scopes inside it, as
-    /// checking the file does. a reader about to ask for the types of most of the file asks
-    /// this first: a scope inferred before the scope around it reads that scope's names
-    /// before that scope has inferred the conditions deciding whether they are bound there,
-    /// and each of those conditions is then inferred inside the inference of the next
-    pub fn infer_in_check_order(&self) {
-        let index = semantic_index(self.db, self.file);
-        for scope in index.scope_ids() {
-            // a scope that takes type context is inferred inside the scope around it
-            if !scope.accepts_type_context(self.db) {
-                infer_scope_types(self.db, scope, crate::types::TypeContext::default());
-            }
-        }
     }
 
     pub fn file(&self) -> File {
@@ -239,46 +228,6 @@ impl<'db> SemanticModel<'db> {
     pub fn class_pattern_instance_type(&self, cls: &ast::Expr) -> Option<Type<'db>> {
         cls.inferred_type(self)?
             .to_instance_approximation(self.db, &self.program_environment())
-    }
-
-    /// basedpython: the specialization step the transpiler splices in after the
-    /// callee of a bare reified-generic call (`f(1)` → `"[int]"`). `None` when
-    /// the call is not a bare reified-generic call or no injectable spelling
-    /// exists — the checker reports the latter as `unspecialized-reified-generic`
-    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<RuntimeSpelling> {
-        let env = &self.program_environment();
-        let db = self.db;
-        let callee_ty = call.func.inferred_type(self)?;
-        let function = match callee_ty {
-            Type::FunctionLiteral(function) => function,
-            Type::BoundMethod(method) => method.function(db),
-            _ => return None,
-        };
-        if function.is_classmethod(db) || !function.is_unspecialized_reified(db) {
-            return None;
-        }
-        let mut positional = Vec::with_capacity(call.arguments.args.len());
-        for argument in &call.arguments.args {
-            if argument.is_starred_expr() {
-                return None;
-            }
-            positional.push(argument.inferred_type(self)?);
-        }
-        let mut keywords = Vec::with_capacity(call.arguments.keywords.len());
-        for keyword in &call.arguments.keywords {
-            let name = keyword.arg.as_ref()?;
-            keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
-        }
-        crate::types::reified_infer::injectable_call_specialization(
-            db,
-            env,
-            self.file(),
-            callee_ty,
-            function,
-            positional,
-            keywords,
-            Some(RuntimeSite::at(call)),
-        )
     }
 
     /// basedpython: the runtime registrations a conformance extension
@@ -782,20 +731,6 @@ impl<'db> SemanticModel<'db> {
         AnonNamedTupleClass::of(self.db, &self.program_environment(), ty)
     }
 
-    /// basedpython: whether every name `expr` reads holds, where it is written, the binding the
-    /// checker resolved when the program runs — so writing `expr` into code that runs there
-    /// evaluates what the checker saw. a class imported only under `if TYPE_CHECKING:`, bound
-    /// only on some paths or only further on does not
-    pub fn reads_names_bound_where_written(&self, expr: &ast::Expr) -> bool {
-        crate::types::reified_infer::written_unbound_read(
-            self.db,
-            &self.program_environment(),
-            self.file(),
-            expr,
-        )
-        .is_none()
-    }
-
     /// could any conversion apply at this call at all?
     ///
     /// Binding the call a second time to find out is the expensive part, and
@@ -1139,30 +1074,6 @@ impl<'db> SemanticModel<'db> {
         .map(|member| member.qualifier(self.db).to_string())
     }
 
-    /// basedpython: the bracketed type-argument spelling the transpiler
-    /// injects at a bare constructor call of a generic class (`A(1)` →
-    /// `"int"`), read from the inferred type of the constructed instance.
-    /// `None` when the callee is not a generic class literal or no runtime
-    /// spelling exists — reification of constructors is best-effort, never
-    /// an error
-    pub fn reified_constructor_type_arguments(
-        &self,
-        call: &ast::ExprCall,
-    ) -> Option<RuntimeSpelling> {
-        let env = &self.program_environment();
-        let callee_ty = call.func.inferred_type(self)?;
-        let class_literal = callee_ty.as_class_literal()?;
-        let constructed = call.inferred_type(self)?;
-        crate::types::reified_infer::constructor_specialization_display(
-            self.db,
-            env,
-            self.file(),
-            class_literal,
-            constructed,
-            Some(RuntimeSite::at(call)),
-        )
-    }
-
     /// basedpython: the keyword the transpiler passes a trailing lambda block
     /// with — the name of the callee's last declared parameter. `None` means
     /// the lambda is appended as a positional argument instead (unknown
@@ -1242,29 +1153,6 @@ impl<'db> SemanticModel<'db> {
             }
             _ => None,
         }
-    }
-
-    /// basedpython: how the type test `lhs is rhs` resolves, from the value's
-    /// inferred type and the type its right-hand side names.
-    ///
-    /// The right-hand side is a type expression, so `rhs` may name its target
-    /// however a type expression can: directly (`list[int]`), through an
-    /// implicit alias (`X = list[int]`), or through a PEP 695 `type` alias.
-    /// `None` only when inference has no type for one of the operands.
-    pub fn parametric_is_plan(
-        &self,
-        lhs: &ast::Expr,
-        rhs: &ast::Expr,
-    ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
-        let env = &self.program_environment();
-        Some(crate::types::reified_infer::type_test_plan(
-            self.db,
-            env,
-            self.file(),
-            lhs.inferred_type(self)?,
-            rhs.inferred_type(self)?,
-            Some(rhs),
-        ))
     }
 
     /// basedpython: when `annotation` is a type expression denoting a union of
@@ -2106,6 +1994,164 @@ impl<'db> SemanticModel<'db> {
         let scope = file_scope.to_scope_id(self.db, self.program_file());
 
         infer_complete_scope_types(self.db, scope).try_expected_type(expr)
+    }
+}
+
+/// basedpython: a [`SemanticModel`] for code that writes the checked program out — the
+/// transpiler, the native backend, and what the checker reads once a file is checked. it can
+/// also ask what a name holds when the program runs, which reads the inference of every scope
+/// around the name, those after it included, so it infers the file in the order checking does
+/// before the first such question. inference builds plain [`SemanticModel`]s, which cannot ask
+/// it: asked from inside inference, the scopes it reads would be inferred inside the scope
+/// being inferred
+pub struct LoweringModel<'db> {
+    model: SemanticModel<'db>,
+    in_check_order: OnceLock<InferredInCheckOrder<'db>>,
+}
+
+impl<'db> std::ops::Deref for LoweringModel<'db> {
+    type Target = SemanticModel<'db>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.model
+    }
+}
+
+impl<'db> LoweringModel<'db> {
+    pub fn new(db: &'db dyn Db, file: ProgramFile<'db>) -> Self {
+        Self {
+            model: SemanticModel::new(db, file),
+            in_check_order: OnceLock::new(),
+        }
+    }
+
+    /// infers every scope of the file, each before the scopes inside it, as checking the file
+    /// does. a reader about to ask for the types of most of the file asks this first: a scope
+    /// inferred before the scope around it reads that scope's names before that scope has
+    /// inferred the conditions deciding whether they are bound there, and each of those
+    /// conditions is then inferred inside the inference of the next
+    pub fn infer_in_check_order(&self) {
+        self.inferred_in_check_order();
+    }
+
+    /// [`Self::infer_in_check_order`], run once, with the proof it hands out
+    pub(crate) fn inferred_in_check_order(&self) -> InferredInCheckOrder<'db> {
+        *self
+            .in_check_order
+            .get_or_init(|| infer_file_in_check_order(self.db, self.file, |_, _| {}))
+    }
+
+    /// basedpython: the specialization step the transpiler splices in after the
+    /// callee of a bare reified-generic call (`f(1)` → `"[int]"`). `None` when
+    /// the call is not a bare reified-generic call or no injectable spelling
+    /// exists — the checker reports the latter as `unspecialized-reified-generic`
+    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<RuntimeSpelling> {
+        let env = &self.program_environment();
+        let db = self.db;
+        let callee_ty = call.func.inferred_type(self)?;
+        let function = match callee_ty {
+            Type::FunctionLiteral(function) => function,
+            Type::BoundMethod(method) => method.function(db),
+            _ => return None,
+        };
+        if function.is_classmethod(db) || !function.is_unspecialized_reified(db) {
+            return None;
+        }
+        let mut positional = Vec::with_capacity(call.arguments.args.len());
+        for argument in &call.arguments.args {
+            if argument.is_starred_expr() {
+                return None;
+            }
+            positional.push(argument.inferred_type(self)?);
+        }
+        let mut keywords = Vec::with_capacity(call.arguments.keywords.len());
+        for keyword in &call.arguments.keywords {
+            let name = keyword.arg.as_ref()?;
+            keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
+        }
+        crate::types::reified_infer::injectable_call_specialization(
+            db,
+            env,
+            self.file(),
+            callee_ty,
+            function,
+            positional,
+            keywords,
+            Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+        )
+    }
+
+    /// basedpython: whether every name `expr` reads holds, where it is written, the binding the
+    /// checker resolved when the program runs — so writing `expr` into code that runs there
+    /// evaluates what the checker saw. a class imported only under `if TYPE_CHECKING:`, bound
+    /// only on some paths or only further on does not
+    pub fn reads_names_bound_where_written(&self, expr: &ast::Expr) -> bool {
+        crate::types::reified_infer::written_unbound_read(
+            self.db,
+            &self.program_environment(),
+            expr,
+            self.inferred_in_check_order(),
+        )
+        .is_none()
+    }
+
+    /// basedpython: the runtime check a checked cast to `type_expr` applies where it is
+    /// written, or `None` when the cast cannot check its value there
+    pub fn checked_cast_plan(&self, type_expr: &ast::Expr) -> Option<CastCheck> {
+        crate::types::soundness::cast_check_plan(
+            self.db,
+            &self.program_environment(),
+            self.file(),
+            type_expr.inferred_type(self)?,
+            Some(RuntimeSite::at(type_expr, self.inferred_in_check_order())),
+        )
+    }
+
+    /// basedpython: the bracketed type-argument spelling the transpiler
+    /// injects at a bare constructor call of a generic class (`A(1)` →
+    /// `"int"`), read from the inferred type of the constructed instance.
+    /// `None` when the callee is not a generic class literal or no runtime
+    /// spelling exists — reification of constructors is best-effort, never
+    /// an error
+    pub fn reified_constructor_type_arguments(
+        &self,
+        call: &ast::ExprCall,
+    ) -> Option<RuntimeSpelling> {
+        let env = &self.program_environment();
+        let callee_ty = call.func.inferred_type(self)?;
+        let class_literal = callee_ty.as_class_literal()?;
+        let constructed = call.inferred_type(self)?;
+        crate::types::reified_infer::constructor_specialization_display(
+            self.db,
+            env,
+            self.file(),
+            class_literal,
+            constructed,
+            Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+        )
+    }
+
+    /// basedpython: how the type test `lhs is rhs` resolves, from the value's
+    /// inferred type and the type its right-hand side names.
+    ///
+    /// The right-hand side is a type expression, so `rhs` may name its target
+    /// however a type expression can: directly (`list[int]`), through an
+    /// implicit alias (`X = list[int]`), or through a PEP 695 `type` alias.
+    /// `None` only when inference has no type for one of the operands.
+    pub fn parametric_is_plan(
+        &self,
+        lhs: &ast::Expr,
+        rhs: &ast::Expr,
+    ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
+        let env = &self.program_environment();
+        Some(crate::types::reified_infer::type_test_plan(
+            self.db,
+            env,
+            self.file(),
+            lhs.inferred_type(self)?,
+            rhs.inferred_type(self)?,
+            Some(WrittenTarget::checked(rhs, self.inferred_in_check_order())),
+        ))
     }
 }
 

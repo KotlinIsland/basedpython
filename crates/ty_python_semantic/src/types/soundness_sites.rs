@@ -14,7 +14,8 @@ use ty_python_core::semantic_index;
 
 use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, binds_one_class_wherever_bound, runtime_binding};
-use crate::semantic_model::{HasType, SemanticModel};
+use crate::semantic_model::{HasType, LoweringModel};
+use crate::types::check_order::InferredInCheckOrder;
 use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
 use crate::types::soundness::{
     ArgSelector, CheckKind, CheckTarget, call_result_is_typevar_derived,
@@ -26,7 +27,7 @@ use crate::types::{DynamicType, KnownInstanceType, ProgramEnvironment, Type};
 /// every runtime soundness check `suite` makes under `positions`, in the order the
 /// checks are found
 pub fn soundness_sites<'ast>(
-    model: &SemanticModel<'_>,
+    model: &LoweringModel<'_>,
     suite: &'ast [Stmt],
     positions: SoundnessPositions,
 ) -> Vec<SoundnessSite<'ast>> {
@@ -175,7 +176,9 @@ pub struct SiteCheck {
 /// where the checks go, decided once over a syntax tree, and what is not a place
 /// for one
 struct Soundness<'a, 'db, 'ast> {
-    model: &'a SemanticModel<'db>,
+    model: &'a LoweringModel<'db>,
+    /// what a name the checks are written with holds is asked once the file is inferred
+    inferred: InferredInCheckOrder<'db>,
     positions: SoundnessPositions,
     sites: Vec<SoundnessSite<'ast>>,
     /// gated expressions already covered by a wrap on an enclosing `!`
@@ -188,9 +191,10 @@ struct Soundness<'a, 'db, 'ast> {
 }
 
 impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
-    fn new(model: &'a SemanticModel<'db>, positions: SoundnessPositions) -> Self {
+    fn new(model: &'a LoweringModel<'db>, positions: SoundnessPositions) -> Self {
         Self {
             model,
+            inferred: model.inferred_in_check_order(),
             positions,
             sites: Vec::new(),
             consumed: Vec::new(),
@@ -301,7 +305,7 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
     fn site_check(
         &self,
         plan: CheckKind,
-        site: RuntimeSite,
+        site: RuntimeSite<'db>,
         runs_later: bool,
     ) -> Option<SiteCheck> {
         let db = self.db();
@@ -312,11 +316,11 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             match runtime_binding(
                 db,
                 &self.env(),
-                program_file,
                 RuntimeRead::Global {
                     name,
                     range: site.range(),
                 },
+                site.inferred(),
             ) {
                 RuntimeBinding::Bound => {}
                 RuntimeBinding::Unbound | RuntimeBinding::NotTheCheckers
@@ -343,8 +347,11 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
 
     /// check the value `expr` produces against `plan`
     fn check_value(&mut self, expr: &'ast Expr, plan: CheckKind) {
-        let Some(check) = self.site_check(plan, RuntimeSite::at(expr), self.runs_later(expr))
-        else {
+        let Some(check) = self.site_check(
+            plan,
+            RuntimeSite::at(expr, self.inferred),
+            self.runs_later(expr),
+        ) else {
             return;
         };
         self.sites.push(SoundnessSite::Value { expr, check });
@@ -360,9 +367,11 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
         let Some(plan) = self.check_plan(target_expr) else {
             return;
         };
-        let Some(check) =
-            self.site_check(plan, RuntimeSite::at(iterable), self.runs_later(iterable))
-        else {
+        let Some(check) = self.site_check(
+            plan,
+            RuntimeSite::at(iterable, self.inferred),
+            self.runs_later(iterable),
+        ) else {
             return;
         };
         self.sites.push(SoundnessSite::Elements {
@@ -440,7 +449,8 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             let parameter = &pwd.parameter;
             // the guards run where the function's body begins, when it is called
             if let Some(plan) = self.parameter_plan(parameter)
-                && let Some(check) = self.site_check(plan, RuntimeSite::at(func), true)
+                && let Some(check) =
+                    self.site_check(plan, RuntimeSite::at(func, self.inferred), true)
             {
                 guards.push((parameter, check));
             }

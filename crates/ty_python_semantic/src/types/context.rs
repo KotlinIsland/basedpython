@@ -21,6 +21,7 @@ use crate::types::class::StaticClassLiteral;
 use crate::types::diagnostic::{INVALID_TYPE_FORM, UNBOUND_TYPE_VARIABLE};
 use crate::types::function::FunctionDecorators;
 use crate::types::infer::InferenceFlags;
+use crate::types::runtime_reads::{RuntimeReadCheck, RuntimeReadSite};
 use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::{
     Db, Program,
@@ -273,6 +274,15 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
         for name in spelling.global_reads() {
             self.record_scope_read_of_name(global, name);
         }
+    }
+
+    /// basedpython: records a site whose module-level names are checked once the file is
+    /// inferred, reported there only if this inference may report diagnostics
+    pub(crate) fn record_runtime_read_check(&self, site: RuntimeReadSite) {
+        let reports = !self.diagnostics_suppressed && !self.is_in_no_type_check();
+        self.diagnostics
+            .borrow_mut()
+            .record_runtime_read_check(RuntimeReadCheck { site, reports });
     }
 
     /// basedpython: [`Self::record_extension_use`], for a use known only by the module that

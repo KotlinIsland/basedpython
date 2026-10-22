@@ -4667,7 +4667,12 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                         expression.file(self.db),
                         lhs_ty,
                         rhs_ty,
-                        Some(right),
+                        // planned as inference plans the test, without asking what the
+                        // names its target is written with hold where it runs. a target
+                        // whose names do not hold the class the checker resolved is
+                        // reported once the file is inferred, and narrows as the test it
+                        // would be: the program does not run with that error in it
+                        Some(crate::types::reified_infer::WrittenTarget::unchecked(right)),
                     )
                     .narrows_negatively()
                     .then_some(rhs_ty)

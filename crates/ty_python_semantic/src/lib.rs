@@ -25,7 +25,7 @@ use ruff_db::source::{SourceTextError, source_text};
 use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
-    HasDefinition, HasType, ImplicitReceiverReference, MemberDefinition, NameKind,
+    HasDefinition, HasType, ImplicitReceiverReference, LoweringModel, MemberDefinition, NameKind,
     PreludeDunderReceiver, SemanticModel, basedpython_augmented_assignment_type,
     basedpython_class_type,
 };

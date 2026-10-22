@@ -302,6 +302,67 @@ def check(value: object) -> Decimal:
     return value cast! Decimal
 ```
 
+## A failed test against an unbound class narrows
+
+a type test against a class the program does not bind is reported, and the checker reads the rest of
+the function as it would if the test could run: the branch where the test fails rules the class out
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+
+def whole(value: int | Decimal) -> int:
+    # error: [erased-type-check] "`is Decimal` cannot be checked at runtime: `Decimal` is not bound when it runs"
+    if value is Decimal:
+        return 0
+    reveal_type(value)  # revealed: int
+    return value
+```
+
+## A reified call that has a reason of its own
+
+where a call's specialization cannot be written for a reason of its own, as for a lambda's type,
+that reason is the one reported, even when another argument names a class the program does not bind
+
+<!-- snapshot-diagnostics -->
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+
+def pair[reified A, reified B](a: A, b: B) -> str:
+    return A.__name__ + B.__name__
+
+def describe(value: Decimal) -> str:
+    # error: [unspecialized-reified-generic]
+    return pair(value, lambda: 1)
+```
+
+## A type test at the module's own level
+
+a test written at the module's own level runs as the module reaches it. a class the module unbinds
+further down still holds where the test runs, so the test reads the class by the name the source
+wrote, and the statements after it, the `assert`s among them, decide nothing about it
+
+```by
+class Shown: ...
+
+def make() -> object:
+    return Shown()
+
+value = make()
+
+assert value is Shown
+assert not (value is int)
+assert isinstance(value, Shown)
+
+del Shown
+```
+
 ## A class the program binds differently from the checker
 
 a module may import a class for the checker and bind the name some other way as it runs, in the

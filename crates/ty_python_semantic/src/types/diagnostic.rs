@@ -23,7 +23,9 @@ use crate::types::function::{FunctionDecorators, FunctionType, KnownFunction, Ov
 use crate::types::infer::UnsupportedComparisonError;
 use crate::types::overrides::MethodKind;
 use crate::types::protocol_class::ProtocolMember;
+use crate::types::reified_infer::{ErasedTargetReason, ReifiedInferenceError};
 use crate::types::repeated_underscore::UnderscoreRefusal;
+use crate::types::runtime_reads::RuntimeReadCheck;
 use crate::types::special_form::TypeQualifier;
 use crate::types::string_annotation::{
     ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION, IMPLICIT_CONCATENATED_STRING_TYPE_ANNOTATION,
@@ -4220,6 +4222,233 @@ struct InferenceUses {
     /// module-level name a runtime spelling the transpiled program writes reads. each is a
     /// symbol of the scope that owns it
     scope_reads: FxHashSet<(FileScopeId, ScopedSymbolId)>,
+    /// the sites that write module-level names into code that runs, whose names are checked
+    /// once the file is inferred ([`crate::types::runtime_reads`])
+    runtime_read_checks: Vec<RuntimeReadCheck>,
+}
+
+/// reports a bare call of the reified generic function `name` whose specialization cannot be
+/// written into the call, saying why — `None` when it would have to pass through unpacked
+/// arguments
+pub(crate) fn report_unspecialized_reified_call<'db>(
+    context: &InferContext<'db, '_>,
+    call: TextRange,
+    name: &str,
+    failure: Option<ReifiedInferenceError<'db>>,
+) {
+    let Some(builder) = context.report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call) else {
+        return;
+    };
+    let (db, env) = (context.db(), context.program_environment());
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Cannot call reified generic function `{name}` without explicit specialization"
+    ));
+    match failure {
+        None => diagnostic.info(format_args!(
+            "the inferred specialization cannot be injected through unpacked arguments — \
+             specialize with `{name}[...]`"
+        )),
+        Some(ReifiedInferenceError::Unsolved(parameter)) => diagnostic.info(format_args!(
+            "reified type parameter `{parameter}` cannot be inferred from the arguments — \
+             specialize with `{name}[...]`"
+        )),
+        Some(ReifiedInferenceError::Unspellable(parameter, ty)) => {
+            diagnostic.info(format_args!(
+                "inferred type `{}` for type parameter `{parameter}` has no runtime spelling — \
+                 specialize with `{name}[...]`",
+                ty.display(db, env),
+            ));
+        }
+        Some(ReifiedInferenceError::NotAtRuntime(read, binding)) => {
+            diagnostic.info(binding.describe(&read));
+        }
+        Some(ReifiedInferenceError::NoBinding) => diagnostic.info(format_args!(
+            "the specialization cannot be inferred from this call — specialize with \
+             `{name}[...]`"
+        )),
+    }
+}
+
+/// reports a bare construction of the reified generic class `name` whose specialization
+/// cannot be written into the call, saying why
+pub(crate) fn report_unspecialized_reified_construction<'db>(
+    context: &InferContext<'db, '_>,
+    call: TextRange,
+    name: &str,
+    failure: ReifiedInferenceError<'db>,
+) {
+    let Some(builder) = context.report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call) else {
+        return;
+    };
+    let (db, env) = (context.db(), context.program_environment());
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Cannot construct reified generic class `{name}` without a specialization"
+    ));
+    match failure {
+        ReifiedInferenceError::Unsolved(parameter) => diagnostic.info(format_args!(
+            "reified type parameter `{parameter}` cannot be inferred here — construct a \
+             specialization, as in `{name}[int](...)`"
+        )),
+        ReifiedInferenceError::Unspellable(parameter, ty) => diagnostic.info(format_args!(
+            "inferred type `{}` for type parameter `{parameter}` has no runtime spelling — \
+             construct a specialization, as in `{name}[int](...)`",
+            ty.display(db, env),
+        )),
+        ReifiedInferenceError::NotAtRuntime(read, binding) => {
+            diagnostic.info(binding.describe(&read));
+        }
+        ReifiedInferenceError::NoBinding => diagnostic.info(format_args!(
+            "the specialization cannot be inferred from this call — construct one, as in \
+             `{name}[int](...)`"
+        )),
+    }
+}
+
+pub(crate) fn report_erased_type_check(
+    context: &InferContext<'_, '_>,
+    primary: TextRange,
+    target: &str,
+    reason: ErasedTargetReason,
+) {
+    let Some(builder) = context.report_lint(&ERASED_TYPE_CHECK, primary) else {
+        return;
+    };
+    match reason {
+        ErasedTargetReason::NotAtRuntime(name, binding) => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: {}",
+                binding.why_not_checkable(&name)
+            ));
+            diagnostic.info(binding.describe(&name));
+        }
+        ErasedTargetReason::Protocol => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: a protocol's instances don't \
+                 record which specialization they satisfy"
+            ));
+            diagnostic.info(format_args!(
+                "an instance's `__orig_class__` names its concrete class, never the protocol, \
+                 and a structural `isinstance` check can't see type arguments"
+            ));
+            diagnostic.info(format_args!(
+                "reify the type parameter (`def f[T](x: T)`), or test against a concrete class \
+                 that records the specialization on its instances or across its mro"
+            ));
+        }
+        ErasedTargetReason::NotSubscriptable => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: the target class cannot be \
+                 subscripted"
+            ));
+            diagnostic.info(format_args!(
+                "the class has no `__class_getitem__` on this python version, so the test's \
+                 runtime check would raise `TypeError` evaluating `{target}`"
+            ));
+            diagnostic.info(format_args!(
+                "drop the type arguments and test against the bare class, which is all the \
+                 runtime records anyway"
+            ));
+        }
+        ErasedTargetReason::BuiltinCollection => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: a builtin collection's instances \
+                 don't record their type arguments"
+            ));
+            diagnostic.info(format_args!(
+                "test against a subclass that fixes the arguments (`class B(list[int])`), \
+                 whose `__orig_bases__` the probe can unwind"
+            ));
+        }
+        ErasedTargetReason::Dynamic => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: `{target}` admits every value, \
+                 so there is nothing for the test to look for"
+            ));
+            diagnostic.info(format_args!(
+                "a test that can only answer `True` narrows nothing; drop it, or name the \
+                 type the value is expected to have"
+            ));
+        }
+        ErasedTargetReason::Callable => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: a callable's parameter and \
+                 return types are not recorded on the value"
+            ));
+            diagnostic.info(format_args!(
+                "the runtime can see that a value is callable and nothing more, so the \
+                 signature would be assumed rather than checked"
+            ));
+            diagnostic.info(format_args!(
+                "test against a bare `Callable`, which asks only what the runtime records, \
+                 or take the value's type from the call site"
+            ));
+        }
+        ErasedTargetReason::TypedDict => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: a `TypedDict`'s instances are \
+                 plain dicts"
+            ));
+            diagnostic.info(format_args!(
+                "the test could only ask whether the value is a `dict`, assuming every key \
+                 and value type `{target}` declares"
+            ));
+            diagnostic.info(format_args!(
+                "`isinstance` refuses a `TypedDict` for the same reason"
+            ));
+        }
+        ErasedTargetReason::NonRuntimeCheckableProtocol => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: `{target}` has a member with no \
+                 runtime spelling"
+            ));
+            diagnostic.info(format_args!(
+                "a member whose type the emitted python cannot name leaves nothing to check \
+                 the value's own annotation against"
+            ));
+            diagnostic.info(format_args!(
+                "decorate `{target}` with `@typing.runtime_checkable` for the check python \
+                 itself performs, which asks only that the members are present"
+            ));
+        }
+        ErasedTargetReason::Intersection => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: an intersection has no single \
+                 runtime form"
+            ));
+            diagnostic.info(format_args!(
+                "test each part separately and join the tests with `and`"
+            ));
+        }
+        ErasedTargetReason::Subclass => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: `issubclass` cannot take what \
+                 `{target}` is parameterized by"
+            ));
+            diagnostic.info(format_args!(
+                "the test can see that the value is a class and nothing more; name the class \
+                 it must be a subclass of"
+            ));
+        }
+        ErasedTargetReason::UncomparableLiteral => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: equality does not decide \
+                 membership of `{target}`"
+            ));
+            diagnostic.info(format_args!(
+                "`0.0 == -0.0` and `nan != nan`, so a `float` or `complex` literal names a \
+                 type the runtime cannot be asked about; `LiteralString` is a property of how \
+                 a value was written rather than of the value"
+            ));
+        }
+        ErasedTargetReason::Unspellable => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked at runtime: `{target}` has no runtime form"
+            ));
+            diagnostic.info(format_args!(
+                "the emitted python has no expression to evaluate for this target"
+            ));
+        }
+    }
 }
 
 pub(crate) fn report_mismatched_type_name<'db>(
@@ -4261,6 +4490,8 @@ impl TypeCheckDiagnostics {
             let uses = self.uses_mut();
             uses.extension_modules.extend(&other_uses.extension_modules);
             uses.scope_reads.extend(&other_uses.scope_reads);
+            uses.runtime_read_checks
+                .extend_from_slice(&other_uses.runtime_read_checks);
         }
     }
 
@@ -4303,6 +4534,18 @@ impl TypeCheckDiagnostics {
             .flat_map(|uses| uses.scope_reads.iter().copied())
     }
 
+    /// basedpython: records a site whose module-level names are checked once the file is
+    /// inferred
+    pub(crate) fn record_runtime_read_check(&mut self, check: RuntimeReadCheck) {
+        self.uses_mut().runtime_read_checks.push(check);
+    }
+
+    pub(crate) fn runtime_read_checks(&self) -> &[RuntimeReadCheck] {
+        self.uses
+            .as_ref()
+            .map_or(&[], |uses| &uses.runtime_read_checks)
+    }
+
     fn uses_mut(&mut self) -> &mut InferenceUses {
         self.uses.get_or_insert_with(Box::default)
     }
@@ -4312,6 +4555,7 @@ impl TypeCheckDiagnostics {
         if let Some(uses) = &mut self.uses {
             uses.extension_modules.shrink_to_fit();
             uses.scope_reads.shrink_to_fit();
+            uses.runtime_read_checks.shrink_to_fit();
         }
         self.diagnostics.shrink_to_fit();
     }

@@ -215,7 +215,7 @@ impl SoundnessSites {
 /// decide every soundness check `suite` makes under `positions`. `written` is the
 /// module `suite` is parsed from, as it was written
 pub fn soundness_sites(
-    model: &ty_python_semantic::SemanticModel<'_>,
+    model: &ty_python_semantic::LoweringModel<'_>,
     written: WrittenNames,
     suite: &[Stmt],
     positions: SoundnessPositions,
