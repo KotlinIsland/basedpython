@@ -8,13 +8,22 @@
 //! fallback, or a registration emitted before the interface's own class
 //! statement would all type-check and fail here.
 //!
-//! No third-party packages are needed, so the program is transpiled for whichever
-//! interpreter runs it; if none is found the test skips, and says so, rather than
-//! fails.
+//! A conformance written in another module than its interface is run too, transpiled
+//! through a project database as `by build` transpiles it, since the lowering reads the
+//! other module's types.
+//!
+//! Each program is transpiled for whichever interpreter runs it; if none is found the
+//! test skips, and says so, rather than fails. The cross-module programs write
+//! `override`, which python has from 3.12, so an older interpreter needs
+//! `typing_extensions`.
 
+use std::fmt::Write as _;
 use std::process::Command;
 
-use by_transforms::{Config, PythonVersion, transpile};
+use by_transforms::{Config, PythonVersion, transpile, transpile_typed};
+use ruff_db::files::system_path_to_file;
+use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
+use ty_project::{ProjectMetadata, TestDb};
 
 mod common;
 mod interpreters;
@@ -178,4 +187,105 @@ fn conformances_run_correctly() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+/// a project database over `files`, as the language server or `by build` would hold
+fn project_db(files: &[(&str, &str)]) -> TestDb {
+    let mut db = TestDb::new(ProjectMetadata::new(
+        ruff_python_ast::name::Name::new_static(""),
+        SystemPathBuf::from("/"),
+    ));
+    db.init_program().expect("program init failed");
+    for (path, source) in files {
+        db.write_file(path, source).expect("write file failed");
+    }
+    db
+}
+
+/// transpile every module of `files` for the interpreter that runs it, run `main`, and assert
+/// it prints `expected`
+///
+/// a conformance registers in one module and is read in another, so only executing the modules
+/// together proves the two halves meet. two tests asserting each module's text once passed while
+/// the program they described raised `AttributeError`
+fn run_project(files: &[(&str, &str)], expected: &str) {
+    // an `override` is `typing_extensions`' before 3.12
+    let Some(python) = common::python_with(
+        PythonVersion::PY39,
+        "import sys\nif sys.version_info < (3, 12): import typing_extensions",
+        "with `typing_extensions` before 3.12",
+    ) else {
+        return;
+    };
+    let config = Config {
+        min_version: python.version,
+        ..Config::default()
+    };
+    let db = project_db(files);
+    // a second database over the same files, for a pre-pass that rewrites a module's source
+    let rebuild = || Some(Box::new(project_db(files)) as Box<dyn ty_python_semantic::Db>);
+    let dir = tempfile::Builder::new()
+        .prefix("conformance")
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir");
+    let mut transpiled = String::new();
+    for (path, _) in files {
+        let file = system_path_to_file(&db, path).expect("file not in db");
+        let out = transpile_typed(&db, file, &config, Some(&rebuild))
+            .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
+        let relative = path.trim_start_matches('/').replace(".by", ".py");
+        writeln!(transpiled, "--- {relative} ---\n{out}").expect("write to a string");
+        std::fs::write(dir.path().join(relative), out).expect("write module");
+    }
+    let output = Command::new(&python.command)
+        .arg("main.py")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        output.status.success(),
+        "transpiled project failed on {python}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n{transpiled}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+}
+
+/// the interface comes from one module, the conformance from another, and the consumer sees
+/// both only through its imports
+#[test]
+fn an_imported_conformance_dispatches() {
+    run_project(
+        &[
+            ("/iface.by", "protocol Show:\n    def show(self) -> str\n"),
+            (
+                "/adapters.by",
+                "from iface import Show\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n",
+            ),
+            (
+                "/main.by",
+                "import adapters\nfrom iface import Show\n\ndef render(value: Show) -> str:\n    return value.show()\n\nprint(render(\"hi\"))\n",
+            ),
+        ],
+        "OWN:hi",
+    );
+}
+
+/// the module that declares the protocol-typed function is upstream of the conformance by
+/// construction, so it can never see one. it still has to emit a dispatch
+#[test]
+fn a_conformance_declared_downstream_of_its_use_dispatches() {
+    run_project(
+        &[
+            (
+                "/lib.by",
+                "protocol Show:\n    def show(self) -> str\n\ndef render(value: Show) -> str:\n    return value.show()\n",
+            ),
+            (
+                "/main.by",
+                "from lib import Show, render\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n\nprint(render(\"hi\"))\n",
+            ),
+        ],
+        "OWN:hi",
+    );
 }

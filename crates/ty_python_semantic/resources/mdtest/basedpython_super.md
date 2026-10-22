@@ -74,21 +74,64 @@ class B(A):
         super.does_not_exist  # error: [unresolved-attribute]
 ```
 
-## `super[T]` where `T` is not in the MRO falls through
+## `super[T]` looks past a generic base
 
-`super[Other]` in a class whose MRO does not contain `Other` produces no bound super, so the
-attribute lookup falls back to lookup on the `super` class itself.
+The class before `T` in the MRO may be a generic class's specialization. The lookup starts after
+that class:
+
+```by
+class Box[T]:
+    def value(self) -> T:
+        raise NotImplementedError
+
+class Named:
+    def name(self) -> str:
+        return "named"
+
+class C(Box[int], Named):
+    def g(self) -> None:
+        reveal_type(super[Box].value())   # revealed: int
+        reveal_type(super[Named].name())  # revealed: str
+```
+
+## `super[T]` needs a class in the MRO
+
+`super[T]` finds the class before `T` in the MRO of the class it is written in when it runs. A class
+that is not in that MRO raises `ValueError` there, so it is reported, as `super(T, self)` with a `T`
+that `self` is no instance of is:
 
 ```by
 class A:
     pass
 
 class Other:
-    pass
+    x: int = 1
 
 class B(A):
     def f(self):
-        super[Other].x  # error: [unresolved-attribute]
+        super[Other].x  # error: [invalid-super-argument] "`Other` is not in the MRO of `B`"
+```
+
+The class it is written in has no class before it, so it names no class to look up past:
+
+```by
+class C(A):
+    def f(self):
+        super[C].f  # error: [invalid-super-argument] "`C` comes first in its own MRO, so `super[C]` has no class to look up past"
+```
+
+`T` has to be the very class in the MRO. A value of a `type[...]` type may be any subclass, and a
+specialization of a generic class is not a class at all:
+
+```by
+class Box[T]:
+    pass
+
+class D(Box[int]):
+    def f(self, cls: type[A]):
+        super[cls].x  # error: [invalid-super-argument] "`type[A]` is not known to be a class in the MRO of `D`"
+        super[Box[int]].x  # error: [invalid-super-argument] "`types.GenericAlias` instance `Box[int]` is not a valid class"
+        super[1].x  # error: [invalid-super-argument] "`1` is not a valid class"
 ```
 
 ## chained calls work the same as the desugared form

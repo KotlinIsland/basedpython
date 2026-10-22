@@ -80,3 +80,14 @@ class C(A, B):
 
 C's MRO is `(C, A, B, object)`; the entry preceding `B` is `A`, so the bound
 super starts the search after `A` and lands on `B.f`
+
+`T` has to be a class in that MRO other than the enclosing class itself, which
+has nothing before it. anything else is reported, since the lookup would raise
+`ValueError` when it runs — so is a value of a `type[...]` type, which may be a
+subclass the MRO does not hold:
+
+```by
+class C(A):
+    def f(self):
+        super[B].f()  # error: `B` is not in the MRO of `C`
+```

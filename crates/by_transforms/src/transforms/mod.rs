@@ -25,6 +25,7 @@ pub(crate) mod dynamic_keyword;
 pub(crate) mod empty_declarations;
 pub(crate) mod enums;
 pub(crate) mod erased_union;
+pub(crate) mod except_polyfill;
 pub(crate) mod export_import;
 pub(crate) mod extension;
 pub(crate) mod flexible_keyword;

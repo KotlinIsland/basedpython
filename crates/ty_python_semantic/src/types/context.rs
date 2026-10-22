@@ -293,6 +293,13 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
             .mark_extension_module_used(module);
     }
 
+    /// basedpython: record that `range` is an f-string inferred as a template literal type
+    pub(super) fn record_template_literal_type(&self, range: TextRange) {
+        self.diagnostics
+            .borrow_mut()
+            .record_template_literal_type(range);
+    }
+
     /// Prevents diagnostic construction for this inference context.
     pub(super) fn suppress_diagnostics(&mut self) {
         debug_assert!(!self.diagnostics_suppressed);

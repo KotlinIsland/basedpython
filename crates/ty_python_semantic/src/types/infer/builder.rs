@@ -83,16 +83,16 @@ use crate::types::diagnostic::{
     INACCESSIBLE_MEMBER, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
     INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
     INVALID_FIELD_LOOKUP, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC,
-    INVALID_REGEX, INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
-    NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
-    NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, PRIVATE_CONSTRUCTOR, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
-    TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
-    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
-    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD,
-    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, USED_UNDERSCORE_NAME, YieldKind,
-    autofix_with_notimplementederror, display_required_elements,
+    INVALID_REGEX, INVALID_REIFIED_TYPE_PARAM, INVALID_SUPER_ARGUMENT, INVALID_TYPE_ALIAS_TYPE,
+    INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT,
+    INVALID_VARIANCE_DECLARATION, NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION,
+    NON_OVERLAPPING_CAST, NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION,
+    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, PRIVATE_CONSTRUCTOR,
+    REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics,
+    UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
+    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT,
+    UNSOUND_CAST, UNSOUND_YIELD, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, USED_UNDERSCORE_NAME,
+    YieldKind, autofix_with_notimplementederror, display_required_elements,
     hint_if_stdlib_attribute_exists_on_other_versions, refutable_unpacking_applies,
     report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
     report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
@@ -14855,8 +14855,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     ///
     /// the keyword is given the bound super the lowering's `super()` call evaluates to, so an
     /// attribute is read, assigned and deleted through the same object in the checker as at run
-    /// time. `super[T]` names the class the attribute is looked up past, and is given that class
-    /// where it names none in the enclosing class's MRO
+    /// time. `super[T]` names the class the attribute is looked up past
     fn infer_super_keyword(&mut self, value: &ast::Expr) -> Option<Type<'db>> {
         if !self.is_basedpython_file() {
             return None;
@@ -14883,18 +14882,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// basedpython: the bound super the `super` keyword `value` stands for, looked up past
     /// `target`, the class `super[T]` names, reporting the keyword where python could not build
-    /// one. `target` itself where it is not a class in the enclosing class's MRO
+    /// one
     fn super_keyword_bound(&mut self, value: &ast::Expr, target: Option<Type<'db>>) -> Type<'db> {
         let env = self.program_environment();
         let db = self.db();
-
-        let target_class = match target {
-            None => None,
-            Some(target) => match target.to_class_type(db) {
-                Some(class) => Some((class, target)),
-                None => return target,
-            },
-        };
 
         // `super` reads its implicit arguments where it is written, as zero-argument `super()`
         // does and as the lowering passes them: the `__class__` cell of the class around it, and
@@ -14967,26 +14958,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
         let enclosing_class = ClassLiteral::Static(enclosing).default_specialization(db);
 
-        let pivot_class_type = match target_class {
+        let pivot_class_type = match target {
             None => Type::from(enclosing_class),
-            Some((target_class, target)) => {
-                let target_lit = target_class.class_literal(db);
-                let mut prev: Option<ClassType<'db>> = None;
-                let mut found: Option<ClassType<'db>> = None;
-                for entry in enclosing_class.class_literal(db).iter_mro(db) {
-                    if let crate::types::ClassBase::Class(c) = entry {
-                        if c.class_literal(db) == target_lit {
-                            found = prev;
-                            break;
-                        }
-                        prev = Some(c);
-                    }
-                }
-                match found {
-                    Some(found) => Type::from(found),
-                    None => return target,
-                }
-            }
+            Some(target) if target.is_dynamic() => return target,
+            // the pivot is the class python finds in the MRO, which is never a specialization
+            Some(target) => match self.super_keyword_pivot(value, enclosing_class, target) {
+                Some(pivot) => Type::ClassLiteral(pivot.class_literal(db)),
+                None => return Type::unknown(),
+            },
         };
 
         match crate::types::bound_super::BoundSuperType::build(
@@ -15001,6 +14980,72 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::unknown()
             }
         }
+    }
+
+    /// basedpython: the class `super[T]` looks up past, the one before `target` in the MRO of
+    /// `enclosing`, the class it is written in, reporting `value` where there is none
+    ///
+    /// the lowering finds that class at run time, as `C.__mro__[C.__mro__.index(T) - 1]`, which
+    /// raises `ValueError` for a `T` that is not in the MRO, and reads past `object` for `C`
+    /// itself. a value of a `type[...]` type may be a subclass the MRO does not hold, so only a
+    /// class literal names a class in it
+    fn super_keyword_pivot(
+        &self,
+        value: &ast::Expr,
+        enclosing: ClassType<'db>,
+        target: Type<'db>,
+    ) -> Option<ClassType<'db>> {
+        let db = self.db();
+        let env = self.program_environment();
+        let target_literal = match target {
+            Type::ClassLiteral(literal) => literal,
+            Type::SubclassOf(_) => {
+                if let Some(builder) = self.context.report_lint(&INVALID_SUPER_ARGUMENT, value) {
+                    builder.into_diagnostic(format_args!(
+                        "`{}` is not known to be a class in the MRO of `{}`",
+                        target.display(db, env),
+                        enclosing.name(db),
+                    ));
+                }
+                return None;
+            }
+            _ => {
+                crate::types::bound_super::BoundSuperError::InvalidPivotClassType {
+                    pivot_class: target,
+                }
+                .report_diagnostic(&self.context, value.into());
+                return None;
+            }
+        };
+
+        let mut previous: Option<ClassType<'db>> = None;
+        for entry in enclosing.class_literal(db).iter_mro(db) {
+            if let crate::types::ClassBase::Class(class) = entry {
+                if class.class_literal(db) == target_literal {
+                    if previous.is_none()
+                        && let Some(builder) =
+                            self.context.report_lint(&INVALID_SUPER_ARGUMENT, value)
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "`{}` comes first in its own MRO, so `super[{}]` has no class to \
+                             look up past",
+                            enclosing.name(db),
+                            target_literal.name(db),
+                        ));
+                    }
+                    return previous;
+                }
+                previous = Some(class);
+            }
+        }
+        if let Some(builder) = self.context.report_lint(&INVALID_SUPER_ARGUMENT, value) {
+            builder.into_diagnostic(format_args!(
+                "`{}` is not in the MRO of `{}`",
+                target_literal.name(db),
+                enclosing.name(db),
+            ));
+        }
+        None
     }
 
     /// Resolve `receiver` to the type the next link of a basedpython optional chain must be

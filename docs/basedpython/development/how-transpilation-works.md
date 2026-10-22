@@ -49,9 +49,10 @@ source (.by)
   ├─ phase 2d  version polyfill
   │     └─ rewrite syntax the target python cannot parse. today that is the
   │        `match` statement, lowered to an `if`/`elif` chain for a target below
-  │        3.10. it runs over the *finished* python rather than over `.by`, so a
-  │        `match` an earlier lowering generated is lowered by the same code as
-  │        one the author wrote
+  │        3.10, and a bracketless `except`, whose types are parenthesized for a
+  │        target below 3.14. it runs over the *finished* python rather than over
+  │        `.by`, so a `match` an earlier lowering generated is lowered by the
+  │        same code as one the author wrote
   │
   └─ phase 3  syntax verification
         ├─ parse the final output as `.py` — any parse error aborts with a

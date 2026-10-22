@@ -2710,6 +2710,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// that `str()` fills. a conversion or a format spec would change what fills
     /// it, so both are rejected rather than quietly ignored.
     fn infer_template_literal_type_expression(&mut self, fstring: &ast::ExprFString) -> Type<'db> {
+        self.context.record_template_literal_type(fstring.range());
         let mut parts: Vec<TemplatePart<'db>> = Vec::new();
         for part in &fstring.value {
             match part {
