@@ -13,9 +13,14 @@
 //! not a `textDocument/codeLens`, because what a client wants of these is not
 //! what it wants of a lens: it draws them as its own kind of hint, under a
 //! setting of its own, and asks again whenever anything in the workspace changes,
-//! where a lens is asked for when its document changes. the counts are a search
-//! of the workspace for each declaration, so a client asks only for the ones it
-//! draws
+//! where a lens is asked for when its document changes. each count is a search
+//! of the workspace, so a client asks only for the ones it draws, and for all of
+//! them in one request
+//!
+//! the searches run on the search lane (`BackgroundSchedule::Search`), one at a
+//! time on a thread of their own, so that a client asking on every pass never
+//! fills the workers the requests someone waits on run on, and a count the
+//! client cancels stops where it is
 //!
 //! one document at a time, whole. `textHash` says which revision of this
 //! document the answer is about, but the counts also read every other file of the

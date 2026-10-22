@@ -8,6 +8,12 @@
 //! subclasses and overrides. so the count over a declaration is the number of
 //! places its click goes to
 //!
+//! each of those is a search of every file of the project, which asked of each
+//! declaration in turn reads every file once per declaration. the counts are
+//! found instead with one pass over the files for all the declarations of the
+//! document: each file is read once, and searched for each declaration whose
+//! name it holds, with the same search, so each count is the same
+//!
 //! the declarations counted are the document's outline ([`crate::document_symbols()`])
 //! at the depth a reader scans a module at: its classes and functions, and the
 //! methods and properties of those classes. a dunder is left out, being called
@@ -15,20 +21,20 @@
 //! names a class it does not declare. a nested function or a class inside a
 //! class is not counted
 
-use rayon::prelude::*;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_text_size::TextRange;
-use ty_project::parallel::ParallelIteratorExt;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::types::ide_support::{class_member_definitions, overridden_members};
 
+use crate::find_references::find_references_to_each;
+use crate::goto_implementation::implementations_at_each;
 use crate::symbols::symbols_for_file;
-use crate::{Db, SymbolKind, find_references, goto_implementation};
+use crate::{Db, SymbolKind};
 
-/// which counts to work out: each is a search of the workspace per declaration
+/// which counts to work out: each is a search of the workspace
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsageCountKinds {
     /// how many places use each declaration
@@ -79,36 +85,41 @@ pub fn document_usage_counts(
         return declarations;
     }
     let source_file = file.file(db);
-    let program = file.program(db);
+    let mut declarations = declarations;
 
-    let mut declarations: Vec<_> = declarations
-        .into_par_iter()
-        .map_with_db(db, |db, mut declaration| {
-            let file = ProgramFile::new(db, source_file, program);
-            let offset = declaration.name_range.start();
-            if kinds.references {
-                declaration.references = Some(
-                    find_references(db, file, offset, false)
-                        .map_or(0, |references| references.len()),
-                );
-            }
-            if kinds.implementations && declaration.kind != DeclarationKind::Function {
-                declaration.implementations =
-                    Some(goto_implementation(db, file, offset).map_or(0, |found| {
-                        found
-                            .value
-                            .iter()
-                            .filter(|target| {
-                                // the declaration is its own first implementation
-                                target.file() != source_file
-                                    || target.focus_range() != declaration.name_range
-                            })
-                            .count()
-                    }));
-            }
-            declaration
-        })
-        .collect::<Vec<_>>();
+    if kinds.references {
+        let offsets: Vec<_> = declarations
+            .iter()
+            .map(|declaration| declaration.name_range.start())
+            .collect();
+        let found = find_references_to_each(db, file, &offsets, false);
+        for (declaration, references) in declarations.iter_mut().zip(found) {
+            declaration.references = Some(references.map_or(0, |references| references.len()));
+        }
+    }
+    if kinds.implementations {
+        // a function is neither subclassed nor overridden
+        let (offsets, counted): (Vec<_>, Vec<_>) = declarations
+            .iter()
+            .enumerate()
+            .filter(|(_, declaration)| declaration.kind != DeclarationKind::Function)
+            .map(|(index, declaration)| (declaration.name_range.start(), index))
+            .unzip();
+        let found = implementations_at_each(db, file, &offsets);
+        for (index, implementations) in counted.into_iter().zip(found) {
+            let declaration = &mut declarations[index];
+            declaration.implementations = Some(implementations.map_or(0, |found| {
+                found
+                    .iter()
+                    .filter(|target| {
+                        // the declaration is its own first implementation
+                        target.file() != source_file
+                            || target.focus_range() != declaration.name_range
+                    })
+                    .count()
+            }));
+        }
+    }
 
     // abstract or not only changes how a method's overrides are named, so it is
     // only worked out for one that has some

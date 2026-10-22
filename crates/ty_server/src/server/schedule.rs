@@ -33,14 +33,20 @@ pub(crate) fn spawn_main_loop(
 pub(crate) struct Scheduler {
     fmt_pool: thread::Pool,
     background_pool: thread::Pool,
+    search_lane: thread::Pool,
 }
 
 impl Scheduler {
     pub(super) fn new(worker_threads: NonZeroUsize) -> Self {
         const FMT_THREADS: usize = 1;
+        const SEARCH_THREADS: usize = 1;
         Self {
             fmt_pool: thread::Pool::new(NonZeroUsize::try_from(FMT_THREADS).unwrap()),
             background_pool: thread::Pool::new(worker_threads),
+            search_lane: thread::Pool::unbounded(
+                NonZeroUsize::try_from(SEARCH_THREADS).unwrap(),
+                "ty:search",
+            ),
         }
     }
 
@@ -66,6 +72,9 @@ impl Scheduler {
                         .spawn(ThreadPriority::LatencySensitive, task),
                     BackgroundSchedule::Fmt => {
                         self.fmt_pool.spawn(ThreadPriority::LatencySensitive, task);
+                    }
+                    BackgroundSchedule::Search => {
+                        self.search_lane.spawn(ThreadPriority::Worker, task);
                     }
                 }
             }
@@ -123,5 +132,35 @@ mod tests {
                 .expect("every job's event to have reached the queue");
         }
         dispatching.join().expect("the dispatching thread to end");
+    }
+
+    /// A job on the search lane runs for as long as its search of the workspace takes. Handing
+    /// the lane more work meanwhile must not wait for it, or the main loop, which hands the work
+    /// out, would stop too: answering nothing else, and unable to take the cancellation that
+    /// would end the long job.
+    #[test]
+    fn handing_a_busy_search_lane_more_work_never_waits() {
+        const JOBS: usize = 64;
+        const PATIENCE: Duration = Duration::from_secs(30);
+
+        let pool = Pool::unbounded(NonZeroUsize::new(1).unwrap(), "test:search");
+        let (release, released) = crossbeam::channel::bounded::<()>(0);
+        pool.spawn(ThreadPriority::Worker, move || {
+            released.recv().ok();
+        });
+
+        let (dispatched, all_dispatched) = crossbeam::channel::bounded(1);
+        let dispatching = std::thread::spawn(move || {
+            for _ in 0..JOBS {
+                pool.spawn(ThreadPriority::Worker, || {});
+            }
+            dispatched.send(()).ok();
+            pool
+        });
+
+        let outcome = all_dispatched.recv_timeout(PATIENCE);
+        release.send(()).ok();
+        drop(dispatching.join());
+        outcome.expect("every job to have been handed to the lane while its one thread was busy");
     }
 }
