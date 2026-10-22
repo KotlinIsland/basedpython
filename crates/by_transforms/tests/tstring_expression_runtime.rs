@@ -5,9 +5,11 @@
 //! that field, so the text a lowered field reports is a claim about the *source*,
 //! not about the lowering. Only an interpreter can settle it: the transform's unit
 //! tests can say what was emitted, but not what python makes of it — and the exact
-//! span python reports (its leading whitespace, its grouping parentheses, its
-//! dropped trailing whitespace) is python's own rule, which is easy to state
-//! wrongly from the outside.
+//! span python reports (its whitespace, its grouping parentheses) is python's own
+//! rule, which is easy to state wrongly from the outside — and which changed in
+//! 3.14.8, when python stopped dropping the whitespace before the end of a field
+//! (python/cpython#154719). Both programs write the text as 3.14.8 reports it, and
+//! `reported` drops that whitespace again on an earlier 3.14.
 //!
 //! Every assertion here is written twice over: the basedpython program asserts what
 //! the field reports, and [`PYTHON_REFERENCE`] asserts that the same expectation
@@ -23,7 +25,11 @@ use interpreters::Interpreter;
 
 /// basedpython whose t-string fields hold expressions that lower
 const PROGRAM: &str = r#"
+import sys
 from string.templatelib import Template
+
+def reported(text: str) -> str:
+    return text if sys.version_info >= (3, 14, 8) else text.rstrip()
 
 def show(a: int?, b: int, d: dict[str, int]) -> None:
     def text(t) -> list:
@@ -38,18 +44,18 @@ def show(a: int?, b: int, d: dict[str, int]) -> None:
     # `typeof`, which is folded in the syntax tree rather than emitted as an edit
     assert text(t"{typeof(b)}") == ["typeof(b)"], text(t"{typeof(b)}")
     # the author's own spacing and grouping parentheses, which python keeps
-    assert text(t"{  (a!)  }") == ["  (a!)"], text(t"{  (a!)  }")
+    assert text(t"{  (a!)  }") == [reported("  (a!)  ")], text(t"{  (a!)  }")
     # a conversion and a format spec end the reported text where the brace would
-    assert text(t"{ (a!) !r:>6}") == [" (a!)"], text(t"{ (a!) !r:>6}")
+    assert text(t"{ (a!) !r:>6}") == [reported(" (a!) ")], text(t"{ (a!) !r:>6}")
     # a field nothing lowered keeps the interpolation python built for it
-    assert text(t"{b} {a!} { b }") == ["b", "a!", " b"], text(t"{b} {a!} { b }")
+    assert text(t"{b} {a!} { b }") == ["b", "a!", reported(" b ")], text(t"{b} {a!} { b }")
     # the values and the rendering are the ones the lowering produced
     assert t"{a!}".values == (3,), t"{a!}".values
     assert t"{ (a!) !r:>6}".values == (3,), "spec values"
     assert t"{a!}".strings == ("", ""), t"{a!}".strings
     # a `=` field, which python itself splits into literal text and a field beside it
     assert list(t"{(a!) = }")[0] == "(a!) = ", list(t"{(a!) = }")[0]
-    assert text(t"{(a!) = }") == ["(a!)"], text(t"{(a!) = }")
+    assert text(t"{(a!) = }") == [reported("(a!) ")], text(t"{(a!) = }")
     # a template nothing lowered is left exactly as written
     assert text(t"{b}") == ["b"], text(t"{b}")
     # a string tag is handed the template with the same texts
@@ -67,18 +73,23 @@ print("ok")
 /// the same fields with the basedpython operators taken out, so the expectations above
 /// are checked against python's own reporting rather than against themselves
 const PYTHON_REFERENCE: &str = r#"
+import sys
+
+def reported(text):
+    return text if sys.version_info >= (3, 14, 8) else text.rstrip()
+
 def show(a, b, d):
     def text(t):
         return [i.expression for i in t.interpolations]
 
     assert text(t"{a}") == ["a"], text(t"{a}")
-    assert text(t"{  (a)  }") == ["  (a)"], text(t"{  (a)  }")
-    assert text(t"{ (a) !r:>6}") == [" (a)"], text(t"{ (a) !r:>6}")
-    assert text(t"{b} {a} { b }") == ["b", "a", " b"], text(t"{b} {a} { b }")
+    assert text(t"{  (a)  }") == [reported("  (a)  ")], text(t"{  (a)  }")
+    assert text(t"{ (a) !r:>6}") == [reported(" (a) ")], text(t"{ (a) !r:>6}")
+    assert text(t"{b} {a} { b }") == ["b", "a", reported(" b ")], text(t"{b} {a} { b }")
     assert t"{a}".values == (3,), t"{a}".values
     assert t"{a}".strings == ("", ""), t"{a}".strings
     assert list(t"{(a) = }")[0] == "(a) = ", list(t"{(a) = }")[0]
-    assert text(t"{(a) = }") == ["(a)"], text(t"{(a) = }")
+    assert text(t"{(a) = }") == [reported("(a) ")], text(t"{(a) = }")
     assert text(t"{b}") == ["b"], text(t"{b}")
 
 show(3, 7, {"k": 5})

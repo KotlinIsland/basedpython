@@ -2,13 +2,17 @@
 //!
 //! python 3.14 gives every replacement field of a `t"..."` to the program as a
 //! `string.templatelib.Interpolation`, whose `expression` attribute is the *source text*
-//! of the field: everything between the `{` and the end of the expression, its grouping
-//! parentheses kept and its trailing whitespace dropped.
+//! of the field: everything between the `{` and the `=`, conversion, format spec or `}`
+//! that ends it, whitespace and grouping parentheses included.
 //!
 //! ```python
 //! a = 3
-//! t"{ (a) !r}".interpolations[0].expression   # ' (a)'
+//! t"{ (a) !r}".interpolations[0].expression   # ' (a) '
 //! ```
+//!
+//! python 3.14.0 to 3.14.7 dropped the whitespace before that end (python/cpython#154719).
+//! the lowering writes the text the way later releases report it, and [`_by_template`]
+//! drops the trailing whitespace again when it runs on one of those releases
 //!
 //! that text is what the attribute is for — a template library names a cache entry by it,
 //! shows it in an error, or renders a `=`-style debug view from it. python reads it off
@@ -153,26 +157,24 @@ impl Wrap {
 
 /// the source text python hands a reader as a field's `expression`
 ///
-/// python takes it from just past the `{` to the end of the expression, keeping whatever
-/// grouping parentheses the expression was written inside and dropping the whitespace
-/// after them. the expression node's own range holds neither, so both ends are read off
-/// the field: the start from its brace, and the end by stepping over the parentheses that
-/// close between the expression's last token and the `=`, conversion, format spec or `}`
-/// that ends the field — nothing else can stand there
+/// python takes it from just past the `{` to the `=`, conversion, format spec or `}` that
+/// ends the field, keeping whatever grouping parentheses and whitespace stand around the
+/// expression. the expression node's own range holds neither, so both ends are read off
+/// the field: the start from its brace, and the end by stepping over the parentheses and
+/// whitespace between the expression's last token and the end of the field — nothing
+/// else can stand there
+///
+/// this is the text python reports from 3.14.8 on; [`_by_template`](crate::runtime) drops
+/// the trailing whitespace on the earlier 3.14 releases, which did
 pub(crate) fn author_text<'src>(source: &'src str, field: &InterpolatedElement) -> &'src str {
     let start = usize::from(field.range().start()) + '{'.len_utf8();
     let expression_end = usize::from(field.expression.range().end());
     let Some(tail) = source.get(expression_end..usize::from(field.range().end())) else {
         return "";
     };
-    let mut closing = 0;
-    for (offset, ch) in tail.char_indices() {
-        match ch {
-            ')' => closing = offset + ch.len_utf8(),
-            ch if ch.is_whitespace() => {}
-            _ => break,
-        }
-    }
+    let closing = tail
+        .find(|ch: char| ch != ')' && !ch.is_whitespace())
+        .unwrap_or(tail.len());
     source
         .get(start..expression_end + closing)
         .unwrap_or_default()
@@ -491,7 +493,7 @@ mod tests {
     fn a_debug_field_reports_the_author_text() {
         assert_eq!(
             lowered("def go(a: int?):\n    print(t\"{(a!) = }\")\n"),
-            "print(_by_template(t\"(a!) = {(_force_unwrap(a))!r}\", (\"(a!)\",)))"
+            "print(_by_template(t\"(a!) = {(_force_unwrap(a))!r}\", (\"(a!) \",)))"
         );
     }
 
@@ -505,19 +507,19 @@ mod tests {
         );
     }
 
-    /// python reads the text from just past the `{` to the end of the expression, keeping
-    /// the grouping parentheses and dropping the whitespace after them. `fields_carry_the_
-    /// text_python_would_have_reported` in the runtime test holds these to a real 3.14
+    /// python reads the text from just past the `{` to the end of the field, keeping the
+    /// grouping parentheses and the whitespace around them. `tstring_expression_runtime`
+    /// holds these to a real 3.14
     #[test]
     fn the_author_text_is_the_span_python_would_have_reported() {
         assert_eq!(
             lowered("def go(a: int?):\n    print(t\"{  (a!)  }\")\n"),
-            "print(_by_template(t\"{  (_force_unwrap(a))  }\", (\"  (a!)\",)))"
+            "print(_by_template(t\"{  (_force_unwrap(a))  }\", (\"  (a!)  \",)))"
         );
         // a conversion and a format spec end the text the same way the closing brace does
         assert_eq!(
             lowered("def go(a: int?):\n    print(t\"{ (a!) !r:>6}\")\n"),
-            "print(_by_template(t\"{ (_force_unwrap(a)) !r:>6}\", (\" (a!)\",)))"
+            "print(_by_template(t\"{ (_force_unwrap(a)) !r:>6}\", (\" (a!) \",)))"
         );
     }
 
