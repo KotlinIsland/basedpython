@@ -7571,7 +7571,7 @@ fn lower_function_with_receiver(
     arrays: &[(usize, RType)],
     frame: Frame,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
-    surface::gate_function(unit.language.source_type(), function)?;
+    surface::gate_function(unit.language.source_type(), unit.model, function)?;
     let function = &comprehension_scopes::scoped(function)?;
     let Unit {
         env,
@@ -7717,6 +7717,21 @@ fn lower_function_with_receiver(
         unit.arrays,
     );
     locals_here.retain(|(name, _)| !declared_global.contains(name));
+    // an override's `_`s take the names of the method it overrides, and the python binds
+    // `_` to the first of them at the top of the body, so `_` is a local holding that
+    // parameter's value as well as whatever the body writes to it
+    let underscore_at_entry = underscore_bound_at_entry(&function.parameters, *unit.written)
+        .filter(|_| !declared_global.contains("_"))
+        .and_then(|parameter| {
+            let (_, rtype) = params.iter().find(|(name, _)| *name == parameter)?;
+            Some((parameter, rtype.clone()))
+        });
+    if let Some((_, rtype)) = &underscore_at_entry {
+        match locals_here.iter_mut().find(|(name, _)| name == "_") {
+            Some((_, written)) => *written = covering(written, rtype),
+            None => locals_here.push(("_".to_string(), rtype.clone())),
+        }
+    }
     let bound: HashSet<String> = params
         .iter()
         .map(|(name, _)| name.clone())
@@ -8214,6 +8229,9 @@ fn lower_function_with_receiver(
         }),
     };
     lowering.check_parameters(function)?;
+    if let Some((parameter, _)) = &underscore_at_entry {
+        lowering.bind_underscore_at_entry(parameter)?;
+    }
     lowering.block(&function.body)?;
 
     // a body that falls off the end returns `None` — python's implicit return. what it
@@ -9122,6 +9140,35 @@ fn signature(
         deferring,
         computed_defaults,
     })
+}
+
+/// the name the first of a parameter list's repeated `_`s takes in the python, where that is
+/// not `_` itself
+///
+/// an override's `_`s take the names the method it overrides gives those positions, and the
+/// python a body mentioning `_` is transpiled to binds `_` to the first of them on entry:
+///
+/// ```python
+/// class Quiet(Handler):
+///     @override
+///     def handle(self, event: int, source: str):
+///         _ = event
+///         del _
+/// ```
+///
+/// every read of `_` that binding reaches is refused, so what it holds is never seen, but
+/// whether it is bound is: `del _` succeeds on it. a generator keeps its locals in its
+/// state object, where a `del` of one declines, so it has no way to tell and is not given
+/// the binding
+fn underscore_bound_at_entry(
+    parameters: &ast::Parameters,
+    written: by_transforms::WrittenNames,
+) -> Option<String> {
+    let first = parameters
+        .iter()
+        .find(|parameter| parameter.name() == "_")?;
+    let name = by_transforms::python_parameter_name(parameters, first.as_parameter(), written);
+    (name != "_").then(|| name.to_string())
 }
 
 /// the representation every `return` in a body agrees on
@@ -15760,6 +15807,18 @@ impl Lowering<'_, '_> {
         } else {
             RType::OBJECT
         })
+    }
+
+    /// bind `_` to `parameter`, the name the first of an override's repeated `_`s takes in
+    /// the python, as the python does at the top of the body
+    fn bind_underscore_at_entry(&mut self, parameter: &str) -> Lowered<()> {
+        let (Some(source), Some(target)) = (self.place(parameter), self.place("_")) else {
+            return Err(Decline::new(format!(
+                "the `_` an override binds to `{parameter}` on entry has no place in the frame"
+            )));
+        };
+        let (value, ty) = self.read_place(&source)?;
+        self.write_place(&target, value, &ty)
     }
 
     /// the entry checks the interpreted build makes on `function`'s own parameters,

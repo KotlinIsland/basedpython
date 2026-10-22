@@ -2759,8 +2759,20 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   PyObject *by_value;\n\
                      }} {type_name}_asend;\n\
                      static PyTypeObject {type_name}_asend_type;\n\
+                     /* one dropped before it was ever stepped is reported, as python reports it from 3.13.\n\
+                     \x20* it is untracked first: the warning runs python, and a collection it sets off must not\n\
+                     \x20* find an object already being freed */\n\
                      static void {type_name}_asend_dealloc(PyObject *self) {{\n\
                      \x20   PyObject_GC_UnTrack(self);\n\
+                     #if PY_VERSION_HEX >= 0x030D0000\n\
+                     \x20   {type_name}_asend *by_self = ({type_name}_asend *)self;\n\
+                     \x20   if (by_self->by_state == 0)\n\
+                     \x20       By_WarnUnawaitedAgenMethod((PyObject *)by_self->by_gen,\n\
+                     \x20                                  by_self->by_mode == 1   ? \"aclose\"\n\
+                     \x20                                  : by_self->by_mode == 3 ? \"athrow\"\n\
+                     \x20                                                          : \"asend\",\n\
+                     \x20                                  {qualname});\n\
+                     #endif\n\
                      \x20   Py_XDECREF((PyObject *)(({type_name}_asend *)self)->by_gen);\n\
                      \x20   Py_XDECREF((({type_name}_asend *)self)->by_value);\n\
                      \x20   Py_TYPE(self)->tp_free(self);\n\
@@ -3075,6 +3087,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                     thrown = mangle_member(crate::GENERATOR_THROWN),
                     state = mangle_member(crate::GENERATOR_STATE),
                     dotted = dotted,
+                    qualname = c_string(&resume.qualname),
                 );
                 format!(
                     "             .tp_as_async = &{type_name}_async,\n             .tp_finalize = {type_name}_finalize,\n"
@@ -12322,6 +12335,14 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let mut installed = String::new();
         if !ready.is_empty() {
             let _ = writeln!(installed, "{ready}");
+        }
+        // python's own messages name a type by its `tp_name`, which a `class` statement
+        // leaves the bare name and a spec leaves the dotted one it was given
+        if heap_type(class) {
+            let _ = writeln!(
+                installed,
+                "    if (By_BareTypeName({type_name}_OBJ) < 0) return -1;"
+            );
         }
         // a method the class wrote binds as a function does, before anything below can
         // read the type's dict or hand the class to a decorator
