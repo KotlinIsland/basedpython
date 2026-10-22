@@ -238,7 +238,7 @@ pub(crate) fn cmd_run(
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
     let mut staging = Staging::new(tmp.path());
     let mut layout = RuntimeLayout::default();
-    let ok = render_check_and_transpile(
+    let status = render_check_and_transpile(
         &db,
         &handles,
         &mut Emit {
@@ -256,8 +256,8 @@ pub(crate) fn cmd_run(
             Ok(())
         },
     )?;
-    if !ok {
-        return Ok(ExitStatus::Failure);
+    if !matches!(status, ExitStatus::Success) {
+        return Ok(status);
     }
     // a program is its data as much as its modules: a `.py` module it imports, a
     // json file it opens, a template it renders. running out of a directory
@@ -960,7 +960,7 @@ pub(crate) fn cmd_build(
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
     let mut layout = RuntimeLayout::default();
-    let ok = render_check_and_transpile(
+    let status = render_check_and_transpile(
         &db,
         &handles,
         &mut Emit {
@@ -1003,8 +1003,9 @@ pub(crate) fn cmd_build(
     }
     staging.finish()?;
 
-    if !ok? {
-        return Ok(ExitStatus::Failure);
+    let status = status?;
+    if !matches!(status, ExitStatus::Success) {
+        return Ok(status);
     }
     eprintln!("\nbuild complete ({file_count} files)");
     Ok(ExitStatus::Success)
@@ -1458,8 +1459,9 @@ pub(crate) fn cmd_compile(
     // the transpile's verdict is answered after the tree is finished, the way
     // `build` answers it: a diagnostic must not cost the tree, because a `build/`
     // a debugger cannot read is worse than one built from a partial check
-    if !transpiled? {
-        return Ok(ExitStatus::Failure);
+    let transpiled = transpiled?;
+    if !matches!(transpiled, ExitStatus::Success) {
+        return Ok(transpiled);
     }
 
     eprintln!("\ncompiled {compiled} module(s)");
@@ -1719,7 +1721,7 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     }
 
     let roots = module_roots(&db, &root);
-    let ok = render_check_and_transpile(
+    render_check_and_transpile(
         &db,
         &handles,
         &mut Emit {
@@ -1739,12 +1741,7 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
             fs::write(&py, emitted.python).with_context(|| format!("{}", py.display()))?;
             Ok(())
         },
-    )?;
-    Ok(if ok {
-        ExitStatus::Success
-    } else {
-        ExitStatus::Failure
-    })
+    )
 }
 
 /// Every first-party `.py`/`.pyi` file under `root`, skipping non-source
@@ -2275,9 +2272,9 @@ fn compilable_files(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Check every file, render diagnostics, then for each non-blocked file call
-/// `consume` with the transpiled Python. Returns `Ok(false)` if the check
-/// outcome blocks per `gate`, or a transpiler bug occurred (caller should
-/// propagate failure).
+/// `consume` with the transpiled Python. Answers the exit status the command
+/// ends with: a failure when something was reported, and an internal error when
+/// that was `by` itself panicking, the way `by check` tells the two apart
 ///
 /// The deciding is [`by_stage::emit::check_and_transpile`], and only the
 /// **rendering** is here. That is the whole difference between the two callers
@@ -2291,12 +2288,18 @@ fn render_check_and_transpile(
     handles: &[(PathBuf, ruff_db::files::File)],
     emit: &mut Emit<'_>,
     consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<ExitStatus> {
     let emitted = by_stage::emit::check_and_transpile(db, handles, emit, consume)?;
     if !emitted.diagnostics.is_empty() {
         render_diagnostics(db, &emitted.diagnostics)?;
     }
-    Ok(emitted.ok)
+    Ok(if emitted.ok {
+        ExitStatus::Success
+    } else if emitted.diagnostics.iter().any(|d| d.severity().is_fatal()) {
+        ExitStatus::InternalError
+    } else {
+        ExitStatus::Failure
+    })
 }
 
 /// Render diagnostics to stderr in the same format as `by check`. The

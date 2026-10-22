@@ -375,7 +375,7 @@ fn restage_transpiled(
             rebuilder: &tree.rebuilder,
             requirements: &mut by_transforms::RuntimeRequirements::default(),
             // a re-stage writes modules back into a tree the build already laid
-            // out, so what it claims is thrown away: whatever copy of the runtime
+            // out, so what it records is thrown away: whatever copy of the runtime
             // a module imports is already sitting where the build put it
             runtime: Some(&mut RuntimeLayout::default()),
             roots: &tree.record.module_roots,
