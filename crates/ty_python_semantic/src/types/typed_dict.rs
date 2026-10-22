@@ -125,7 +125,7 @@ impl<'db> TypedDictOpenness<'db> {
         matches!(self, Self::Closed)
     }
 
-    fn apply_type_mapping_impl<'a>(
+    pub(crate) fn apply_type_mapping_impl<'a>(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

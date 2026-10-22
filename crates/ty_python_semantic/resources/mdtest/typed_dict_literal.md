@@ -41,15 +41,35 @@ def h(x: {"only": int}) -> None:
     reveal_type(x["only"])  # revealed: int
 ```
 
-### Extra-items marker `**: T`
+### Closed by default
 
-A `**: T` entry in a dict literal type lowers to `extra_items=T` on the synthesized `TypedDict`.
-ty's extra-items semantics are still TODO, so the declared fields still type-check but extra keys
-aren't yet enforced.
+A dict literal type is closed, as the `TypedDict` it lowers to is (`closed=True`): it has no keys
+but the ones it names, so a value with another key is rejected.
 
 ```by
-def f(x: {"name": str, **: int}) -> None:
-    reveal_type(x["name"])  # revealed: str
+def f(name: str) -> None:
+    a: {"name": str} = {"name": name, "age": 1}  # error: [invalid-key] "Unknown key "age""
+```
+
+A closed type is not a supertype of a type with more keys, since the extra key would be lost.
+
+```by
+def g(wider: {"name": str, "age": int}) -> None:
+    narrower: {"name": str} = wider  # error: [invalid-assignment]
+```
+
+### Extra-items marker `**: T`
+
+A `**: T` entry in a dict literal type lowers to `extra_items=T` on the synthesized `TypedDict`: a
+key it does not name is allowed, with a value of type `T`.
+
+```by
+def f(name: str) -> None:
+    a: {"name": str, **: int} = {"name": name, "age": 1}
+    reveal_type(a)  # revealed: {"name": str, **: int}
+    reveal_type(a["name"])  # revealed: str
+
+    b: {"name": str, **: int} = {"name": name, "age": "x"}  # error: [invalid-argument-type]
 ```
 
 ## Display

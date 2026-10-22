@@ -997,10 +997,11 @@ Binding `super()` to a class instead returns the property object without invokin
 super(Child, Child).value
 ```
 
-Deleting an attribute on a `super()` object does not invoke the parent's property deleter.
+Deleting an attribute on a `super()` object does not invoke the parent's property deleter: it raises
+`AttributeError`, since a `super()` object has no attributes of its own to delete.
 
 ```py
-del super(Child, Child()).value
+del super(Child, Child()).value  # error: [invalid-assignment]
 ```
 
 The same holds when the receiver may be either a `super()` object or an ordinary instance.
@@ -1011,7 +1012,7 @@ class Ordinary:
 
 def delete_union(flag: bool):
     target = super(Child, Child()) if flag else Ordinary()
-    del target.value
+    del target.value  # error: [invalid-assignment]
 ```
 
 ## Metaclass properties

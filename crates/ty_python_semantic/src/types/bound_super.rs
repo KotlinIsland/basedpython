@@ -14,11 +14,15 @@ use crate::{
     types::{
         BoundTypeVarInstance, ClassBase, ClassType, DivergentType, DynamicType,
         IntersectionBuilder, KnownClass, MemberLookupErrorKind, MemberLookupPolicy,
-        MemberLookupResult, SpecialFormType, SubclassOfInner, SubclassOfType, Type,
-        TypeVarBoundOrConstraints, UnionBuilder, UnsafeUnionType, binding_type,
+        MemberLookupResult, SpecialFormType, StaticClassLiteral, SubclassOfInner, SubclassOfType,
+        Type, TypeVarBoundOrConstraints, UnionBuilder, UnsafeUnionType, binding_type,
+        class::CodeGeneratorKind,
         constraints::ConstraintSet,
         context::InferContext,
-        diagnostic::{INVALID_SUPER_ARGUMENT, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS},
+        diagnostic::{
+            INVALID_SUPER_ARGUMENT, SUPER_CALL_IN_NAMED_TUPLE_METHOD,
+            UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
+        },
         member_lookup_result,
         relation::EquivalenceChecker,
         signatures::{Parameter, Parameters, Signature},
@@ -26,6 +30,27 @@ use crate::{
         visitor,
     },
 };
+
+/// Report `super` used in a method of `enclosing_class` when that is a `NamedTuple`, whose methods
+/// cannot use it, and return whether it was one. `super()` with no arguments or with two is
+/// refused there, and so is the basedpython `super` keyword, which is written as one of them.
+pub(crate) fn report_super_in_named_tuple_method<'db>(
+    context: &InferContext<'db, '_>,
+    enclosing_class: StaticClassLiteral<'db>,
+    node: AnyNodeRef,
+) -> bool {
+    let db = context.db();
+    if !CodeGeneratorKind::NamedTuple.matches(db, enclosing_class.into()) {
+        return false;
+    }
+    if let Some(builder) = context.report_lint(&SUPER_CALL_IN_NAMED_TUPLE_METHOD, node) {
+        builder.into_diagnostic(format_args!(
+            "Cannot use `super()` in a method of NamedTuple class `{}`",
+            enclosing_class.name(db)
+        ));
+    }
+    true
+}
 
 /// The receiver zero-argument `super()` reads where it is written in `scope`: the first parameter
 /// of the function or lambda `scope` is, as python takes the first argument of the frame it runs

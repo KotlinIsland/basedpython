@@ -860,11 +860,15 @@ pub enum DynamicTypedDictAnchor<'db> {
     /// `packs` holds the keyword-variadic packs spliced in with `{**Kwargs}`,
     /// which contribute no fields until they are specialized. Applying a type
     /// mapping resolves each one and folds its fields into `schema`.
+    ///
+    /// `openness` is closed, or the extra items a `**: T` entry declares, as the
+    /// `TypedDict` the transpiler writes for the literal says
     Synthesized {
         scope: ScopeId<'db>,
         range: TextRange,
         schema: TypedDictSchema<'db>,
         packs: Box<[Type<'db>]>,
+        openness: TypedDictOpenness<'db>,
     },
 }
 
@@ -894,6 +898,7 @@ impl<'db> DynamicTypedDictAnchor<'db> {
                 range,
                 schema,
                 packs,
+                openness,
             } => Some(Self::Synthesized {
                 scope: *scope,
                 range: *range,
@@ -902,6 +907,7 @@ impl<'db> DynamicTypedDictAnchor<'db> {
                     .iter()
                     .map(|pack| pack.recursive_type_normalized_impl(db, env, div, true))
                     .collect::<Option<Box<[_]>>>()?,
+                openness: openness.recursive_type_normalized_impl(db, env, div, nested)?,
             }),
         }
     }
@@ -965,6 +971,7 @@ impl<'db> DynamicTypedDictLiteral<'db> {
             range,
             schema,
             packs,
+            openness,
         } = self.anchor(db)
         else {
             return self;
@@ -998,8 +1005,9 @@ impl<'db> DynamicTypedDictLiteral<'db> {
             }
         }
         let pending: Box<[Type<'db>]> = pending.into_boxed_slice();
+        let mapped_openness = openness.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor);
 
-        if &mapped == schema && &pending == packs {
+        if &mapped == schema && &pending == packs && mapped_openness == *openness {
             return self;
         }
 
@@ -1011,6 +1019,7 @@ impl<'db> DynamicTypedDictLiteral<'db> {
                 range: *range,
                 schema: mapped,
                 packs: pending,
+                openness: mapped_openness,
             },
             self.typed_dict_module(db),
         )
@@ -1089,10 +1098,8 @@ impl<'db> DynamicTypedDictLiteral<'db> {
             DynamicTypedDictAnchor::Definition(definition) => {
                 deferred_functional_typed_dict_openness(db, *definition)
             }
-            DynamicTypedDictAnchor::ScopeOffset { openness, .. } => *openness,
-            // basedpython synthesized `{"key": T}` type literals behave like a
-            // default (implicitly open) `TypedDict`
-            DynamicTypedDictAnchor::Synthesized { .. } => TypedDictOpenness::ImplicitlyOpen,
+            DynamicTypedDictAnchor::ScopeOffset { openness, .. }
+            | DynamicTypedDictAnchor::Synthesized { openness, .. } => *openness,
         }
     }
 

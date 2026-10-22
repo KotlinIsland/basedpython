@@ -44,6 +44,20 @@ class B(A):
         super.greet(super)  # the builtin's `greet`, passed the parameter
 ```
 
+## assigning through `super`
+
+a `super()` object has no attributes of its own, and does not pass an
+assignment or a deletion on to the class it reads past, so python raises
+`AttributeError` for `super().x = v` and `del super().x` whatever `x` is. the
+keyword is that object, so `super.x = v`, `super.x += v` and `del super.x` are
+reported. assign through the receiver instead:
+
+```by
+class B(A):
+    def f(self):
+        self.x = 1  # not `super.x = 1`
+```
+
 ## targeted form — `super[T].x`
 
 `super[T].x` resolves `x` against the MRO entry that **precedes** `T` in the

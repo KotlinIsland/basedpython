@@ -797,7 +797,6 @@ fn is_name_fragment(subject: &[Fragment]) -> bool {
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
-    use ruff_python_ast::PythonVersion;
 
     use crate::{Config, transpile};
 
@@ -1292,20 +1291,5 @@ mod tests {
         ));
         assert!(!out.contains("??"), "got:\n{out}");
         assert!(out.contains("        z = "), "got:\n{out}");
-    }
-
-    /// the `match` a destructuring lowers to is itself lowered for a target
-    /// that predates it, so the construct reaches every version the polyfill
-    /// covers rather than being an error below 3.10
-    #[test]
-    fn lowers_below_python_310() {
-        let config = Config {
-            min_version: PythonVersion::PY39,
-            ..Config::test_default()
-        };
-        let out = transpile("let (a, b) := (1, 2)\n", &config).unwrap();
-        assert!(!out.contains("match "), "got:\n{out}");
-        assert!(out.contains("a := "), "binds the captures, got:\n{out}");
-        assert!(out.contains("b := "), "binds the captures, got:\n{out}");
     }
 }

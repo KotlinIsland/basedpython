@@ -342,7 +342,7 @@ ______________________________________________________________________
 
 ### the `match` statement (PEP 634)
 
-`match` is grammar, so a target below 3.10 cannot even parse a file containing one. every `match` in the output — the ones you wrote, and the ones other lowerings produce for [`let` destructuring](destructuring.md), [`if let`](if-let.md), [statement expressions](statement-expressions.md) and [enum](enums.md) exhaustiveness — becomes an `if`/`elif` chain whose conditions do the matching:
+`match` is grammar, so a target below 3.10 cannot even parse a file containing one. every `match` statement in the output — the ones you wrote, and the ones [statement expressions](statement-expressions.md) and [enum](enums.md) exhaustiveness produce — becomes an `if`/`elif` chain whose conditions do the matching:
 
 ```python
 # python source
@@ -369,6 +369,8 @@ only the `match` and `case` headers are replaced, so every case body keeps its s
 two things are not reproduced: a comment written *inside* a multi-line pattern is dropped, and a temporary is left bound after the statement (python has no expression that unbinds a name). the temporaries are dunder-named, so a `match` in a class body leaves nothing `enum` or `dataclass` reads as a member
 
 the lowering binds with assignment expressions, so it needs python 3.8. below that a `match` is reported rather than lowered
+
+[destructuring](destructuring.md) — a `let`, an `if let` or `elif let`, and a pattern written as a `for` or `with` target or as a parameter — is written as a `match` statement too, but is not lowered: it needs a target of 3.10 or later, and an older one is reported
 
 ### `X | Y` at runtime (PEP 604)
 

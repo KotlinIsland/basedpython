@@ -2,9 +2,10 @@
 //!
 //! `match` is python 3.10 syntax, so a target below that cannot even parse a
 //! file containing one. Every `match` in the emitted python — the ones the
-//! author wrote, and the ones other lowerings produce (`let` destructuring,
-//! `if let`, statement expressions, enum exhaustiveness) — is rewritten here
-//! into an `if`/`elif` chain whose conditions do the matching:
+//! author wrote, and the ones statement expressions and enum exhaustiveness
+//! produce — is rewritten here into an `if`/`elif` chain whose conditions do
+//! the matching. A destructuring (`let`, `if let`) is written as a `match` too,
+//! but the parser holds it to 3.10, so none reaches this lowering:
 //!
 //! ```text
 //! match point:                    if [__by_match_0__ := (point)]:

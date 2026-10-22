@@ -290,7 +290,6 @@ mod tests {
     use indoc::indoc;
 
     use crate::{Config, transpile};
-    use ruff_python_ast::PythonVersion;
 
     fn check(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
@@ -515,27 +514,5 @@ mod tests {
             "}),
             "got:\n{out}"
         );
-    }
-
-    /// the `match` this lowering emits is itself lowered for a target that
-    /// predates it, so an `if let` reaches every version the polyfill covers
-    #[test]
-    fn lowers_below_python_310() {
-        let config = Config {
-            min_version: PythonVersion::PY39,
-            ..Config::test_default()
-        };
-        let out = transpile(
-            indoc! {"
-                opt: int | None = 1
-                if let int(x) := opt:
-                    print(x)
-            "},
-            &config,
-        )
-        .unwrap();
-        assert!(!out.contains("match "), "got:\n{out}");
-        assert!(out.contains("x := "), "binds the capture, got:\n{out}");
-        assert!(out.contains("print(x)"), "keeps the body, got:\n{out}");
     }
 }

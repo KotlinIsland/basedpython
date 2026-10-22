@@ -74,6 +74,23 @@ type Pair = tuple[int, int]
 assert first([1, 2]) == 1
 ```
 
+### A custom string tag
+
+A string tag's template is written as a t-string, which python only has from 3.14, but the template
+is lowered for any target:
+
+```toml
+[environment]
+python-version = "3.10"
+```
+
+```by
+def tagged(template: object) -> object:
+    return template
+
+greeting = tagged"hello {1 + 1}"
+```
+
 ### A `match` statement
 
 A `match` statement is lowered to a chain of `if` statements whose tests bind what the patterns
@@ -116,46 +133,23 @@ def describe(x: int) -> str:
 ### A destructuring pattern
 
 A destructuring pattern — `let P := v`, an `if let` clause, or a pattern written as a `for` or
-`with` target or as a parameter — is written as a `match` statement, so it runs wherever one does.
-From 3.8 that is the lowered `match`:
+`with` target or as a parameter — is written as a `match` statement, but is not lowered where a
+`match` statement is. It needs python 3.10 whatever the target:
 
 ```toml
 [environment]
-python-version = "3.8"
+python-version = "3.9"
 ```
 
 ```by
 def total(pair: tuple[int, int] | None) -> int:
+    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.9 (syntax was added in Python 3.10)"
     if let (a, b) := pair:
         return a + b
     return 0
 
 def first(pair: tuple[int, int]) -> int:
-    let (a, _) := pair
-    return a
-
-assert total((1, 2)) == 3
-assert first((4, 5)) == 4
-```
-
-### A destructuring pattern before 3.8
-
-Before 3.8 no `match` can be written, so neither can a destructuring pattern:
-
-```toml
-[environment]
-python-version = "3.7"
-```
-
-```by
-def total(pair: tuple[int, int] | None) -> int:
-    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.7 (syntax was added in Python 3.10)"
-    if let (a, b) := pair:
-        return a + b
-    return 0
-
-def first(pair: tuple[int, int]) -> int:
-    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.7 (syntax was added in Python 3.10)"
+    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.9 (syntax was added in Python 3.10)"
     let (a, _) := pair
     return a
 
@@ -168,8 +162,12 @@ class Point:
 
 def sum_all(points: list[Point]) -> int:
     n = 0
-    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.7 (syntax was added in Python 3.10)"
+    # error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.9 (syntax was added in Python 3.10)"
     for Point(x, y) in points:
         n += x + y
     return n
+
+# error: [invalid-syntax] "Cannot use a destructuring pattern, which is written as a `match` statement, on Python 3.9 (syntax was added in Python 3.10)"
+def norm(Point(x, y): Point) -> int:
+    return x + y
 ```

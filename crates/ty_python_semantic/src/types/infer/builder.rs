@@ -164,7 +164,9 @@ use crate::types::trailing_lambda::{
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
 use crate::types::tuple::{Tuple, TupleLength, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::type_alias::{ManualPEP695TypeAliasType, PEP695TypeAliasType};
-use crate::types::typed_dict::{TypedDictAssignmentKind, TypedDictKeyAssignment};
+use crate::types::typed_dict::{
+    TypedDictAssignmentKind, TypedDictKeyAssignment, TypedDictOpenness,
+};
 use crate::types::typevar::{
     BoundTypeVarIdentity, TypeVarConstraints, TypeVarIdentity, TypeVarInstance, TypeVarSet,
 };
@@ -4198,11 +4200,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 true
             }
 
-            Type::Dynamic(..)
-            | Type::Divergent(_)
-            | Type::Never
-            | Type::ModuleLiteral(..)
-            | Type::BoundSuper(..) => true,
+            // a `super` object has no attributes of its own to delete, and does not pass a deletion
+            // on to the class it reads past, so python raises `AttributeError` for any attribute
+            Type::BoundSuper(_) => {
+                if emit_diagnostics
+                    && let Some(builder) = self.context.report_lint(&INVALID_ASSIGNMENT, target)
+                {
+                    builder.into_diagnostic(format_args!(
+                        "Cannot delete attribute `{attribute}` on type `{}`",
+                        object_ty.display(db, env),
+                    ));
+                }
+                false
+            }
+
+            Type::Dynamic(..) | Type::Divergent(_) | Type::Never | Type::ModuleLiteral(..) => true,
         }
     }
 
@@ -4258,7 +4270,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     ..
                 },
             ) => {
-                let object_ty = self.infer_expression(object, TypeContext::default());
+                let object_ty = match self.infer_super_keyword(object) {
+                    Some(keyword) => keyword,
+                    None => self.infer_expression(object, TypeContext::default()),
+                };
                 self.report_undeclared_protocol_attribute(attr_expr);
 
                 if let Some(infer_assigned_ty) = infer_assigned_ty {
@@ -8686,19 +8701,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         let mut schema = TypedDictSchema::default();
         let mut packs: Vec<Type<'db>> = Vec::new();
+        // closed unless a `**: T` entry admits extra items, as the `TypedDict` the transpiler
+        // writes for the literal is
+        let mut openness = TypedDictOpenness::Closed;
         let mut hasher = DefaultHasher::new();
         for item in &dict.items {
             let Some(key_expr) = item.key.as_ref() else {
-                // `**: T` extra-items marker — encoded as `Starred(Starred(T))`.
-                // TODO: wire this into `TypedDictSchema.extra_items` once
-                // PEP 728 support lands. for now we accept the syntax and
-                // infer the type so user-visible diagnostics still fire, but
-                // we don't yet enforce extra-key matching
+                // `**: T` extra-items marker — encoded as `Starred(Starred(T))`
                 if let ast::Expr::Starred(outer) = &item.value
                     && let ast::Expr::Starred(inner) = outer.value.as_ref()
                 {
-                    let _ = self.infer_type_expression(&inner.value);
+                    let extra_ty = self.infer_type_expression(&inner.value);
                     "**".hash(&mut hasher);
+                    extra_ty.display(db, env).to_string().hash(&mut hasher);
+                    openness = TypedDictOpenness::extra(db, extra_ty, false);
                     continue;
                 }
                 // basedpython `{**Kwargs}`: the pack contributes no fields until it is
@@ -8733,6 +8749,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: dict.range(),
             schema,
             packs: packs.into_boxed_slice(),
+            openness,
         };
         let td = DynamicTypedDictLiteral::new(db, class_name, anchor, TypingModule::Typing);
         Type::ClassLiteral(ClassLiteral::DynamicTypedDict(td)).to_instance_approximation(db, env)
@@ -14831,50 +14848,52 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
-    /// basedpython: `super[T]` standing as an attribute's base, `super[T].x`, is the `super` keyword
-    /// targeted at `T`, which the attribute is looked up past. its slice is inferred as the class
-    /// it names, which is the type the subscript is given, and the attribute load builds the
-    /// bound super from it ([`Self::basedpython_super_value_type`]). `None` for any other
-    /// expression: anywhere else `super[T]` is the subscript of the name, as python reads it
-    fn basedpython_super_subscript(&mut self, value: &ast::Expr) -> Option<Type<'db>> {
+    /// basedpython: infer `value` as the `super` keyword, when it is one: `super` or `super[T]`
+    /// standing as an attribute's base. `None` for any other expression, which is left for the
+    /// caller to infer: anywhere else `super` is the name and `super[T]` its subscript, as python
+    /// reads them.
+    ///
+    /// the keyword is given the bound super the lowering's `super()` call evaluates to, so an
+    /// attribute is read, assigned and deleted through the same object in the checker as at run
+    /// time. `super[T]` names the class the attribute is looked up past, and is given that class
+    /// where it names none in the enclosing class's MRO
+    fn infer_super_keyword(&mut self, value: &ast::Expr) -> Option<Type<'db>> {
         if !self.is_basedpython_file() {
             return None;
         }
-        let ast::Expr::Subscript(subscript) = value else {
-            return None;
+        let ty = match value {
+            ast::Expr::Name(name) if name.id.as_str() == "super" => {
+                self.super_keyword_bound(value, None)
+            }
+            ast::Expr::Subscript(subscript)
+                if subscript
+                    .value
+                    .as_name_expr()
+                    .is_some_and(|name| name.id.as_str() == "super") =>
+            {
+                self.infer_expression(&subscript.value, TypeContext::default());
+                let target = self.infer_expression(&subscript.slice, TypeContext::default());
+                self.super_keyword_bound(value, Some(target))
+            }
+            _ => return None,
         };
-        let ast::Expr::Name(name) = subscript.value.as_ref() else {
-            return None;
-        };
-        if name.id.as_str() != "super" {
-            return None;
-        }
-        self.infer_expression(&subscript.value, TypeContext::default());
-        let target = self.infer_expression(&subscript.slice, TypeContext::default());
-        self.store_expression_type(value, target);
-        Some(target)
+        self.store_expression_type(value, ty);
+        Some(ty)
     }
 
-    /// basedpython: compute the bound-super type for `super` / `super[T]`
-    /// when used as an attribute base. returns `None` when `value` does not
-    /// match the sugar form, when there is no enclosing class, or when the
-    /// supplied target class is not in the enclosing class' MRO.
-    fn basedpython_super_value_type(&mut self, value: &ast::Expr) -> Option<Type<'db>> {
+    /// basedpython: the bound super the `super` keyword `value` stands for, looked up past
+    /// `target`, the class `super[T]` names, reporting the keyword where python could not build
+    /// one. `target` itself where it is not a class in the enclosing class's MRO
+    fn super_keyword_bound(&mut self, value: &ast::Expr, target: Option<Type<'db>>) -> Type<'db> {
         let env = self.program_environment();
         let db = self.db();
 
-        let target_class: Option<ClassType<'db>> = match value {
-            ast::Expr::Name(n) if n.id.as_str() == "super" => None,
-            ast::Expr::Subscript(s) => {
-                let ast::Expr::Name(n) = s.value.as_ref() else {
-                    return None;
-                };
-                if n.id.as_str() != "super" {
-                    return None;
-                }
-                Some(self.expression_type(s.slice.as_ref()).to_class_type(db)?)
-            }
-            _ => return None,
+        let target_class = match target {
+            None => None,
+            Some(target) => match target.to_class_type(db) {
+                Some(class) => Some((class, target)),
+                None => return target,
+            },
         };
 
         // `super` reads its implicit arguments where it is written, as zero-argument `super()`
@@ -14905,7 +14924,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             {
                 builder.into_diagnostic(message);
             }
-            return Some(Type::unknown());
+            return Type::unknown();
         }
 
         let Some(enclosing) = nearest_enclosing_class(db, self.index, scope) else {
@@ -14920,8 +14939,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                      no class encloses this function",
                 );
             }
-            return Some(Type::unknown());
+            return Type::unknown();
         };
+        if crate::types::bound_super::report_super_in_named_tuple_method(
+            &self.context,
+            enclosing,
+            value.into(),
+        ) {
+            return Type::unknown();
+        }
         let Some(owner_type) = crate::types::bound_super::implicit_super_receiver(
             db,
             self.index,
@@ -14937,14 +14963,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                      the function it is written in has no parameter to read the receiver from",
                 );
             }
-            return Some(Type::unknown());
+            return Type::unknown();
         };
         let enclosing_class = ClassLiteral::Static(enclosing).default_specialization(db);
 
         let pivot_class_type = match target_class {
             None => Type::from(enclosing_class),
-            Some(target) => {
-                let target_lit = target.class_literal(db);
+            Some((target_class, target)) => {
+                let target_lit = target_class.class_literal(db);
                 let mut prev: Option<ClassType<'db>> = None;
                 let mut found: Option<ClassType<'db>> = None;
                 for entry in enclosing_class.class_literal(db).iter_mro(db) {
@@ -14956,7 +14982,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         prev = Some(c);
                     }
                 }
-                Type::from(found?)
+                match found {
+                    Some(found) => Type::from(found),
+                    None => return target,
+                }
             }
         };
 
@@ -14966,10 +14995,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             pivot_class_type,
             owner_type,
         ) {
-            Ok(bound_super) => Some(bound_super),
+            Ok(bound_super) => bound_super,
             Err(error) => {
                 error.report_diagnostic(&self.context, value.into());
-                Some(Type::unknown())
+                Type::unknown()
             }
         }
     }
@@ -15025,8 +15054,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &mut self,
         attribute: &ast::ExprAttribute,
     ) -> Result<Type<'db>, Type<'db>> {
-        let value_type = match self.basedpython_super_subscript(&attribute.value) {
-            Some(target) => target,
+        let value_type = match self.infer_super_keyword(&attribute.value) {
+            Some(keyword) => keyword,
             None => {
                 self.infer_maybe_standalone_expression(&attribute.value, TypeContext::default())
             }
@@ -15135,16 +15164,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 value_type = narrowed;
                 none_chain_was_optional = true;
             }
-        }
-
-        // basedpython: `super.x` and `super[T].x` sugar in `.by` files.
-        // overrides value_type with the corresponding bound-super type so that
-        // attribute lookup is performed against the MRO, mirroring what the
-        // transpile produces (`super().x` / `super(<predecessor>, self).x`)
-        if self.is_basedpython_file()
-            && let Some(super_value_type) = self.basedpython_super_value_type(value)
-        {
-            value_type = super_value_type;
         }
 
         // basedpython safe variance: a private member does not specialize. It keeps the type it
@@ -15650,7 +15669,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 member_type
             }
             ExprContext::Store => {
-                self.infer_expression(value, TypeContext::default());
+                if self.infer_super_keyword(value).is_none() {
+                    self.infer_expression(value, TypeContext::default());
+                }
                 self.validate_member_visibility(attribute, self.expression_type(value));
                 Type::Never
             }

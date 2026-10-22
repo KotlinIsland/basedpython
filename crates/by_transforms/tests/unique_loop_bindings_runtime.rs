@@ -58,20 +58,6 @@ for left, right in [(1, 2), (3, 4)]:
     pairs.append(lambda: (left, right))
 assert [fn() for fn in pairs] == [(1, 2), (3, 4)], "each unpacked target binds"
 
-# a pattern in the target position binds its captures, not the binder the
-# destructuring lowering matches against
-class Pair:
-    __match_args__ = ("left", "right")
-
-    def __init__(self, left: int, right: int):
-        self.left = left
-        self.right = right
-
-patterned = []
-for Pair(left, right) in [Pair(1, 2), Pair(3, 4)]:
-    patterned.append(lambda: (left, right))
-assert [fn() for fn in patterned] == [(1, 2), (3, 4)], "each pattern capture binds"
-
 # a `def`'s parameter default is re-evaluated per call from inside the body, so
 # a loop binding it names is captured there like any other body read
 def collect_defaults() -> list:
@@ -129,6 +115,24 @@ for i in [1, 2, 3]:
 else:
     after = lambda: i
 assert after() == 3, "the else clause sees the final value"
+
+print("ok")
+"#;
+
+/// a pattern in the target position binds its captures, not the binder the destructuring
+/// lowering matches against. a destructuring needs python 3.10
+const PATTERN_CAPTURES: &str = r#"
+class Pair:
+    __match_args__ = ("left", "right")
+
+    def __init__(self, left: int, right: int):
+        self.left = left
+        self.right = right
+
+patterned = []
+for Pair(left, right) in [Pair(1, 2), Pair(3, 4)]:
+    patterned.append(lambda: (left, right))
+assert [fn() for fn in patterned] == [(1, 2), (3, 4)], "each pattern capture binds"
 
 print("ok")
 "#;
@@ -360,6 +364,14 @@ fn loop_bindings_are_per_iteration() {
         return;
     };
     run(&python, CAPTURES, true);
+}
+
+#[test]
+fn pattern_captures_are_per_iteration() {
+    let Some(python) = python(PythonVersion::PY310) else {
+        return;
+    };
+    run(&python, PATTERN_CAPTURES, true);
 }
 
 #[test]

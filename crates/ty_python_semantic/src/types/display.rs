@@ -2408,6 +2408,16 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'_, 'db> {
                             .fmt_detailed(f)?;
                         wrote_any = true;
                     }
+                    if let Some(extra_items) = typeddict.openness(self.db).explicit_extra_items() {
+                        if wrote_any {
+                            f.write_str(", ")?;
+                        }
+                        f.write_str("**: ")?;
+                        extra_items
+                            .declared_ty
+                            .display_with(self.db, env, self.settings.clone())
+                            .fmt_detailed(f)?;
+                    }
                     return f.write_char('}');
                 }
                 match defining_class {
