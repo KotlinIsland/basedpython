@@ -135,10 +135,13 @@ impl VendoredFileSystem {
         &self,
         dir: impl AsRef<VendoredPath>,
     ) -> impl Iterator<Item = DirectoryEntry> + '_ {
-        let directory_prefix = NormalizedVendoredPath::from(dir.as_ref())
-            .with_trailing_slash()
-            .0
-            .into_owned();
+        let normalized = NormalizedVendoredPath::from(dir.as_ref());
+        // the archive's root has no name of its own: every entry is under it
+        let directory_prefix = if normalized.as_str().is_empty() {
+            String::new()
+        } else {
+            normalized.with_trailing_slash().0.into_owned()
+        };
 
         self.inner.0.file_names().filter_map(move |name| {
             // Any entry that doesn't have the `path` (with a
@@ -648,6 +651,19 @@ pub(crate) mod tests {
         vendored://stdlib/asyncio/
         vendored://stdlib/functools.pyi
         ");
+    }
+
+    #[test]
+    fn read_directory_root() {
+        let mock_typeshed = mock_typeshed();
+
+        for root in ["", ".", "./"] {
+            assert_eq!(
+                readdir_snapshot(&mock_typeshed, root),
+                "vendored://stdlib/",
+                "{root:?}"
+            );
+        }
     }
 
     #[test]

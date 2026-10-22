@@ -30,8 +30,8 @@ use std::collections::{BTreeSet, HashSet};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::{DbWithWritableSystem as _, SystemPath, SystemPathBuf};
 use ruff_diagnostics::{Edit, Fix, IsolationLevel, SourceMap};
-use ruff_python_ast::Stmt;
-use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{Expr, Stmt};
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use salsa::Setter as _;
@@ -646,101 +646,187 @@ fn run_anon_named_tuple_cleanup(
     quotes: &WrittenQuotes,
     config: &Config,
 ) -> Result<String, String> {
-    use ruff_python_ast::visitor::Visitor;
-
     for _ in 0..4 {
-        let (db, file) = make_in_memory_db(&source);
-        let source_ref = ruff_db::source::source_text(&db, file);
-        let src = source_ref.as_str();
-        let module = ruff_db::parsed::parsed_module(
-            &db,
-            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
-        )
-        .load(&db);
-        let model = ty_python_semantic::SemanticModel::new(
-            &db,
-            ty_python_semantic::Db::program_file(&db, file),
-        );
-
-        let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
-            src,
-            written,
-            quotes,
-            &model,
-            config.clone(),
-            module.suite(),
-        );
-        for stmt in module.suite() {
-            anon.visit_stmt(stmt);
+        match run_cleanup_round(&source, written, quotes, config)? {
+            CleanupRound::Skipped | CleanupRound::Unchanged => return Ok(source),
+            CleanupRound::Lowered(lowered) => source = lowered,
         }
-        anon.finish();
-        if let Some(err) = anon.errors.first() {
-            return Err(err.clone());
-        }
-        let protocol = transforms::protocol_type::cleanup(
-            src,
-            written,
-            quotes,
-            &model,
-            module.suite(),
-            config,
-        )?;
-
-        if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
-            return Ok(source);
-        }
-        let mut preamble = String::new();
-        if anon.needs_import {
-            // an earlier run over the pre-splice source already emitted a class
-            // (and its imports) for an anon-NT whose edit an AST pass then
-            // re-rendered away, so only what the spliced output is actually
-            // missing gets prepended. matched as a run of whole lines, the way
-            // the inline-protocol cleanup does
-            let source_lines: Vec<&str> = source.lines().collect();
-            let push_missing = |preamble: &mut String, entry: &str| {
-                let entry_lines: Vec<&str> = entry.lines().collect();
-                let present = !entry_lines.is_empty()
-                    && source_lines
-                        .windows(entry_lines.len())
-                        .any(|window| window == entry_lines.as_slice());
-                if !present {
-                    preamble.push_str(entry);
-                    preamble.push('\n');
-                }
-            };
-            push_missing(
-                &mut preamble,
-                &written.import_from("typing", &["NamedTuple"]),
-            );
-            let (imports, helpers) = anon.callable.take_requirements();
-            for line in imports
-                .into_iter()
-                .chain(runtime_entries(config, &helpers, &source))
-            {
-                push_missing(&mut preamble, line.trim_end_matches('\n'));
-            }
-            for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
-                for class_def in defs.split_inclusive("\n\n") {
-                    push_missing(&mut preamble, class_def.trim_end_matches('\n'));
-                }
-            }
-        }
-        let mut edits = anon.edits;
-        if let Some((protocol_edits, protocol_preamble)) = protocol {
-            preamble.push_str(&protocol_preamble);
-            edits.extend(protocol_edits);
-        }
-
-        let (body, _) = apply_transforms_once(src, edits);
-        source = if preamble.is_empty() {
-            body
-        } else {
-            splice_preamble(&body, &preamble)
-        };
-
-        let _ = config;
     }
     Ok(source)
+}
+
+/// what one round of [`run_anon_named_tuple_cleanup`] did
+#[derive(Debug, PartialEq, Eq)]
+enum CleanupRound {
+    /// the output spells nothing the cleanup lowers, so the round built no db and asked the
+    /// checker nothing
+    Skipped,
+    /// the output was analysed and nothing in it needed lowering
+    Unchanged,
+    /// the output with what was left lowered, which the next round reads again
+    Lowered(String),
+}
+
+/// one round of [`run_anon_named_tuple_cleanup`] over `source`
+///
+/// the only syntax the round lowers is an anonymous named tuple form and an inline protocol,
+/// and the only other thing it does is construct each plain tuple literal the checker reads as
+/// an anonymous named tuple. the checker makes that type only from a form the parser flags
+/// (`DynamicNamedTupleAnchor::Anonymous`), and the round's db reads nothing but `source` and
+/// the vendored stubs, none of which spells one (`vendored_stubs_spell_no_anonymous_named_tuple`
+/// checks that). so a `source` that spells neither has nothing to lower or construct, and the
+/// round leaves it before building a db
+fn run_cleanup_round(
+    source: &str,
+    written: WrittenNames,
+    quotes: &WrittenQuotes,
+    config: &Config,
+) -> Result<CleanupRound, String> {
+    // read as basedpython, the way the round's db reads it
+    let parsed = ruff_python_parser::parse_unchecked_source(
+        source,
+        ruff_python_ast::PySourceType::BasedPython,
+    );
+    if SurfaceSyntax::find(parsed.suite(), SurfaceSyntax::CLEANED_UP).is_none() {
+        return Ok(CleanupRound::Skipped);
+    }
+    let (db, file) = make_in_memory_db(source);
+    let source_ref = ruff_db::source::source_text(&db, file);
+    let src = source_ref.as_str();
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
+    let model = ty_python_semantic::SemanticModel::new(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file),
+    );
+
+    let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
+        src,
+        written,
+        quotes,
+        &model,
+        config.clone(),
+        module.suite(),
+    );
+    for stmt in module.suite() {
+        anon.visit_stmt(stmt);
+    }
+    anon.finish();
+    if let Some(err) = anon.errors.first() {
+        return Err(err.clone());
+    }
+    let protocol =
+        transforms::protocol_type::cleanup(src, written, quotes, &model, module.suite(), config)?;
+
+    if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
+        return Ok(CleanupRound::Unchanged);
+    }
+    let mut preamble = String::new();
+    if anon.needs_import {
+        // an earlier run over the pre-splice source already emitted a class
+        // (and its imports) for an anon-NT whose edit an AST pass then
+        // re-rendered away, so only what the spliced output is actually
+        // missing gets prepended. matched as a run of whole lines, the way
+        // the inline-protocol cleanup does
+        let source_lines: Vec<&str> = source.lines().collect();
+        let push_missing = |preamble: &mut String, entry: &str| {
+            let entry_lines: Vec<&str> = entry.lines().collect();
+            let present = !entry_lines.is_empty()
+                && source_lines
+                    .windows(entry_lines.len())
+                    .any(|window| window == entry_lines.as_slice());
+            if !present {
+                preamble.push_str(entry);
+                preamble.push('\n');
+            }
+        };
+        push_missing(
+            &mut preamble,
+            &written.import_from("typing", &["NamedTuple"]),
+        );
+        let (imports, helpers) = anon.callable.take_requirements();
+        for line in imports
+            .into_iter()
+            .chain(runtime_entries(config, &helpers, source))
+        {
+            push_missing(&mut preamble, line.trim_end_matches('\n'));
+        }
+        for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
+            for class_def in defs.split_inclusive("\n\n") {
+                push_missing(&mut preamble, class_def.trim_end_matches('\n'));
+            }
+        }
+    }
+    let mut edits = anon.edits;
+    if let Some((protocol_edits, protocol_preamble)) = protocol {
+        preamble.push_str(&protocol_preamble);
+        edits.extend(protocol_edits);
+    }
+
+    let (body, _) = apply_transforms_once(src, edits);
+    Ok(CleanupRound::Lowered(if preamble.is_empty() {
+        body
+    } else {
+        splice_preamble(&body, &preamble)
+    }))
+}
+
+/// basedpython-only syntax [`run_anon_named_tuple_cleanup`] lowers when an earlier pass left it
+/// in the output
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SurfaceSyntax {
+    /// an anonymous named tuple, as a type `(name: T, ...)` or as a value `(name=v, ...)`
+    AnonymousNamedTuple,
+    /// `protocol(...)`
+    InlineProtocol,
+}
+
+impl SurfaceSyntax {
+    /// what [`run_anon_named_tuple_cleanup`] lowers
+    const CLEANED_UP: &[Self] = &[Self::AnonymousNamedTuple, Self::InlineProtocol];
+
+    fn of(expr: &Expr) -> Option<Self> {
+        match expr {
+            Expr::Tuple(tuple) if tuple.is_anon_named_tuple || tuple.is_anon_named_tuple_value => {
+                Some(Self::AnonymousNamedTuple)
+            }
+            Expr::ProtocolType(_) => Some(Self::InlineProtocol),
+            _ => None,
+        }
+    }
+
+    /// the first expression in `stmts`, in source order, that spells one of `kinds`
+    fn find(stmts: &[Stmt], kinds: &[Self]) -> Option<(Self, TextRange)> {
+        struct Finder<'a> {
+            kinds: &'a [SurfaceSyntax],
+            found: Option<(SurfaceSyntax, TextRange)>,
+        }
+        impl<'ast> Visitor<'ast> for Finder<'_> {
+            fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+                if self.found.is_none() {
+                    walk_stmt(self, stmt);
+                }
+            }
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if self.found.is_some() {
+                    return;
+                }
+                if let Some(kind) = SurfaceSyntax::of(expr)
+                    && self.kinds.contains(&kind)
+                {
+                    self.found = Some((kind, expr.range()));
+                    return;
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut finder = Finder { kinds, found: None };
+        finder.visit_body(stmts);
+        finder.found
+    }
 }
 
 /// Rewrite stdlib imports to `typing_extensions` where the imported name is
@@ -1151,7 +1237,7 @@ impl From<String> for TranspileError {
 }
 
 fn verify_syntax(source: &str, author: &AuthorNames) -> Result<(), TranspileError> {
-    use ruff_python_ast::{PySourceType, visitor::Visitor};
+    use ruff_python_ast::PySourceType;
 
     let parsed = ruff_python_parser::parse_unchecked_source(source, PySourceType::Python);
     let parse_errors = parsed.errors();
@@ -1168,63 +1254,6 @@ fn verify_syntax(source: &str, author: &AuthorNames) -> Result<(), TranspileErro
             kind: TranspileErrorKind::InvalidSyntax,
             message: format!("transpiler produced invalid Python: {}", first.error),
             output_range: Some(first.location),
-            by_range: None,
-        });
-    }
-
-    #[expect(clippy::items_after_statements, reason = "scanner colocated with use")]
-    struct AnonNamedTupleScanner {
-        leftover_range: Option<ruff_text_size::TextRange>,
-        leftover_typeof: Option<ruff_text_size::TextRange>,
-    }
-    #[expect(clippy::items_after_statements, reason = "scanner colocated with use")]
-    impl<'ast> Visitor<'ast> for AnonNamedTupleScanner {
-        fn visit_expr(&mut self, expr: &'ast ruff_python_ast::Expr) {
-            if self.leftover_range.is_some() || self.leftover_typeof.is_some() {
-                return;
-            }
-            if let ruff_python_ast::Expr::Tuple(t) = expr {
-                if t.is_anon_named_tuple || t.is_anon_named_tuple_value {
-                    self.leftover_range = Some(<ruff_python_ast::ExprTuple as Ranged>::range(t));
-                    return;
-                }
-            }
-            if let ruff_python_ast::Expr::Subscript(s) = expr {
-                if s.is_typeof {
-                    self.leftover_typeof =
-                        Some(<ruff_python_ast::ExprSubscript as Ranged>::range(s));
-                    return;
-                }
-            }
-            ruff_python_ast::visitor::walk_expr(self, expr);
-        }
-    }
-
-    let mut scanner = AnonNamedTupleScanner {
-        leftover_range: None,
-        leftover_typeof: None,
-    };
-    for stmt in parsed.suite() {
-        scanner.visit_stmt(stmt);
-        if scanner.leftover_range.is_some() || scanner.leftover_typeof.is_some() {
-            break;
-        }
-    }
-    if let Some(range) = scanner.leftover_range {
-        let snippet = &source[usize::from(range.start())..usize::from(range.end())];
-        return Err(TranspileError {
-            kind: TranspileErrorKind::Bug,
-            message: format!("transpiler failed to lower anonymous named tuple syntax `{snippet}`"),
-            output_range: Some(range),
-            by_range: None,
-        });
-    }
-    if let Some(range) = scanner.leftover_typeof {
-        let snippet = &source[usize::from(range.start())..usize::from(range.end())];
-        return Err(TranspileError {
-            kind: TranspileErrorKind::Bug,
-            message: format!("transpiler failed to lower `typeof` syntax `{snippet}`"),
-            output_range: Some(range),
             by_range: None,
         });
     }
@@ -3849,5 +3878,185 @@ mod synthesized_class_names {
                 "the module's own `{name}` is passed over:\n{out}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod leftover_surface_syntax {
+    use ruff_db::files::{File, system_path_to_file, vendored_path_to_file};
+    use ruff_db::system::DbWithWritableSystem as _;
+    use ruff_db::vendored::{FileType, VendoredPathBuf};
+    use ruff_python_ast::PySourceType;
+
+    use super::{
+        CleanupRound, Config, SurfaceSyntax, WrittenNames, WrittenQuotes, make_in_memory_db,
+        run_cleanup_round,
+    };
+
+    /// what the cleanup finds to lower in `source`
+    fn spells(source: &str) -> Option<SurfaceSyntax> {
+        let parsed = ruff_python_parser::parse_unchecked_source(source, PySourceType::BasedPython);
+        SurfaceSyntax::find(parsed.suite(), SurfaceSyntax::CLEANED_UP).map(|(kind, _)| kind)
+    }
+
+    #[test]
+    fn an_anonymous_named_tuple_type_is_left_over() {
+        assert_eq!(
+            spells("def f(p: list[(a: int, b: str)]) -> None: ...\n"),
+            Some(SurfaceSyntax::AnonymousNamedTuple)
+        );
+    }
+
+    #[test]
+    fn an_anonymous_named_tuple_value_is_left_over() {
+        assert_eq!(
+            spells("def f() -> object:\n    return [(a=1, b=2)]\n"),
+            Some(SurfaceSyntax::AnonymousNamedTuple)
+        );
+    }
+
+    #[test]
+    fn an_inline_protocol_type_is_left_over() {
+        assert_eq!(
+            spells("def f(p: int | protocol(a: int)) -> None: ...\n"),
+            Some(SurfaceSyntax::InlineProtocol)
+        );
+    }
+
+    #[test]
+    fn an_inline_protocol_value_is_left_over() {
+        assert_eq!(
+            spells("class A:\n    P = protocol(a: int)\n"),
+            Some(SurfaceSyntax::InlineProtocol)
+        );
+    }
+
+    /// phase 3 reads the output as python, which rejects every basedpython-only form, so one
+    /// an earlier pass left behind fails the transpile rather than reaching python
+    #[test]
+    fn phase_3_rejects_a_leftover_basedpython_form() {
+        for output in [
+            "a = b = 1\nprint(a === b)\n",
+            "a = b = 1\nprint(a !== b)\n",
+            "x: (a: int)\n",
+            "x = (a=1)\n",
+            "P = protocol(a: int)\n",
+            "y = 1\nx: typeof y = y\n",
+        ] {
+            let error = super::verify_syntax(output, &super::AuthorNames::none())
+                .expect_err("a leftover basedpython form must not pass phase 3");
+            assert_eq!(
+                error.kind,
+                super::TranspileErrorKind::InvalidSyntax,
+                "{output:?}"
+            );
+            assert!(
+                error.message.contains("is not valid in .py files"),
+                "{output:?}: {}",
+                error.message
+            );
+        }
+    }
+
+    /// python that names its own named tuple and protocol, and builds plain tuples
+    const PYTHON: &str = concat!(
+        "from typing import NamedTuple, Protocol\n",
+        "\n",
+        "class P(NamedTuple):\n",
+        "    a: int\n",
+        "\n",
+        "class Q(Protocol):\n",
+        "    a: int\n",
+        "\n",
+        "def f(p: P = P(1), q: tuple[int, int] = (1, 2)) -> P:\n",
+        "    return P(*q[:1])\n",
+    );
+
+    #[test]
+    fn python_spells_none_of_it() {
+        assert_eq!(spells(PYTHON), None);
+    }
+
+    fn round(source: &str) -> CleanupRound {
+        let quotes = WrittenQuotes::default();
+        run_cleanup_round(
+            source,
+            WrittenNames::new(source),
+            &quotes,
+            &Config::test_default(),
+        )
+        .expect("the round should succeed")
+    }
+
+    /// the speedup: an output with nothing left to lower is passed over before any db is built
+    #[test]
+    fn a_round_over_python_builds_no_db() {
+        assert_eq!(round(PYTHON), CleanupRound::Skipped);
+    }
+
+    #[test]
+    fn a_round_over_a_leftover_lowers_it() {
+        let CleanupRound::Lowered(lowered) = round("def f(p: (a: int)) -> int:\n    return p.a\n")
+        else {
+            panic!("the leftover anonymous named tuple was not lowered");
+        };
+        assert_eq!(spells(&lowered), None, "{lowered}");
+    }
+
+    /// whether the db reads `file` as spelling an anonymous named tuple anywhere
+    fn spells_anonymous_named_tuple(db: &ty_project::TestDb, file: File) -> bool {
+        let module = ruff_db::parsed::parsed_module(
+            db,
+            ty_python_semantic::Db::program_file(db, file).python_file(db),
+        )
+        .load(db);
+        SurfaceSyntax::find(module.suite(), &[SurfaceSyntax::AnonymousNamedTuple]).is_some()
+    }
+
+    /// the cleanup passes over an output that spells no anonymous named tuple without asking
+    /// the checker which of its plain tuples it reads as one, which holds only while nothing
+    /// else its db reads spells one either
+    #[test]
+    fn vendored_stubs_spell_no_anonymous_named_tuple() {
+        let (mut db, _) = make_in_memory_db("");
+        db.write_file("/control.byi", "def f(p: (a: int, b: str)) -> None: ...\n")
+            .expect("write file failed");
+        let control = system_path_to_file(&db, "/control.byi").expect("file not in db");
+        assert!(
+            spells_anonymous_named_tuple(&db, control),
+            "the scan must see a stub that does spell one"
+        );
+
+        let mut scanned = 0;
+        let mut spelling = Vec::new();
+        let mut directories = vec![VendoredPathBuf::from("")];
+        while let Some(directory) = directories.pop() {
+            let entries: Vec<_> = ruff_db::Db::vendored(&db)
+                .read_directory(&directory)
+                .collect();
+            for entry in entries {
+                match entry.file_type() {
+                    FileType::Directory => directories.push(entry.into_path()),
+                    FileType::File => {
+                        if !matches!(entry.path().extension(), Some("pyi" | "byi")) {
+                            continue;
+                        }
+                        let file = vendored_path_to_file(&db, entry.path())
+                            .expect("a listed vendored file exists");
+                        scanned += 1;
+                        if spells_anonymous_named_tuple(&db, file) {
+                            spelling.push(entry.path().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(scanned > 0, "no vendored stub was scanned");
+        assert!(
+            spelling.is_empty(),
+            "these vendored stubs spell an anonymous named tuple, so the cleanup in \
+             `run_cleanup_round` can no longer pass over an output that spells none without \
+             asking the checker: {spelling:?}"
+        );
     }
 }
