@@ -2791,6 +2791,10 @@ BY_HOT char By_DepthEnter(ByDepth depth) {
 
 BY_HOT void By_DepthLeave(ByDepth depth) { (void)depth; }
 
+BY_HOT char By_DepthEnterConstruction(ByDepth depth) { return By_DepthEnter(depth); }
+
+BY_HOT void By_DepthLeaveConstruction(ByDepth depth) { (void)depth; }
+
 #else
 
 typedef struct {
@@ -2837,6 +2841,31 @@ BY_HOT char By_DepthEnter(ByDepth depth) {
 
 /* give back the frame an `By_DepthEnter` that succeeded took */
 BY_HOT void By_DepthLeave(ByDepth depth) { depth.thread->BY_PY_RECURSION_REMAINING++; }
+
+/* a construction compiled code makes on a cycle of compiled calls, which is python's call
+ * of the type and then the frame of the `__init__` that call runs. from 3.12 the type's
+ * call is counted against the C stack's own count and only the frame is the recursion
+ * limit's, but 3.11 has one count for both, so there a construction takes two */
+BY_HOT char By_DepthEnterConstruction(ByDepth depth) {
+#if PY_VERSION_HEX < 0x030C0000
+    if (By_DepthEnter(depth)) return 1;
+    if (BY_UNLIKELY(By_DepthEnter(depth))) {
+        By_DepthLeave(depth);
+        return 1;
+    }
+    return 0;
+#else
+    return By_DepthEnter(depth);
+#endif
+}
+
+/* give back what a `By_DepthEnterConstruction` that succeeded took */
+BY_HOT void By_DepthLeaveConstruction(ByDepth depth) {
+#if PY_VERSION_HEX < 0x030C0000
+    By_DepthLeave(depth);
+#endif
+    By_DepthLeave(depth);
+}
 
 #endif /* BY_RECURSION_STACK_ONLY */
 
@@ -9942,11 +9971,15 @@ static PyObject *By_InstanceDict_ior(PyObject *selfobj, PyObject *other) {
     return By_NewRef(selfobj);
 }
 
-/* every name the object has, removed one at a time. a field the layout treats as always
- * defined refuses, which is what an emitted instance being its layout means — and it
- * refuses loudly rather than leaving half a mapping behind */
+/* every name the object has, removed, as python's `dict.clear` empties an instance's dict
+ * without asking any descriptor. a field is removed through its own setter, which takes a
+ * delete for every field the mapping names
+ *
+ * the entries are held until every one is gone, because python's own clear lets go of the
+ * values only once the dict is empty: a `__del__` that letting go of one runs finds the
+ * object already cleared, rather than the fields after its own still standing */
 static PyObject *By_InstanceDict_clearmethod(PyObject *selfobj, PyObject *unused) {
-    PyObject *keys;
+    PyObject *items;
     Py_ssize_t index;
     Py_ssize_t count;
     (void)unused;
@@ -9954,16 +9987,17 @@ static PyObject *By_InstanceDict_clearmethod(PyObject *selfobj, PyObject *unused
         PyDict_Clear(selfobj);
         Py_RETURN_NONE;
     }
-    keys = PyDict_Keys(selfobj);
-    if (keys == NULL) return NULL;
-    count = PyList_GET_SIZE(keys);
+    items = PyDict_Items(selfobj);
+    if (items == NULL) return NULL;
+    count = PyList_GET_SIZE(items);
     for (index = 0; index < count; index++) {
-        if (By_InstanceDict_assign(selfobj, PyList_GET_ITEM(keys, index), NULL) < 0) {
-            Py_DECREF(keys);
+        PyObject *key = PyTuple_GET_ITEM(PyList_GET_ITEM(items, index), 0);
+        if (By_InstanceDict_assign(selfobj, key, NULL) < 0) {
+            Py_DECREF(items);
             return NULL;
         }
     }
-    Py_DECREF(keys);
+    Py_DECREF(items);
     Py_RETURN_NONE;
 }
 
@@ -10330,8 +10364,7 @@ failed:
 }
 
 /* `obj.__dict__ = mapping`, which python takes as replacing the whole of an object's
- * state — so every name the object has and the mapping does not is removed first. a
- * field the layout treats as always defined cannot be removed and says so */
+ * state — so every name the object has and the mapping does not is removed first */
 static inline int By_InstanceDictReplace(PyObject *owner, const By_DictField *fields,
                                          PyObject *value) {
     PyObject *standing;

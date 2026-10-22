@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::mangle::mangle;
 use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
@@ -704,12 +705,11 @@ impl FieldDecl {
     /// reserved words would have to be kept correct against every C version and
     /// compiler extension forever; a prefix cannot collide with any of them
     ///
-    /// the prefix also says whether the name was generated, and it has
-    /// to. `$` is not a portable C identifier character — msvc rejects it — so `mangle`
-    /// turns it into `_`, which is exactly the character a source name may hold: `$state`
-    /// and a local called `_state` both came out as `by_f__state`, and a generator taking
-    /// a parameter of that name declared one struct member twice and failed the *build*.
-    /// separating the two prefixes is what the `$` was already meant to be doing
+    /// the name is [mangled](crate::mangle::mangle), which keeps every two names apart:
+    /// `$state` and a local called `_state` once both came out as `by_f__state`, and a
+    /// generator taking a parameter of that name declared one struct member twice and
+    /// failed the *build*. the prefix also says whether the name was generated, which is
+    /// what reading the emitted struct wants to know
     pub fn member(&self) -> String {
         format!("{}{}", self.member_prefix("f"), mangle(&self.name))
     }
@@ -1780,8 +1780,18 @@ impl ModuleIr {
 
     /// the C identifier for the module's init function, which cpython looks up by
     /// name when loading the extension
+    ///
+    /// the name is not [mangled](crate::mangle::mangle), because cpython asks for exactly
+    /// `PyInit_<name>`. a character a C identifier cannot hold becomes `_`, which no
+    /// interpreter will find either, but which leaves the C building
     pub fn init_symbol(&self) -> String {
-        format!("PyInit_{}", mangle(self.name.last_component()))
+        let name: String = self
+            .name
+            .last_component()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        format!("PyInit_{name}")
     }
 }
 
@@ -1894,13 +1904,6 @@ impl From<String> for ModuleName {
     }
 }
 
-/// map a dotted or otherwise punctuated name onto a C identifier
-fn mangle(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -1977,8 +1980,26 @@ mod tests {
     #[test]
     fn symbols_are_c_identifiers() {
         let f = function();
-        assert_eq!(f.native_symbol("pkg.mod"), "by_pkg_mod_add");
-        assert_eq!(f.wrapper_symbol("pkg.mod"), "byw_pkg_mod_add");
+        assert_eq!(f.native_symbol("pkg.mod"), "by_10pkgZ2e_mod_3add");
+        assert_eq!(f.wrapper_symbol("pkg.mod"), "byw_10pkgZ2e_mod_3add");
+    }
+
+    /// a function whose name spells a class's and a method's with `_` between is not that
+    /// method, and the two once shared every symbol and failed the build
+    #[test]
+    fn a_method_and_a_function_spelled_alike_have_their_own_symbols() {
+        let mut spelled_alike = function();
+        spelled_alike.name = "A_b".to_string();
+        let mut method = function();
+        method.name = "b".to_string();
+        method.owner = Some("A".to_string());
+        for symbol in [
+            Function::native_symbol,
+            Function::wrapper_symbol,
+            Function::interpreted_symbol,
+        ] {
+            assert_ne!(symbol(&spelled_alike, "m"), symbol(&method, "m"));
+        }
     }
 
     #[test]

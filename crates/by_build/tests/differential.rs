@@ -3172,6 +3172,65 @@ data class Point:
 }
 
 #[test]
+fn a_construction_compiled_code_makes_counts_as_python_s_does() {
+    // a compiled `__init__` that builds another instance of its class goes round a cycle
+    // of compiled calls, and each round is python's call of the type and then the frame of
+    // the `__init__` that call runs. 3.11 counts both against the limit, and the compiled
+    // construction counted only the frame, so the recursion went twice as deep there.
+    //
+    // from 3.13 python specialises the construction inside `__init__`, which takes a second
+    // frame a level once the call site is warm — see runtime.md#how-deep-a-recursion-goes.
+    // a metaclass is one thing that keeps it from doing so, and a compiled class with one
+    // declines, so the depth is held to the same class written with one in python: a
+    // recursion of the construction python makes when it does not specialise
+    let source = "\
+class Node:
+    def __init__(self, n: int) -> None:
+        self.child = Node(n - 1) if n else None
+";
+    let Some(compiled) = agree_python_built(
+        "recconstruct",
+        source,
+        &[
+            "(lambda node: (node.child.child.child.child is None, type(node.child).__name__))(m.Node(3))",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            &format!(
+                "import sys\n\
+                 import by_diff_recconstruct as m\n\
+                 assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+                 print(type(vars(m.Node)['__init__']).__name__)\n\
+                 class Unspecialised(type):\n\
+                 \x20   pass\n\
+                 namespace = {{'Unspecialised': Unspecialised}}\n\
+                 exec({source:?}.replace('class Node:', 'class Node(metaclass=Unspecialised):'), \
+                 namespace)\n\
+                 def deepest(construct):\n\
+                 \x20   sys.setrecursionlimit(100)\n\
+                 \x20   n = 0\n\
+                 \x20   while True:\n\
+                 \x20       try:\n\
+                 \x20           construct(n=n)\n\
+                 \x20       except RecursionError:\n\
+                 \x20           return n - 1\n\
+                 \x20       n += 1\n\
+                 print(deepest(m.Node) == deepest(namespace['Node']))\n"
+            ),
+        ),
+        "wrapper_descriptor\nTrue"
+    );
+}
+
+#[test]
 fn a_recursive_body_keeps_the_copy_it_is_versioned_against_in_a_function_of_its_own() {
     // a function versioned at its entry holds two copies of itself: the one the test says
     // yes to, which knows its parameters are exactly `int`s and that the names it calls
@@ -3217,11 +3276,17 @@ def outer(n: int) -> int:
     let c = std::fs::read_to_string(compiled.join("by_diff_recsplit.c"))
         .expect("the emitted C is kept");
     assert!(
-        c.contains("__attribute__((noinline)) static ByTagged byu_by_diff_recsplit_fib(ByDepth by_depth, ByTagged r0) {"),
+        c.contains(&format!(
+            "__attribute__((noinline)) static ByTagged {}(ByDepth by_depth, ByTagged r0) {{",
+            symbol("byu", &["by_diff_recsplit", "fib"], "")
+        )),
         "the copy the test says no to is not a C function of its own:\n{c}"
     );
     assert!(
-        c.contains("else return byu_by_diff_recsplit_fib(by_depth, r0);"),
+        c.contains(&format!(
+            "else return {}(by_depth, r0);",
+            symbol("byu", &["by_diff_recsplit", "fib"], "")
+        )),
         "the test does not reach it by an uncounted call:\n{c}"
     );
 }
@@ -12330,9 +12395,10 @@ frozen data class Fixed:
         \x20   except (TypeError, AttributeError) as e:\n        print(type(e).__name__)\n\
         \x20   else:\n        print('accepted')\n",
     );
-    // the frozen write is *not* part of that delta: `FrozenInstanceError` is what the
-    // interpreted twin raises, and the emitted type's `__setattr__` raises the same
-    assert_eq!(out, "5\nTypeError\nAttributeError\nFrozenInstanceError");
+    // the delete and the frozen write are *not* part of that delta: python deletes a
+    // field its slot holds, and `FrozenInstanceError` is what the interpreted twin raises,
+    // which the emitted type's `__setattr__` raises the same
+    assert_eq!(out, "5\nTypeError\naccepted\nFrozenInstanceError");
 }
 
 #[test]
@@ -17181,44 +17247,51 @@ fn a_for_over_a_compiled_generator_is_emitted_as_its_type_s_step() {
     }
     let emitted = std::fs::read_to_string(dir.join("by_diff_stepped_pin.c"))
         .expect("the generated C is written beside the extension");
-    let step =
-        "By_by_diff_stepped_pin_counting_gen_Type_next((By_by_diff_stepped_pin_counting_gen *)";
+    let module = "by_diff_stepped_pin";
+    let step = format!(
+        "{}(({} *)",
+        symbol("By", &[module, "counting$gen"], "_Type_next"),
+        symbol("By", &[module, "counting$gen"], ""),
+    );
     for symbol in [
-        "by_by_diff_stepped_pin_total",
-        "by_by_diff_stepped_pin_collected",
-        "by_by_diff_stepped_pin_left_and_resumed",
-        "by_by_diff_stepped_pin_relayed_gen__resume",
+        symbol("by", &[module, "total"], ""),
+        symbol("by", &[module, "collected"], ""),
+        symbol("by", &[module, "left_and_resumed"], ""),
+        symbol("by", &[module, "relayed$gen", "$resume"], ""),
     ] {
-        let body = emitted_function(&emitted, symbol);
-        assert!(body.contains(step), "{symbol}: {body}");
+        let body = emitted_function(&emitted, &symbol);
+        assert!(body.contains(&step), "{symbol}: {body}");
         assert!(body.contains(", by_depth, 1)"), "{symbol}: {body}");
     }
     // a frame handed no depth looks it up once, and a generator's body is handed the one
     // its step counted
     assert!(
-        emitted_function(&emitted, "by_by_diff_stepped_pin_total")
+        emitted_function(&emitted, &symbol("by", &[module, "total"], ""))
             .contains("ByDepth by_depth = By_DepthHere();"),
         "{emitted}"
     );
     assert!(
-        !emitted_function(&emitted, "by_by_diff_stepped_pin_relayed_gen__resume")
-            .contains("By_DepthHere"),
+        !emitted_function(
+            &emitted,
+            &symbol("by", &[module, "relayed$gen", "$resume"], "")
+        )
+        .contains("By_DepthHere"),
         "{emitted}"
     );
     // a generator expression is stepped the same way, and a loop whose iterable is not
     // known to be one is left to the protocol with no depth looked up for it
     assert!(
-        emitted_function(&emitted, "by_by_diff_stepped_pin_over_an_expression")
-            .contains("_genexpr0_gen_Type_next(("),
+        emitted_function(&emitted, &symbol("by", &[module, "over_an_expression"], ""))
+            .contains("genexpr0Z24_gen_Type_next(("),
         "{emitted}"
     );
     // `tp_iternext` finishes quietly through the same step
     assert!(
         emitted_function(
             &emitted,
-            "By_by_diff_stepped_pin_counting_gen_Type_iternext"
+            &symbol("By", &[module, "counting$gen"], "_Type_iternext")
         )
-        .contains("By_by_diff_stepped_pin_counting_gen_Type_next("),
+        .contains(&symbol("By", &[module, "counting$gen"], "_Type_next(")),
         "{emitted}"
     );
 }
@@ -17595,8 +17668,11 @@ async def streamed() -> Any:
         ("awaited", "BY_FRAME_COROUTINE"),
         ("streamed", "BY_FRAME_ASYNC_GENERATOR"),
     ] {
-        let symbol = format!("By_by_diff_framekind_pin_{function}_gen_Type_send");
-        let send = emitted_function(&emitted, &symbol);
+        let state = format!("{function}$gen");
+        let send = emitted_function(
+            &emitted,
+            &symbol("By", &["by_diff_framekind_pin", &state], "_Type_send"),
+        );
         assert!(send.contains(kind), "{function}: {send}");
         for other in [
             "BY_FRAME_GENERATOR",
@@ -17616,20 +17692,150 @@ async def streamed() -> Any:
     // `__anext__` hands back, which is its `send` with nothing sent. a coroutine has no
     // such step of its own — it is not an iterator
     for symbol in [
-        "By_by_diff_framekind_pin_plain_gen_Type_next",
-        "By_by_diff_framekind_pin_streamed_gen_Type_asend_send",
+        symbol("By", &["by_diff_framekind_pin", "plain$gen"], "_Type_next"),
+        symbol(
+            "By",
+            &["by_diff_framekind_pin", "streamed$gen"],
+            "_Type_asend_send",
+        ),
     ] {
-        let step = emitted_function(&emitted, symbol);
+        let step = emitted_function(&emitted, &symbol);
         assert!(step.contains("Py_None"), "{symbol}: {step}");
     }
     assert!(
-        emitted_function(&emitted, "By_by_diff_framekind_pin_plain_gen_Type_iternext")
-            .contains("By_by_diff_framekind_pin_plain_gen_Type_next("),
+        emitted_function(
+            &emitted,
+            &symbol(
+                "By",
+                &["by_diff_framekind_pin", "plain$gen"],
+                "_Type_iternext"
+            )
+        )
+        .contains(&symbol(
+            "By",
+            &["by_diff_framekind_pin", "plain$gen"],
+            "_Type_next("
+        )),
         "{emitted}"
     );
     assert!(
-        !emitted.contains("By_by_diff_framekind_pin_awaited_gen_Type_iternext"),
+        !emitted.contains(&symbol(
+            "By",
+            &["by_diff_framekind_pin", "awaited$gen"],
+            "_Type_iternext"
+        )),
         "{emitted}"
+    );
+}
+
+/// an emitted symbol: `prefix`, then each name [mangled](by_ir::mangle::mangle) and joined
+/// with `_`, then `suffix`
+fn symbol(prefix: &str, names: &[&str], suffix: &str) -> String {
+    let names: Vec<String> = names
+        .iter()
+        .map(|name| by_ir::mangle::mangle(name))
+        .collect();
+    format!("{prefix}_{}{suffix}", names.join("_"))
+}
+
+/// names python tells apart are emitted under symbols C tells apart
+///
+/// each name used to have every character a C identifier cannot hold replaced with `_`,
+/// and its parts joined with `_`: so `é1` and `_1` were one symbol, a function `A_b` and
+/// the method `b` of a class `A` were one, the class `Foo_Type` was the type object of the
+/// class `Foo`, and the module failed to build. a property's setter, named `value$set`,
+/// declined rather than meet a method `value_set`
+#[test]
+fn names_python_tells_apart_build_under_their_own_symbols() {
+    agree_python(
+        "manglednames",
+        "\
+from collections.abc import Iterator
+
+
+def A_b() -> int:
+    return 1
+
+
+def é1() -> int:
+    return 2
+
+
+def _1() -> int:
+    return 3
+
+
+class A:
+    def b(self) -> int:
+        return 4
+
+
+class Foo_Type:
+    def kind(self) -> str:
+        return \"Foo_Type\"
+
+
+class Foo:
+    def kind(self) -> str:
+        return \"Foo\"
+
+
+class Point_Type_get_x:
+    pass
+
+
+class Point:
+    def __init__(self, x: int, é1: int, _1: int) -> None:
+        self.x = x
+        self.é1 = é1
+        self._1 = _1
+
+    def total(self) -> int:
+        return self.x + self.é1 + self._1
+
+
+class Settable:
+    def __init__(self) -> None:
+        self.held = 0
+
+    @property
+    def value(self) -> int:
+        return self.held
+
+    @value.setter
+    def value(self, v: int) -> None:
+        self.held = v
+
+    def value_set(self) -> str:
+        return \"method\"
+
+
+def counted_é(n: int) -> Iterator[int]:
+    for i in range(n):
+        yield i
+
+
+def counted__(n: int) -> Iterator[int]:
+    for i in range(n):
+        yield i + 1
+
+
+def outer(n: int) -> int:
+    def é(k: int) -> int:
+        return k + n
+
+    def _(k: int) -> int:
+        return k * n
+
+    return é(1) + _(2)
+",
+        &[
+            "(m.A_b(), m.é1(), m._1(), m.A().b(), m.Foo_Type().kind(), m.Foo().kind())",
+            "[(p.total(), p.é1, p._1, vars(p)) for p in [m.Point(1, 2, 3)]]",
+            "[(setattr(s, 'value', 5), s.value, s.value_set()) for s in [m.Settable()]]",
+            "(list(m.counted_é(3)), list(m.counted__(3)), m.outer(5))",
+            "type(m.Point_Type_get_x()).__name__",
+        ],
     );
 }
 
@@ -17706,7 +17912,11 @@ def written(n: int) -> object:
     let resume = |name: &str| {
         emitted_function(
             &emitted,
-            &format!("by_by_diff_finish_pin_{name}_gen__resume"),
+            &symbol(
+                "by",
+                &["by_diff_finish_pin", &format!("{name}$gen"), "$resume"],
+                "",
+            ),
         )
     };
     let finishes = |body: &str| body.matches("->by_returned = by_t;").count();
@@ -31779,12 +31989,13 @@ async def drains(source: Any) -> list[int]:
     );
 }
 
+// a resumable frame's `return` *is* a `StopIteration`, so raising it under the enclosing
+// `with`'s error target handed that exception to `__exit__` as though the block had failed.
+// the cleanups run first now, and the raise leaves without a target of its own. the three
+// tests below are one program split by the frame that leaves, so each compiles a third of it
+
 #[test]
 fn leaving_a_context_early_runs_its_exit_with_no_exception() {
-    // a resumable frame's `return` *is* a `StopIteration`, so raising it under the
-    // enclosing `with`'s error target handed that exception to `__exit__` as though
-    // the block had failed. the cleanups run first now, and the raise leaves without
-    // a target of its own
     agree_python(
         "earlyexit",
         "\
@@ -31804,6 +32015,21 @@ def bare(manager: Any, log: list[str]) -> Any:
     with manager as name:
         yield str(name)
         return
+",
+        &[
+            "_logged(lambda t, log: list(m.returned(t, log, 2)))",
+            "_logged(lambda t, log: _value(m.returned(t, log, 2)))",
+            "_logged(lambda t, log: _value(m.bare(t, log)))",
+        ],
+    );
+}
+
+#[test]
+fn leaving_an_async_context_runs_its_exit_with_no_exception() {
+    agree_python(
+        "earlyexit_async",
+        "\
+from typing import Any
 
 
 async def returns(manager: Any, log: list[str]) -> str:
@@ -31822,6 +32048,21 @@ async def raises(manager: Any, log: list[str]) -> str:
     async with manager as name:
         log.append('body ' + str(name))
         raise ValueError('boom')
+",
+        &[
+            "_logged(lambda t, log: _run(m.returns(t, log)))",
+            "_logged(lambda t, log: _run(m.falls(t, log)))",
+            "_logged(lambda t, log: _run(m.raises(t, log)))",
+        ],
+    );
+}
+
+#[test]
+fn leaving_a_loop_or_a_nested_async_context_runs_each_exit_with_no_exception() {
+    agree_python(
+        "earlyexit_async_nested",
+        "\
+from typing import Any
 
 
 async def breaks(manager: Any, log: list[str], n: int) -> str:
@@ -31848,12 +32089,6 @@ async def pair(manager: Any, log: list[str]) -> str:
         return 'pair'
 ",
         &[
-            "_logged(lambda t, log: list(m.returned(t, log, 2)))",
-            "_logged(lambda t, log: _value(m.returned(t, log, 2)))",
-            "_logged(lambda t, log: _value(m.bare(t, log)))",
-            "_logged(lambda t, log: _run(m.returns(t, log)))",
-            "_logged(lambda t, log: _run(m.falls(t, log)))",
-            "_logged(lambda t, log: _run(m.raises(t, log)))",
             "_logged(lambda t, log: _run(m.breaks(t, log, 4)))",
             "_logged(lambda t, log: _run(m.pair(t, log)))",
             "_nested(lambda a, b, log: _run(m.nested(a, b, log)))",
@@ -33922,7 +34157,7 @@ def classify(v: object) -> int:
     };
     let c = std::fs::read_to_string(compiled.join("by_diff_onelayouttest.c"))
         .expect("the emitted C is kept");
-    let body = one_function(&c, "_classify(");
+    let body = one_function(&c, &format!("_{}(", by_ir::mangle::mangle("classify")));
     assert!(
         body.contains("PyObject_TypeCheck("),
         "the layout test is gone:\n{body}"
@@ -37935,7 +38170,7 @@ def area_of(shape: Shape) -> int:
         };
         assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
         let c = std::fs::read_to_string(&built.artifact.source).expect("the generated C is read");
-        let body = one_function(&c, "_area_of(");
+        let body = one_function(&c, &format!("_{}(", by_ir::mangle::mangle("area_of")));
         assert!(
             body.contains("By_MethodStands("),
             "the licence test is gone:\n{body}"
@@ -38264,7 +38499,11 @@ class Quiet(Base):
     let generated =
         std::fs::read_to_string(built.artifact.source).expect("the generated c is there");
     let (_, tail) = generated
-        .split_once("By_by_diff_inheritedinitslot_Quiet_Type_slots[]")
+        .split_once(&symbol(
+            "By",
+            &["by_diff_inheritedinitslot", "Quiet"],
+            "_Type_slots[]",
+        ))
         .expect("the subclass has a slot table");
     let (slots, _) = tail.split_once("};").expect("the slot table ends");
     assert!(!slots.contains("Py_tp_init"), "the subclass filled tp_init");
@@ -38410,11 +38649,12 @@ fn a_slots_declaration_is_storage_the_emitted_type_owns() {
     let generated =
         std::fs::read_to_string(built.artifact.source).expect("the generated c is there");
     let (_, tail) = generated
-        .split_once("struct By_by_diff_slotsowned_Link {")
+        .split_once(&symbol("struct By", &["by_diff_slotsowned", "Link"], " {"))
         .expect("`Link` has an instance struct");
     let (fields, _) = tail.split_once('}').expect("the struct ends");
     assert!(
-        fields.contains("by_f_prev") && fields.contains("by_p_prev"),
+        fields.contains(&format!("by_f_{}", by_ir::mangle::mangle("prev")))
+            && fields.contains(&format!("by_p_{}", by_ir::mangle::mangle("prev"))),
         "`Link` kept no room for `prev`: {fields}"
     );
 }
@@ -41507,6 +41747,238 @@ fn the_class_that_deletes_an_attribute_is_the_compiled_one() {
     assert_eq!(out, "method_descriptor method_descriptor");
 }
 
+const REASSIGNS_CLASS: &str = "\
+class Base:
+    def __init__(self) -> None:
+        self.x = 1
+
+    def name(self) -> str:
+        return \"base\"
+
+    def both(self) -> str:
+        return self.name() + self.name()
+
+
+class Circle(Base):
+    def name(self) -> str:
+        return \"circle\"
+
+
+class Shape(Base):
+    def name(self) -> str:
+        return \"shape\"
+
+
+class Wide(Base):
+    def __init__(self) -> None:
+        super().__init__()
+        self.y = 2
+
+
+class Lone:
+    def __init__(self) -> None:
+        self.x = 1
+
+
+class Other:
+    def __init__(self) -> None:
+        self.x = 1
+
+
+def describe(b: Base) -> str:
+    return b.name() + b.both()
+";
+
+/// an instance moved to a class laid out as its own one is reaches that class through
+/// compiled code, and one python refuses to move is refused in python's words
+///
+/// two classes the module extends that share a base and add no field to it lay their
+/// instances out alike, so python takes the move. a call compiled against the base asks the
+/// instance's type before it reaches a method directly, so the move is seen — see
+/// runtime.md#an-instances-__class__-reassigned
+#[test]
+fn an_instance_moved_to_a_class_laid_out_alike_answers_as_that_class() {
+    agree_python(
+        "classmove",
+        REASSIGNS_CLASS,
+        &[
+            "[(setattr(o, '__class__', m.Shape), type(o).__name__, m.describe(o), o.both(), o.x) \
+              for o in [m.Circle()]]",
+            "repr(_capture(setattr, m.Circle(), '__class__', int))",
+            "repr(_capture(setattr, m.Lone(), '__class__', int))",
+        ],
+    );
+}
+
+/// and every other move between two compiled classes is refused, where python's classes take
+/// it
+///
+/// the refusal is python's own, made against the layouts the module emitted: a class nothing
+/// extends is an immutable type, and a class and its base, or a subclass that adds a field,
+/// lay their instances out differently. it is what keeps a method reached directly working
+/// on the layout its class was compiled with. these are the documented differences, held
+/// here so a change to either is seen
+#[test]
+fn an_instance_moved_between_compiled_classes_laid_out_apart_is_refused() {
+    let Some(compiled) = agree_python_built(
+        "classmoveapart",
+        REASSIGNS_CLASS,
+        &["m.describe(m.Circle())"],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_classmoveapart as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             for source, target in ((m.Circle, m.Base), (m.Base, m.Circle), (m.Circle, m.Wide), \
+             (m.Lone, m.Other)):\n\
+             \x20   try:\n\
+             \x20       source().__class__ = target\n\
+             \x20   except TypeError as error:\n\
+             \x20       print(error)\n",
+        ),
+        "__class__ assignment: 'Base' object layout differs from 'Circle'\n\
+         __class__ assignment: 'Circle' object layout differs from 'Base'\n\
+         __class__ assignment: 'Wide' object layout differs from 'Circle'\n\
+         __class__ assignment only supported for mutable types or ModuleType subclasses"
+    );
+}
+
+/// a field the module never deletes is deleted from outside it as python deletes one
+///
+/// every field python can name has an absent state, the one an instance `__init__` never
+/// ran on is in, so a delete from another module puts it back there. it used to refuse with
+/// `cannot delete an attribute`, whatever the field held, where python deletes. a compiled
+/// read that follows finds it gone, a second delete raises python's own words — which name
+/// only the attribute where the class keeps it in a slot — and a write sets it again
+#[test]
+fn a_field_deleted_from_outside_the_module_is_gone() {
+    agree_python(
+        "outsidedelete",
+        "\
+from collections.abc import Callable
+
+
+class Point:
+    def __init__(self, x: int, y: float, label: str, flag: bool) -> None:
+        self.x = x
+        self.y = y
+        self.label = label
+        self.flag = flag
+
+    def total(self) -> float:
+        return self.x + self.y
+
+    def describe(self) -> str:
+        return self.label + str(self.flag)
+
+
+class Slotted:
+    __slots__ = (\"a\",)
+
+    def __init__(self, a: int) -> None:
+        self.a = a
+
+    def read(self) -> int:
+        return self.a
+
+
+def around(p: Point, hook: Callable[[Point], object]) -> int:
+    first = p.x
+    hook(p)
+    return first + p.x
+",
+        &[
+            "[(n, delattr(p, n), hasattr(p, n), repr(_capture(delattr, p, n))) \
+              for p in [m.Point(1, 2.0, 's', True)] for n in ('x', 'y', 'label', 'flag')]",
+            "[(delattr(p, 'x'), repr(_capture(p.total)), setattr(p, 'x', 5), p.total()) \
+              for p in [m.Point(1, 2.0, 's', True)]]",
+            "[(delattr(p, 'flag'), repr(_capture(p.describe)), vars(p)) \
+              for p in [m.Point(1, 2.0, 's', True)]]",
+            "[(delattr(s, 'a'), repr(_capture(s.read)), repr(_capture(delattr, s, 'a'))) \
+              for s in [m.Slotted(1)]]",
+            "repr(_capture(m.around, m.Point(1, 2.0, 's', True), lambda p: delattr(p, 'x')))",
+            "m.around(m.Point(1, 2.0, 's', True), lambda p: setattr(p, 'x', 10))",
+        ],
+    );
+}
+
+/// a store lets go of the value it replaces once the new one is in place, as python's own
+/// store does
+///
+/// letting go of the old value can run its `__del__`, and one that deletes or reads the
+/// field it was held in has to find the new value there. the store used to let go first,
+/// and the finalizer found the value being let go of still in the field — where deleting
+/// it would have let go of it a second time
+#[test]
+fn a_finalizer_a_store_runs_finds_the_new_value_in_place() {
+    agree_python(
+        "storethenrelease",
+        "\
+class Holder:
+    def __init__(self, held: object) -> None:
+        self.held = held
+        self.seen = \"\"
+
+    def replace(self, value: object) -> None:
+        self.held = value
+",
+        &[
+            "(lambda h: (setattr(h, 'held', type('Fin', (), {'__del__': lambda self: delattr(h, 'held')})()), \
+              h.replace(2), hasattr(h, 'held')))(m.Holder(1))[2]",
+            "(lambda h: (setattr(h, 'held', type('Fin', (), {'__del__': lambda self: setattr(h, 'seen', repr(h.held))})()), \
+              h.replace(3), h.seen, h.held))(m.Holder(1))[2:]",
+            "(lambda h: (setattr(h, 'held', type('Fin', (), {'__del__': lambda self: setattr(h, 'seen', repr(h.held))})()), \
+              setattr(h, 'held', 4), h.seen, h.held))(m.Holder(1))[2:]",
+        ],
+    );
+}
+
+/// `obj.__dict__.clear()` removes every attribute, as python's clears an instance's dict
+///
+/// it went through each name in turn and stopped at the first field that refused to be
+/// deleted, leaving the names before it gone and the rest in place. it lets go of what it
+/// removed only once every name is gone, as python's clear does, so a `__del__` that
+/// letting go runs finds the object already cleared. `obj.__dict__ = {...}` removes what
+/// the new mapping does not hold the same way
+#[test]
+fn clearing_an_instance_dict_removes_every_attribute() {
+    agree_python(
+        "dictclear",
+        "\
+class Record:
+    def __init__(self, a: int, b: str) -> None:
+        self.a = a
+        self.b = b
+
+    def both(self) -> str:
+        return str(self.a) + self.b
+
+
+class Box:
+    def __init__(self, held: object, tag: str) -> None:
+        self.held = held
+        self.tag = tag
+",
+        &[
+            "[(d.__setitem__('extra', 3), d.clear(), vars(r), [hasattr(r, n) for n in ('a', 'b', 'extra')], \
+               repr(_capture(r.both))) for r in [m.Record(1, 'x')] for d in [r.__dict__]]",
+            "[(setattr(r, 'extra', 3), setattr(r, '__dict__', {'b': 'y'}), vars(r), \
+               [hasattr(r, n) for n in ('a', 'b', 'extra')]) for r in [m.Record(1, 'x')]]",
+            "[(d.clear(), setattr(r, 'a', 2), setattr(r, 'b', 'z'), r.both(), vars(r)) \
+              for r in [m.Record(1, 'x')] for d in [r.__dict__]]",
+            "[(setattr(b, 'held', type('Fin', (), {'__del__': lambda self: setattr(b, 'seen', sorted(vars(b)))})()), \
+               b.__dict__.clear(), vars(b)) for b in [m.Box(None, 'x')]][0][2]",
+        ],
+    );
+}
+
 /// and it releases what the field held exactly once
 ///
 /// a delete that forgot to release leaks the value; one that cleared the byte without
@@ -43363,18 +43835,21 @@ def keys(n: int) -> str:
     }
     let emitted = std::fs::read_to_string(dir.join("by_diff_strofint_shape.c"))
         .expect("the generated C is written beside the extension");
-    let body = emitted_function(&emitted, "by_by_diff_strofint_shape_keys");
+    let body = emitted_function(
+        &emitted,
+        &symbol("by", &["by_diff_strofint_shape", "keys"], ""),
+    );
     // the conversion is fused, the argument's `PyLong` is gone with it, and the
     // resolution the fusion is guarded on is still made — through the memo, which
     // re-derives it whenever a namespace has been written to since the last answer
     assert!(body.contains("By_StrOfInt("), "{body}");
     assert!(!body.contains("By_BoxInt("), "{body}");
     assert!(
-        body.contains("By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str)"),
+        body.contains("By_LookupGlobalSite(&by_gs_3str, by_module_dict, by_g_3str)"),
         "{body}"
     );
     assert!(
-        body.contains("static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;"),
+        body.contains("static ByGlobalSite by_gs_3str = BY_GLOBAL_SITE_INIT;"),
         "{body}"
     );
 }
@@ -43467,13 +43942,16 @@ def joined(n: int) -> str:
     // string the digits used to be built into is gone — and with it the second
     // allocation and the copy back out of it. the resolution the fast path is
     // guarded on is still made, through the same memo the unfused shape used
-    let body = emitted_function(&emitted, "by_by_diff_strconcatint_shape_keys");
+    let body = emitted_function(
+        &emitted,
+        &symbol("by", &["by_diff_strconcatint_shape", "keys"], ""),
+    );
     assert!(body.contains("By_StrConcatInt("), "{body}");
     assert!(!body.contains("By_StrOfInt("), "{body}");
     assert!(!body.contains("By_StrConcat("), "{body}");
     assert!(!body.contains("By_UnboxStr("), "{body}");
     assert!(
-        body.contains("By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str)"),
+        body.contains("By_LookupGlobalSite(&by_gs_3str, by_module_dict, by_g_3str)"),
         "{body}"
     );
 
@@ -43481,7 +43959,10 @@ def joined(n: int) -> str:
     // resize in place, and a chain of those is linear where a chain of copies would
     // be quadratic — which is worth more than the one small allocation fusing it
     // would save
-    let body = emitted_function(&emitted, "by_by_diff_strconcatint_shape_joined");
+    let body = emitted_function(
+        &emitted,
+        &symbol("by", &["by_diff_strconcatint_shape", "joined"], ""),
+    );
     assert!(body.contains("By_StrAddAppend("), "{body}");
     assert!(!body.contains("By_StrConcatInt("), "{body}");
 }
@@ -43528,7 +44009,10 @@ def once(i: int) -> str:
     let emitted = std::fs::read_to_string(dir.join("by_diff_strconcatint_shared.c"))
         .expect("the generated C is written beside the extension");
     for name in ["twice", "once"] {
-        let body = emitted_function(&emitted, &format!("by_by_diff_strconcatint_shared_{name}"));
+        let body = emitted_function(
+            &emitted,
+            &symbol("by", &["by_diff_strconcatint_shared", name], ""),
+        );
         assert!(body.contains("By_StrOfInt("), "{name}: {body}");
         assert!(!body.contains("By_StrConcatInt("), "{name}: {body}");
     }
@@ -46816,58 +47300,40 @@ class Derived(Base):
     );
 }
 
-/// build `source` as python, import it, and hand back the directory it was built into and
-/// the message the import refused with
-fn refused_import(tag: &str, source: &str) -> Option<(Scratch, String)> {
-    let (python, toolchain) = environment()?;
-    let dir = Scratch::new(format!("by_diff_{tag}_r"));
-    let module = format!("by_diff_{tag}");
-    let options = Options {
-        language: by_irbuild::Language::Python,
-        ..Options::default()
-    };
-    if let Err(error) = build_source(source, module.as_str(), &toolchain, &dir, &options) {
-        assert!(
-            missing_toolchain(&error),
-            "{tag} failed to build: {error:#}"
-        );
-        eprintln!("skipping {tag}: no working C toolchain ({error})");
-        return None;
-    }
-    let message = run(
+/// which build answers for `class` in the module built into `dir`: `method_descriptor` for
+/// the compiled one, `function` where the module stood down to its interpreted definition
+fn answering_build(dir: &Path, module: &str, class: &str, method: &str) -> Option<String> {
+    let (python, _) = environment()?;
+    Some(run(
         &python,
-        &dir,
+        dir,
         &format!(
-            "try:\n\
-             \x20   import {module}\n\
-             except ImportError as error:\n\
-             \x20   print(error)\n\
-             else:\n\
-             \x20   print('the import was not refused')\n"
+            "import {module} as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.{class})['{method}']).__name__)\n"
         ),
-    );
-    Some((dir, message))
+    ))
 }
 
 #[test]
-fn a_mixture_left_on_a_base_the_module_replaced_refuses_the_import() {
-    // `dict` owns its instances and the emitted `Ours` owns its own, so the two cannot
-    // be mixed and the construction hands back the interpreted definition to stand as
-    // `AsDict` — which the module body built on the interpreted `Ours`, while the name
-    // `Ours` now means the emitted type. `isinstance(m.AsDict(), m.Ours)` is then False
-    // where python answers True.
+fn a_mixture_left_on_a_base_the_module_replaced_stands_the_module_down() {
+    // `dict` owns its instances and the emitted `Ours` owns its own, so from 3.12 the two
+    // cannot be laid out as one and the construction hands back the interpreted definition
+    // to stand as `AsDict` — which the module body built on the interpreted `Ours`, while
+    // the name `Ours` already means the emitted type. `isinstance(m.AsDict(), m.Ours)` would
+    // then be False where python answers True: a wrong answer, and invisible to every other
+    // comparison of the two legs.
     //
-    // that is a wrong answer, not a slow one, and it is invisible to every comparison of
-    // the two legs: both classes still answer every call the same way, and both spell
-    // their `__mro__` with the same names. so the import refuses, and the module is
-    // unusable rather than quietly wrong until the compiler stands the whole family down
-    // instead. `logging/config.py` is the shape in the standard library, where
-    // `ConvertingDict(dict, ConvertingMixin)` is the same three lines
+    // whether the two can be laid out as one is the interpreter's own rule over whatever the
+    // bases' names hold at import, so only the import can tell. it used to refuse, which
+    // left the module unusable; it stands the whole module down to its interpreted
+    // definition instead, which answers as python does. `logging/config.py` is the shape in
+    // the standard library, where `ConvertingDict(dict, ConvertingMixin)` is the same three
+    // lines
     //
     // below 3.12 python lays out a class over a base whose instances keep nothing past a
     // dict and weak references as if that base kept nothing at all, so `AsDict` stands on
-    // the emitted `Ours` and there is nothing orphaned to refuse. the module is then the
-    // compiled one, and answers as python does
+    // the emitted `Ours` and the module is the compiled one
     let source = "\
 class Ours:
     def side(self) -> str:
@@ -46880,36 +47346,43 @@ class Ours:
 class AsDict(dict, Ours):
     def label(self) -> str:
         return \"dict\"
+
+
+def make() -> Ours:
+    return Ours()
 ";
-    let Some((_dir, message)) = refused_import("orphanmix", source) else {
+    let Some(dir) = agree_python_built(
+        "orphanmix",
+        source,
+        &[
+            "(isinstance(m.AsDict(), m.Ours), [c.__name__ for c in m.AsDict.__mro__])",
+            "[(d.label(), d.side(), d.twice(), d) for d in [m.AsDict(a=1, b=2, c=3)]]",
+            "[(setattr(d, 'extra', 4), d.extra, d.twice()) for d in [m.AsDict(a=1)]]",
+            "(isinstance(m.make(), m.Ours), m.make().twice())",
+        ],
+    ) else {
         return;
     };
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
-        assert_eq!(message, "the import was not refused");
-        agree_python(
-            "orphanmix_a",
-            source,
-            &[
-                "(isinstance(m.AsDict(), m.Ours), [c.__name__ for c in m.AsDict.__mro__])",
-                "[(d.label(), d.side(), d.twice(), d) for d in [m.AsDict(a=1, b=2, c=3)]]",
-                "[(setattr(d, 'extra', 4), d.extra, d.twice()) for d in [m.AsDict(a=1)]]",
-            ],
-        );
+    let Some((_, toolchain)) = environment() else {
         return;
-    }
+    };
+    let expected = if supports(&toolchain, (3, 12)) {
+        "function"
+    } else {
+        "method_descriptor"
+    };
     assert_eq!(
-        message,
-        "by_diff_orphanmix.AsDict stands on an orphaned base: by_diff_orphanmix.Ours is \
-         what this module's own base of that name means and is not among its __bases__, \
-         so isinstance answers False where python answers True"
+        answering_build(&dir, "by_diff_orphanmix", "Ours", "twice").as_deref(),
+        Some(expected)
     );
 }
 
 #[test]
-fn a_class_on_two_bases_of_this_modules_own_refuses_the_import() {
+fn a_class_on_two_bases_of_this_modules_own_stands_the_module_down() {
     // the same failure without an outside base in sight: two emitted classes each own
-    // their instances, so `type(\"Mixin\", (Root, Extra), ...)` cannot lay one out either,
-    // and `Mixin` is left as the definition the body built on the two interpreted ones
+    // their instances, so `type(\"Mixin\", (Root, Extra), ...)` cannot lay one out either
+    // from 3.12, and `Mixin` would be left as the definition the body built on the two
+    // interpreted ones
     //
     // below 3.12 the two lay out as one, as they do for `AsDict` above, so `Mixin` stands on
     // both emitted bases
@@ -46931,28 +47404,29 @@ class Mixin(Root, Extra):
     def tag(self) -> int:
         return 1
 ";
-    let Some((_dir, message)) = refused_import("orphanpair", source) else {
+    let Some(dir) = agree_python_built(
+        "orphanpair",
+        source,
+        &[
+            "(isinstance(m.Mixin(), m.Root), isinstance(m.Mixin(), m.Extra))",
+            "[c.__name__ for c in m.Mixin.__mro__]",
+            "[(x.kind(), x.extra(), x.both(), x.tag()) for x in [m.Mixin()]]",
+            "[(setattr(x, 'extra_field', 4), x.extra_field, x.both()) for x in [m.Mixin()]]",
+        ],
+    ) else {
         return;
     };
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
-        assert_eq!(message, "the import was not refused");
-        agree_python(
-            "orphanpair_a",
-            source,
-            &[
-                "(isinstance(m.Mixin(), m.Root), isinstance(m.Mixin(), m.Extra))",
-                "[c.__name__ for c in m.Mixin.__mro__]",
-                "[(x.kind(), x.extra(), x.both(), x.tag()) for x in [m.Mixin()]]",
-                "[(setattr(x, 'extra_field', 4), x.extra_field, x.both()) for x in [m.Mixin()]]",
-            ],
-        );
+    let Some((_, toolchain)) = environment() else {
         return;
-    }
+    };
+    let expected = if supports(&toolchain, (3, 12)) {
+        "function"
+    } else {
+        "method_descriptor"
+    };
     assert_eq!(
-        message,
-        "by_diff_orphanpair.Mixin stands on an orphaned base: by_diff_orphanpair.Root is \
-         what this module's own base of that name means and is not among its __bases__, \
-         so isinstance answers False where python answers True"
+        answering_build(&dir, "by_diff_orphanpair", "Extra", "both").as_deref(),
+        Some(expected)
     );
 }
 
