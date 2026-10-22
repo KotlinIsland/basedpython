@@ -17,6 +17,7 @@
 //! to be one implementation of each.
 
 use std::ffi::OsStr;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -112,11 +113,26 @@ impl Rebuilder {
 /// returns the `\\?\` verbatim form and the second does not — so a caller that
 /// re-derived it would find none of the db's paths under it.
 pub type ProjectBuild = (
-    ProjectDatabase,
+    FrozenProjectDatabase,
     Vec<(PathBuf, ruff_db::files::File)>,
     Rebuilder,
     PathBuf,
 );
+
+/// a project db for a command that runs once, whose inputs are frozen
+///
+/// it hands out only a shared [`ProjectDatabase`], because salsa panics on a write to a frozen
+/// input and a write needs the db by `&mut`. a clone of that handle can still be written
+/// through, and panics the same way
+pub struct FrozenProjectDatabase(ProjectDatabase);
+
+impl Deref for FrozenProjectDatabase {
+    type Target = ProjectDatabase;
+
+    fn deref(&self) -> &ProjectDatabase {
+        &self.0
+    }
+}
 
 /// the sources `build`, `run` and `transpile` claim: a `.py` beside a `.by`
 /// is that file's own output, so writing beside it again would be circular
@@ -276,7 +292,15 @@ pub fn build_project_db(
         .with_context(|| format!("non-utf8 path: {}", canonical_root.display()))?;
 
     let metadata = project_metadata.clone();
-    let db = ProjectDatabase::use_defaults(project_metadata, system);
+    let mut db = ProjectDatabase::use_defaults(project_metadata, system);
+    // what `by check` does to its db, for the same reasons: the command runs once and changes
+    // no input, so salsa need not record a dependency on each one, and every parsed syntax
+    // tree is kept until it exits rather than evicted, a trade only a short-lived db should
+    // make. the freeze reaches only files indexed after it, so it comes before the sources
+    // are read
+    ruff_db::disable_lru(&mut db);
+    db.freeze_open_files();
+    db.freeze();
 
     let mut sources = project_sources(&db, extensions, &canonical_root, output);
     // the walk is over a hash set, so order is arbitrary; emit deterministically
@@ -291,7 +315,12 @@ pub fn build_project_db(
         root: sys_root.to_path_buf(),
         included,
     };
-    Ok((db, sources, rebuilder, canonical_root))
+    Ok((
+        FrozenProjectDatabase(db),
+        sources,
+        rebuilder,
+        canonical_root,
+    ))
 }
 
 /// The sources a build claims out of a db that already exists.
@@ -356,8 +385,60 @@ pub fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_hidden_within;
+    use super::{BY_SOURCES, build_project_db, is_hidden_within};
+    use ruff_db::files::File;
+    use salsa::Setter as _;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::Path;
+    use ty_project::{Db, ProjectDatabase};
+
+    /// whether salsa refuses `write` because the input it writes is frozen
+    ///
+    /// each write gets a db of its own, built outside the panic it is expected to raise, so a
+    /// build that panics on its own fails the test rather than passing it
+    fn refuses_as_frozen(write: impl FnOnce(&mut ProjectDatabase, File)) -> bool {
+        let project = tempfile::tempdir().expect("tempdir");
+        std::fs::write(project.path().join("main.by"), "x = 1\n").expect("a source");
+        let (db, sources, _, _) =
+            build_project_db(project.path(), BY_SOURCES, None).expect("a project db");
+        assert_eq!(sources.len(), 1);
+        let file = sources[0].1;
+        let mut db = db.0;
+        let Err(panic) = catch_unwind(AssertUnwindSafe(|| write(&mut db, file))) else {
+            return false;
+        };
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        message.contains("never-changing inputs cannot be mutated")
+    }
+
+    /// the sources are frozen as `by check` freezes them, which only holds for a file indexed
+    /// after the freeze: one indexed before it stays mutable, and checking it costs what an
+    /// incremental db does
+    #[test]
+    fn the_sources_a_build_reads_never_change() {
+        assert!(refuses_as_frozen(|db, file| {
+            file.set_source_text_override(db).to(None);
+        }));
+    }
+
+    #[test]
+    fn the_project_a_build_reads_never_changes() {
+        assert!(refuses_as_frozen(|db, _| {
+            db.project().set_included_paths(db, Vec::new());
+        }));
+    }
+
+    #[test]
+    fn a_build_never_has_open_files() {
+        assert!(refuses_as_frozen(|db, _| {
+            db.project()
+                .set_open_files(db, std::iter::empty().collect());
+        }));
+    }
 
     #[test]
     fn a_hidden_directory_is_not_project_source() {

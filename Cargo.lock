@@ -441,6 +441,7 @@ dependencies = [
  "dunce",
  "rayon",
  "ruff_db",
+ "salsa",
  "serde",
  "serde_json",
  "sha2",

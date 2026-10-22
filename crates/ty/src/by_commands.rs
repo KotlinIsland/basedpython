@@ -1338,17 +1338,17 @@ pub(crate) fn cmd_compile(
                 Err(error) => break 'compiling Err(error),
             };
 
-            let program_file = ty_python_semantic::Db::program_file(&db, *file);
+            let program_file = ty_python_semantic::Db::program_file(&*db, *file);
             let parsed =
-                ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
-            let model = ty_python_semantic::SemanticModel::new(&db, program_file);
+                ruff_db::parsed::parsed_module(&*db, program_file.python_file(&*db)).load(&*db);
+            let model = ty_python_semantic::SemanticModel::new(&*db, program_file);
             // a `.py` source needs no transpiling to be its own interpreted fallback
             let mut options = options.clone();
             if path.extension().is_some_and(|x| x == "py") {
                 options.language = by_irbuild::Language::Python;
             }
             let mut lowered = by_irbuild::build_module(
-                &db,
+                &*db,
                 &model.program_environment(),
                 &model,
                 parsed.suite(),
