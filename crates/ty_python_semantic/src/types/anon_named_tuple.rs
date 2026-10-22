@@ -10,13 +10,8 @@ use ruff_python_ast::name::Name;
 use salsa::plumbing::AsId;
 
 use crate::Db;
-use crate::types::class::{
-    ClassLiteral, DynamicNamedTupleAnchor, DynamicNamedTupleLiteral, NamedTupleSpec,
-};
+use crate::types::class::{ClassLiteral, DynamicNamedTupleLiteral, NamedTupleSpec};
 use crate::types::{ProgramEnvironment, Type, UnionType};
-
-/// the prefix of every synthesized anonymous named tuple class's name
-const CLASS_PREFIX: &str = "_AnonNamedTuple_";
 
 /// the class and field specification of an anonymous named tuple `ty` is an instance
 /// of, or (for a type form in a value position) the class itself
@@ -33,14 +28,8 @@ pub(crate) fn anon_named_tuple_class<'db>(
     let ClassLiteral::DynamicNamedTuple(class) = literal else {
         return None;
     };
-    if !class.name(db).as_str().starts_with(CLASS_PREFIX) {
-        return None;
-    }
-    match class.anchor(db) {
-        DynamicNamedTupleAnchor::ScopeOffset { spec, .. } => Some((class, *spec)),
-        DynamicNamedTupleAnchor::CollectionsDefinition { .. }
-        | DynamicNamedTupleAnchor::TypingDefinition(_) => None,
-    }
+    let spec = class.anchor(db).anonymous_spec()?;
+    Some((class, spec))
 }
 
 /// every anonymous named tuple instance `expected` allows, in the order its union

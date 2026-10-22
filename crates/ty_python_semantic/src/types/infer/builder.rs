@@ -66,9 +66,9 @@ use crate::types::call::{Argument, Binding, Bindings, CallArguments, CallError, 
 use crate::types::call_type_forms::CallTypeForm;
 use crate::types::callable::CallableTypeKind;
 use crate::types::class::{
-    ClassLiteral, CodeGeneratorKind, DynamicClassScopeOffset, DynamicNamedTupleAnchor,
-    DynamicNamedTupleLiteral, DynamicTypedDictAnchor, DynamicTypedDictLiteral,
-    FrozenDataclassDispatch, MethodDecorator, NamedTupleField, NamedTupleSpec, StaticClassLiteral,
+    ClassLiteral, CodeGeneratorKind, DynamicNamedTupleAnchor, DynamicNamedTupleLiteral,
+    DynamicTypedDictAnchor, DynamicTypedDictLiteral, FrozenDataclassDispatch, MethodDecorator,
+    NamedTupleField, NamedTupleSpec, StaticClassLiteral,
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
@@ -8815,6 +8815,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Type::inline_protocol(self.db(), env, members, packs.into_boxed_slice())
     }
 
+    /// the class of the anonymous named tuple form `tuple`, which the parser flagged as one —
+    /// `is_anon_named_tuple` for a type, `is_anon_named_tuple_value` for a value. it is the only
+    /// way the checker makes an anonymous named tuple class, so whether a type is one is read
+    /// off its [`DynamicNamedTupleAnchor::Anonymous`] anchor
     fn synthesize_anon_named_tuple_class(
         &mut self,
         tuple: &ast::ExprTuple,
@@ -8881,14 +8885,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let class_name =
             ruff_python_ast::name::Name::new(format!("_AnonNamedTuple_{truncated:08x}"));
 
-        // Anchor at the module-scope with a constant offset of 0 so structural
-        // identity (driven entirely by `spec`) determines the synthesized
-        // class. Different shapes produce different specs; identical shapes
-        // unify across the file.
+        // Anchor at the module-scope so structural identity (driven entirely
+        // by `spec`) determines the synthesized class. Different shapes produce
+        // different specs; identical shapes unify across the file.
         let module_scope = global_scope(db, db.program_file(self.file()));
-        let anchor = DynamicNamedTupleAnchor::ScopeOffset {
+        let anchor = DynamicNamedTupleAnchor::Anonymous {
             scope: module_scope,
-            offset: DynamicClassScopeOffset::Node(0),
             spec,
         };
 

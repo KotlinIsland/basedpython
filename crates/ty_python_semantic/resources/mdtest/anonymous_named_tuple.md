@@ -236,3 +236,22 @@ a: (name: str, age: int) = ("a", 0)
 b: (name: str, age: int) = ("b", 1)
 b = a
 ```
+
+## A named tuple the program makes is never anonymous
+
+Only an anonymous named tuple form makes an anonymous named tuple. A `NamedTuple` class the program
+makes itself is an ordinary named tuple whatever it is called, even when its name is the one
+basedpython gives the class it synthesizes, so a plain tuple is not read as an instance of it.
+
+```by
+from typing import NamedTuple
+
+def instances[T](cls: type[T]) -> list[T]:
+    return []
+
+xs = instances(NamedTuple("_AnonNamedTuple_deadbeef", [("a", int)]))
+reveal_type(xs)  # revealed: list[_AnonNamedTuple_deadbeef]
+
+# error: [invalid-argument-type]
+xs.append((1,))
+```

@@ -22,7 +22,7 @@ use ty_module_resolver::{KnownModule, Module, file_to_module};
 use crate::Db;
 use crate::place::{DefinedPlace, Place, builtins_symbol, global_symbol};
 use crate::types::callable::CallableTypeKind;
-use crate::types::class::{ClassLiteral, ClassType, DynamicNamedTupleAnchor, GenericAlias};
+use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::function::{FunctionType, OverloadLiteral};
 use crate::types::generics::{GenericContext, Specialization};
@@ -1371,34 +1371,27 @@ impl<'db> FmtDetailed<'db> for ClassDisplay<'_, 'db> {
         // class name. Positional fields use the synthetic `arg<i>` name and
         // are rendered without a label
         if let ClassLiteral::DynamicNamedTuple(nt) = self.class
-            && nt.name(self.db).as_str().starts_with("_AnonNamedTuple_")
+            && let Some(spec) = nt.anchor(self.db).anonymous_spec()
         {
-            let spec = match nt.anchor(self.db) {
-                DynamicNamedTupleAnchor::CollectionsDefinition { spec, .. }
-                | DynamicNamedTupleAnchor::ScopeOffset { spec, .. } => Some(*spec),
-                DynamicNamedTupleAnchor::TypingDefinition(_) => None,
-            };
-            if let Some(spec) = spec {
-                let fields = spec.fields(self.db);
-                let ty = Type::ClassLiteral(self.class);
-                let mut f = f.with_type(ty);
-                f.write_char('(')?;
-                for (i, field) in fields.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    let synthetic_pos = field.name.as_str() == format!("arg{i}");
-                    if !synthetic_pos {
-                        write!(f, "{}: ", field.name)?;
-                    }
-                    field
-                        .ty
-                        .display_with(self.db, env, self.settings.clone())
-                        .fmt_detailed(&mut f)?;
+            let fields = spec.fields(self.db);
+            let ty = Type::ClassLiteral(self.class);
+            let mut f = f.with_type(ty);
+            f.write_char('(')?;
+            for (i, field) in fields.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
                 }
-                f.write_char(')')?;
-                return Ok(());
+                let synthetic_pos = field.name.as_str() == format!("arg{i}");
+                if !synthetic_pos {
+                    write!(f, "{}: ", field.name)?;
+                }
+                field
+                    .ty
+                    .display_with(self.db, env, self.settings.clone())
+                    .fmt_detailed(&mut f)?;
             }
+            f.write_char(')')?;
+            return Ok(());
         }
 
         let qualification_level = self.settings.qualified.get(&**self.class.name(self.db));
