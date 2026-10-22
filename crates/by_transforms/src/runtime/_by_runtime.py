@@ -396,17 +396,26 @@ class _Template:
 # `None` a field nothing lowered, which keeps the interpolation python built and so
 # stays byte-identical to what python would have reported
 #
+# the author's text keeps the whitespace before the `=`, conversion, format spec or
+# `}` that ends the field, which is what python reports from 3.14.8 on. 3.14.0 to
+# 3.14.7 dropped it (python/cpython#154719), so there it is dropped here too, or a
+# lowered field would report different text from an untouched field beside it
+#
 # the import is made here rather than at the top of the file because this module is
 # shared with runtimes that have no `string.templatelib`. only a t-string can reach
 # this helper, and a t-string needs 3.14
 def _by_template(_t, _exprs):
     from string.templatelib import Interpolation, Template
+    from sys import version_info
 
+    _drops_trailing_space = version_info < (3, 14, 8)
     _strings = _t.strings
     _parts = []
     for _index, _field in enumerate(_t.interpolations):
         _parts.append(_strings[_index])
         _expr = _exprs[_index]
+        if _expr is not None and _drops_trailing_space:
+            _expr = _expr.rstrip()
         _parts.append(
             _field
             if _expr is None
