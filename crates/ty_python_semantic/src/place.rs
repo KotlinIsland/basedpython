@@ -19,6 +19,7 @@ use crate::reachability::{
     NarrowingProjector, ReachabilityEvaluationCache, evaluate_reachability,
     evaluate_reachability_with_cache,
 };
+use crate::types::check_order::InferredInCheckOrder;
 use crate::types::{
     DynamicType, KnownClass, MemberLookupPolicy, Type, TypeAndQualifiers, TypeQualifiers,
     UnionBuilder, UnionType, binding_type, inferred_declaration, is_discarded_dict_key_assignment,
@@ -612,12 +613,20 @@ pub(crate) enum RuntimeRead<'a> {
 /// completes, which a module the checker finds never ends, one that stops with `sys.exit()`
 /// say, needs. a binding made under `if TYPE_CHECKING:` never runs, which is how an import
 /// cycle is broken
+///
+/// the answer reads the bindings the module makes after the read, and the conditions they
+/// are made under, so it is asked only once the scopes around the read are inferred
+/// ([`InferredInCheckOrder`]), never by inference itself: asked from inside the module's
+/// inference, each later condition would be inferred inside the inference of the next.
+/// inference records where to ask ([`crate::types::runtime_reads`])
 pub(crate) fn runtime_binding<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    file: ProgramFile<'db>,
     read: RuntimeRead<'_>,
+    inferred: InferredInCheckOrder<'db>,
 ) -> RuntimeBinding {
+    // a question is asked of the file whose inference the proof is for, and of no other
+    let file = inferred.file();
     let index = semantic_index(db, file);
     let module = parsed_module(db, file.python_file(db)).load(db);
     match read {

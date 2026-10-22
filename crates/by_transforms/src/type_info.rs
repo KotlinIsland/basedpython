@@ -21,7 +21,7 @@ use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
 use ty_python_semantic::{
-    AnonNamedTupleClass, AnonNamedTupleId, Db, HasType, ImplicitReceiverReference,
+    AnonNamedTupleClass, AnonNamedTupleId, Db, HasType, ImplicitReceiverReference, LoweringModel,
     ProgramEnvironment, SemanticModel,
 };
 
@@ -874,7 +874,7 @@ pub(crate) use ty_python_semantic::types::soundness::CastCheck;
 /// re-export of the ty-side framework role so transforms name a single type
 pub(crate) use ty_python_semantic::types::FrameworkRole;
 
-impl TypeInfo for SemanticModel<'_> {
+impl TypeInfo for LoweringModel<'_> {
     fn is_type_fn_application(&self, expr: &Expr) -> bool {
         let Expr::Subscript(subscript) = expr else {
             return false;
@@ -999,7 +999,7 @@ impl TypeInfo for SemanticModel<'_> {
         &self,
         call: &ruff_python_ast::ExprCall,
     ) -> Option<RuntimeSpelling> {
-        SemanticModel::reified_call_specialization(self, call)
+        LoweringModel::reified_call_specialization(self, call)
     }
 
     fn constructor_specialization(
@@ -1022,7 +1022,7 @@ impl TypeInfo for SemanticModel<'_> {
         lhs: &Expr,
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan> {
-        SemanticModel::parametric_is_plan(self, lhs, rhs)
+        LoweringModel::parametric_is_plan(self, lhs, rhs)
     }
 
     fn is_plain_value(&self, expr: &Expr) -> bool {
@@ -1502,18 +1502,11 @@ impl TypeInfo for SemanticModel<'_> {
     }
 
     fn reads_names_bound_where_written(&self, expr: &Expr) -> bool {
-        SemanticModel::reads_names_bound_where_written(self, expr)
+        LoweringModel::reads_names_bound_where_written(self, expr)
     }
 
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck> {
-        let ty = type_expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::cast_check_plan(
-            self.db(),
-            &self.program_environment(),
-            self.file(),
-            ty,
-            Some(type_expr),
-        )
+        LoweringModel::checked_cast_plan(self, type_expr)
     }
 
     fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool {
@@ -1761,7 +1754,7 @@ fn display_for_python<'db>(
 
 /// `class` with each field's type spelled for the emitted python
 fn anon_named_tuple_construction<'db>(
-    model: &SemanticModel<'db>,
+    model: &LoweringModel<'db>,
     class: AnonNamedTupleClass<'db>,
     min_version: ruff_python_ast::PythonVersion,
 ) -> AnonNamedTupleConstruction {
@@ -1818,7 +1811,7 @@ fn anon_named_tuple_construction<'db>(
 fn spell_for_python<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    model: &SemanticModel<'db>,
+    model: &LoweringModel<'db>,
     ty: Type<'db>,
     min_version: ruff_python_ast::PythonVersion,
     literal: bool,
@@ -1921,7 +1914,7 @@ fn typing_name(name: &str, literal: bool) -> Option<&'static str> {
 /// signature it annotates. Anything else would reach the output unresolved, so the spelling
 /// is refused rather than written with a name that is not there.
 fn resolvable_in_output(
-    model: &SemanticModel<'_>,
+    model: &LoweringModel<'_>,
     min_version: ruff_python_ast::PythonVersion,
     spelled: &SynthesizedType,
     bare_classes: &[String],

@@ -51,6 +51,7 @@ use crate::types::definition_resolution::user_visible_definitions;
 use crate::types::diagnostic::{TypeCheckDiagnostics, UNUSED_IMPORT};
 use crate::types::extensions::{extension_granting_imports, extensions_in_module};
 use crate::types::lowering_reads::spelled_module_reads;
+use crate::types::runtime_reads::file_runtime_read_checks;
 use crate::types::{ProgramEnvironment, Type};
 use crate::{Db, FxIndexMap};
 
@@ -224,8 +225,11 @@ impl<'db> Uses<'db> {
                 .map(|extension| extension.name(db).clone()),
         );
         // a type the transpiled program writes out names its classes as the module binds them
-        let model = crate::SemanticModel::new(db, file);
+        let model = crate::LoweringModel::new(db, file);
         module_names.extend(spelled_module_reads(&model, parsed.suite()));
+        for checks in file_runtime_read_checks(db, file) {
+            module_names.extend(checks.module_reads.iter().cloned());
+        }
 
         Self {
             definitions,

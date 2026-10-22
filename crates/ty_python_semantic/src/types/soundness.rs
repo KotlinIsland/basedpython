@@ -12,7 +12,6 @@
 //!   what second argument does that check take? (`runtime_check_target`)
 
 use ruff_db::files::File;
-use ruff_python_ast as ast;
 
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
@@ -205,20 +204,20 @@ fn python_string_literal(value: &str) -> String {
 /// keeps the emitted code from ever running `isinstance` against a subscripted
 /// or non-`@runtime_checkable` protocol, which raises at runtime.
 ///
-/// `written_at` is the cast's written target, where the check runs: a check whose target
-/// reads a name that does not hold there the binding the checker resolved has no plan
-pub fn cast_check_plan<'db>(
+/// `site` is the cast's written target, where the check runs: a check whose target reads a
+/// name that does not hold there the binding the checker resolved has no plan
+pub(crate) fn cast_check_plan<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-    written_at: Option<&ast::Expr>,
+    site: Option<RuntimeSite<'db>>,
 ) -> Option<CastCheck> {
     let plan = cast_check_plan_anywhere(db, env, file, ty)?;
-    if let Some(site) = written_at.map(RuntimeSite::at)
+    if let Some(site) = site
         && plan
             .spelling()
-            .is_some_and(|spelling| spelling.unbound_read(db, env, file, site).is_some())
+            .is_some_and(|spelling| spelling.unbound_read(db, env, site).is_some())
     {
         return None;
     }
@@ -249,7 +248,7 @@ fn cast_check_plan_anywhere<'db>(
 
 /// whether a checked cast to `target` has no faithful runtime residue and must
 /// degrade to an unchecked `typing.cast`: a protocol target that
-/// [`cast_check_plan`] cannot validate structurally. this is what stops the
+/// `cast_check_plan` cannot validate structurally. this is what stops the
 /// transpiler emitting `isinstance(value, <protocol>)`, which raises at runtime
 pub fn cast_target_is_unverifiable_protocol<'db>(
     db: &'db dyn Db,

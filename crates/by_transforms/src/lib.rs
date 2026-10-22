@@ -132,7 +132,7 @@ fn run_context_sensitive_phase<'a>(
     if !parsed.errors().is_empty() {
         return std::borrow::Cow::Borrowed(source);
     }
-    let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    let model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     model.infer_in_check_order();
     transforms::context_sensitive::qualify(source, parsed.suite(), &model)
 }
@@ -160,7 +160,7 @@ fn run_erased_union_phase<'a>(
     if !parsed.errors().is_empty() {
         return std::borrow::Cow::Borrowed(source);
     }
-    let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    let model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     model.infer_in_check_order();
     transforms::erased_union::reify(source, parsed.suite(), &model, config.min_version)
 }
@@ -287,7 +287,7 @@ fn transpile_with_report(
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
-    let model = ty_python_semantic::SemanticModel::new(
+    let model = ty_python_semantic::LoweringModel::new(
         &db,
         ty_python_semantic::Db::program_file(&db, file),
     );
@@ -511,7 +511,7 @@ pub fn transpile_typed_with_report(
     };
     // which imports must stay eager, computed against the *project* db: a
     // single-file db cannot resolve the modules that declare the conformances
-    let eager_model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    let eager_model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
     let eager_names = eager_model.eagerly_imported_names();
     let (spliced, ast_errors, phase0_map) = transforms::ast_driver::run_against_source(
@@ -698,7 +698,7 @@ fn run_cleanup_round(
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
-    let model = ty_python_semantic::SemanticModel::new(
+    let model = ty_python_semantic::LoweringModel::new(
         &db,
         ty_python_semantic::Db::program_file(&db, file),
     );
@@ -904,7 +904,7 @@ fn run_lazy_import_phase(
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
-    let model = ty_python_semantic::SemanticModel::new(
+    let model = ty_python_semantic::LoweringModel::new(
         &db,
         ty_python_semantic::Db::program_file(&db, file),
     );
@@ -1703,7 +1703,7 @@ pub fn optional_marker_edits(source: &str) -> Vec<(TextRange, String)> {
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
-    let model = ty_python_semantic::SemanticModel::new(
+    let model = ty_python_semantic::LoweringModel::new(
         &db,
         ty_python_semantic::Db::program_file(&db, file),
     );
@@ -1734,7 +1734,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
-    let model = ty_python_semantic::SemanticModel::new(
+    let model = ty_python_semantic::LoweringModel::new(
         &db,
         ty_python_semantic::Db::program_file(&db, file),
     );

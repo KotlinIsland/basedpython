@@ -18,14 +18,14 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, Stmt};
 
-use crate::semantic_model::SemanticModel;
+use crate::semantic_model::LoweringModel;
 use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::types::soundness_sites::{SoundnessPositions, soundness_sites};
 
 /// every module-level name a spelling the transpiled program writes for `suite` reads. every
 /// soundness position counts, because which ones a build enables is the build's choice and
 /// the answer has to hold for any build of the file
-pub(crate) fn spelled_module_reads(model: &SemanticModel<'_>, suite: &[Stmt]) -> Vec<Name> {
+pub(crate) fn spelled_module_reads(model: &LoweringModel<'_>, suite: &[Stmt]) -> Vec<Name> {
     let mut spellings = Spellings {
         model,
         reads: Vec::new(),
@@ -40,7 +40,7 @@ pub(crate) fn spelled_module_reads(model: &SemanticModel<'_>, suite: &[Stmt]) ->
 }
 
 struct Spellings<'a, 'db> {
-    model: &'a SemanticModel<'db>,
+    model: &'a LoweringModel<'db>,
     reads: Vec<Name>,
 }
 

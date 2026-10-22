@@ -39,7 +39,7 @@ pub(crate) fn unquote_forward_references(source: &str) -> String {
     if !module.errors().is_empty() {
         return source.to_owned();
     }
-    let model = ty_python_semantic::SemanticModel::new(&db, program_file);
+    let model = ty_python_semantic::LoweringModel::new(&db, program_file);
     let ranges = literal_type_strings(source, module.suite(), &model);
     let mut strings = Strings {
         ranges: &ranges,

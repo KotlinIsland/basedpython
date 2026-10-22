@@ -20,25 +20,33 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
 use crate::types::ProgramEnvironment;
+use crate::types::check_order::InferredInCheckOrder;
 use crate::types::visibility::private_symbols;
 
 /// where a lowering writes a spelling into code that runs, which decides what each name it
-/// reads holds there
+/// reads holds there. what a name holds there is asked only once the scopes around the code
+/// are inferred, so a site is made only with the proof that they are
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeSite {
+pub(crate) struct RuntimeSite<'db> {
     range: TextRange,
+    inferred: InferredInCheckOrder<'db>,
 }
 
-impl RuntimeSite {
-    /// the code `node` is written as
-    pub(crate) fn at(node: &impl Ranged) -> Self {
+impl<'db> RuntimeSite<'db> {
+    /// the code `node` is written as, in the file `inferred` is for
+    pub(crate) fn at(node: &impl Ranged, inferred: InferredInCheckOrder<'db>) -> Self {
         Self {
             range: node.range(),
+            inferred,
         }
     }
 
     pub(crate) fn range(self) -> TextRange {
         self.range
+    }
+
+    pub(crate) fn inferred(self) -> InferredInCheckOrder<'db> {
+        self.inferred
     }
 }
 
@@ -117,21 +125,9 @@ impl RuntimeSpelling {
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
-        file: File,
-        site: RuntimeSite,
+        site: RuntimeSite<'db>,
     ) -> Option<(Name, RuntimeBinding)> {
-        self.global_reads().find_map(|name| {
-            let binding = runtime_binding(
-                db,
-                env,
-                db.program_file(file),
-                RuntimeRead::Global {
-                    name,
-                    range: site.range,
-                },
-            );
-            (binding != RuntimeBinding::Bound).then(|| (name.clone(), binding))
-        })
+        first_unbound_read(db, env, self.global_reads(), site)
     }
 
     pub(crate) fn push_str(&mut self, text: &str) {
@@ -191,4 +187,26 @@ impl RuntimeSpelling {
     pub fn source(&self) -> String {
         self.spelled(ToOwned::to_owned)
     }
+}
+
+/// the first of the module-level names `reads` that does not hold, where `site` runs, the
+/// binding the checker resolved — with what it holds instead
+pub(crate) fn first_unbound_read<'a, 'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    reads: impl IntoIterator<Item = &'a Name>,
+    site: RuntimeSite<'db>,
+) -> Option<(Name, RuntimeBinding)> {
+    reads.into_iter().find_map(|name| {
+        let binding = runtime_binding(
+            db,
+            env,
+            RuntimeRead::Global {
+                name,
+                range: site.range,
+            },
+            site.inferred,
+        );
+        (binding != RuntimeBinding::Bound).then(|| (name.clone(), binding))
+    })
 }

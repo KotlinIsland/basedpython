@@ -11,7 +11,7 @@ use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
 use ruff_python_ast::Stmt;
 use ty_project::{ProjectMetadata, TestDb};
-use ty_python_semantic::{ProgramEnvironment, SemanticModel};
+use ty_python_semantic::{LoweringModel, ProgramEnvironment};
 
 use crate::Language;
 
@@ -22,7 +22,7 @@ pub(crate) fn with_source<T>(
     f: impl FnOnce(
         &dyn ty_python_semantic::Db,
         &ProgramEnvironment<'_>,
-        &SemanticModel<'_>,
+        &LoweringModel<'_>,
         &[Stmt],
     ) -> T,
 ) -> T {
@@ -37,14 +37,14 @@ pub(crate) fn with_source_in<T>(
     f: impl FnOnce(
         &dyn ty_python_semantic::Db,
         &ProgramEnvironment<'_>,
-        &SemanticModel<'_>,
+        &LoweringModel<'_>,
         &[Stmt],
     ) -> T,
 ) -> T {
     let (db, file) = make_db(source, language);
     let program_file = ty_python_semantic::Db::program_file(&db, file);
     let parsed = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
-    let model = SemanticModel::new(&db, program_file);
+    let model = LoweringModel::new(&db, program_file);
     let env = ProgramEnvironment::from_file(program_file);
     f(&db, &env, &model, parsed.suite())
 }

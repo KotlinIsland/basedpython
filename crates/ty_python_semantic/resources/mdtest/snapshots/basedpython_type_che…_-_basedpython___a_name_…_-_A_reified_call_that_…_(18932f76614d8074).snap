@@ -1,0 +1,39 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_type_checking_imports.md - basedpython: a name that is not bound where the program reads it - A reified call that has a reason of its own
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_type_checking_imports.md
+---
+
+# Source files
+
+## mdtest_snippet.by
+
+```
+ 1 | from typing import TYPE_CHECKING
+ 2 | 
+ 3 | if TYPE_CHECKING:
+ 4 |     from decimal import Decimal
+ 5 | 
+ 6 | def pair[reified A, reified B](a: A, b: B) -> str:
+ 7 |     return A.__name__ + B.__name__
+ 8 | 
+ 9 | def describe(value: Decimal) -> str:
+10 |     # error: [unspecialized-reified-generic]
+11 |     return pair(value, lambda: 1)
+```
+
+# Diagnostics
+
+```
+error[unspecialized-reified-generic]: Cannot call reified generic function `pair` without explicit specialization
+  --> src/mdtest_snippet.by:11:12
+   |
+11 |     return pair(value, lambda: 1)
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+info: inferred type `() -> int` for type parameter `B` has no runtime spelling — specialize with `pair[...]`
+
+```
