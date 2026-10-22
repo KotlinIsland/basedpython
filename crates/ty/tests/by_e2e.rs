@@ -4274,6 +4274,15 @@ fn python_at_least_312() -> Option<String> {
     python_at_least(12, "a reified generic needs")
 }
 
+/// source read from stdin is analysed at the version it is transpiled for, as a project's
+/// modules are. `frozendict` is a builtin from 3.15, past ty's newest python, so the
+/// conversion its annotation makes is only written where the analysis knows it
+#[test]
+fn stdin_is_analysed_at_the_version_it_is_transpiled_for() {
+    let out = run_transpile("a: frozendict[str, str] = {}\n", &["--min-version", "3.15"]);
+    assert!(out.contains("= frozendict()"), "{out}");
+}
+
 /// transpile with `--min-version 3.13` — reified generics require native PEP
 /// 695 syntax in the output (the closure mechanism), available from 3.12+.
 fn transpile_at_313(source: &str) -> String {

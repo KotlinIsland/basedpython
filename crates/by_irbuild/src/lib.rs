@@ -17,7 +17,7 @@ pub mod shims;
 pub mod single_file;
 mod surface;
 
-pub use single_file::module_from_source;
+pub use single_file::{module_from_source, module_from_source_at};
 
 /// which language a source is written in
 ///

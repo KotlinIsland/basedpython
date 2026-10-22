@@ -138,7 +138,7 @@ impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
             let fragment = params.source.is_some();
             let transpiled = transpile_detached(move || {
                 if fragment {
-                    by_transforms::transpile(source, &config)
+                    by_transforms::transpile_analysed_at(source, &config, config.min_version)
                 } else {
                     by_transforms::transpile_typed(&*owned, file, &config, None)
                         .map_err(|error| error.to_string())

@@ -1611,8 +1611,9 @@ fn agree_built(
 
     // the interpreted leg: for basedpython, the transpiler's own output run by
     // cpython, under the same config `by_build` uses — including the *target
-    // version*, which has to be this interpreter's or the two legs are not the
-    // same program. for python there is nothing to transpile — it already is one
+    // version*, which has to be this interpreter's and is the version the module is
+    // analysed at, or the two legs are not the same program. for python there is
+    // nothing to transpile — it already is one
     let fallback = config.clone();
     let interpreted_source = match language {
         by_irbuild::Language::BasedPython => {
@@ -1622,7 +1623,8 @@ fn agree_built(
             {
                 config.min_version = parsed;
             }
-            by_transforms::transpile(source, &config).expect("the source transpiles")
+            by_transforms::transpile_analysed_at(source, &config, config.min_version)
+                .expect("the source transpiles")
         }
         by_irbuild::Language::Python => source.to_string(),
     };
@@ -1672,6 +1674,51 @@ fn agree_built(
         );
     }
     Some(compiled_dir)
+}
+
+/// the interpreted fallback is analysed at the version of the interpreter it is built for.
+/// `frozendict` is a builtin from 3.15, past ty's newest python, and the module body that
+/// binds `a` runs from the fallback: analysed at ty's newest python it took `frozendict` for
+/// a name nothing defines and left the display a `dict`
+#[test]
+fn the_fallback_converts_as_the_interpreter_s_version_does() {
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 15))) {
+        return;
+    }
+    agree(
+        "fallbackversion",
+        "\
+a: frozendict[str, str] = {}
+
+def kind() -> str:
+    return type(a).__name__
+",
+        &["m.kind()", "type(m.a).__name__"],
+    );
+}
+
+/// the compiled half is analysed at the version of the interpreter it is built for, as the
+/// fallback is. analysed at ty's newest python, the test below took the first branch on
+/// every interpreter, laid `LIMIT` out as a `float`, and an older interpreter's `int` was
+/// refused at the read where python doubled it
+#[test]
+fn the_compiled_half_is_analysed_at_the_interpreter_s_version() {
+    agree_python(
+        "compiledversion",
+        "\
+import sys
+
+if sys.version_info >= (3, 14):
+    LIMIT = 1.5
+else:
+    LIMIT = 2
+
+
+def doubled() -> object:
+    return LIMIT * 2
+",
+        &["m.doubled()", "type(m.LIMIT).__name__"],
+    );
 }
 
 #[test]
@@ -3053,6 +3100,74 @@ class Leaf(Root):
              print(type(vars(m.Made)['__new__']).__name__, type(vars(m.Root)['__init_subclass__']).__name__)\n",
         ),
         "staticmethod classmethod"
+    );
+}
+
+/// what a function defined in the module under test would be, for a recursion that has to
+/// take exactly one python frame a level, as `_at_the_limit` counts them
+const DEFINED_AGAINST: &str =
+    "(lambda source: (g := dict(globals(), m=m), exec(source, g), g['result'])[2])";
+
+#[test]
+fn a_construction_from_python_counts_the_frame_of_the_init_it_runs() {
+    // python runs a class's `__init__` in a frame of its own, the one `@dataclass` generates
+    // included, and a compiled class's `tp_init` counted none: a recursion that went round
+    // through a construction reached a level deeper for every one, and a construction at
+    // the limit succeeded where python's raises. a keyword argument keeps 3.13 and later
+    // from specialising python's construction, which takes a second frame — see
+    // runtime.md#how-deep-a-recursion-goes
+    let at_the_limit = |construct: &str| {
+        format!(
+            "{DEFINED_AGAINST}(\"\"\"
+def d(n):
+    return d(n - 1) + 1 if n else ({construct}, 0)[1]
+result = _at_the_limit(d, 100)
+\"\"\")"
+        )
+    };
+    let Some(compiled) = agree_in(
+        "recinit",
+        "\
+from collections.abc import Callable
+
+
+class Node:
+    def __init__(self, f: Callable[[int], int], n: int) -> None:
+        self.v = f(n)
+
+
+class Pair:
+    def __init__(self, a: int) -> None:
+        self.a = a
+
+
+data class Point:
+    x: int
+    y: int
+",
+        &[
+            "(lambda f: _deepest(lambda n: f(f, n), 100))(lambda f, k: 0 if k == 0 else m.Node(lambda j: f(f, j), n=k - 1).v + 1)",
+            &at_the_limit("m.Node(lambda j: j, 1)"),
+            &at_the_limit("m.Pair(1)"),
+            &at_the_limit("m.Point(1, 2)"),
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_recinit as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(*(type(vars(c)['__init__']).__name__ for c in (m.Node, m.Pair, m.Point)))\n",
+        ),
+        "wrapper_descriptor wrapper_descriptor wrapper_descriptor"
     );
 }
 
@@ -14823,6 +14938,49 @@ fn a_nested_function_is_the_compiled_one() {
     assert_eq!(out, "by function False");
 }
 
+/// a nested function that captures nothing answers `__closure__` with `None`, as python's
+/// does. one that captures a name refuses the attribute: python's answer is a tuple of
+/// cells, and a compiled closure keeps the names in an environment its siblings share,
+/// where cells made for the asking would go on holding the values they were made with —
+/// see "a nested function's closure" in runtime.md
+#[test]
+fn a_nested_function_answers_closure_where_it_captures_nothing() {
+    let source = "\
+def plain():
+    def inner(x: int) -> int:
+        return x
+
+    return inner
+
+
+def outer(k: int):
+    def inner(x: int) -> int:
+        return x + k
+
+    return inner
+";
+    agree_python(
+        "closurenone",
+        source,
+        &["m.plain().__closure__", "m.plain()(3)", "m.outer(1)(2)"],
+    );
+    let Some((_dir, answers)) = compiled_answers(
+        "closurecaptured",
+        source,
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &[
+            "(type(m.plain()).__module__, type(m.outer(1)).__module__)",
+            "hasattr(m.outer(1), '__closure__')",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(answers, ["('by', 'by')", "False"]);
+}
+
 #[test]
 fn a_raise_out_of_a_try_body_does_not_leak_what_it_wrote() {
     // the exception edge is a CFG edge, and the refcount pass used not to follow it
@@ -25980,6 +26138,119 @@ def look(key: Pair) -> str:
     );
 }
 
+/// a set the module body built holds the instances its members were built as, and each is
+/// moved onto the compiled class, so the set answers for what the class makes now. a member
+/// that hashes as the instance it replaces takes that instance's own entry, so the set
+/// iterates in the order it did; one that does not — a class hashed on its identity — has
+/// the set built again. a `frozenset` is written in place where every hash is kept, and is
+/// settled as a copy where one is not, as a tuple is
+#[test]
+fn a_set_the_module_body_built_holds_the_compiled_class_s_instances() {
+    let Some(compiled) = agree_in(
+        "twinsets",
+        "\
+frozen data class Pair:
+    x: int
+    y: int
+
+
+class Cell:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+POINTS = {Pair(1, 2), Pair(3, 4), Pair(5, 6)}
+FROZEN = frozenset({Pair(1, 2), Pair(7, 8)})
+CELLS = {Cell(1), Cell(2)}
+HELD = {\"cells\": frozenset({Cell(3)})}
+NESTED = {FROZEN: 1}
+
+
+def has(p: Pair) -> bool:
+    return p in POINTS
+",
+        &[
+            "(m.Pair(1, 2) in m.POINTS, m.has(m.Pair(3, 4)), m.Pair(9, 9) in m.POINTS)",
+            "list(m.POINTS)",
+            "(m.Pair(7, 8) in m.FROZEN, list(m.FROZEN))",
+            "hash(m.FROZEN) == hash(frozenset({m.Pair(1, 2), m.Pair(7, 8)}))",
+            "(len(m.CELLS), all(isinstance(c, m.Cell) for c in m.CELLS), sorted(c.v for c in m.CELLS))",
+            "[isinstance(c, m.Cell) for c in m.HELD['cells']]",
+            "m.NESTED[frozenset({m.Pair(1, 2), m.Pair(7, 8)})]",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_twinsets as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.Cell)['__init__']).__name__, type(vars(m.Pair)['__init__']).__name__)\n",
+        ),
+        "wrapper_descriptor wrapper_descriptor"
+    );
+}
+
+/// a subclass of `dict` or `set` whose every write is its base's own keeps no account of its
+/// members beside the table, so its keys and members move as an exact one's do. a subclass
+/// that writes one of its own — `OrderedDict` keeps its order in a list of its own — is left
+/// as the body built it, see runtime.md
+#[test]
+fn a_dict_or_set_subclass_that_writes_as_its_base_moves_its_members() {
+    let Some(compiled) = agree_python_built(
+        "twinsubsets",
+        "\
+class Key:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is type(self) and other.x == self.x
+
+    def __hash__(self) -> int:
+        return hash(self.x)
+
+
+class Table(dict):
+    pass
+
+
+class Bag(set):
+    pass
+
+
+TABLE = Table({Key(1): 'a', Key(2): 'b'})
+BAG = Bag({Key(1), Key(2)})
+",
+        &[
+            "(type(m.TABLE).__name__, m.TABLE.get(m.Key(1)), [k.x for k in m.TABLE])",
+            "(type(m.BAG).__name__, m.Key(2) in m.BAG, sorted(k.x for k in m.BAG))",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_twinsubsets as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.Key)['__eq__']).__name__)\n",
+        ),
+        "wrapper_descriptor"
+    );
+}
+
 /// a move that fails partway takes the moves begun inside it down as well
 ///
 /// a move registers itself before its fields are filled, which is what lets a cyclic graph
@@ -26504,15 +26775,13 @@ def alias_answers() -> int:
     );
 }
 
-/// the two places a module-level name still keeps what the body put there, and one it
-/// used to
+/// the place a module-level name still keeps what the body put there, and two it used to
 ///
-/// a set's member is hashed on, so replacing one is a removal and an insertion in a
-/// container somebody else is already holding — the settling walk refuses it rather than
-/// moving it. a dict's key used to be refused for the same reason, and moves now: the dict
-/// is keyed again in the order it held its keys, the same object as before.
+/// a set's member and a dict's key are hashed on, so each used to be refused rather than
+/// moved. both move now: the dict is keyed again in the order it held its keys, and the set
+/// is built again from its members, each the same object as before.
 ///
-/// a module-level *tuple* is the other, and it is a different reason. a tuple cannot be
+/// a module-level *tuple* is the one left, and it is a different reason. a tuple cannot be
 /// written, so settling one builds a copy; the module name is only ever rebound to a
 /// value that *is* something replaced, and a copy is not — putting one where the original
 /// stood would break every other holder's `is` against it, and a second holder walked
@@ -26559,14 +26828,14 @@ PAIR = (proxy,)
          print(m.proxy in m.MEMBERS, m.proxy in m.KEYED, m.PAIR[0] is m.proxy)\n\
          print(next(iter(m.MEMBERS))(), m.KEYED[next(iter(m.KEYED))], m.PAIR[0]())\n",
     );
-    // python answers `True True True` on the first line. a dict's key moves, and the
-    // dict is keyed again, so `KEYED` agrees; a set's member is what it is hashed on and a
-    // tuple is the definition's own, so those two do not. the second line is what the
+    // python answers `True True True` on the first line. a set's member and a dict's key
+    // move, and the set and the dict are built again, so `MEMBERS` and `KEYED` agree; a
+    // tuple is the definition's own, so `PAIR` does not. the second line is what the
     // divergence still cannot reach: what is held there computes what the forwarder
     // computes, so nothing but identity sees it
     assert_eq!(
         out,
-        "False True False\n\
+        "True True False\n\
          7 held 7"
     );
 }
@@ -26767,6 +27036,81 @@ def bare(cls: type) -> object:
             "str(_capture(lambda: m.Node.__new__(m.Node).v))",
             "(lambda c: c.copy(m.Node(6)).v)(__import__('copy'))",
         ],
+    );
+}
+
+/// a class whose `int` fields start unset publishes a `__new__` that hands an interpreted
+/// subclass its allocator, where python's class has none and `C.__new__` is
+/// `object.__new__`. so it answers as `object.__new__` does: every refusal in python's words,
+/// decided for the class python would have built — whose `tp_new` is `object`'s rather than
+/// the dispatcher the published entry gives it — and an abstract subclass refused, which the
+/// entry used to allocate
+#[test]
+fn the_new_a_class_with_unset_fields_publishes_answers_as_object_new_does() {
+    let Some(compiled) = agree_python_built(
+        "objectnewentry",
+        "\
+import abc
+
+
+class Box:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+class Lone:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+class Sub(Box):
+    def __init__(self, v: int) -> None:
+        Box.__init__(self, v)
+        self.w = 1
+
+
+class Written:
+    def __new__(cls) -> 'Written':
+        return object.__new__(cls)
+",
+        &[
+            "str(_capture(lambda: m.Box.__new__()))",
+            "str(_capture(lambda: m.Box.__new__(1)))",
+            "str(_capture(lambda: m.Box.__new__(int)))",
+            "str(_capture(lambda: m.Box.__new__(type('Q', (dict,), {}))))",
+            "type(m.Box.__new__(m.Box)).__name__",
+            "type(m.Sub.__new__(m.Box)).__name__",
+            "type(m.Box.__new__(m.Lone)).__name__",
+            "type(m.Box.__new__(m.Written)).__name__",
+            "str(_capture(lambda: m.Box.__new__(m.Written, 1)))",
+            "type(m.Box.__new__(m.Box, 1, x=2)).__name__",
+            "type(m.Sub.__new__(m.Sub, 1)).__name__",
+            "type('S', (m.Box,), {})(1).v",
+            "str(_capture(lambda: m.Box.__new__(type('S', (m.Box,), {'__init__': object.__init__}), 1)))",
+            "str(_capture(lambda: m.Box.__new__(type('S', (m.Box,), {'__new__': lambda c: object.__new__(c)}), 1)))",
+            "str(_capture(lambda: m.abc.ABCMeta('A', (m.Box,), {'f': m.abc.abstractmethod(lambda s: 1)})(1)))",
+            "type(m.abc.ABCMeta('A', (m.Box,), {'f': lambda s: 1})(1)).__name__",
+            "str(_capture(lambda: m.Box.__new__(m.abc.ABCMeta('A', (m.Box,), {'f': m.abc.abstractmethod(lambda s: 1)}))))",
+            "str(_capture(lambda: object.__new__(type('S', (m.Box,), {})).v))",
+            "(m.Box.__new__.__name__, m.Box.__new__.__qualname__, m.Box.__new__.__self__)",
+            "(m.Box.__new__.__doc__, m.Box.__new__.__text_signature__)",
+            "repr(m.Box.__new__) == repr(object.__new__)",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_objectnewentry as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.Box)['__new__']).__name__, type(vars(m.Box)['__init__']).__name__)\n",
+        ),
+        "builtin_function_or_method wrapper_descriptor"
     );
 }
 
@@ -45438,6 +45782,74 @@ fn the_docstrings_are_read_off_compiled_definitions() {
         "native native native\n\
          method_descriptor\n\
          the plain one"
+    );
+}
+
+/// a class answers `__doc__` with the string its body opens with, and `None` where it opens
+/// with none, and a written `__new__` with its own docstring. an emitted type is built from
+/// tables, so both used to answer `None` — only a data class carried its docstring across.
+/// `__new__` returns `Self`: a soundness check naming the class it is written in reads a name
+/// the class statement has not bound yet, and leaves the method to its interpreted definition
+#[test]
+fn a_class_and_its_written_new_answer_their_docstrings() {
+    let Some(compiled) = agree_in(
+        "classdoc",
+        "\
+from typing import Self
+
+
+class Box:
+    \"\"\"a box\"\"\"
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def get(self) -> int:
+        return self.v
+
+
+class Made:
+    \"\"\"made by its `__new__`\"\"\"
+
+    def __new__(cls, v: int) -> Self:
+        \"\"\"the `__new__` that makes it\"\"\"
+        return object.__new__(cls)
+
+
+class Plain:
+    def get(self) -> int:
+        return 1
+
+
+class Sub(Box):
+    pass
+",
+        &[
+            "m.Box.__doc__",
+            "m.Box(1).__doc__",
+            "m.Made.__doc__",
+            "m.Made.__new__.__doc__",
+            "m.Plain.__doc__",
+            "m.Sub.__doc__",
+            "type('Below', (m.Box,), {}).__doc__",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_classdoc as m\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+             print(type(vars(m.Box)['get']).__name__, type(vars(m.Made)['__new__'].__func__).__name__)\n",
+        ),
+        "method_descriptor builtin_function_or_method"
     );
 }
 
