@@ -2,11 +2,9 @@
 //!
 //! an instance `__new__` made without running `__init__` has none of the fields
 //! `__init__` gives every other instance, so a read of one is preceded by a test that
-//! raises `AttributeError` where the field is absent. but a field that is always
-//! assigned cannot be taken away again once it has been — `del` of one is refused, and
-//! only a field `__init__` might leave out can be deleted, whose read tests for itself.
-//! so once a function has written a field of an object, or tested it, every later read
-//! of that field of that same object finds it:
+//! raises `AttributeError` where the field is absent. once a function has written a field
+//! of an object, or tested it, a later read of that field of that same object finds it —
+//! until python code runs, because python code can `del` it again:
 //!
 //! ```python
 //! def step(state: State) -> None:
@@ -17,12 +15,16 @@
 //! "that same object" is a register that has not been written in between. a register
 //! written again may hold another object, and one written on some path into a block is
 //! as good as written. a handler is entered from the middle of the blocks it covers, so
-//! what it can rely on is only what held all through each of them
+//! what it can rely on is only what held all through each of them. what python code can
+//! run is [`Effects`]' answer, which is the one every other pass that holds a fact across
+//! operations asks
 
 use std::collections::{HashMap, HashSet};
 
-use by_ir::function::{BasicBlock, Function, ModuleIr};
-use by_ir::ops::{BlockId, Op, RegisterId, Value};
+use by_ir::function::{Function, ModuleIr};
+use by_ir::ops::{BlockId, Op, RegisterId, Terminator, Value};
+
+use crate::runs_python::{Effects, Held};
 
 /// a field of the object a register holds, which the function knows the object has
 type Known = (RegisterId, String);
@@ -31,8 +33,9 @@ type Known = (RegisterId, String);
 type Layouts = HashMap<String, Vec<Option<String>>>;
 
 pub(crate) fn run(module: &mut ModuleIr) {
-    // only a field nothing can take away again: an optional one can be deleted by
-    // anything the function calls, and a field no instance lacks has nothing to prove
+    let effects = Effects::of(module);
+    // only a field a read tests: an optional one's read asks for itself, and a field no
+    // instance lacks has nothing to prove
     let layouts: HashMap<String, Vec<Option<String>>> = module
         .classes
         .iter()
@@ -50,8 +53,53 @@ pub(crate) fn run(module: &mut ModuleIr) {
         })
         .collect();
     for function in module.all_functions_mut() {
-        prove(function, &layouts);
+        let runs = runs_python(&effects, function);
+        prove(function, &layouts, &runs);
     }
+}
+
+/// for each operation of each block, whether python code can run while it does — and so
+/// take away a field the function had seen. a block the analysis never reached is taken to
+/// run it everywhere
+fn runs_python(effects: &Effects, function: &Function) -> Vec<Vec<bool>> {
+    let entries = Held::solve(
+        function,
+        Function::entry(),
+        effects.held_at_entry(function),
+        |_| true,
+    );
+    function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| match entries.get(&BlockId(index)) {
+            Some(entry) => {
+                let mut held = entry.clone();
+                block
+                    .ops
+                    .iter()
+                    .map(|op| {
+                        let runs = effects.op_runs_python(function, op, &held);
+                        held.step(function, op);
+                        runs
+                    })
+                    .collect()
+            }
+            None => vec![true; block.ops.len()],
+        })
+        .collect()
+}
+
+/// whether control leaves a block through `terminator` without running python code: a
+/// jump, or a test of a value the block already holds
+fn leaves_quietly(terminator: &Terminator) -> bool {
+    matches!(
+        terminator,
+        Terminator::Goto(_)
+            | Terminator::Branch { .. }
+            | Terminator::NarrowShort { .. }
+            | Terminator::MachineStep { .. }
+    )
 }
 
 /// what an operation lets the function know about fields afterwards
@@ -97,25 +145,22 @@ fn rebinds(op: &Op) -> Vec<RegisterId> {
         .collect()
 }
 
-/// `known` after `op` has run
-fn step(known: &mut HashSet<Known>, op: &Op, layouts: &Layouts) {
+/// `known` after `op` has run, where `runs` says whether python code can run while it does
+///
+/// what the operation itself writes or tests is learned after what python code took away:
+/// a store releases the value it replaces only once the new one is in place, so a
+/// finalizer that release runs sees the field written
+fn step(known: &mut HashSet<Known>, op: &Op, runs: bool, layouts: &Layouts) {
+    if runs {
+        known.clear();
+    }
     for register in rebinds(op) {
         known.retain(|(held, _)| *held != register);
     }
     known.extend(learned(op, layouts));
 }
 
-/// what holds at every point of a block, for a handler it can raise into
-fn throughout(block: &BasicBlock, entry: &HashSet<Known>) -> HashSet<Known> {
-    let rebound: HashSet<RegisterId> = block.ops.iter().flat_map(rebinds).collect();
-    entry
-        .iter()
-        .filter(|(held, _)| !rebound.contains(held))
-        .cloned()
-        .collect()
-}
-
-fn prove(function: &mut Function, layouts: &Layouts) {
+fn prove(function: &mut Function, layouts: &Layouts, runs: &[Vec<bool>]) {
     let count = function.blocks.len();
     if count == 0 {
         return;
@@ -132,8 +177,14 @@ fn prove(function: &mut Function, layouts: &Layouts) {
             };
             let block = &function.blocks[index];
             let mut known = start.clone();
-            for op in &block.ops {
-                step(&mut known, op, layouts);
+            // what held at every point of the block, for a handler it can raise into
+            let mut throughout = start.clone();
+            for (at, op) in block.ops.iter().enumerate() {
+                step(&mut known, op, runs[index][at], layouts);
+                throughout.retain(|fact| known.contains(fact));
+            }
+            if !leaves_quietly(&block.terminator) {
+                known.clear();
             }
             // the exception edge is the last of the successors, and it carries only what
             // held all through the block
@@ -146,7 +197,7 @@ fn prove(function: &mut Function, layouts: &Layouts) {
                 .map(|successor| (successor, known.clone()))
                 .collect();
             if let Some(handler) = block.error_target {
-                flows.push((handler, throughout(block, &start)));
+                flows.push((handler, throughout));
             }
             for (successor, facts) in flows {
                 let Some(slot) = entry.get_mut(successor.index()) else {
@@ -169,7 +220,7 @@ fn prove(function: &mut Function, layouts: &Layouts) {
             continue;
         };
         let mut kept = Vec::with_capacity(block.ops.len());
-        for op in block.ops.drain(..) {
+        for (at, op) in block.ops.drain(..).enumerate() {
             let op = match op {
                 Op::RequireField {
                     receiver: Value::Register(receiver),
@@ -202,7 +253,7 @@ fn prove(function: &mut Function, layouts: &Layouts) {
                 },
                 other => other,
             };
-            step(&mut known, &op, layouts);
+            step(&mut known, &op, runs[index][at], layouts);
             kept.push(op);
         }
         block.ops = kept;
@@ -345,6 +396,49 @@ mod tests {
         );
         assert!(
             matches!(ops[2], Op::SetField { present: true, .. }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn a_field_is_tested_again_once_python_code_can_have_run() {
+        // python code can `del` a field the function had seen, so a call into it ends what
+        // the function knows — while a store keeps what it wrote, which is in place before
+        // the value it replaced is let go of
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let s = builder.param("s", state());
+        let value = builder.param("v", RType::INT);
+        let out = builder.temp(RType::INT);
+        let called = builder.temp(RType::OBJECT);
+        builder.push(require(s, "a"));
+        builder.push(Op::CallPython {
+            dest: called,
+            callee: "hook".to_string(),
+            args: vec![Value::Register(s)],
+        });
+        builder.push(require(s, "a"));
+        builder.push(Op::SetField {
+            receiver: Value::Register(s),
+            class: "State".to_string(),
+            field: "b".to_string(),
+            value: Value::Register(value),
+            moves: false,
+            present: false,
+        });
+        builder.push(require(s, "a"));
+        builder.push(require(s, "b"));
+        builder.push(read(out, s, "a"));
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let mut module = ModuleIr::new("app");
+        module.classes.push(class(&[("a", false), ("b", false)]));
+        module.functions.push(builder.finish());
+
+        super::run(&mut module);
+
+        let ops = &module.functions[0].blocks[0].ops;
+        assert_eq!(requires(&module), 3, "{ops:?}");
+        assert!(
+            matches!(&ops[4], Op::RequireField { field, .. } if field == "a"),
             "{ops:?}"
         );
     }

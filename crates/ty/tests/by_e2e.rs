@@ -1,3 +1,4 @@
+use by_ir::mangle::mangle;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
@@ -552,7 +553,7 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
     // attribute read at all
     let emitted = std::fs::read_to_string(out.join("wanted.c")).expect("the C is readable");
     assert!(
-        emitted.contains("by_wanted_go"),
+        emitted.contains(&format!("by_{}_{}", mangle("wanted"), mangle("go"))),
         "`go` lowered natively, so `Point` resolved out of the uncompiled sibling"
     );
 }
@@ -627,8 +628,14 @@ fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
     // the two `dup` members are distinct modules, not one file written twice
     let first = fs::read_to_string(out.join("pkg/dup.c")).unwrap();
     let second = fs::read_to_string(out.join("pkg/sub/dup.c")).unwrap();
-    assert!(first.contains("by_pkg_dup_tag"), "{first}");
-    assert!(second.contains("by_pkg_sub_dup_tag"), "{second}");
+    assert!(
+        first.contains(&format!("by_{}_{}", mangle("pkg.dup"), mangle("tag"))),
+        "{first}"
+    );
+    assert!(
+        second.contains(&format!("by_{}_{}", mangle("pkg.sub.dup"), mangle("tag"))),
+        "{second}"
+    );
 }
 
 #[test]
@@ -857,7 +864,7 @@ fn compile_reads_whether_to_bind_functions_early_from_the_project() {
         return;
     };
     assert!(
-        asked.contains("By_ResolveFunction(&by_fs_add"),
+        asked.contains(&format!("By_ResolveFunction(&by_fs_{}", mangle("add"))),
         "the call asks"
     );
     let Some(early) = emitted(

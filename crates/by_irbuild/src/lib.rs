@@ -3170,24 +3170,6 @@ fn lower_class<'a>(
             clash.name
         )));
     }
-    // a property's halves are named with a `$`, which no source can write — but the
-    // symbol they mangle to replaces it with an underscore, and a method a source *did*
-    // write may already hold that symbol. two bodies under one symbol is a module that
-    // does not build at all, which is worse than one that declines
-    if let Some(clash) = published
-        .iter()
-        .flat_map(|property| [&property.getter, &property.setter, &property.deleter])
-        .flatten()
-        .find(|accessor| {
-            lowered
-                .iter()
-                .any(|method| method.name != **accessor && mangles_alike(&method.name, accessor))
-        })
-    {
-        return Err(Decline::new(format!(
-            "a property half named `{clash}` reaches the same symbol as a method of this class"
-        )));
-    }
     let slots = class_slots(class, &fields, inherited)?;
     Ok((
         by_ir::function::ClassIr {
@@ -3221,19 +3203,6 @@ fn lower_class<'a>(
         },
         environments,
     ))
-}
-
-/// whether two python names reach one C identifier
-///
-/// a symbol is the name with every character that is not alphanumeric replaced, so
-/// `value$set` and `value_set` arrive at the same one. a property's halves are named
-/// with a `$` no source can write, and this is what keeps that from being the only thing
-/// standing between them and a method a source did write
-fn mangles_alike(left: &str, right: &str) -> bool {
-    left.len() == right.len()
-        && left.chars().zip(right.chars()).all(|(left, right)| {
-            left == right || (!left.is_ascii_alphanumeric() && !right.is_ascii_alphanumeric())
-        })
 }
 
 /// `__getattr__` stands *behind* the ordinary lookup rather than replacing it
@@ -6898,12 +6867,11 @@ fn presence_where_a_finalizer_reads(
 
 /// every field a `del` in this module names, written down as one that may be absent
 ///
-/// `del self.buffer` has somewhere to go only where the field can record that it is
-/// gone, and that is the presence byte an optional one carries: the delete clears it,
-/// a read while it is clear raises `AttributeError` the way python does, and a later
-/// write sets it again. a field with no byte has no absent state at all, so a delete
-/// on one can only refuse — which is the `cannot delete an attribute` an emitted class
-/// used to answer where the interpreted twin deleted.
+/// `del self.buffer` clears the presence byte an optional field carries, a read while it
+/// is clear raises `AttributeError` the way python does, and a later write sets it again.
+/// a field without the byte is deleted too, into the state an instance `__init__` never
+/// ran on is in — see the emitter's `delete_field` — which is how a delete from another
+/// module reaches a field this one never deletes.
 ///
 /// the names are collected module-wide rather than per class, for two reasons. a
 /// delete need not be written in a method at all — `del handle.buffer` in a plain

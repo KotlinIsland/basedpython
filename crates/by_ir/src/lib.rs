@@ -10,6 +10,7 @@
 pub mod builder;
 pub mod call_graph;
 pub mod function;
+pub mod mangle;
 pub mod ops;
 pub mod print;
 pub mod rtype;

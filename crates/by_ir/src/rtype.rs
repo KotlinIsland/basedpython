@@ -388,7 +388,7 @@ fn mangle_component(ty: &RType) -> String {
             Primitive::Tuple => "tuple".to_string(),
         },
         RType::Tuple(items) => format!("t{}", tuple_mangle(items)),
-        RType::Instance { class, .. } => format!("i{class}"),
+        RType::Instance { class, .. } => format!("i{}", crate::mangle::mangle(class)),
     }
 }
 

@@ -30,6 +30,7 @@ use by_ir::function::{
     Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, PropertyIr, RegisterDecl,
     SlotAlias, Surface, cleaned_doc,
 };
+use by_ir::mangle::mangle;
 use by_ir::ops::{
     BinOp, BlockId, CmpOp, Concatenation, LicenceKind, Mutation, Op, RegisterId, SoundTarget,
     Terminator, UnaryOp, Value,
@@ -1603,9 +1604,9 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             error_check(&field.ty, "by_v")
         );
         let storage = storage_name(module, class, &field.name);
-        let release = release_old(field, &storage);
-        if !release.is_empty() {
-            let _ = writeln!(out, "      {release}");
+        let (take, release) = old_value(module, field, &storage);
+        if !take.is_empty() {
+            let _ = writeln!(out, "      {take}");
         }
         let _ = writeln!(out, "      {storage}->{} = by_v;", field.member());
         // the byte beside a field is what a later read and the deallocation both ask,
@@ -1622,6 +1623,9 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             field,
             &format!("{storage}->{}", field.member()),
         ));
+        if !release.is_empty() {
+            let _ = writeln!(out, "      {release}");
+        }
         out.push_str("    }\n");
     }
     out.push_str("    return 0;\n}\n\n");
@@ -1875,19 +1879,34 @@ fn emit_class_getitem(module: &ModuleIr, class: &ClassIr, type_name: &str) -> St
     )
 }
 
-/// releasing what a field held before a setter overwrites it
+/// what a field held before a store overwrites it, taken aside, and the release of it once
+/// the new value is in place — empty strings for a field that holds no reference
 ///
-/// an optional one may hold nothing at all, and the byte beside it is what says so —
-/// releasing a value that was never written would be releasing whatever `tp_alloc`
-/// left there
-fn release_old(field: &by_ir::function::FieldDecl, storage: &str) -> String {
-    let Some(release) = dec_ref(&field.ty, &format!("{storage}->{}", field.member())) else {
-        return String::new();
+/// the release comes after the store, as python's own store does it: letting go of the
+/// old value can run a `__del__`, and one that reads or deletes this same field has to
+/// find the new value there rather than the one being let go of. an optional field may
+/// hold nothing at all, and the byte beside it is what says so — releasing a value that
+/// was never written would be releasing whatever `tp_alloc` left there
+fn old_value(
+    module: &ModuleIr,
+    field: &by_ir::function::FieldDecl,
+    storage: &str,
+) -> (String, String) {
+    let Some(release) = dec_ref(&field.ty, "by_old") else {
+        return (String::new(), String::new());
     };
+    let member = format!("{storage}->{}", field.member());
+    let ty = ctype(module, &field.ty);
     if field.optional {
-        format!("if ({storage}->{}) {{ {release} }}", field.presence())
+        (
+            format!(
+                "{ty} by_old = {member}; char by_held = {storage}->{};",
+                field.presence()
+            ),
+            format!("if (by_held) {{ {release} }}"),
+        )
     } else {
-        release
+        (format!("{ty} by_old = {member};"), release)
     }
 }
 
@@ -1934,11 +1953,15 @@ fn mark_present(field: &by_ir::function::FieldDecl, storage: &str) -> String {
 
 /// `del obj.field`, which python reaches through the setter with no value
 ///
-/// the presence byte is what makes this expressible at all: clearing it puts the field
-/// back into the state `tp_alloc` left it in, which a read already answers with
-/// `AttributeError` and a later write already sets again. so the delete is the write
-/// read backwards, and a field with no byte — one `__init__` assigns on every path and
-/// nothing deletes — has no absent state to return to and keeps refusing.
+/// every field python can name has an absent state, because `C.__new__(C)` makes an
+/// instance `__init__` never ran on: an optional field's byte clear, an object's `NULL`, a
+/// tagged `int`'s error value. a read already answers that state with `AttributeError` and
+/// a later write already sets the field again, so the delete is the write read backwards.
+/// a field python cannot name — one the compiler made up, a closure's shared cell — has no
+/// such state and keeps refusing.
+///
+/// deleting an attribute the instance does not have raises python's own `AttributeError`,
+/// which names only the attribute where the class keeps it in a slot.
 ///
 /// the order is the one `PyObject_GenericSetAttr` uses on a slot, and it is not
 /// cosmetic: releasing the old value can run a `__del__` that reaches back into this
@@ -1953,29 +1976,50 @@ fn delete_field(
     field: &by_ir::function::FieldDecl,
     storage: &str,
 ) -> String {
-    if !field.optional {
+    let Some(absent) = field_absent(field, storage) else {
         return "\x20   if (by_value == NULL) {\n\
                 \x20       PyErr_SetString(PyExc_AttributeError, \"cannot delete an attribute\");\n\
                 \x20       return -1;\n\
                 \x20   }\n"
             .to_string();
-    }
-    let member = field.member();
+    };
+    let member = format!("{storage}->{}", field.member());
+    // the state `field_absent` reads as absent, which is the state `tp_alloc` and the
+    // instance's own unset left the field in
+    let clear = if field.has_presence_byte() {
+        format!(
+            "\x20       memset(&{member}, 0, sizeof({member}));\n\
+             \x20       {storage}->{} = 0;\n",
+            field.presence()
+        )
+    } else if field.ty == RType::INT {
+        format!("\x20       {member} = BY_INT_ERROR;\n")
+    } else {
+        format!("\x20       {member} = NULL;\n")
+    };
+    let missing = if owner.slots.is_some() && !instance_dict(module, owner) {
+        format!(
+            "PyErr_SetString(PyExc_AttributeError, {});",
+            c_string(&field.name)
+        )
+    } else {
+        format!(
+            "PyErr_Format(PyExc_AttributeError, \"'%s' object has no attribute '%s'\", \
+             By_TypeName(selfobj), {});",
+            c_string(&field.name)
+        )
+    };
     let release = dec_ref(&field.ty, "by_old")
         .map_or_else(String::new, |release| format!("\x20       {release}\n"));
     format!(
         "\x20   if (by_value == NULL) {{\n\
-         \x20       if (!{storage}->{presence}) {{ PyErr_Format(PyExc_AttributeError, \
-         \"'%s' object has no attribute '%s'\", By_TypeName(selfobj), {name}); return -1; }}\n\
-         \x20       {ty} by_old = {storage}->{member};\n\
-         \x20       memset(&{storage}->{member}, 0, sizeof({storage}->{member}));\n\
-         \x20       {storage}->{presence} = 0;\n\
+         \x20       if ({absent}) {{ {missing} return -1; }}\n\
+         \x20       {ty} by_old = {member};\n\
+         {clear}\
          {unpublish}\
          {release}\
          \x20       return 0;\n\
          \x20   }}\n",
-        presence = field.presence(),
-        name = c_string(&field.name),
         ty = ctype(module, &field.ty),
         // before the release, for the reason the order above is what it is: a `__del__`
         // the release runs can read this instance, and it must not find the mapping
@@ -1996,7 +2040,7 @@ fn delete_field(
 
 /// the C identifier the two halves of a property are reached through
 fn property_symbol(type_name: &str, name: &str) -> String {
-    format!("{type_name}_prop_{name}")
+    format!("{type_name}_prop_{}", mangle(name))
 }
 
 /// the three halves of a property, each as the C identifier its `PyMethodDef` goes under
@@ -2076,7 +2120,7 @@ fn emit_initializing_setter(
             "static int {type_name}_set_{name}(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
              \x20   (void)by_value; (void)closure;\n\
              \x20   return By_FieldNotWritable(selfobj, {quoted});\n}}\n",
-            name = field.name,
+            name = mangle(&field.name),
             quoted = c_string(&field.name),
         );
     };
@@ -2091,7 +2135,7 @@ fn emit_initializing_setter(
          {present}\
          {publish}\
          \x20   return 0;\n}}\n",
-        name = field.name,
+        name = mangle(&field.name),
         quoted = c_string(&field.name),
         bind = bind_self(module, owner, "selfobj"),
         ty = ctype(module, &field.ty),
@@ -2129,7 +2173,7 @@ fn emit_dataclass_members(class: &ClassIr, type_name: &str) -> String {
             out,
             "    {{{}, {type_name}_get_{}}},",
             c_string(&field.name),
-            field.name
+            mangle(&field.name)
         );
     }
     out.push_str("    {NULL, NULL}\n};\n");
@@ -2182,7 +2226,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         let _ = writeln!(
             out,
             "static PyObject *{type_name}_get_{}(PyObject *selfobj, void *closure) {{\n                 (void)closure;\n                 {}\n{absent}                 return {};\n}}",
-            field.name,
+            mangle(&field.name),
             bind_self(module, field_owner(module, class, &field.name), "selfobj"),
             box_borrowed(&field.ty, &format!("self->{}", field.member()))
         );
@@ -2200,7 +2244,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             "static int {type_name}_has_{}(PyObject *selfobj) {{\n\
              \x20   {}\n\
              \x20   return self->{} != 0;\n}}",
-            field.name,
+            mangle(&field.name),
             bind_self(module, field_owner(module, class, &field.name), "selfobj"),
             field.presence()
         );
@@ -2213,6 +2257,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             out.push_str(&emit_initializing_setter(module, class, &type_name, field));
             continue;
         }
+        let (take, release) = old_value(module, field, "self");
         let _ = writeln!(
             out,
             "static int {type_name}_set_{}(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
@@ -2221,12 +2266,13 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              {}\
              \x20   {} by_v = {};\n\
              \x20   if ({}) return -1;\n\
-             \x20   {}\n\
+             \x20   {take}\n\
              \x20   self->{} = by_v;\n\
              {}\
              {}\
+             \x20   {release}\n\
              \x20   return 0;\n}}\n",
-            field.name,
+            mangle(&field.name),
             bind_self(module, field_owner(module, class, &field.name), "selfobj"),
             delete_field(
                 module,
@@ -2237,7 +2283,6 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             ctype(module, &field.ty),
             unbox_checked(module, &field.ty, "by_value"),
             error_check(&field.ty, "by_v"),
-            release_old(field, "self"),
             field.member(),
             mark_present(field, "self"),
             publish_field(
@@ -2287,14 +2332,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         );
         for field in dict_fields(module, class) {
             let present = if field_default(module, class, field).is_some() {
-                format!("{type_name}_has_{}", field.name)
+                format!("{type_name}_has_{}", mangle(&field.name))
             } else {
                 "NULL".to_string()
             };
             // the same setter the field's descriptor publishes, and the one condition it
             // is emitted under
             let set = if class.exported {
-                format!("{type_name}_set_{}", field.name)
+                format!("{type_name}_set_{}", mangle(&field.name))
             } else {
                 "NULL".to_string()
             };
@@ -2350,14 +2395,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             continue;
         }
         let setter = if class.exported {
-            format!("{type_name}_set_{}", field.name)
+            format!("{type_name}_set_{}", mangle(&field.name))
         } else {
             "NULL".to_string()
         };
         let _ = writeln!(
             out,
-            "    {{\"{}\", {type_name}_get_{}, {setter}, NULL, NULL}},",
-            field.name, field.name
+            "    {{{}, {type_name}_get_{}, {setter}, NULL, NULL}},",
+            c_string(&field.name),
+            mangle(&field.name)
         );
     }
     // a class whose whole state is the dict answers `__dict__` with the dict itself,
@@ -6198,6 +6244,20 @@ thread_local! {
         std::cell::RefCell::new(HashSet::new());
 }
 
+/// whether a call to a compiled `__init__` is the second half of a construction: its
+/// receiver is an instance this frame allocated itself, which is the `tp_alloc` python's
+/// call of the type makes before it runs `__init__`. an `__init__` called on any other
+/// receiver — a base's, reached through `super()` — is an ordinary method call
+fn constructs(function: &Function, owner: Option<&str>, callee: &str, args: &[Value]) -> bool {
+    let (Some(owner), Some(Value::Register(receiver))) = (owner, args.first()) else {
+        return false;
+    };
+    callee == "__init__"
+        && function.blocks.iter().flat_map(|block| &block.ops).any(|op| {
+            matches!(op, Op::NewInstance { dest, class, .. } if dest == receiver && class == owner)
+        })
+}
+
 fn is_recursive(function: &Function) -> bool {
     RECURSIVE.with_borrow(|recursive| recursive.contains(&function.qualified_name()))
 }
@@ -7588,12 +7648,14 @@ fn commit_checked(function: &Function, dest: RegisterId, error_target: ErrorEdge
 /// owes `by_fn` a release
 fn resolve_str(error_target: ErrorEdge) -> String {
     let label = error_label(error_target);
+    let slot = global_name_slot("str");
+    let site = global_site("str");
     format!(
-        "    {{ static PyObject *by_g_str = NULL; PyObject *by_fn = NULL;\n      \
-         if (by_g_str == NULL) by_g_str = By_InternedStr(\"str\", 3);\n      \
-         if (by_g_str == NULL) goto {label};\n      \
-         static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;\n      \
-         by_fn = By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str);\n      \
+        "    {{ static PyObject *{slot} = NULL; PyObject *by_fn = NULL;\n      \
+         if ({slot} == NULL) {slot} = By_InternedStr(\"str\", 3);\n      \
+         if ({slot} == NULL) goto {label};\n      \
+         static ByGlobalSite {site} = BY_GLOBAL_SITE_INIT;\n      \
+         by_fn = By_LookupGlobalSite(&{site}, by_module_dict, {slot});\n      \
          if (by_fn == NULL) goto {label};\n"
     )
 }
@@ -8133,11 +8195,12 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                         return refuse("no class in the chain publishes the field");
                     };
                     format!(
-                        "    By_RecheckField((PyObject *){}, {type_name}_OBJ, {}, {}, {}_get_{member});\n",
+                        "    By_RecheckField((PyObject *){}, {type_name}_OBJ, {}, {}, {}_get_{});\n",
                         value_expr(src),
                         c_string(class),
                         c_string(member),
                         publisher.type_name(module.name.dotted()),
+                        mangle(member),
                     )
                 }
             }
@@ -8524,6 +8587,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             args,
         } => {
             let target = native_callee(module, owner.as_deref(), callee);
+            let construction = constructs(function, owner.as_deref(), callee, args);
             // an argument may be a *subclass* of what the callee declares — the
             // layouts line up, so the pointer is valid, but C wants to be told
             let args = args
@@ -8552,6 +8616,13 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 Some(target) => target.native_symbol(module.name.dotted()),
                 None => format!("by_{}_{}", mangle(module.name.dotted()), mangle(callee)),
             };
+            // a construction is the type's call as well as the frame of the `__init__` it
+            // runs, and 3.11 counts that call against the same limit
+            let (enter, leave) = if construction {
+                ("By_DepthEnterConstruction", "By_DepthLeaveConstruction")
+            } else {
+                ("By_DepthEnter", "By_DepthLeave")
+            };
             let call = match (counted, target) {
                 (true, Some(target)) => {
                     let args = if args.is_empty() {
@@ -8560,7 +8631,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                         format!("by_depth, {args}")
                     };
                     format!(
-                        "({{ {ret} by_called = {symbol}({args}); By_DepthLeave(by_depth); by_called; }})",
+                        "({{ {ret} by_called = {symbol}({args}); {leave}(by_depth); by_called; }})",
                         ret = ctype(module, &target.ret)
                     )
                 }
@@ -8568,7 +8639,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             };
             let enter = if counted {
                 format!(
-                    "    if (BY_UNLIKELY(By_DepthEnter(by_depth))) goto {};\n",
+                    "    if (BY_UNLIKELY({enter}(by_depth))) goto {};\n",
                     error_label(error_target)
                 )
             } else {
@@ -9761,22 +9832,24 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             if !*moves && let Some(retain) = inc_ref(&ty, &value_expr(value)) {
                 let _ = writeln!(out, "    {retain}");
             }
-            // the release reads the old value, so an optional field that was never
-            // written must not be released: the byte says whether there is one
-            if let Some(release) = dec_ref(&ty, &target) {
-                match field_decl(module, class, field) {
-                    Some(decl) if decl.optional => {
-                        let _ = writeln!(
-                            out,
-                            "    if ({}->{}) {{ {release} }}",
-                            fields,
-                            decl.presence()
-                        );
-                    }
-                    _ => {
-                        let _ = writeln!(out, "    {release}");
-                    }
-                }
+            // the value it replaces is let go of only once the new one is in place, as
+            // python's own store does: letting go can run a `__del__`, and one that reads
+            // or deletes this field has to find the new value. an optional field that was
+            // never written has nothing to let go of, and its byte says whether there is one
+            let release =
+                dec_ref(&ty, "by_old").map(|release| match field_decl(module, class, field) {
+                    Some(decl) if decl.optional => (
+                        format!(" char by_held = {fields}->{};", decl.presence()),
+                        format!("if (by_held) {{ {release} }}"),
+                    ),
+                    _ => (String::new(), release),
+                });
+            if let Some((held, _)) = &release {
+                let _ = writeln!(
+                    out,
+                    "    {{ {} by_old = {target};{held}",
+                    ctype(module, &ty)
+                );
             }
             let _ = writeln!(out, "    {target} = {};", value_expr(value));
             // and the register is left empty, so the release every later exit makes of it
@@ -9794,6 +9867,9 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 && let Some(decl) = field_decl(module, class, field)
             {
                 out.push_str(&publish_field(module, owner, &fields, decl, &target));
+            }
+            if let Some((_, release)) = &release {
+                let _ = writeln!(out, "    {release} }}");
             }
             out
         }
@@ -11542,6 +11618,92 @@ fn twin_decorators(module: &ModuleIr) -> String {
     out
 }
 
+/// what an exit from module init that leaves the whole module interpreted has to undo,
+/// beyond the names it installed
+struct ModuleUnwind<'a> {
+    /// how many interpreted definitions `by_twin` holds
+    twin_count: usize,
+    record_interpreted: &'a str,
+    drop_installer: &'a str,
+    release_bodies: &'a str,
+}
+
+/// the test after `class`'s construction that stands the whole module down where the
+/// construction handed back the interpreted definition while a base of ours is the
+/// emitted type, or nothing where no base of ours has a twin slot to ask
+///
+/// that definition stands on the interpreted copy of the base, and the name of the base
+/// already means the emitted type, so `isinstance` would answer False where python
+/// answers True. a class on a base of ours beside one from outside is built by calling its
+/// metaclass, which hands the definition back where the interpreter cannot lay the bases
+/// out as one — a `dict` beside a class of ours, from 3.12. only the import can know: the
+/// bases are whatever their names hold by then, and whether two of them can be laid out as
+/// one is the interpreter's own rule. nothing has been decorated or adopted yet, so every
+/// name installed so far is given back its interpreted definition and the module is left
+/// as the interpreted one
+fn standing_down_over_an_orphaned_base(
+    module: &ModuleIr,
+    class: &ClassIr,
+    twins: &[&ClassIr],
+    slot: usize,
+    unwind: &ModuleUnwind<'_>,
+) -> String {
+    // a base that was itself handed back its interpreted definition is what this one's
+    // stands on already
+    let emitted_bases = class
+        .base
+        .iter()
+        .flat_map(ClassBase::plain_names)
+        .filter_map(|name| {
+            twins
+                .iter()
+                .take(slot)
+                .rposition(|candidate| candidate.name == name)
+        })
+        .map(|base| format!("(by_type[{base}] != NULL && by_type[{base}] != by_twin[{base}])"))
+        .collect::<Vec<_>>();
+    if emitted_bases.is_empty() {
+        return String::new();
+    }
+    let mut restore = String::new();
+    for (earlier, installed) in twins.iter().enumerate().take(slot) {
+        let name = c_string(&installed.name);
+        let _ = writeln!(
+            restore,
+            "\x20     if (by_type[{earlier}] != NULL) {{\n\
+             \x20         if (by_twin[{earlier}] != NULL) {{\n\
+             \x20             if (PyDict_SetItemString(dict, {name}, by_twin[{earlier}]) < 0) return -1;\n\
+             \x20         }} else {{\n\
+             \x20             By_DropName(dict, {name});\n\
+             \x20         }}\n\
+             \x20     }}"
+        );
+    }
+    let release_forwarders = if module.shims.is_some() {
+        "\x20     Py_DECREF(by_built);\n"
+    } else {
+        ""
+    };
+    let type_name = class.type_name(module.name.dotted());
+    format!(
+        "    if ({type_name} == by_twin[{slot}] && ({})) {{\n\
+         {restore}\
+         \x20     Py_CLEAR({type_name});\n\
+         {}{}{}\
+         \x20     for (Py_ssize_t by_at = 0; by_at < {}; by_at++) Py_XDECREF(by_twin[by_at]);\n\
+         \x20     Py_CLEAR(by_twins.moved);\n\
+         {release_forwarders}{}\
+         \x20     return 0;\n\
+         \x20   }}\n",
+        emitted_bases.join(" || "),
+        unwind.record_interpreted,
+        twin_decorators(module),
+        unwind.drop_installer,
+        unwind.twin_count,
+        unwind.release_bodies,
+    )
+}
+
 /// the classes module init publishes, in the order the twin arrays hold them
 ///
 /// this is the same walk `emit_module_init` uses to lay those arrays out, so a class's
@@ -11683,11 +11845,13 @@ fn emit_install_verification(module: &ModuleIr) -> String {
 
 /// whether init has an exit that leaves the *whole* module interpreted
 ///
-/// three things can refuse in a way init cannot go on from — see the layout guard in
+/// four things can refuse in a way init cannot go on from — see the layout guard in
 /// [`emit_module_init`]: a class built ahead of everything else, a class the module body
-/// changed after its statement in a way the type replacing it cannot answer for, and a
-/// class whose name the module body wrote over. a module with no class in the namespace
-/// installs its functions or fails the import, and never quietly stands down entire
+/// changed after its statement in a way the type replacing it cannot answer for, a class
+/// whose name the module body wrote over, and a class the interpreter could not build over
+/// a base of ours — see [`standing_down_over_an_orphaned_base`]. a module with no class in
+/// the namespace installs its functions or fails the import, and never quietly stands down
+/// entire
 fn stands_the_module_down(module: &ModuleIr) -> bool {
     module
         .classes
@@ -12367,6 +12531,24 @@ fn emit_module_init(module: &ModuleIr) -> String {
         if !ready.is_empty() {
             let _ = writeln!(installed, "{ready}");
         }
+        // before anything has been decorated or adopted, which is what lets the whole
+        // module still stand down
+        if let Some(slot) = slot
+            && stands_on_an_emitted_base(module, class)
+        {
+            installed.push_str(&standing_down_over_an_orphaned_base(
+                module,
+                class,
+                &twins,
+                slot,
+                &ModuleUnwind {
+                    twin_count: twins.len() + forwarder_twins.len(),
+                    record_interpreted,
+                    drop_installer: &drop_installer,
+                    release_bodies,
+                },
+            ));
+        }
         // python's own messages name a type by its `tp_name`, which a `class` statement
         // leaves the bare name and a spec leaves the dotted one it was given
         if heap_type(class) {
@@ -12517,7 +12699,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 continue;
             };
             let setter = if class.exported {
-                format!("{type_name}_set_{}", field.name)
+                format!("{type_name}_set_{}", mangle(&field.name))
             } else {
                 "NULL".to_string()
             };
@@ -12526,8 +12708,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 "    if (By_HoldFieldDefault((PyTypeObject *){type_name}_OBJ, {}, &{cell}, {}, {type_name}_get_{}, {setter}, {type_name}_has_{}) < 0) return -1;",
                 c_string(&field.name),
                 i32::from(holds),
-                field.name,
-                field.name
+                mangle(&field.name),
+                mangle(&field.name)
             );
         }
         // a dunder the body assigned is now in the type's dict under its own name, and
@@ -12808,9 +12990,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let type_name = owner.type_name(module.name.dotted());
         let arm = publishing_class(module, owner, &field).map(|publisher| {
             format!(
-                "      By_ArmField(&by_member, {type_name}_OBJ, {}, {}_get_{field});\n",
+                "      By_ArmField(&by_member, {type_name}_OBJ, {}, {}_get_{});\n",
                 c_string(&field),
                 publisher.type_name(module.name.dotted()),
+                mangle(&field),
             )
         });
         let _ = writeln!(
@@ -13028,12 +13211,6 @@ fn emit_module_init(module: &ModuleIr) -> String {
     out
 }
 
-fn mangle(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13148,7 +13325,7 @@ mod tests {
     fn a_native_signature_uses_the_mangled_symbol() {
         let module = module_with(add());
         let c = emit_module(&module);
-        assert!(c.contains("ByTagged by_app_add(ByTagged r0, ByTagged r1)"));
+        assert!(c.contains("ByTagged by_3app_3add(ByTagged r0, ByTagged r1)"));
     }
 
     /// `class Cell: v: int` with the field always assigned, and one method of it
@@ -13229,7 +13406,7 @@ mod tests {
         // the value is only ever an unset field's error word when it is not a short, and
         // a read that keeps a reference already asks that
         let c = emit_module(&cell(reads_v_plus_one(false)));
-        let body = body_of(&c, "by_app_Cell_next(By_app_Cell * r0) {");
+        let body = body_of(&c, "by_3app_4Cell_4next(By_3app_4Cell * r0) {");
         let short = body
             .find("if (BY_UNLIKELY(!By_IsShort(by_t))) {")
             .unwrap_or_else(|| panic!("the read asks whether it has a short: {body}"));
@@ -13245,7 +13422,7 @@ mod tests {
         // a read that keeps nothing leaves the value to the addition, whose test that both
         // operands are shorts already sends an unset field's odd error word the slow way
         let c = emit_module(&cell(reads_v_plus_one(true)));
-        let body = body_of(&c, "by_app_Cell_next(By_app_Cell * r0) {");
+        let body = body_of(&c, "by_3app_4Cell_4next(By_3app_4Cell * r0) {");
         let fast = body
             .find("if (BY_UNLIKELY(!By_IntAddShort(")
             .unwrap_or_else(|| panic!("the addition has a fast path: {body}"));
@@ -13263,7 +13440,7 @@ mod tests {
     fn a_small_body_with_no_loop_is_offered_to_be_written_in_place() {
         let c = emit_module(&module_with(add()));
         assert!(
-            c.contains("static inline ByTagged by_app_add(ByTagged r0, ByTagged r1)"),
+            c.contains("static inline ByTagged by_3app_3add(ByTagged r0, ByTagged r1)"),
             "{c}"
         );
 
@@ -13277,7 +13454,7 @@ mod tests {
         looping.blocks.push(again);
         let c = emit_module(&module_with(looping));
         assert!(
-            c.contains("static ByTagged by_app_add(ByTagged r0, ByTagged r1)"),
+            c.contains("static ByTagged by_3app_3add(ByTagged r0, ByTagged r1)"),
             "{c}"
         );
     }
@@ -13455,7 +13632,7 @@ mod tests {
         let c = emit_module(&module);
         assert!(
             c.contains(
-                "By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_app_Wrapped_Type_spec);"
+                "By_3app_7Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_3app_7Wrapped_Type_spec);"
             ),
             "the spec construction is the guard's: {c}"
         );
@@ -13466,7 +13643,7 @@ mod tests {
         // and a refusal is the whole module's, taken before anything of this module's
         // own is installed
         let refusal = c
-            .find(&refuses_whole_module("By_app_Wrapped_Type"))
+            .find(&refuses_whole_module("By_3app_7Wrapped_Type"))
             .expect("a refusal leaves the module interpreted");
         let install = c
             .find("PyModule_AddFunctions")
@@ -13495,12 +13672,12 @@ mod tests {
 
         assert!(
             c.contains(
-                "By_app_Wrapped *by_new = ((By_app_Wrapped *)By_TypeData(by_obj, By_app_Wrapped_Type_OBJ));"
+                "By_3app_7Wrapped *by_new = ((By_3app_7Wrapped *)By_TypeData(by_obj, By_3app_7Wrapped_Type_OBJ));"
             ),
             "the storage is found, not assumed: {c}"
         );
         assert!(
-            !c.contains("(By_app_Wrapped *)by_type->tp_alloc"),
+            !c.contains("(By_3app_7Wrapped *)by_type->tp_alloc"),
             "the allocation is an object, not a field struct: {c}"
         );
         // and the value handed on is still the object — the field storage is not one
@@ -13529,7 +13706,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains("By_app_Owned *by_new = (By_app_Owned *)by_obj;"),
+            c.contains("By_3app_5Owned *by_new = (By_3app_5Owned *)by_obj;"),
             "no lookup for a class that owns its layout: {c}"
         );
         assert!(!c.contains("By_TypeData(by_obj"), "{c}");
@@ -13549,22 +13726,22 @@ mod tests {
 
         assert!(
             c.contains(
-                "By_app_Deeper_Type = By_SpecSubclass(dict, \"Deeper\", &By_app_Deeper_Type_spec, \"Wrapped\", By_app_Wrapped_Type_OBJ);"
+                "By_3app_6Deeper_Type = By_SpecSubclass(dict, \"Deeper\", &By_3app_6Deeper_Type_spec, \"Wrapped\", By_3app_7Wrapped_Type_OBJ);"
             ),
             "the subclass stands on the emitted base: {c}"
         );
         // the base is still the one construction that has to answer from reality, and
         // it is built first
         let base = c
-            .find("By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\"")
+            .find("By_3app_7Wrapped_Type = By_SpecClass(dict, \"Wrapped\"")
             .expect("the base is built from the twin's own bases");
         let derived = c
-            .find("By_app_Deeper_Type = By_SpecSubclass(")
+            .find("By_3app_6Deeper_Type = By_SpecSubclass(")
             .expect("the subclass is built after it");
         assert!(base < derived, "the base is built first: {c}");
         // and a refusal is still the whole module's
         assert!(
-            c.contains(&refuses_whole_module("By_app_Deeper_Type")),
+            c.contains(&refuses_whole_module("By_3app_6Deeper_Type")),
             "{c}"
         );
     }
@@ -13590,14 +13767,14 @@ mod tests {
             !c.contains("== NULL) return 0;"),
             "nothing outside the pair reads either, so the module is not refused: {c}"
         );
-        let shared = "if (By_app_Wrapped_Type != NULL && By_app_Deeper_Type != NULL) {";
+        let shared = "if (By_3app_7Wrapped_Type != NULL && By_3app_6Deeper_Type != NULL) {";
         assert_eq!(
             c.matches(shared).count(),
             2,
             "both halves of the pair wait on both types: {c}"
         );
         assert!(
-            !c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            !c.contains("if (By_3app_7Wrapped_Type != NULL) {"),
             "so the base is never installed on its own: {c}"
         );
     }
@@ -13617,11 +13794,11 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "the base a still-running function reads refuses for the module: {c}"
         );
         assert!(
-            c.contains(&refuses_whole_module("By_app_Deeper_Type")),
+            c.contains(&refuses_whole_module("By_3app_6Deeper_Type")),
             "and the subclass goes with it, because it cannot stand alone on a base \
              the module gave up: {c}"
         );
@@ -13639,21 +13816,21 @@ mod tests {
 
         assert!(
             c.contains(
-                "By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_app_Wrapped_Type_spec);"
+                "By_3app_7Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_3app_7Wrapped_Type_spec);"
             ),
             "the construction is unchanged: {c}"
         );
         assert!(
-            !c.contains("return 0;\n    By_app_Wrapped_Type")
+            !c.contains("return 0;\n    By_3app_7Wrapped_Type")
                 && !c.contains("Wrapped_Type == NULL) return 0"),
             "nothing reaches into it, so the module is not refused: {c}"
         );
         assert!(
-            c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            c.contains("if (By_3app_7Wrapped_Type != NULL) {"),
             "the install waits on the type: {c}"
         );
         assert!(
-            c.contains("if (PyDict_SetItemString(dict, \"Wrapped\", By_app_Wrapped_Type_OBJ) < 0) return -1;"),
+            c.contains("if (PyDict_SetItemString(dict, \"Wrapped\", By_3app_7Wrapped_Type_OBJ) < 0) return -1;"),
             "and installs it where there is one: {c}"
         );
     }
@@ -13684,7 +13861,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a module function reaching into it refuses for the module: {c}"
         );
     }
@@ -13712,7 +13889,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a class the module cannot answer for keeps the whole-module refusal: {c}"
         );
     }
@@ -13741,7 +13918,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            !c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            !c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a class that holds the attribute does not hold the module: {c}"
         );
     }
@@ -13769,12 +13946,12 @@ mod tests {
         assert!(
             c.contains(
                 "{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
-                 \x20    offsetof(By_app_Open, by_dict), BY_DICT_OFFSET_FLAGS}"
+                 \x20    offsetof(By_3app_4Open, by_dict), BY_DICT_OFFSET_FLAGS}"
             ),
             "the type is told where the word is: {c}"
         );
         assert!(
-            c.contains("{Py_tp_members, (void *)By_app_Open_Type_members}"),
+            c.contains("{Py_tp_members, (void *)By_3app_4Open_Type_members}"),
             "the members table reaches the type: {c}"
         );
     }
@@ -13801,7 +13978,7 @@ mod tests {
 
         assert!(
             c.contains(
-                "struct By_app_Tight {\n\
+                "struct By_3app_5Tight {\n\
                  \x20   PyObject_HEAD\n\
                  \x20   PyObject *by_dict;"
             ),
@@ -13809,7 +13986,7 @@ mod tests {
         );
         assert!(
             c.contains(
-                "struct By_app_Loose {\n\
+                "struct By_3app_5Loose {\n\
                  \x20   PyObject_HEAD\n\
                  \x20   PyObject *by_dict;"
             ),
@@ -13817,11 +13994,11 @@ mod tests {
         );
         // only the subclass can reach one, so only the subclass names the offset
         assert!(
-            !c.contains("offsetof(By_app_Tight, by_dict)"),
+            !c.contains("offsetof(By_3app_5Tight, by_dict)"),
             "the slotted base publishes no dict: {c}"
         );
         assert!(
-            c.contains("offsetof(By_app_Loose, by_dict)"),
+            c.contains("offsetof(By_3app_5Loose, by_dict)"),
             "the subclass publishes one: {c}"
         );
     }
@@ -13864,7 +14041,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            !c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            !c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a class with a dict answers for the write itself: {c}"
         );
     }
@@ -13893,7 +14070,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a register typed on it reaches into it: {c}"
         );
     }
@@ -13915,7 +14092,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "the type it answers with reaches into it: {c}"
         );
     }
@@ -13941,7 +14118,7 @@ mod tests {
             "nothing still running reads either, so the module is not refused: {c}"
         );
         assert!(
-            c.contains("if (By_app_Wrapped_Type != NULL && By_app_Reader_Type != NULL) {"),
+            c.contains("if (By_3app_7Wrapped_Type != NULL && By_3app_6Reader_Type != NULL) {"),
             "the reader waits on what it reads as well as on itself: {c}"
         );
     }
@@ -13969,8 +14146,8 @@ mod tests {
 
         assert!(
             c.contains(
-                "if (By_app_Wrapped_Type != NULL && By_app_Reader_Type != NULL \
-                 && By_app_Outer_Type != NULL) {"
+                "if (By_3app_7Wrapped_Type != NULL && By_3app_6Reader_Type != NULL \
+                 && By_3app_5Outer_Type != NULL) {"
             ),
             "the outer class waits on everything its methods can reach: {c}"
         );
@@ -13995,11 +14172,11 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            !c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            !c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a helper nothing else builds does not hold the module: {c}"
         );
         assert!(
-            c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            c.contains("if (By_3app_7Wrapped_Type != NULL) {"),
             "the class is still left out on its own: {c}"
         );
     }
@@ -14024,14 +14201,14 @@ mod tests {
         );
         assert!(
             c.contains(
-                "if (By_app_Wrapped_Type != NULL && By_app_Wrapped_step_gen_Type != NULL) {"
+                "if (By_3app_7Wrapped_Type != NULL && By_3app_16Wrapped_step_gen_Type != NULL) {"
             ),
             "it waits on the class it reads: {c}"
         );
         assert!(
             c.contains(
                 "if (PyDict_SetItemString(dict, \"Wrapped_step_gen\", \
-                 By_app_Wrapped_step_gen_Type_OBJ) < 0) return -1;"
+                 By_3app_16Wrapped_step_gen_Type_OBJ) < 0) return -1;"
             ),
             "and the name it publishes is inside that wait: {c}"
         );
@@ -14051,7 +14228,7 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains(&refuses_whole_module("By_app_Wrapped_Type")),
+            c.contains(&refuses_whole_module("By_3app_7Wrapped_Type")),
             "a helper the module still builds holds it: {c}"
         );
     }
@@ -14115,20 +14292,20 @@ mod tests {
         let c = emit_module(&module);
 
         let declaration = c
-            .split("struct By_app_Deeper {")
+            .split("struct By_3app_6Deeper {")
             .nth(1)
             .and_then(|rest| rest.split_once("};"))
             .map(|(body, _)| body.to_string())
             .expect("the subclass declares a struct");
-        assert!(declaration.contains("by_f_depth;"), "{declaration}");
-        assert!(!declaration.contains("by_f_tag;"), "{declaration}");
+        assert!(declaration.contains("by_f_5depth;"), "{declaration}");
+        assert!(!declaration.contains("by_f_3tag;"), "{declaration}");
         // and a read of the inherited field goes to the base's region rather than this
         // one's, which is what keeps the single copy single
         assert!(
             c.contains(
-                "static PyObject *By_app_Deeper_Type_get_tag(PyObject *selfobj, void *closure) {\n\
+                "static PyObject *By_3app_6Deeper_Type_get_3tag(PyObject *selfobj, void *closure) {\n\
                  \x20                (void)closure;\n\
-                 \x20                By_app_Wrapped *self = ((By_app_Wrapped *)By_TypeData(selfobj, By_app_Wrapped_Type_OBJ));"
+                 \x20                By_3app_7Wrapped *self = ((By_3app_7Wrapped *)By_TypeData(selfobj, By_3app_7Wrapped_Type_OBJ));"
             ),
             "{c}"
         );
@@ -14145,25 +14322,25 @@ mod tests {
         let c = emit_module(&module);
 
         let init = c
-            .split("static int By_app_Deeper_Type_init(")
+            .split("static int By_3app_6Deeper_Type_init(")
             .nth(1)
             .and_then(|rest| rest.split_once("\n}\n"))
             .map(|(body, _)| body.to_string())
             .expect("the subclass generates a constructor");
         assert!(
             init.contains(
-                "By_app_Deeper *self = ((By_app_Deeper *)By_TypeData(selfobj, By_app_Deeper_Type_OBJ));"
+                "By_3app_6Deeper *self = ((By_3app_6Deeper *)By_TypeData(selfobj, By_3app_6Deeper_Type_OBJ));"
             ),
             "{init}"
         );
         assert!(
             init.contains(
-                "By_app_Wrapped *by_up1 = ((By_app_Wrapped *)By_TypeData(selfobj, By_app_Wrapped_Type_OBJ));"
+                "By_3app_7Wrapped *by_up1 = ((By_3app_7Wrapped *)By_TypeData(selfobj, By_3app_7Wrapped_Type_OBJ));"
             ),
             "{init}"
         );
-        assert!(init.contains("by_up1->by_f_tag = by_v;"), "{init}");
-        assert!(init.contains("self->by_f_depth = by_v;"), "{init}");
+        assert!(init.contains("by_up1->by_f_3tag = by_v;"), "{init}");
+        assert!(init.contains("self->by_f_5depth = by_v;"), "{init}");
         // and both are still bound from the call, in the order the class declares them
         assert!(
             init.contains("static const char *const by_names[] = { \"tag\", \"depth\" };"),
@@ -14188,7 +14365,7 @@ mod tests {
         assert!(!c.contains("By_SpecSubclass"), "{c}");
         assert!(
             c.contains(
-                "By_app_Deeper_Type = By_SpecClass(dict, \"Deeper\", &By_app_Deeper_Type_spec);"
+                "By_3app_6Deeper_Type = By_SpecClass(dict, \"Deeper\", &By_3app_6Deeper_Type_spec);"
             ),
             "{c}"
         );
@@ -14214,23 +14391,23 @@ mod tests {
 
         assert!(
             c.contains(
-                "By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_app_Wrapped_Type_spec);"
+                "By_3app_7Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_3app_7Wrapped_Type_spec);"
             ),
             "the base is built from a spec of its own: {c}"
         );
         assert!(
             c.contains(
-                "By_app_Deeper_Type = By_SpecSubclass(dict, \"Deeper\", &By_app_Deeper_Type_spec, \"Wrapped\", By_app_Wrapped_Type_OBJ);"
+                "By_3app_6Deeper_Type = By_SpecSubclass(dict, \"Deeper\", &By_3app_6Deeper_Type_spec, \"Wrapped\", By_3app_7Wrapped_Type_OBJ);"
             ),
             "and the subclass stands on the finished type: {c}"
         );
         assert!(
-            c.contains("{Py_tp_dealloc, (void *)By_app_Wrapped_Type_dealloc},"),
+            c.contains("{Py_tp_dealloc, (void *)By_3app_7Wrapped_Type_dealloc},"),
             "the base carries the deallocator that breaks the chain: {c}"
         );
         // and it binds no storage, because it declared no region for one
         assert!(
-            !c.contains("By_app_Wrapped *by_f"),
+            !c.contains("By_3app_7Wrapped *by_f"),
             "nothing of the base's own is reached: {c}"
         );
     }
@@ -14249,7 +14426,7 @@ mod tests {
         assert!(!c.contains("By_SpecClass"), "{c}");
         assert!(c.contains("By_BuildClass"), "{c}");
         assert!(
-            !c.contains("{Py_tp_dealloc, (void *)By_app_Wrapped_Type_dealloc},"),
+            !c.contains("{Py_tp_dealloc, (void *)By_3app_7Wrapped_Type_dealloc},"),
             "no slot takes the base's freeing over: {c}"
         );
     }
@@ -14290,7 +14467,7 @@ mod tests {
         // and the class is still built by calling the metaclass, which is the whole point
         // of putting the value where the metaclass can read it
         assert!(
-            c.contains(", by_kwds, By_app_Wrapped_Type_methods, NULL, 1, &by_carried);"),
+            c.contains(", by_kwds, By_3app_7Wrapped_Type_methods, NULL, 1, &by_carried);"),
             "the metaclass is what builds it, and it is handed the carry: {c}"
         );
     }
@@ -14365,7 +14542,7 @@ mod tests {
 
         assert!(
             c.contains(
-                "if (By_VerifyClass(\"app\", dict, \"Wrapped\", by_type[0], By_app_Wrapped_Type_OBJ,"
+                "if (By_VerifyClass(\"app\", dict, \"Wrapped\", by_type[0], By_3app_7Wrapped_Type_OBJ,"
             ),
             "what the name means is checked against what was emitted for it: {c}"
         );
@@ -14376,7 +14553,7 @@ mod tests {
             "the base's own slot is named: {c}"
         );
         assert!(
-            c.contains("By_app_Deeper_Type_methods,"),
+            c.contains("By_3app_6Deeper_Type_methods,"),
             "the method table is what says which names were lowered: {c}"
         );
         // before the interpreted definitions are released, because comparing against one
@@ -14485,10 +14662,10 @@ mod tests {
         let c = emit_module(&module);
         // the forward declaration precedes the body, so take the last split
         let use_body = c
-            .rsplit("static inline ByTagged by_app_use")
+            .rsplit("static inline ByTagged by_3app_3use")
             .next()
             .expect("the caller is emitted");
-        assert!(use_body.contains("by_app_pure()"), "{use_body}");
+        assert!(use_body.contains("by_3app_4pure()"), "{use_body}");
         assert!(!use_body.contains("if (r0 == BY_INT_ERROR) goto by_error;"));
     }
 
@@ -14499,7 +14676,7 @@ mod tests {
         // releasing them here *and* in the wrapper was a double-decref that only
         // survived because small ints are unrefcounted
         let body = c
-            .split("static inline ByTagged by_app_add(ByTagged r0, ByTagged r1) {")
+            .split("static inline ByTagged by_3app_3add(ByTagged r0, ByTagged r1) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject").next())
             .expect("the body is emitted");
@@ -14569,7 +14746,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(a)));
         let c = emit_module(&module_with(builder.finish()));
         let body = c
-            .split("static inline PyObject * by_app_first(PyObject * r0) {")
+            .split("static inline PyObject * by_3app_5first(PyObject * r0) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject *byw").next())
             .expect("the body is emitted");
@@ -14605,7 +14782,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(n)));
         let c = emit_module(&module_with(builder.finish()));
         let body = c
-            .split("static inline ByTagged by_app_halve(ByTagged r0) {")
+            .split("static inline ByTagged by_3app_5halve(ByTagged r0) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject").next())
             .expect("the body is emitted");
@@ -14947,8 +15124,8 @@ mod tests {
         let mut function = add();
         function.exported = false;
         let c = emit_module(&module_with(function));
-        assert!(!c.contains("byw_app_add"));
-        assert!(c.contains("static inline ByTagged by_app_add"));
+        assert!(!c.contains("byw_3app_3add"));
+        assert!(c.contains("static inline ByTagged by_3app_3add"));
     }
 
     #[test]
@@ -14975,7 +15152,7 @@ mod tests {
         assert!(c.contains("PyMODINIT_FUNC PyInit_app(void)"));
         assert!(c.contains("\"app\""));
         assert!(c.contains(
-            "{\"add\", (PyCFunction)(void(*)(void))byw_pkg_app_add, METH_FASTCALL | METH_KEYWORDS, NULL},"
+            "{\"add\", (PyCFunction)(void(*)(void))byw_10pkgZ2e_app_3add, METH_FASTCALL | METH_KEYWORDS, NULL},"
         ));
     }
 
@@ -15531,14 +15708,14 @@ mod tests {
         let c = emit_module(&module);
 
         let named = c
-            .find("typedef struct By_app_Point By_app_Point;")
+            .find("typedef struct By_3app_5Point By_3app_5Point;")
             .expect("the instance struct is named");
         let slot = c
-            .find("typedef struct { By_app_Point * f0; ByTagged f1; } ByTuple_iPoint_int;")
+            .find("typedef struct { By_3app_5Point * f0; ByTagged f1; } ByTuple_i5Point_int;")
             .expect("the slot is a pointer to it");
         assert!(named < slot, "{c}");
         let defined = c
-            .find("struct By_app_Point {\n")
+            .find("struct By_3app_5Point {\n")
             .expect("and defined after both");
         assert!(slot < defined, "{c}");
     }
@@ -15579,7 +15756,7 @@ mod tests {
         }
         let c = emit_module(&module);
 
-        assert_eq!(c.matches("} ByTuple_iPoint_int;").count(), 1, "{c}");
+        assert_eq!(c.matches("} ByTuple_i5Point_int;").count(), 1, "{c}");
     }
 
     #[test]
@@ -15620,12 +15797,12 @@ mod tests {
         function.registers[inner.index()].borrowed = true;
 
         let text = emit_function(&ModuleIr::new("app"), &function);
-        assert!(text.contains("r1 = r0->by_f_inner;"), "{text}");
+        assert!(text.contains("r1 = r0->by_f_5inner;"), "{text}");
         // the intermediate is neither retained nor released
-        assert!(!text.contains("By_XIncRef(r0->by_f_inner)"), "{text}");
+        assert!(!text.contains("By_XIncRef(r0->by_f_5inner)"), "{text}");
         assert!(!text.contains("Py_XDECREF(r1)"), "{text}");
         // the value that leaves still is
-        assert!(text.contains("By_XIncRef(r1->by_f_label)"), "{text}");
+        assert!(text.contains("By_XIncRef(r1->by_f_5label)"), "{text}");
     }
 
     #[test]
@@ -15757,13 +15934,13 @@ mod tests {
 
         let c = emit_function(&ModuleIr::new("app"), &function);
         assert!(
-            c.contains("static ByGlobalUnboxedSite by_gu__limit = BY_GLOBAL_UNBOXED_SITE_INIT;"),
+            c.contains("static ByGlobalUnboxedSite by_gu_6_limit = BY_GLOBAL_UNBOXED_SITE_INIT;"),
             "{c}"
         );
         assert!(
             c.contains(
-                "ByTagged by_t = By_LookupGlobalTaggedSite(&by_gu__limit, &by_gs__limit, \
-                 by_module_dict, by_g__limit);"
+                "ByTagged by_t = By_LookupGlobalTaggedSite(&by_gu_6_limit, &by_gs_6_limit, \
+                 by_module_dict, by_g_6_limit);"
             ),
             "{c}"
         );
@@ -15815,7 +15992,7 @@ mod tests {
         assert_eq!(verify(&function), Ok(()));
 
         let c = emit_function(&ModuleIr::new("app"), &function);
-        assert!(c.contains("By_LookupGlobalSite(&by_gs__limit"), "{c}");
+        assert!(c.contains("By_LookupGlobalSite(&by_gs_6_limit"), "{c}");
         assert!(c.contains("By_UnboxInt("), "{c}");
         assert!(!c.contains("ByGlobalUnboxedSite"), "{c}");
     }
@@ -15912,7 +16089,7 @@ mod tests {
         let register = local(value);
         assert!(
             c.contains(&format!(
-                "->by_f_tag = {register};\n    {register} = NULL;\n"
+                "->by_f_3tag = {register};\n    {register} = NULL;\n"
             )),
             "{c}"
         );
@@ -16121,7 +16298,7 @@ mod tests {
     #[test]
     fn a_constructors_computed_default_is_optional_and_hands_the_call_over() {
         let c = emit_module(&holder());
-        let slot = body_of(&c, "static int By_app_Holder_Type_init(");
+        let slot = body_of(&c, "static int By_3app_6Holder_Type_init(");
         // the arity is the *written* one: it is the value that is unavailable here,
         // not the parameter
         assert!(
@@ -16133,7 +16310,7 @@ mod tests {
         // default is a value, and handing the call over would only make it slower
         assert!(
             slot.contains(
-                "if (by_bound[0] == NULL) return By_InitInterpreted(byi_app_Holder___init__, \
+                "if (by_bound[0] == NULL) return By_InitInterpreted(byi_3app_6Holder_8__init__, \
                  \"Holder.__init__\", selfobj, args, kwds);"
             ),
             "{slot}"
@@ -16141,7 +16318,7 @@ mod tests {
         assert!(!c.contains("By_TwinDefault("), "{c}");
         // which means the slot needs the handle the method wrapper already takes
         assert!(
-            c.contains("static PyObject *byi_app_Holder___init__ = NULL;"),
+            c.contains("static PyObject *byi_3app_6Holder_8__init__ = NULL;"),
             "{c}"
         );
     }
@@ -16151,11 +16328,11 @@ mod tests {
     #[test]
     fn a_constructor_handed_its_marker_hands_the_call_over() {
         let c = emit_module(&holder_holding(true));
-        let slot = body_of(&c, "static int By_app_Holder_Type_init(");
+        let slot = body_of(&c, "static int By_3app_6Holder_Type_init(");
         assert!(
             slot.contains(
-                "if ((by_bound[0] == NULL || by_bound[0] == byi_app_Holder___init___d1)) \
-                 return By_InitInterpreted(byi_app_Holder___init__, \"Holder.__init__\", \
+                "if ((by_bound[0] == NULL || by_bound[0] == byi_3app_6Holder_8__init___d1)) \
+                 return By_InitInterpreted(byi_3app_6Holder_8__init__, \"Holder.__init__\", \
                  selfobj, args, kwds);"
             ),
             "{slot}"
@@ -16163,7 +16340,7 @@ mod tests {
         // the marker is read off the definition once the module has run
         assert!(
             c.contains(
-                "byi_app_Holder___init___d1 = By_TwinDefault(byi_app_Holder___init__, 1, \"value\");"
+                "byi_3app_6Holder_8__init___d1 = By_TwinDefault(byi_3app_6Holder_8__init__, 1, \"value\");"
             ),
             "{c}"
         );
@@ -16226,7 +16403,7 @@ mod tests {
         // first and `body_of` takes whichever it finds
         let wrapper = body_of(
             &c,
-            "static PyObject *byw_app_outer_env_cb(PyObject *self, PyObject *const *args, \
+            "static PyObject *byw_3app_12outerZ24_env_2cb(PyObject *self, PyObject *const *args, \
              Py_ssize_t nargs, PyObject *kwnames) {",
         );
         // the parameter stays optional, and the omitted case reads the field rather
@@ -16236,12 +16413,12 @@ mod tests {
             "{wrapper}"
         );
         assert!(
-            wrapper.contains("By_ReadCell(a0->by_gf__default_cb_name, \"name\", 0)"),
+            wrapper.contains("By_ReadCell(a0->by_gf_25Z24_defaultZ24_cbZ24_name, \"name\", 0)"),
             "{wrapper}"
         );
         // and no edge to a definition that was never bound under a name
         assert!(!wrapper.contains("by_wrap_defer"), "{wrapper}");
-        assert!(!c.contains("byi_app_outer_env_cb"), "{c}");
+        assert!(!c.contains("byi_3app_12outerZ24_env_2cb"), "{c}");
     }
 
     /// a class whose `__init__` is `def __init__(self, a, /, *rest, **extra)`: a
@@ -16309,7 +16486,7 @@ mod tests {
     #[test]
     fn a_constructor_builds_its_variadic_parameters_rather_than_binding_them() {
         let c = emit_module(&variadic_init());
-        let slot = body_of(&c, "static int By_app_Var_Type_init(");
+        let slot = body_of(&c, "static int By_3app_3Var_Type_init(");
         // only `a` is bound: the other two are what is *left over*, so treating them as
         // named parameters made a call supplying neither an arity error
         assert!(
@@ -16343,7 +16520,7 @@ mod tests {
         // the brace is what tells the definition from the forward declaration
         let wrapper = body_of(
             &c,
-            "byw_app_Var___init__(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {",
+            "byw_3app_3Var_8__init__(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {",
         );
         assert!(
             wrapper.contains(
@@ -16432,12 +16609,12 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains("By_MakeFunction(&byw_app_Env_call_spec, (PyObject *)(r0))"),
+            c.contains("By_MakeFunction(&byw_3app_3Env_4call_spec, (PyObject *)(r0))"),
             "{c}"
         );
         assert!(
             c.contains(
-                "static const ByFunctionSpec byw_app_Env_call_spec = { byw_app_Env_call, \"call\", \"make.<locals>.call\", NULL, &by_module_dict, NULL, 0, NULL, NULL, NULL, &by_fallback, &byw_app_Env_call_code };"
+                "static const ByFunctionSpec byw_3app_3Env_4call_spec = { byw_3app_3Env_4call, \"call\", \"make.<locals>.call\", NULL, &by_module_dict, NULL, 0, NULL, NULL, NULL, &by_fallback, &byw_3app_3Env_4call_code };"
             ),
             "{c}"
         );
@@ -16454,21 +16631,21 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains("{Py_tp_alloc, (void *)By_app_Point_Type_alloc},")
-                && c.contains("{Py_tp_free, (void *)By_app_Point_Type_free},"),
+            c.contains("{Py_tp_alloc, (void *)By_3app_5Point_Type_alloc},")
+                && c.contains("{Py_tp_free, (void *)By_3app_5Point_Type_free},"),
             "the type takes both halves over: {c}"
         );
         assert!(
-            c.contains("static PyObject *By_app_Point_Type_recycled[16];"),
+            c.contains("static PyObject *By_3app_5Point_Type_recycled[16];"),
             "and holds sixteen blocks: {c}"
         );
         // a request for any other type is one these blocks are not the size of
         assert!(
-            c.contains("&& by_type == (PyTypeObject *)By_app_Point_Type_OBJ)"),
+            c.contains("&& by_type == (PyTypeObject *)By_3app_5Point_Type_OBJ)"),
             "the allocator asks what it is being asked for: {c}"
         );
         assert!(
-            c.contains("    By_app_Point_Type_drain();\n")
+            c.contains("    By_3app_5Point_Type_drain();\n")
                 && c.contains("by_slots, NULL, NULL, by_module_free"),
             "and the module hands the blocks back when it goes: {c}"
         );
@@ -16485,13 +16662,13 @@ mod tests {
         module.classes = vec![counted];
         let c = emit_module(&module);
         assert!(
-            c.contains("static void By_app_Point_Type_unset(PyObject *selfobj) {")
-                && c.contains("self->by_f_x = BY_INT_ERROR;"),
+            c.contains("static void By_3app_5Point_Type_unset(PyObject *selfobj) {")
+                && c.contains("self->by_f_1x = BY_INT_ERROR;"),
             "{c}"
         );
         assert!(
-            c.contains("By_app_Point_Type_unset(by_block);")
-                && c.contains("if (by_fresh != NULL) By_app_Point_Type_unset(by_fresh);"),
+            c.contains("By_3app_5Point_Type_unset(by_block);")
+                && c.contains("if (by_fresh != NULL) By_3app_5Point_Type_unset(by_fresh);"),
             "a recycled block and a fresh one are both reset: {c}"
         );
 

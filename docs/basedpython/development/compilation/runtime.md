@@ -122,9 +122,16 @@ is installed in the instance's dict word, which is what lets python's own attrib
 machinery put a stray name straight into it. a field read pays nothing for any of
 this; a field write pays one test of that word.
 
-two differences remain, both loud: `type(vars(o))` names the mapping rather than
-`dict`, and `del o.__dict__[f]` for a *field* raises where python removes it,
-because a layout field has no unbound state to return to.
+one difference remains, and it is loud: `type(vars(o))` names the mapping rather than
+`dict`.
+
+a field is deleted as python deletes an attribute — `del o.f` from this module or from any
+other, `del o.__dict__[f]` or `o.__dict__.clear()` — because every field has the state an
+instance `__init__` never ran on is in, and a delete puts it back there. a read then
+raises `AttributeError` in python's words, and a later write sets the field again. a
+compiled function that has seen a field asks again once python code can have run, since
+that code may have deleted it. a clear lets go of what it removed only once every name is
+gone, as python's does, so a `__del__` that runs then finds the object already cleared.
 
 the invariant is checked once more where every attribute write passes, rather
 than only where the fields are worked out: a write of a name nothing in the
@@ -780,6 +787,17 @@ hands the interpreted definition back to stand as the class — in both cases th
 name holding that definition is the answer, not a defect, and the check records
 it rather than raising.
 
+the one construction that cannot be handed back alone is a class on a base the module
+emitted, beside one from outside or beside a second base of its own — `class ConvertingDict(dict, ConvertingMixin)` in `logging.config`. it is built by calling its
+metaclass, and from 3.12 python refuses to lay out a `dict` and a class of ours as one
+instance, as it refuses two classes of ours. the definition handed back stands on the
+interpreted copy of the base while the base's name already means the emitted type, so
+the import stands the **whole module** down there instead: before anything has been
+decorated or adopted, every name it installed is given back its interpreted definition,
+and the module runs as the interpreted one. whether the bases can be laid out as one is
+the interpreter's own rule over whatever their names hold at import, so the build cannot
+know it beforehand.
+
 recording is the other half, and it is what the check is for. `--annotate` says
 which classes a module *meant* to compile; it cannot say which ones an import
 stood a type under, and for most of this project's life the report was read as
@@ -975,12 +993,16 @@ mod.nested_depth(98)  # python: RecursionError; compiled: 98
 ```
 
 a construction counts the frame of the `__init__` it runs, as python's does, a generated one
-included. from 3.13 python also specialises a construction a call site makes often, where
-the class's `__init__` is a plain python function given every argument by position and its
-instances keep their attributes inline, and the specialised form takes a second frame for
-the return from `__init__`. a compiled class is never constructed that way, and neither is
-a class written on one the module extends, so a recursion that goes round through such a
-construction reaches the limit a level later for each one:
+included — made by compiled code, where it goes round a cycle of compiled calls, as any call
+is. on 3.11 it also counts python's call of the type, which that version counts against the
+same limit. from 3.13 python also specialises a construction a call site makes often, where
+the class has no metaclass or `__new__` of its own and its `__init__` is a plain python
+function given every argument by position — and, on 3.13, where its instances keep their
+attributes inline — and the specialised form takes a second frame for the return from
+`__init__`. a compiled class is never constructed that way, and neither is a class written
+on one the module extends, so a recursion that goes round through such a construction
+reaches the limit a level later for each one. that includes an `__init__` that builds
+another instance of its own class, which python specialises once the call inside it is warm:
 
 ```python
 class Node:
@@ -1365,6 +1387,55 @@ generates and a slot for every field, so what counts as written afterwards is wh
 from the class the decorator handed back. `setattr(Point, "__repr__", f)` after a
 `data class Point`, or a write over one of its fields, leaves the module interpreted, and
 what the decorator wrote itself does not
+
+### an instance's `__class__` reassigned
+
+python moves an instance to another class with `o.__class__ = Other` wherever the two lay
+their instances out alike, and two classes written in python with no `__slots__` always do.
+a compiled class lays its instances out itself, and python decides the move against that
+layout:
+
+- two classes the module extends that share a base and add no field to it are laid out
+    alike, and the move is taken. a call compiled against the base asks the instance's type
+    before it reaches a method directly, so it answers as the class the instance now has
+- a class and its own base, or a subclass that adds a field, are laid out apart, and the
+    move is refused with python's
+    `__class__ assignment: 'Base' object layout differs from 'Circle'`
+- a class the module neither extends nor decorates is an immutable type — see
+    [writing onto a class nothing extends](#writing-onto-a-class-nothing-extends) — and
+    python refuses to move an instance to or from one, with
+    `__class__ assignment only supported for mutable types or ModuleType subclasses`
+
+```python
+class Base:
+    def name(self) -> str:
+        return "base"
+
+
+class Circle(Base):
+    def name(self) -> str:
+        return "circle"
+
+
+class Shape(Base):
+    def name(self) -> str:
+        return "shape"
+
+
+class Lone:
+    pass
+
+
+# from another module
+c = mod.Circle()
+c.__class__ = mod.Shape  # both: c.name() is "shape"
+c.__class__ = mod.Base  # python: moved; compiled: TypeError
+mod.Lone().__class__ = mod.Base  # python: moved; compiled: TypeError
+```
+
+where python refuses too — an instance of a class written in python moved to `int` — the
+two refuse with the same words. the refusal is what keeps a method reached directly working
+on the layout its class was compiled with
 
 ### the `__new__` a class with an unset field publishes
 
