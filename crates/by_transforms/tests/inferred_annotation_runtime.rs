@@ -10,7 +10,6 @@
 //! asks; where they are not, it is imported for a checker alone.
 
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile, transpile_typed};
@@ -171,11 +170,12 @@ fn an_inferred_annotation_adds_no_import_cycle() {
         db.write_file(path, source).expect("write file failed");
     }
     for lazy_imports in [true, false] {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("inferred_annotation_cycle_{lazy_imports}"));
-        // a stale directory from an earlier run would mask a transpile failure
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create case dir");
+        // a directory of its own, so a run beside another, from the same checkout, neither
+        // reads nor deletes the other's modules
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("inferred_annotation_cycle_{lazy_imports}"))
+            .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+            .expect("create case dir");
         let config = Config {
             min_version: PythonVersion::PY310,
             lazy_imports,
@@ -186,9 +186,9 @@ fn an_inferred_annotation_adds_no_import_cycle() {
             let transpiled = transpile_typed(&db, file, &config, None)
                 .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
             let relative = path.trim_start_matches('/').replace(".by", ".py");
-            fs::write(dir.join(relative), transpiled).expect("write module");
+            fs::write(dir.path().join(relative), transpiled).expect("write module");
         }
-        let m = fs::read_to_string(dir.join("m.py")).expect("read m");
+        let m = fs::read_to_string(dir.path().join("m.py")).expect("read m");
         // a deferred `make` is read through the module's `_LazyFrom`
         let make = if lazy_imports {
             "_by_lazy.make"

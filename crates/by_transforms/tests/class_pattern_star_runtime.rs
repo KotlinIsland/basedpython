@@ -30,8 +30,13 @@ const PROGRAM: &str = r#"
 from dataclasses import dataclass
 
 
+# a data class gets `__match_args__` only from python 3.10, and the polyfilled `match` runs
+# below that too, where a positional class pattern has no positions to read without one. so
+# each class spells its own
 @dataclass
 class Line:
+    __match_args__ = ("start", "mid", "stop", "end")
+
     start: int
     mid: int
     stop: int
@@ -75,6 +80,8 @@ assert first(line) == 0, "a trailing star claims no position of its own"
 # wildcards, which is the whole point of counting from the end
 @dataclass
 class Short:
+    __match_args__ = ("start", "end")
+
     start: int
     end: int
 

@@ -15,7 +15,6 @@
 //! fails.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile_typed};
@@ -77,11 +76,14 @@ fn build_db() -> TestDb {
 
 /// transpile every file of the project for `target` through the typed pipeline into a fresh
 /// directory under the cargo temp dir, keeping the package layout
-fn build_case(case: &str, target: PythonVersion) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(dir.join("ui")).expect("create case dir");
+fn build_case(case: &str, target: PythonVersion) -> tempfile::TempDir {
+    // a directory of its own, so a run beside another, from the same checkout, neither reads
+    // nor deletes the other's modules
+    let dir = tempfile::Builder::new()
+        .prefix(case)
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir");
+    fs::create_dir_all(dir.path().join("ui")).expect("create case dir");
 
     let db = build_db();
     let config = Config {
@@ -93,7 +95,7 @@ fn build_case(case: &str, target: PythonVersion) -> PathBuf {
         let transpiled = transpile_typed(&db, file, &config, None)
             .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
         let relative = path.trim_start_matches('/').replace(".by", ".py");
-        fs::write(dir.join(relative), transpiled).expect("write module");
+        fs::write(dir.path().join(relative), transpiled).expect("write module");
     }
     dir
 }

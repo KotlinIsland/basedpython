@@ -11,7 +11,6 @@ mod common;
 mod interpreters;
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, SoundnessPositions, transpile, transpile_typed};
@@ -363,11 +362,13 @@ fn transpile_project(
     name: &str,
     target: PythonVersion,
     files: &[(&str, &str)],
-) -> Result<PathBuf, String> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
+) -> Result<tempfile::TempDir, String> {
+    // a directory of its own, so a run beside another, from the same checkout, neither reads
+    // nor deletes the other's modules
+    let dir = tempfile::Builder::new()
+        .prefix(name)
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir");
     let mut db = TestDb::new(ProjectMetadata::new(
         ruff_python_ast::name::Name::new_static(""),
         SystemPathBuf::from("/"),
@@ -385,7 +386,7 @@ fn transpile_project(
         let transpiled =
             transpile_typed(&db, file, &config, None).map_err(|error| error.message)?;
         let relative = path.trim_start_matches('/').replace(".by", ".py");
-        fs::write(dir.join(relative), transpiled).expect("write module");
+        fs::write(dir.path().join(relative), transpiled).expect("write module");
     }
     Ok(dir)
 }
@@ -422,7 +423,7 @@ fn a_literal_for_another_modules_named_tuple_is_built() {
         output.status.success(),
         "transpiled program failed on {python}:\n--- stderr ---\n{}\n--- main.py ---\n{}",
         String::from_utf8_lossy(&output.stderr),
-        fs::read_to_string(dir.join("main.py")).unwrap_or_default(),
+        fs::read_to_string(dir.path().join("main.py")).unwrap_or_default(),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
 }

@@ -24,8 +24,9 @@ use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
-    ReturnGuardForm, callable_parameter_label, is_classvar_marker_id, is_final_marker_id,
-    is_let_marker_id, predicate_guard,
+    ReturnGuardForm, any_over_expr, callable_parameter_label, is_classvar_marker_id,
+    is_final_marker_id, is_let_marker_id, predicate_guard, type_modifier_marker,
+    use_site_variance_marker,
 };
 use ruff_python_ast::{Expr, ExprCallableType, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
@@ -112,6 +113,9 @@ pub(crate) struct CallableSyntax<'src> {
     /// substitution reaches every depth of the recursion below rather than only
     /// a subtree whose range matches exactly
     substitutions: Vec<(TextRange, String)>,
+    /// set while a leaf holding a use-site variance keyword or a type modifier is written out,
+    /// so each one is written as the type it marks. see [`Self::lower_leaf`]
+    writing_markers: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -154,6 +158,7 @@ impl<'src> CallableSyntax<'src> {
             protocol_class_defs: String::new(),
             extra_imports: Vec::new(),
             substitutions: Vec::new(),
+            writing_markers: false,
         }
     }
 
@@ -287,6 +292,21 @@ impl<'src> CallableSyntax<'src> {
         // a claimed fold this lowerer was handed, inside a wider edit it makes
         if let Some(name) = self.substitution_for(expr.range()) {
             return name.to_owned();
+        }
+        // a use-site variance keyword or a type modifier has no python spelling, and is written
+        // as the type it marks — `literal str`, which has one, is a substitution. the driver
+        // collapses the blanks a keyword was replaced with in the source it keeps, but a leaf
+        // copied from the source here would keep them, and a string annotation cannot start with
+        // them. the markers are written out only here, in text this lowerer is writing anyway:
+        // asked whether a type needs rewriting at all, a marker alone answers no, so a type
+        // with nothing else to lower keeps its source and its own collapsed keyword
+        if !self.writing_markers && contains_keyword_marker(expr) {
+            self.writing_markers = true;
+            let written = self.rewrite(expr);
+            self.writing_markers = false;
+            if let Some(written) = written {
+                return written;
+            }
         }
         // a leaf that *contains* an already-lowered subtree is rendered by
         // sweeping the substitutions over its source instead: the per-leaf
@@ -828,6 +848,14 @@ impl<'src> CallableSyntax<'src> {
                 ))
             }
 
+            // see `lower_leaf`
+            Expr::Subscript(_)
+                if self.writing_markers
+                    && let Some(inner) = keyword_marker_inner(expr) =>
+            {
+                Some(self.rewrite_or_leaf(inner))
+            }
+
             Expr::Subscript(s) => {
                 // `Annotated[T, meta…]` — only the first slice element is a type
                 // position; the rest is arbitrary metadata and must stay verbatim
@@ -1004,6 +1032,18 @@ pub(crate) fn lower_type_expr_full(
     // (`float` → `JustFloat`, a literal → `Literal[…]`, `dynamic` → `Any`)
     rewrite_type_expr_with_imports(source, written, types, expr, config.float_literals)
         .map(|(text, _)| text)
+}
+
+/// the type a use-site variance keyword or a type modifier marks, when `expr` is one
+fn keyword_marker_inner(expr: &Expr) -> Option<&Expr> {
+    use_site_variance_marker(expr)
+        .map(|(_, inner)| inner)
+        .or_else(|| type_modifier_marker(expr).map(|(_, inner)| inner))
+}
+
+/// whether `expr` holds a use-site variance keyword or a type modifier anywhere
+fn contains_keyword_marker(expr: &Expr) -> bool {
+    any_over_expr(expr, |node| keyword_marker_inner(node).is_some())
 }
 
 /// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,

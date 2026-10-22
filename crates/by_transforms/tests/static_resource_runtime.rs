@@ -8,7 +8,7 @@
 //! escaping did not survive — fails here.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile_typed};
@@ -22,7 +22,7 @@ use interpreters::Interpreter;
 
 /// transpile `/proj/main.by` with `files` written around it, into a fresh
 /// directory under the cargo temp dir.
-fn build_case(case: &str, files: &[(&str, &str)]) -> PathBuf {
+fn build_case(case: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
     let mut db = TestDb::new(ProjectMetadata::new(
         ruff_python_ast::name::Name::new_static(""),
         SystemPathBuf::from("/proj"),
@@ -36,11 +36,13 @@ fn build_case(case: &str, files: &[(&str, &str)]) -> PathBuf {
     let transpiled =
         transpile_typed(&db, file, &Config::default(), None).expect("transpile should succeed");
 
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
-    fs::write(dir.join("main.py"), transpiled).expect("write module");
+    // a directory of its own, so a run beside another, from the same checkout, neither reads
+    // nor deletes the other's modules
+    let dir = tempfile::Builder::new()
+        .prefix(case)
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir");
+    fs::write(dir.path().join("main.py"), transpiled).expect("write module");
     dir
 }
 
@@ -164,7 +166,7 @@ fn a_yaml_document_reads_back_as_it_was_written() {
             ("/proj/main.by", YAML_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -179,7 +181,7 @@ fn a_mapping_nested_in_a_sequence_is_defined_before_it_is_named() {
             ("/proj/main.by", JSON_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -194,7 +196,7 @@ fn a_toml_document_reads_back_as_it_was_written() {
             ("/proj/main.by", TOML_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -209,5 +211,5 @@ fn a_resource_imported_inside_a_function_runs_there() {
             ("/proj/main.by", SCOPED_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }

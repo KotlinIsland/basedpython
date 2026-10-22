@@ -111,9 +111,24 @@ class Param(Base):
 def read() -> object:
     return super
 
+# a lambda passes its own first parameter as the receiver, which here has a class whose method
+# resolution order reaches `Mixin` after `Lam`, where the method's own receiver's does not
+class Mixin(Base):
+    @override
+    def m(self, n: int) -> int:
+        return n * 100
+
+class Lam(Base):
+    def via(self, other: Base) -> int:
+        reader = lambda receiver: super.m(1)
+        return reader(other)
+
+class Mixed(Lam, Mixin): ...
+
 assert Sub().m(1) == 3, Sub().m(1)
 assert Param().p(4) == 4
 assert read() === 5
+assert Lam().via(Mixed()) == 100, Lam().via(Mixed())
 print("ok")
 "#;
 

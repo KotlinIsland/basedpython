@@ -42,6 +42,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_text_size::Ranged;
 use ty_python_semantic::AnonNamedTupleId;
 
+use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::synthesized_types::{Namer, SynthesizedKind, SynthesizedTypes};
 use crate::type_info::{AnonNamedTupleConstruction, AnonNamedTupleField, TypeInfo};
@@ -185,6 +186,8 @@ fn reads_a_module_binding(types: &dyn TypeInfo, expr: &Expr) -> bool {
 pub(crate) struct AnonNamedTuple<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where a field type naming something the module binds is written as a string
+    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     config: crate::Config,
     /// every type form's class, named together with the other kinds of synthesized type, whose
@@ -221,7 +224,7 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// The imports of the `typing` names a field type reads, collected the same way
     typing_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// whether python evaluates the synthesized class's field annotations as it is made
-    annotations_evaluated: bool,
+    pub(crate) annotations_evaluated: bool,
     /// the class emitted for each anonymous named tuple the checker identifies, so
     /// that every type form it reads as one type, and every plain tuple literal it
     /// reads as an instance of it, names one class
@@ -241,6 +244,7 @@ impl<'src> AnonNamedTuple<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: crate::Config,
         synthesized: std::rc::Rc<SynthesizedTypes>,
@@ -248,6 +252,7 @@ impl<'src> AnonNamedTuple<'src> {
         Self {
             source,
             written,
+            quotes,
             types,
             config,
             edits: Vec::new(),
@@ -280,6 +285,19 @@ impl<'src> AnonNamedTuple<'src> {
             out.push('\n');
         }
         out
+    }
+
+    /// `annotation`, a field's type as the class declares it, written as a string where it reads
+    /// a name the module binds: the class is declared ahead of everything the module binds, so
+    /// such a name is not bound yet where the class's field annotations are read, as it is made
+    fn declared_field(&self, annotation: String) -> String {
+        let reads_a_module_binding = crate::type_info::names_read(&annotation)
+            .is_some_and(|names| names.iter().any(|name| self.types.is_bound_globally(name)));
+        if reads_a_module_binding {
+            self.quotes.quote(&annotation)
+        } else {
+            annotation
+        }
     }
 
     fn src(&self, range: ruff_text_size::TextRange) -> &str {
@@ -396,7 +414,7 @@ impl<'src> AnonNamedTuple<'src> {
                 self.typing_imports
                     .borrow_mut()
                     .extend(d.typing_imports_in(self.written));
-                d.annotation_in(self.written, self.annotations_evaluated)
+                self.declared_field(d.annotation_in(self.written, self.annotations_evaluated))
             };
             fields.push((name, type_display));
         }
@@ -536,7 +554,9 @@ impl<'src> AnonNamedTuple<'src> {
                     self.typing_imports
                         .borrow_mut()
                         .extend(spelled.typing_imports_in(self.written));
-                    spelled.annotation_in(self.written, self.annotations_evaluated)
+                    self.declared_field(
+                        spelled.annotation_in(self.written, self.annotations_evaluated),
+                    )
                 }
                 AnonNamedTupleField::NamedTuple(nested) => self.construction_class(nested)?,
                 AnonNamedTupleField::Unspellable => return Err(name.clone()),
@@ -600,6 +620,7 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
 pub(crate) struct AnonNamedTuplePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: crate::Config,
 }
 
@@ -607,11 +628,13 @@ impl<'src> AnonNamedTuplePass<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         config: crate::Config,
     ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -637,6 +660,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         let mut inner = AnonNamedTuple::new(
             self.source,
             self.written,
+            self.quotes,
             types,
             self.config.clone(),
             ctx.synthesized.clone(),
@@ -797,6 +821,34 @@ mod tests {
                 a: _AnonNamedTuple_b4e69f63
             "},
         );
+    }
+
+    /// the class is declared ahead of everything the module binds, so a field reading a class
+    /// or an import of the module, wherever it is bound, is written as a string — a value form's
+    /// field as a type form's. a builtin is bound there
+    #[test]
+    fn a_field_naming_a_binding_of_the_module_is_quoted() {
+        let out = transpile(
+            indoc! {"
+                from fractions import Fraction
+
+                class Earlier: ...
+
+                def f(p: (a: Earlier, b: Later, c: Fraction, d: int)) -> None: ...
+
+                v = (e=Earlier(), g=Fraction(1), n=1)
+
+                class Later: ...
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        for field in [
+            "    a: \"Earlier\"\n    b: \"Later\"\n    c: \"Fraction\"\n    d: int\n",
+            "    e: \"Earlier\"\n    g: \"Fraction\"\n    n: int\n",
+        ] {
+            assert!(out.contains(field), "expected {field:?}, got: {out}");
+        }
     }
 
     /// `typeof` is lowered by an AST pass, inside the construct this pass replaces

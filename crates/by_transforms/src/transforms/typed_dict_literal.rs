@@ -490,6 +490,28 @@ mod tests {
         assert!(out.contains("    foo: \"Foo\"\n"), "got: {out}");
     }
 
+    /// a field's type is a type position like any other, so it carries a type modifier: `literal
+    /// str` is written `LiteralString`, and `final`, which python has no spelling for, is written
+    /// as the type it marks. the field is quoted, and a quoted type cannot start with the blanks
+    /// the keyword was replaced with in the source
+    #[test]
+    fn a_type_modifier_on_a_field() {
+        let out = transpile(
+            indoc! {"
+                a: {\"s\": literal str, \"n\": final int, \"l\": list[final int], **: final str}
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("(TypedDict, extra_items=\"str\"):"),
+            "got: {out}"
+        );
+        assert!(out.contains("    s: \"LiteralString\"\n"), "got: {out}");
+        assert!(out.contains("    n: \"int\"\n"), "got: {out}");
+        assert!(out.contains("    l: \"list[int]\"\n"), "got: {out}");
+    }
+
     #[test]
     fn quoted_field_type_escapes_inner_quotes() {
         let out = transpile("a: {\"k\": \"Foo\"}\n", &Config::test_default()).unwrap();

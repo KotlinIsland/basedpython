@@ -76,3 +76,50 @@ fn a_synthesized_type_inside_another_is_its_class() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
 }
+
+/// A named tuple class is declared ahead of everything the module binds, and below 3.14 python
+/// evaluates its field annotations as it makes the class. A field naming a class or an import of
+/// the module, declared above or below the type, is not bound there yet, and raised `NameError`
+/// on import of a module that checks clean. Each reads back, once the module has run, as the
+/// class it names.
+const MODULE_NAMES: &str = r#"
+import typing
+from fractions import Fraction
+
+class Earlier: ...
+
+def f(p: (a: Earlier, b: Later, c: Fraction, d: int)) -> None: ...
+
+v = (e=Earlier(), g=Fraction(1), n=1)
+
+class Later: ...
+
+hints = typing.get_type_hints(typing.get_type_hints(f)["p"])
+assert hints == {"a": Earlier, "b": Later, "c": Fraction, "d": int}, hints
+value_hints = typing.get_type_hints(type(v))
+assert value_hints == {"e": Earlier, "g": Fraction, "n": int}, value_hints
+print("ok")
+"#;
+
+#[test]
+fn a_field_naming_a_binding_of_the_module_reads_it() {
+    let Some(python) = common::python(PythonVersion::PY39) else {
+        return;
+    };
+    let config = Config {
+        min_version: python.version,
+        ..Config::default()
+    };
+    let transpiled = transpile(MODULE_NAMES, &config).expect("transpile should succeed");
+    let output = Command::new(&python.command)
+        .arg("-c")
+        .arg(&transpiled)
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        output.status.success(),
+        "failed on {python}:\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}

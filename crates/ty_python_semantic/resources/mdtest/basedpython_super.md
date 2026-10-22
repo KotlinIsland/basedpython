@@ -131,6 +131,95 @@ def outside() -> int:
     return super.a
 ```
 
+## a function nested in a method passes its own receiver
+
+`super` reads its implicit arguments where it is written, as zero-argument `super()` does: the
+receiver is the first parameter of the function or lambda around it. A function nested in a method
+passes its own first parameter, which has to be an instance of the class.
+
+```by
+class A:
+    def f(self) -> int:
+        return 1
+
+class B(A):
+    def f(self) -> int:
+        def inner(other: B) -> int:
+            return super.f()
+        def wrong(n: int) -> int:
+            # error: [invalid-super-argument]
+            return super.f()
+        return inner(self)
+```
+
+## a lambda passes its own receiver
+
+A lambda reads its own first parameter too, not the method's, so one with no parameter has no
+receiver to pass.
+
+```by
+class A:
+    def f(self) -> int:
+        return 1
+
+class B(A):
+    def f(self) -> int:
+        # error: [unavailable-implicit-super-arguments] "has no parameter to read the receiver from"
+        g = lambda: super.f()
+        return 1
+```
+
+## a comprehension has no receiver
+
+A comprehension runs as a function of its own, whose first argument is the iterator it walks, so it
+has no receiver to pass either.
+
+```by
+class A:
+    def f(self) -> int:
+        return 1
+
+class B(A):
+    def f(self) -> int:
+        # error: [unavailable-implicit-super-arguments] "in a comprehension"
+        return [super.f() for _ in range(1)][0]
+```
+
+## `super[T]` anywhere but an attribute's base is a subscript
+
+`super[T]` is the keyword only as an attribute's base. Anywhere else it is the subscript of the
+name, as python reads it: of the builtin class, which takes no subscript.
+
+```by
+class A:
+    def f(self) -> int:
+        return 1
+
+class B(A):
+    def f(self) -> int:
+        # error: [not-subscriptable]
+        pivot = super[A]
+        return 1
+```
+
+## `super[T]` anywhere but an attribute's base reads the module's binding
+
+A module that binds the name `super` itself is subscripted as what it binds, while `super.f` stays
+the keyword.
+
+```by
+super = {1: "one"}
+
+class A:
+    def f(self) -> int:
+        return 1
+
+class B(A):
+    def f(self) -> int:
+        reveal_type(super[1])  # revealed: str
+        return super.f()
+```
+
 ## `super` in a property accessor
 
 An accessor is a method like any other, so `super` stays available there.

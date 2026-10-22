@@ -185,6 +185,22 @@ class _Anon(NamedTuple):
 it is a subclass of the heterogeneous `tuple[str, int]`, so it can be used anywhere that tuple
 type is expected
 
+the class is declared ahead of the module, where a named tuple's field annotations are read as the
+class is made. a field naming something the module binds — a class or an import of the module —
+is written as a string there, which `typing.get_type_hints` resolves once the module has run:
+
+```by
+class Point: ...
+
+a: (origin: Point, label: str)
+```
+
+```python
+class _Anon(NamedTuple):
+    origin: "Point"
+    label: str
+```
+
 ## structural identity
 
 two anonymous named tuples with the same field names *and* the same field

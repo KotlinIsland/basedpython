@@ -11,7 +11,6 @@
 //! rather than the single-file `transpile`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile_typed};
@@ -64,11 +63,13 @@ const FILES: &[(&str, &str)] = &[
 
 /// transpile every file of the project for `target` into a fresh directory under the cargo
 /// temp dir
-fn build(target: PythonVersion) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("imported_conversion_class");
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
+fn build(target: PythonVersion) -> tempfile::TempDir {
+    // a directory of its own, so a run beside another, from the same checkout, neither reads
+    // nor deletes the other's modules
+    let dir = tempfile::Builder::new()
+        .prefix("imported_conversion_class")
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir");
 
     let mut db = TestDb::new(ProjectMetadata::new(
         ruff_python_ast::name::Name::new_static(""),
@@ -87,7 +88,7 @@ fn build(target: PythonVersion) -> PathBuf {
         let transpiled = transpile_typed(&db, file, &config, None)
             .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
         let relative = path.trim_start_matches('/').replace(".by", ".py");
-        fs::write(dir.join(relative), transpiled).expect("write module");
+        fs::write(dir.path().join(relative), transpiled).expect("write module");
     }
     dir
 }
@@ -110,7 +111,7 @@ fn a_conversion_target_is_imported_clear_of_every_other_name() {
         "transpiled program failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- main.py ---\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
-        fs::read_to_string(dir.join("main.py")).unwrap_or_default(),
+        fs::read_to_string(dir.path().join("main.py")).unwrap_or_default(),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
     interpreters::ran(&interpreter, target);

@@ -21,6 +21,9 @@ class I:
     j: final int = 1
 
 
+n: {"o": literal str, "p": final int, **: final str}
+
+
 # `literal` and `final` are only modifiers when a name follows them
 k: literal
 m: final[int]
@@ -43,6 +46,9 @@ def h(x: literal int, *args: literal str, **kwargs: final int) -> final bool: ..
 
 class I:
     j: final int = 1
+
+
+n: {"o": literal str, "p": final int, **: final str}
 
 
 # `literal` and `final` are only modifiers when a name follows them

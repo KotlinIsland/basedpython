@@ -13,7 +13,7 @@
 //! other assertion while quietly destroying the feature
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use by_transforms::{Config, transpile, transpile_typed};
@@ -764,17 +764,23 @@ fn python() -> Option<Interpreter> {
     interpreters::oldest(Config::default().min_version, "", "")
 }
 
+/// a fresh directory for `case` under the cargo temp dir, of its own, so a run beside another,
+/// from the same checkout, neither reads nor deletes the other's modules
+fn case_dir(case: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(case)
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("create case dir")
+}
+
 /// transpile `sources` (`module stem` → basedpython source) into a fresh
 /// directory under the cargo temp dir
-fn build_case(case: &str, sources: &[(&str, &str)]) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
+fn build_case(case: &str, sources: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = case_dir(case);
 
     for (stem, source) in sources {
         let transpiled = transpile(source, &Config::default()).expect("transpile should succeed");
-        let path = dir.join(format!("{stem}.py"));
+        let path = dir.path().join(format!("{stem}.py"));
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create package dir");
         }
@@ -788,10 +794,9 @@ fn build_case(case: &str, sources: &[(&str, &str)]) -> PathBuf {
 /// the reference
 fn agrees_with_python(python: &Interpreter, case: &str, sources: &[(&str, &str)]) {
     let transpiled = build_case(case, sources);
-    let reference = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{case}_python"));
-    let _ = fs::remove_dir_all(&reference);
+    let reference = case_dir(&format!("{case}_python"));
     for (stem, source) in sources {
-        let path = reference.join(format!("{stem}.py"));
+        let path = reference.path().join(format!("{stem}.py"));
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create package dir");
         }
@@ -813,10 +818,10 @@ fn agrees_with_python(python: &Interpreter, case: &str, sources: &[(&str, &str)]
         // the two trees are in directories of their own, which a message naming a file says
         String::from_utf8_lossy(&output.stdout).replace(&dir.display().to_string(), "<dir>")
     };
-    let expected = run(&reference);
+    let expected = run(reference.path());
     assert!(!expected.trim().is_empty(), "the reference printed nothing");
     assert_eq!(
-        run(&transpiled),
+        run(transpiled.path()),
         expected,
         "the transpiled program disagrees with python"
     );
@@ -850,7 +855,7 @@ fn an_imported_value_is_the_object_itself() {
         "lazy_values",
         &[("by_values_mod", VALUES_MODULE), ("main", VALUES_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -862,7 +867,7 @@ fn character_identity_survives_an_import() {
         "char_identity",
         &[("by_char_mod", CHAR_MODULE), ("main", CHAR_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -874,7 +879,7 @@ fn import_stays_lazy_until_first_use() {
         "lazy_defer",
         &[("by_lazy_mod", LAZY_MODULE), ("main", LAZY_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -886,7 +891,7 @@ fn a_name_is_claimed_only_once_the_module_is_lazy() {
         "lazy_window",
         &[("by_watched_mod", WATCHED_MODULE), ("main", WINDOW_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -895,7 +900,7 @@ fn an_unlazifiable_name_in_a_multi_name_import_stays_bound() {
         return;
     };
     let dir = build_case("lazy_mixed", &[("main", MIXED_MAIN)]);
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -904,7 +909,7 @@ fn a_submodule_resolves_on_first_use() {
         return;
     };
     let dir = build_case("lazy_submodule", &[("main", SUBMODULE_MAIN)]);
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -913,7 +918,7 @@ fn an_annotation_reads_the_imported_object() {
         return;
     };
     let dir = build_case("lazy_annotations", &[("main", ANNOTATIONS_MAIN)]);
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -925,7 +930,7 @@ fn a_string_annotation_resolves_to_the_imported_object() {
         "lazy_future_annotations",
         &[("main", FUTURE_ANNOTATIONS_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -934,7 +939,7 @@ fn the_polyfill_reads_builtins_the_module_binds_for_itself() {
         return;
     };
     let dir = build_case("lazy_builtin_names", &[("main", BUILTIN_NAMES_MAIN)]);
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -946,7 +951,7 @@ fn a_read_in_every_scope_is_the_object_itself() {
         "lazy_scopes",
         &[("by_token_mod", TOKEN_MODULE), ("main", SCOPES_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -958,7 +963,7 @@ fn a_name_bound_again_reads_as_python_does() {
         "lazy_rebound",
         &[("by_token_mod", TOKEN_MODULE), ("main", REBOUND_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -970,7 +975,7 @@ fn a_read_before_the_import_runs_raises_python_s_name_error() {
         "lazy_early",
         &[("by_token_mod", TOKEN_MODULE), ("main", EARLY_MAIN)],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -988,7 +993,7 @@ fn a_deferred_name_is_passed_on_to_other_modules() {
             ("main", REEXPORT_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -1006,7 +1011,7 @@ fn modules_importing_each_other_resolve_on_use() {
             ("main", CYCLE_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -1022,7 +1027,7 @@ fn a_patch_of_the_importing_module_reaches_its_reads() {
             ("main", PATCH_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -1038,10 +1043,7 @@ fn a_check_on_a_deferred_class_is_made_once_its_import_has_run() {
     for (path, source) in ONCE_BOUND {
         db.write_file(path, source).expect("write file failed");
     }
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lazy_once_bound");
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
+    let dir = case_dir("lazy_once_bound");
     for (path, _) in ONCE_BOUND {
         let file = system_path_to_file(&db, path).expect("file not in db");
         let transpiled = transpile_typed(&db, file, &Config::default(), None)
@@ -1055,13 +1057,13 @@ fn a_check_on_a_deferred_class_is_made_once_its_import_has_run() {
             );
         }
         let relative = path.trim_start_matches('/').replace(".by", ".py");
-        fs::write(dir.join(relative), transpiled).expect("write module");
+        fs::write(dir.path().join(relative), transpiled).expect("write module");
     }
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 /// transpile each of `files` against a project db holding all of them, into `case`'s directory
-fn build_project(case: &str, files: &[(&str, &str)]) -> PathBuf {
+fn build_project(case: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
     let mut db = TestDb::new(ProjectMetadata::new(
         ruff_python_ast::name::Name::new_static(""),
         SystemPathBuf::from("/"),
@@ -1070,16 +1072,13 @@ fn build_project(case: &str, files: &[(&str, &str)]) -> PathBuf {
     for (path, source) in files {
         db.write_file(path, source).expect("write file failed");
     }
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
-    // a stale directory from an earlier run would mask a transpile failure
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create case dir");
+    let dir = case_dir(case);
     for (path, _) in files {
         let file = system_path_to_file(&db, path).expect("file not in db");
         let transpiled = transpile_typed(&db, file, &Config::default(), None)
             .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
         let relative = path.trim_start_matches('/').replace(".by", ".py");
-        fs::write(dir.join(relative), transpiled).expect("write module");
+        fs::write(dir.path().join(relative), transpiled).expect("write module");
     }
     dir
 }
@@ -1090,7 +1089,7 @@ fn a_hoisted_class_s_quoted_field_binds_what_it_reads() {
         return;
     };
     let dir = build_case("lazy_hoisted_fields", &[("main", HOISTED_FIELDS)]);
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -1099,9 +1098,9 @@ fn a_quote_in_a_type_argument_of_a_sibling_module_s_generic_binds_what_it_reads(
         return;
     };
     let dir = build_project("lazy_quoted_through_a_sibling", QUOTED_THROUGH_A_SIBLING);
-    let main = fs::read_to_string(dir.join("main.py")).expect("read main");
+    let main = fs::read_to_string(dir.path().join("main.py")).expect("read main");
     assert!(main.contains("Box[\"F | JSONDecoder\"]"), "{main}");
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
@@ -1118,7 +1117,7 @@ fn a_relative_import_of_the_package_reads_its_attribute_or_its_submodule() {
             ("main", RELATIVE_MAIN),
         ],
     );
-    run_main(&python, &dir);
+    run_main(&python, dir.path());
 }
 
 #[test]
