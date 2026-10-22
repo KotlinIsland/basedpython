@@ -783,6 +783,19 @@ pub(crate) trait TypeInfo {
     /// `class_def` is not an extension
     fn extension_backing_function(&self, class_def: &StmtClassDef, member: &str) -> Option<String>;
 
+    /// basedpython: what kind of member `member` of the extension `class_def` declares is — the
+    /// kind every call of it is resolved as. `None` when `class_def` is not an extension
+    fn extension_member_kind(
+        &self,
+        class_def: &StmtClassDef,
+        member: &str,
+    ) -> Option<ty_python_semantic::ExtensionMemberKind>;
+
+    /// whether `decorator` is `classmethod`, `staticmethod` or `property` — one that decides how a
+    /// member binds its receiver rather than wrapping what it does, under whatever name it is
+    /// written
+    fn decides_receiver_binding(&self, decorator: &ruff_python_ast::Decorator) -> bool;
+
     /// whether `expr` is a field-specifier call — `pydantic.Field(...)`,
     /// `dataclasses.field(...)`, `attrs.field(...)`, and the like. the checker
     /// models these as assignable to the field's declared type, but their
@@ -1635,6 +1648,24 @@ impl TypeInfo for SemanticModel<'_> {
     fn extension_backing_function(&self, class_def: &StmtClassDef, member: &str) -> Option<String> {
         let class = class_def.inferred_type(self)?.as_class_literal()?;
         ty_python_semantic::extension_backing_function(self.db(), class, member)
+    }
+
+    fn extension_member_kind(
+        &self,
+        class_def: &StmtClassDef,
+        member: &str,
+    ) -> Option<ty_python_semantic::ExtensionMemberKind> {
+        let class = class_def.inferred_type(self)?.as_class_literal()?;
+        ty_python_semantic::extension_member_kind(self.db(), class, member)
+    }
+
+    fn decides_receiver_binding(&self, decorator: &ruff_python_ast::Decorator) -> bool {
+        decorator
+            .expression
+            .inferred_type(self)
+            .is_some_and(|decorator| {
+                ty_python_semantic::decides_receiver_binding(self.db(), decorator)
+            })
     }
 
     fn static_resource(&self, path: &str, binding: &str) -> Result<String, String> {

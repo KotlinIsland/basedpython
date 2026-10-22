@@ -521,6 +521,36 @@ pub fn extension_backing_function<'db>(
         .then(|| backing_function_name(db, extension, member))
 }
 
+/// what kind of member `member` of `extension` is — the same kind every call of it is resolved
+/// as — or `None` when `extension` is not an extension or declares no such member
+pub fn extension_member_kind<'db>(
+    db: &'db dyn Db,
+    extension: ClassLiteral<'db>,
+    member: &str,
+) -> Option<ExtensionMemberKind> {
+    let ClassLiteral::Static(extension) = extension else {
+        return None;
+    };
+    if !extension.is_extension(db) {
+        return None;
+    }
+    Some(classify_member(db, own_member(db, extension, member)?))
+}
+
+/// whether a decorator of type `decorator` is `classmethod`, `staticmethod` or `property`: one of
+/// the decorators that decide which of [`ExtensionMemberKind`]'s kinds a member is
+pub fn decides_receiver_binding<'db>(db: &'db dyn Db, decorator: Type<'db>) -> bool {
+    decorator
+        .as_class_literal()
+        .and_then(|class| class.known(db))
+        .is_some_and(|known| {
+            matches!(
+                known,
+                KnownClass::Classmethod | KnownClass::Staticmethod | KnownClass::Property
+            )
+        })
+}
+
 /// a successful extension-member resolution
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExtensionMemberResolution<'db> {

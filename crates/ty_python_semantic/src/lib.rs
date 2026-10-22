@@ -52,8 +52,8 @@ pub use types::conversions::{
     ConversionImport, ConversionInfo, ConversionRuntime, DISCARD_ADAPTER,
 };
 pub use types::extensions::{
-    ExtensionAttributeInfo, ExtensionMemberKind, extension_backing_function,
-    extension_backing_functions,
+    ExtensionAttributeInfo, ExtensionMemberKind, decides_receiver_binding,
+    extension_backing_function, extension_backing_functions, extension_member_kind,
 };
 pub use types::ide_support::{
     ImplementationsFinder, ImportAliasResolution, OverridableMember, ResolvedDefinition,
