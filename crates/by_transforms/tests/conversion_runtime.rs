@@ -20,6 +20,7 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile_analysed_at};
 
+mod common;
 mod interpreters;
 
 /// basedpython whose module-level `assert`s exercise the three dunders end to end
@@ -247,13 +248,14 @@ assert c["x"] == 1
 print("ok")
 "#;
 
-/// transpile `program` for `min_version`, analysed at that version as a project requiring it
-/// is, and run it on the oldest interpreter found of that version or later that `probe` runs
-/// on, asserting it exits cleanly
-fn run_transpiled(program: &str, min_version: PythonVersion, probe: &str, needs: &str) {
-    let Some(interpreter) = interpreters::oldest(min_version, probe, needs) else {
+/// transpile `program` for the interpreter it runs on, analysed at that version as a project
+/// requiring it is, and run it there, asserting it exits cleanly. the interpreter is the pinned
+/// one, or the oldest found, of `at_least` or later that `probe` runs on
+fn run_transpiled(program: &str, at_least: PythonVersion, probe: &str, needs: &str) {
+    let Some(interpreter) = common::python_with(at_least, probe, needs) else {
         return;
     };
+    let min_version = interpreter.version;
     let config = Config {
         min_version,
         ..Config::default()
@@ -273,17 +275,16 @@ fn run_transpiled(program: &str, min_version: PythonVersion, probe: &str, needs:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    interpreters::ran(&interpreter, min_version);
 }
 
 #[test]
 fn conversions_run_correctly() {
-    run_transpiled(PROGRAM, PythonVersion::PY313, "", "");
+    run_transpiled(PROGRAM, PythonVersion::PY39, "", "");
 }
 
 #[test]
 fn frozen_displays_run_correctly() {
-    run_transpiled(FROZEN_PROGRAM, PythonVersion::PY313, "", "");
+    run_transpiled(FROZEN_PROGRAM, PythonVersion::PY39, "", "");
 }
 
 #[test]

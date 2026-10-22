@@ -242,6 +242,8 @@ pub(crate) enum Lowering {
     /// the whitespace the keyword blanking collapses. only spacing is at stake, so any
     /// edit it lands inside may leave it out
     KeywordPadding,
+    /// `literal str`, written `LiteralString`
+    LiteralString,
     LiteralType,
     LocalOnce,
     MatchType,
@@ -1369,6 +1371,8 @@ pub(crate) fn run_against_source<'a>(
     let symbolic_imports = std::mem::take(&mut symbolic_folds.imports);
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
     ctx.type_substitutions = symbolic_folds.substitutions();
+    ctx.type_substitutions
+        .extend(literal_string_rewrites.substitutions());
     let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
 
     // every class a type expression lowers to — a typed dict literal, an anonymous named tuple,
@@ -1455,7 +1459,7 @@ pub(crate) fn run_against_source<'a>(
     let top_star_pass = top_star::TopStar::new(written);
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());
-    let string_tag_pass = string_tag::StringTagPass::new(source_ref, config.clone());
+    let string_tag_pass = string_tag::StringTagPass::new(source_ref, &comments, config.clone());
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
     let super_keyword_pass = super_keyword::SuperKeyword::new(written);
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
@@ -1915,7 +1919,10 @@ pub(crate) fn run_against_source<'a>(
     for (range, replacement) in literal_string_rewrites.edits() {
         ctx.text_edits.push((range, replacement));
     }
-    authorship.finished(Author::driver("literal string", None), &ctx);
+    authorship.finished(
+        Author::driver("literal string", Some(Lowering::LiteralString)),
+        &ctx,
+    );
     if literal_string_rewrites.needs_import {
         ctx.required_imports
             .push(written.import_from("typing", &["LiteralString"]));
@@ -1983,6 +1990,7 @@ pub(crate) fn run_against_source<'a>(
     // reason the `=` fields above are
     let template_wraps = template_expression::claim(
         source_ref,
+        &comments,
         parsed_handle.suite(),
         &rewriting,
         &fields_replaced_in_tree,
@@ -2748,6 +2756,13 @@ mod subsumed_lowerings {
             Lowering::OptionalType,
             "an_optional_target_tests_for_none_too",
         ),
+        (
+            "TypedDictLiteralPass",
+            Lowering::LiteralString,
+            "by construction: a dict literal type's values are not read as type expressions, so \
+             no `literal` modifier is parsed in one, and the class body prints its fields through \
+             the same lowerer as the other synthesized types",
+        ),
         // the runtime-union lowering runs only below 3.10, where the cases above never go
         (
             "CallableSyntaxPass",
@@ -2808,6 +2823,12 @@ mod subsumed_lowerings {
                 "1 + 1",
                 "Literal[2]",
                 Some("1 + 1"),
+            ),
+            (
+                Lowering::LiteralString,
+                "literal str",
+                "LiteralString",
+                Some("literal "),
             ),
         ];
         leaves
@@ -2875,6 +2896,7 @@ mod subsumed_lowerings {
             Lowering::FloatConst,
             Lowering::Typeof,
             Lowering::SymbolicTypeOp,
+            Lowering::LiteralString,
         ];
         // the class is hoisted ahead of the module's own bindings, so a field reading one —
         // the `y` a `typeof` names — is written as a forward reference
@@ -2899,9 +2921,16 @@ mod subsumed_lowerings {
             |leaf| format!("def f(x: protocol(a: {leaf})) -> None: ..."),
             |lowered| format!("a: \"{lowered}\""),
         ));
+        // a dict literal type's values are not read as type expressions, so a modifier
+        // cannot stand in one
+        let dict_fields: Vec<Lowering> = fields
+            .iter()
+            .copied()
+            .filter(|lowering| *lowering != Lowering::LiteralString)
+            .collect();
         cases.extend(leaves(
             "TypedDictLiteralPass",
-            &fields,
+            &dict_fields,
             |leaf| format!("def f(x: {{\"a\": {leaf}}}) -> None: ..."),
             |lowered| format!("a: \"{lowered}\""),
         ));
@@ -2981,6 +3010,13 @@ mod subsumed_lowerings {
                 "type Point = (x: int, y: int)\n",
                 &["TypeAliasType(\"Point\", _AnonNamedTuple_"],
                 &["(x: int"],
+            ),
+            case(
+                "GenericPolyfillPass",
+                &[Lowering::LiteralString],
+                "class Box[T: literal str, U in (literal str, int)]: ...\n",
+                &["bound=LiteralString", "TypeVar(\"_U\", LiteralString, int)"],
+                &["literal "],
             ),
             case(
                 "GenericPolyfillPass",

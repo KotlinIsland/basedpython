@@ -5,6 +5,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_body, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef, StmtTypeAlias, TypeParam};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use ty_python_semantic::types::NameResolution;
 
 use crate::config::Config;
 use crate::transforms::callable::lower_type_expr_full;
@@ -65,6 +66,10 @@ pub(crate) struct GenericPolyfill<'src> {
     /// symbolic fold, a synthesized type's class. One inside a statement this pass replaces
     /// wholesale is dropped unless spliced in here
     type_substitutions: Vec<(TextRange, String)>,
+    /// the span of every type that lowers to a synthesized class, whose body reads each type
+    /// parameter by the name this pass declares it under already — see
+    /// [`Namer::read_type_parameters`](super::synthesized_types::Namer::read_type_parameters)
+    synthesized: Vec<TextRange>,
     /// text edits earlier passes already emitted. one of these covering a type
     /// expression hides the source bytes our typevar rename would have patched
     /// — the arrow lowering's `(T) -> R` → `Callable[[T], R]` is the common case
@@ -212,15 +217,14 @@ struct ProcessedTypeParams {
 }
 
 impl<'src> GenericPolyfill<'src> {
-    #[expect(clippy::too_many_arguments)]
+    /// the pass over a module, taking what the passes before it wrote from `ctx`
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
         quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: Config,
-        type_substitutions: Vec<(TextRange, String)>,
-        pending_edits: Vec<(TextRange, String)>,
+        ctx: &super::ast_driver::PassContext,
         decided: PolyfilledTypeParams,
     ) -> Self {
         let constructors = Constructors::new(written, &config, &decided);
@@ -240,8 +244,13 @@ impl<'src> GenericPolyfill<'src> {
             generic_class_renames: HashMap::new(),
             enclosing_renames: Vec::new(),
             private_aliases: HashMap::new(),
-            type_substitutions,
-            pending_edits,
+            type_substitutions: ctx.type_substitutions.clone(),
+            synthesized: ctx
+                .synthesized
+                .substitutions()
+                .map(|(range, _)| range)
+                .collect(),
+            pending_edits: ctx.text_edits.clone(),
             superseded: Vec::new(),
             statement_prefixes: Vec::new(),
         }
@@ -342,6 +351,28 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
+    /// rename the type parameters `renames` maps wherever `expr` reads them, as edits
+    fn rename_expr(&mut self, expr: &Expr, renames: &HashMap<String, String>) {
+        rename_in_expr(
+            expr,
+            renames,
+            Some(self.types),
+            &self.synthesized,
+            &mut self.edits,
+        );
+    }
+
+    /// [`Self::rename_expr`] over every expression of `stmt`, at any depth
+    fn rename_stmt(&mut self, stmt: &Stmt, renames: &HashMap<String, String>) {
+        Rename {
+            renames,
+            types: Some(self.types),
+            written_whole: &self.synthesized,
+            edits: &mut self.edits,
+        }
+        .visit_stmt(stmt);
+    }
+
     /// pre-scan for the module's `private type` aliases so a reference inside a
     /// later alias's value can be renamed as the value is re-rendered. like the
     /// module's other private symbols, they are the ones declared outside any class
@@ -398,7 +429,7 @@ impl<'src> GenericPolyfill<'src> {
     /// Lower one element of a parameter-shape tuple to a Python type
     /// expression suitable for inclusion inside `tuple[...]`. Mirrors the
     /// rules in `annotation.rs::lower_tuple_element`
-    fn lower_param_shape_elt(&self, elt: &Expr) -> String {
+    fn lower_param_shape_elt(&mut self, elt: &Expr) -> String {
         match elt {
             Expr::Named(named) => {
                 if let Expr::Starred(starred) = named.target.as_ref() {
@@ -408,10 +439,10 @@ impl<'src> GenericPolyfill<'src> {
                     return format!(
                         "*{}[{}, ...]",
                         self.written.builtin("tuple"),
-                        self.src(named.value.range())
+                        self.lowered_type(&named.value)
                     );
                 }
-                self.src(named.value.range()).to_owned()
+                self.lowered_type(&named.value)
             }
             Expr::Starred(s) => {
                 if matches!(s.value.as_ref(), Expr::Starred(_)) {
@@ -420,10 +451,10 @@ impl<'src> GenericPolyfill<'src> {
                 format!(
                     "*{}[{}, ...]",
                     self.written.builtin("tuple"),
-                    self.src(s.value.range())
+                    self.lowered_type(&s.value)
                 )
             }
-            _ => self.src(elt.range()).to_owned(),
+            _ => self.lowered_type(elt),
         }
     }
 
@@ -433,21 +464,30 @@ impl<'src> GenericPolyfill<'src> {
         (start, indent)
     }
 
-    /// `default`, a type parameter's default, as the python the `default=` argument of its
-    /// declaration is written with. `visible` renames the type parameters in scope
-    fn default_arg(&mut self, default: &Expr, visible: &HashMap<String, String>) -> String {
-        let rendered = lower_type_expr_full(
+    /// `expr`, a type written as an argument of a type parameter's declaration — its default,
+    /// one of its constraints — as python spells it. `visible` renames the type parameters in
+    /// scope
+    fn type_argument(&mut self, expr: &Expr, visible: &HashMap<String, String>) -> String {
+        apply_renames_to_rendered(&self.lowered_type(expr), visible)
+    }
+
+    /// `expr`, a type this pass writes in place of its source, as python spells it, carrying
+    /// whatever the lowerings inside it wrote
+    ///
+    /// this commits as [`Self::subsume_within`] does: the caller writes the result over the
+    /// span of `expr`
+    fn lowered_type(&mut self, expr: &Expr) -> String {
+        lower_type_expr_full(
             self.source,
             self.written,
             self.quotes,
             self.types,
-            default,
-            &self.subsume_within(default.range()),
+            expr,
+            &self.subsume_within(expr.range()),
             &self.config,
             RootKind::Evaluated,
         )
-        .unwrap_or_else(|| self.src(default.range()).to_owned());
-        apply_renames_to_rendered(&rendered, visible)
+        .unwrap_or_else(|| self.src(expr.range()).to_owned())
     }
 
     /// the `default=` argument of a `ParamSpec`: a list of types, `...`, or another parameter
@@ -461,11 +501,11 @@ impl<'src> GenericPolyfill<'src> {
                 let elements: Vec<String> = list
                     .elts
                     .iter()
-                    .map(|element| self.default_arg(element, visible))
+                    .map(|element| self.type_argument(element, visible))
                     .collect();
                 format!("[{}]", elements.join(", "))
             }
-            other => self.default_arg(other, visible),
+            other => self.type_argument(other, visible),
         }
     }
 
@@ -551,17 +591,17 @@ impl<'src> GenericPolyfill<'src> {
                         // In basedpython, `T: (int, str)` means bound=(int, str), not
                         // positional constraints — the mapping is written with `in`
                         if tv.is_type_mapping {
-                            let inner = match bound.as_ref() {
+                            let members: Vec<String> = match bound.as_ref() {
                                 Expr::Tuple(t) if t.parenthesized => t
                                     .elts
                                     .iter()
-                                    .map(|e| self.src(e.range()))
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                                other => self.src(other.range()).to_owned(),
+                                    .map(|member| self.type_argument(member, &visible))
+                                    .collect(),
+                                other => vec![self.type_argument(other, &visible)],
                             };
+                            let inner = members.join(", ");
                             if !inner.is_empty() {
-                                extra_args.push(apply_renames_to_rendered(&inner, &visible));
+                                extra_args.push(inner);
                             }
                         } else {
                             // basedpython parameter-shape tuple bound — lower to
@@ -612,7 +652,7 @@ impl<'src> GenericPolyfill<'src> {
                     if let Some(default) = &tv.default {
                         extra_args.push(format!(
                             "default={}",
-                            through_classes(self.default_arg(default, &visible))
+                            through_classes(self.type_argument(default, &visible))
                         ));
                     }
 
@@ -659,7 +699,7 @@ impl<'src> GenericPolyfill<'src> {
                             Expr::Starred(starred) => starred.value.as_ref(),
                             other => other,
                         };
-                        let rendered = self.default_arg(unpacked, &visible);
+                        let rendered = self.type_argument(unpacked, &visible);
                         if matches!(default, Expr::Starred(_)) {
                             self.needed_imports.unpack = true;
                             format!("{}[{rendered}]", self.constructors.unpack)
@@ -830,7 +870,7 @@ impl<'src> GenericPolyfill<'src> {
             // as individual edits — this lets literal_types and auto_quote also
             // emit their own non-overlapping edits on the same expressions.
             for base_expr in &args.args {
-                rename_in_expr(base_expr, &rename_map, &mut self.edits);
+                self.rename_expr(base_expr, &rename_map);
             }
             if args.args.is_empty() && args.keywords.is_empty() {
                 // empty `()` → replace with `(Generic[_T])`; 2-char range, safe
@@ -885,7 +925,7 @@ impl<'src> GenericPolyfill<'src> {
         // Rename type param references in class body.
         let mark = self.edits.len();
         for stmt in &class.body {
-            rename_in_stmt(stmt, &rename_map, &mut self.edits);
+            self.rename_stmt(stmt, &rename_map);
         }
         self.reconcile_pending(&rename_map, mark);
         rename_map
@@ -904,7 +944,7 @@ impl<'src> GenericPolyfill<'src> {
         };
         if let Some(rename_map) = self.generic_class_renames.get(base.id.as_str()).cloned() {
             for stmt in &class.body {
-                rename_in_stmt(stmt, &rename_map, &mut self.edits);
+                self.rename_stmt(stmt, &rename_map);
             }
         }
     }
@@ -959,21 +999,21 @@ impl<'src> GenericPolyfill<'src> {
             .chain(func.parameters.kwonlyargs.iter());
         for param in all_params {
             if let Some(ann) = &param.parameter.annotation {
-                rename_in_expr(ann, &rename_map, &mut self.edits);
+                self.rename_expr(ann, &rename_map);
             }
         }
         if let Some(vararg) = &func.parameters.vararg
             && let Some(ann) = &vararg.annotation
         {
-            rename_in_expr(ann, &rename_map, &mut self.edits);
+            self.rename_expr(ann, &rename_map);
         }
         if let Some(kwarg) = &func.parameters.kwarg
             && let Some(ann) = &kwarg.annotation
         {
-            rename_in_expr(ann, &rename_map, &mut self.edits);
+            self.rename_expr(ann, &rename_map);
         }
         if let Some(ret) = &func.returns {
-            rename_in_expr(ret, &rename_map, &mut self.edits);
+            self.rename_expr(ret, &rename_map);
         }
         // the body reads a parameter under its own name, which a type parameter of that name
         // does not reach: the parameter is bound in the body's scope, the type parameter in
@@ -985,7 +1025,7 @@ impl<'src> GenericPolyfill<'src> {
         self.reconcile_pending(&rename_map, mark);
         let mark = self.edits.len();
         for stmt in &func.body {
-            rename_in_stmt(stmt, &body_renames, &mut self.edits);
+            self.rename_stmt(stmt, &body_renames);
         }
         self.reconcile_pending(&body_renames, mark);
         // what the rest of the body sees, a nested definition among it
@@ -1083,17 +1123,19 @@ impl<'src> GenericPolyfill<'src> {
         // silently losing the other.
         let folded = self.subsume_within(alias.value.range());
         let mut value_renames: Vec<Fix> = Vec::new();
-        rename_in_expr(&alias.value, &rename_map, &mut value_renames);
+        // a rename inside a folded operation went with the operand it renamed —
+        // `type X[T: A] = T.a` folds to `int`, which mentions no `T` to rename
+        let folded_ranges: Vec<TextRange> = folded.iter().map(|(range, _)| *range).collect();
+        rename_in_expr(
+            &alias.value,
+            &rename_map,
+            None,
+            &folded_ranges,
+            &mut value_renames,
+        );
         let renames = value_renames
             .iter()
             .flat_map(ruff_diagnostics::Fix::edits)
-            // a rename inside a folded operation went with the operand it renamed —
-            // `type X[T: A] = T.a` folds to `int`, which mentions no `T` to rename
-            .filter(|edit| {
-                !folded
-                    .iter()
-                    .any(|(range, _)| range.contains_range(edit.range()))
-            })
             .map(|edit| (edit.range(), edit.content().unwrap_or_default().to_owned()));
         let substitutions: Vec<(TextRange, String)> =
             folded.iter().cloned().chain(renames).collect();
@@ -1188,7 +1230,7 @@ impl GenericPolyfill<'_> {
                 }
                 _ => {
                     parts.push(match visible {
-                        Some(visible) => self.default_arg(elt, visible),
+                        Some(visible) => self.type_argument(elt, visible),
                         None => self.src(elt.range()).to_owned(),
                     });
                 }
@@ -1338,135 +1380,81 @@ fn apply_renames_to_rendered(rendered: &str, renames: &HashMap<String, String>) 
     out
 }
 
-fn rename_in_expr(expr: &Expr, renames: &HashMap<String, String>, edits: &mut Vec<Fix>) {
-    match expr {
-        Expr::Name(n) => {
-            if let Some(new) = renames.get(n.id.as_str()) {
-                edits.push(Fix::safe_edit(Edit::range_replacement(
-                    new.clone(),
-                    n.range(),
-                )));
-            }
-        }
-        Expr::Subscript(s) => {
-            rename_in_expr(&s.value, renames, edits);
-            rename_in_expr(&s.slice, renames, edits);
-        }
-        Expr::Attribute(a) => rename_in_expr(&a.value, renames, edits),
-        Expr::Tuple(t) => t
-            .elts
-            .iter()
-            .for_each(|e| rename_in_expr(e, renames, edits)),
-        Expr::List(l) => l
-            .elts
-            .iter()
-            .for_each(|e| rename_in_expr(e, renames, edits)),
-        Expr::BinOp(b) => {
-            rename_in_expr(&b.left, renames, edits);
-            rename_in_expr(&b.right, renames, edits);
-        }
-        Expr::Call(c) => {
-            rename_in_expr(&c.func, renames, edits);
-            c.arguments
-                .args
-                .iter()
-                .for_each(|a| rename_in_expr(a, renames, edits));
-        }
-        Expr::UnaryOp(u) => rename_in_expr(&u.operand, renames, edits),
-        Expr::Starred(s) => rename_in_expr(&s.value, renames, edits),
-        // an arrow callable `(**P) -> None` lowers to `Callable[P, None]` via a template edit
-        // that passes its operand source through, so a rename on the inner name still lands
-        Expr::CallableType(c) => {
-            if let Some(receiver) = &c.receiver {
-                rename_in_expr(receiver, renames, edits);
-            }
-            c.args
-                .iter()
-                .for_each(|a| rename_in_expr(a, renames, edits));
-            rename_in_expr(&c.returns, renames, edits);
-        }
-        _ => {}
+/// rename every name in `expr` that `renames` maps, as an edit
+///
+/// with `types`, the renames are a generic's type parameters, and a name ty finds bound
+/// elsewhere — declared `global`, or bound by a scope of its own — keeps the author's spelling.
+/// without, every spelling `renames` maps is renamed
+///
+/// nothing inside a span of `written_whole` is renamed: what is written there in its place
+/// reads the names the polyfill declares already, or none at all
+fn rename_in_expr(
+    expr: &Expr,
+    renames: &HashMap<String, String>,
+    types: Option<&dyn TypeInfo>,
+    written_whole: &[TextRange],
+    edits: &mut Vec<Fix>,
+) {
+    Rename {
+        renames,
+        types,
+        written_whole,
+        edits,
     }
+    .visit_expr(expr);
 }
 
-fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Vec<Fix>) {
-    match stmt {
-        Stmt::AnnAssign(a) => {
-            rename_in_expr(&a.annotation, renames, edits);
-            if let Some(v) = &a.value {
-                rename_in_expr(v, renames, edits);
-            }
+struct Rename<'a> {
+    renames: &'a HashMap<String, String>,
+    types: Option<&'a dyn TypeInfo>,
+    written_whole: &'a [TextRange],
+    edits: &'a mut Vec<Fix>,
+}
+
+impl<'ast> Visitor<'ast> for Rename<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        // a nested class that introduces its *own* type params is polyfilled independently
+        // and may shadow the name, so it is left to that. one without, an enum's variant
+        // class say, reads the enclosing class's parameters in its bases and field
+        // annotations, and after the polyfill those resolve to the mangled `TypeVar` bound
+        // at module scope
+        if let Stmt::ClassDef(class) = stmt
+            && class.type_params.is_some()
+        {
+            return;
         }
-        Stmt::FunctionDef(f) => {
-            for p in f
-                .parameters
-                .posonlyargs
-                .iter()
-                .chain(f.parameters.args.iter())
-                .chain(f.parameters.kwonlyargs.iter())
-            {
-                if let Some(ann) = &p.parameter.annotation {
-                    rename_in_expr(ann, renames, edits);
-                }
-            }
-            for variadic in [
-                f.parameters.vararg.as_deref(),
-                f.parameters.kwarg.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if let Some(ann) = &variadic.annotation {
-                    rename_in_expr(ann, renames, edits);
-                }
-            }
-            if let Some(ret) = &f.returns {
-                rename_in_expr(ret, renames, edits);
-            }
-            for s in &f.body {
-                rename_in_stmt(s, renames, edits);
-            }
+        walk_stmt(self, stmt);
+    }
+
+    /// a nested function's own type-parameter list is written by its own polyfill, which
+    /// reads the parameters of the lists around it under their mangled names already
+    fn visit_type_params(&mut self, _type_params: &'ast ruff_python_ast::TypeParams) {}
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if self
+            .written_whole
+            .iter()
+            .any(|range| range.contains_range(expr.range()))
+        {
+            return;
         }
-        Stmt::Return(r) => {
-            if let Some(v) = &r.value {
-                rename_in_expr(v, renames, edits);
-            }
+        let Expr::Name(name) = expr else {
+            walk_expr(self, expr);
+            return;
+        };
+        if let Some(new) = self.renames.get(name.id.as_str())
+            && !self.types.is_some_and(|types| {
+                matches!(
+                    types.name_resolution(name),
+                    Some(NameResolution::DeclaredGlobal | NameResolution::Local)
+                )
+            })
+        {
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                new.clone(),
+                name.range(),
+            )));
         }
-        Stmt::Assign(a) => {
-            for t in &a.targets {
-                rename_in_expr(t, renames, edits);
-            }
-            rename_in_expr(&a.value, renames, edits);
-        }
-        Stmt::Expr(e) => rename_in_expr(&e.value, renames, edits),
-        Stmt::If(i) => {
-            rename_in_expr(&i.test, renames, edits);
-            for s in &i.body {
-                rename_in_stmt(s, renames, edits);
-            }
-            for clause in &i.elif_else_clauses {
-                for s in &clause.body {
-                    rename_in_stmt(s, renames, edits);
-                }
-            }
-        }
-        // descend into a nested class (e.g. an enum's nested variant classes)
-        // so the enclosing class's type-param references in its bases and field
-        // annotations are renamed too — after the polyfill the mangled `TypeVar`
-        // is bound at module scope, so the nested reference resolves to it. a
-        // nested class that introduces its *own* type params is polyfilled
-        // independently and may shadow the name, so skip it
-        Stmt::ClassDef(c) if c.type_params.is_none() => {
-            if let Some(args) = &c.arguments {
-                for base in &args.args {
-                    rename_in_expr(base, renames, edits);
-                }
-            }
-            for s in &c.body {
-                rename_in_stmt(s, renames, edits);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -2097,14 +2085,15 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
 
     /// a header or alias it polyfills is re-printed with its type parameters renamed, and it
     /// re-renders what the lowerings inside wrote rather than their source — the symbolic
-    /// folds, the private alias names, the tuple, named tuple and match types, and the variance
-    /// keywords as `TypeVar` arguments
+    /// folds, the `LiteralString` a `literal str` is written as, the private alias names, the
+    /// tuple, named tuple and match types, and the variance keywords as `TypeVar` arguments
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
         &[
             super::ast_driver::Lowering::TupleLiteralType,
             super::ast_driver::Lowering::AnonNamedTuple,
             super::ast_driver::Lowering::MatchType,
             super::ast_driver::Lowering::SymbolicTypeOp,
+            super::ast_driver::Lowering::LiteralString,
             super::ast_driver::Lowering::Modifiers,
             super::ast_driver::Lowering::VisibilityRename,
             super::ast_driver::Lowering::VarianceStrip,
@@ -2123,8 +2112,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             self.quotes,
             types,
             self.config.clone(),
-            ctx.type_substitutions.clone(),
-            ctx.text_edits.clone(),
+            ctx,
             PolyfilledTypeParams::decide(self.source, self.written, stmts, &self.config),
         );
         inner.collect_private_aliases(stmts);
@@ -2511,6 +2499,83 @@ mod tests {
         );
     }
 
+    /// a type parameter read anywhere in the body is renamed, however deep the statement it
+    /// stands in: a class body runs its annotations as the class is made, so one missed in a
+    /// loop there is a `NameError` on import
+    #[test]
+    fn a_type_parameter_is_renamed_in_every_compound_statement() {
+        check(
+            indoc! {"
+                class A[T]:
+                    for i in range(1):
+                        a: T
+                    while False:
+                        b: T
+                    with open(\"f\") as f:
+                        c: T
+                    try:
+                        d: T
+                    except Exception:
+                        e: T
+                    else:
+                        g: T
+                    finally:
+                        h: T
+                    match 1:
+                        case 1:
+                            k: T
+                    def method(self) -> None:
+                        for i in range(1):
+                            m: list[T] = []
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class A(Generic[_T]):
+                    for i in range(1):
+                        a: _T
+                    while False:
+                        b: _T
+                    with open(\"f\") as f:
+                        c: _T
+                    try:
+                        d: _T
+                    except Exception:
+                        e: _T
+                    else:
+                        g: _T
+                    finally:
+                        h: _T
+                    match 1:
+                        case 1:
+                            k: _T
+                    def method(self) -> None:
+                        for i in range(1):
+                            m: list[_T] = []
+            "},
+        );
+    }
+
+    /// a folded operation is written as the type it folds to, which reads the parameters the
+    /// operation read, so they are renamed in it too
+    #[test]
+    fn a_type_parameter_is_renamed_inside_a_fold() {
+        check_at(
+            indoc! {"
+                def pair_up[T, U](values: (T, U) * int) -> (U, T) * int:
+                    return values
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\")
+                _U = TypeVar(\"_U\")
+                def pair_up(values: tuple[_T | _U, ...]) -> tuple[_U | _T, ...]:
+                    return values
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
     #[test]
     fn rendered_rename_skips_string_and_attribute() {
         let mut renames = std::collections::HashMap::new();
@@ -2804,6 +2869,46 @@ mod tests {
                 class A(Generic[_T2]): ...
             "},
             PythonVersion::PY311,
+        );
+    }
+
+    /// a method that declares the type parameter's name `global` reads the module's binding, and
+    /// one that binds the name itself reads its own, so neither is renamed to the `TypeVar`
+    #[test]
+    fn a_name_bound_elsewhere_keeps_its_spelling() {
+        check(
+            indoc! {"
+                T = \"module level\"
+
+                class Box[T]:
+                    def module(self) -> str:
+                        global T
+                        return T
+
+                    def own(self) -> int:
+                        T = 1
+                        return T
+
+                    def parameter(self, x: T) -> T:
+                        return x
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                T = \"module level\"
+
+                _T = TypeVar(\"_T\")
+                class Box(Generic[_T]):
+                    def module(self) -> str:
+                        global T
+                        return T
+
+                    def own(self) -> int:
+                        T = 1
+                        return T
+
+                    def parameter(self, x: _T) -> _T:
+                        return x
+            "},
         );
     }
 
@@ -3159,6 +3264,64 @@ mod tests {
                 _T = TypeVar(\"_T\", bound=tuple[int, str])
                 class Foo(Generic[_T]): ...
             "},
+        );
+    }
+
+    /// `literal str` is the one type modifier python can spell, as `LiteralString`, so a
+    /// polyfilled type parameter carries it in its bound, its tuple bound and its constraints,
+    /// as the native spelling does from 3.12. the other modifiers have no spelling and erase,
+    /// there as everywhere, leaving the padding the keyword was blanked to
+    #[test]
+    fn a_literal_string_modifier_reaches_a_polyfilled_type_parameter() {
+        check_at(
+            indoc! {"
+                def bounded[T: literal str](t: T) -> T:
+                    return t
+                def in_a_tuple[T: (literal str, literal int)](t: T) -> T:
+                    return t
+                def constrained[T in (literal str, literal int)](t: T) -> T:
+                    return t
+                class C[T: literal str]: ...
+                type Alias[T: literal str] = list[T]
+            "},
+            indoc! {"
+                from typing import LiteralString, TypeVar, Generic
+                from typing_extensions import TypeAliasType
+                _T = TypeVar(\"_T\", bound=LiteralString)
+                def bounded(t: _T) -> _T:
+                    return t
+                _T_1 = TypeVar(\"_T_1\", bound=tuple[LiteralString,         int])
+                def in_a_tuple(t: _T_1) -> _T_1:
+                    return t
+                _T_2 = TypeVar(\"_T_2\", LiteralString,         int)
+                def constrained(t: _T_2) -> _T_2:
+                    return t
+                class C(Generic[_T]): ...
+                Alias = TypeAliasType(\"Alias\", list[_T], type_params=(_T,))
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// the native spelling, where a tuple bound is written `tuple[...]` and the type mapping
+    /// with python's own `:`
+    #[test]
+    fn a_literal_string_modifier_reaches_a_native_tuple_bound_and_constraints() {
+        check_at(
+            indoc! {"
+                def in_a_tuple[T: (literal str, literal int)](t: T) -> T:
+                    return t
+                def constrained[T in (literal str, literal int)](t: T) -> T:
+                    return t
+            "},
+            indoc! {"
+                from typing import LiteralString
+                def in_a_tuple[T: tuple[LiteralString,         int]](t: T) -> T:
+                    return t
+                def constrained[T: (LiteralString, int)](t: T) -> T:
+                    return t
+            "},
+            PythonVersion::PY312,
         );
     }
 

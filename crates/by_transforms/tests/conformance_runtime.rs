@@ -8,14 +8,16 @@
 //! fallback, or a registration emitted before the interface's own class
 //! statement would all type-check and fail here.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
 
 /// basedpython whose module-level `assert`s exercise the conformance runtime
@@ -152,23 +154,18 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn conformances_run_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping conformance runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

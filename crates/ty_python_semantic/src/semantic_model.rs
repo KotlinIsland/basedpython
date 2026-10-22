@@ -158,6 +158,14 @@ impl<'db> SemanticModel<'db> {
         crate::types::visibility::reads_class_scope_binding(self.db, self.file, reference)
     }
 
+    /// basedpython: see `crate::types::visibility::name_resolution`
+    pub fn name_resolution(
+        &self,
+        reference: &ast::ExprName,
+    ) -> Option<crate::types::visibility::NameResolution> {
+        crate::types::visibility::name_resolution(self.db, self.file, reference)
+    }
+
     /// basedpython: the module-level names this file declares `private` — the
     /// set `private-import` reads, and whose references the lowering renames
     pub fn private_module_symbols(&self) -> Vec<ruff_python_ast::name::Name> {

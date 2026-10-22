@@ -7,21 +7,18 @@
 //! trailing comma, a helper class named before it was defined, a string whose
 //! escaping did not survive — fails here.
 
-#![expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use by_transforms::{Config, transpile_typed};
+use by_transforms::{Config, PythonVersion, transpile_typed};
 use ruff_db::files::system_path_to_file;
 use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
 use ty_project::{ProjectMetadata, TestDb};
 
 mod common;
+mod interpreters;
+use interpreters::Interpreter;
 
 /// transpile `/proj/main.by` with `files` written around it, into a fresh
 /// directory under the cargo temp dir.
@@ -48,8 +45,8 @@ fn build_case(case: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 /// run `main.py` in `dir`, asserting it exits cleanly and prints `ok`
-fn run_main(python: &str, dir: &Path) {
-    let output = Command::new(python)
+fn run_main(python: &Interpreter, dir: &Path) {
+    let output = Command::new(&python.command)
         .arg("main.py")
         .current_dir(dir)
         .output()
@@ -157,8 +154,7 @@ print("ok")
 
 #[test]
 fn a_yaml_document_reads_back_as_it_was_written() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping static resource runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY310) else {
         return;
     };
     let dir = build_case(
@@ -173,8 +169,7 @@ fn a_yaml_document_reads_back_as_it_was_written() {
 
 #[test]
 fn a_mapping_nested_in_a_sequence_is_defined_before_it_is_named() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping static resource runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY310) else {
         return;
     };
     let dir = build_case(
@@ -189,8 +184,7 @@ fn a_mapping_nested_in_a_sequence_is_defined_before_it_is_named() {
 
 #[test]
 fn a_toml_document_reads_back_as_it_was_written() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping static resource runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY310) else {
         return;
     };
     let dir = build_case(
@@ -205,8 +199,7 @@ fn a_toml_document_reads_back_as_it_was_written() {
 
 #[test]
 fn a_resource_imported_inside_a_function_runs_there() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping static resource runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY310) else {
         return;
     };
     let dir = build_case(

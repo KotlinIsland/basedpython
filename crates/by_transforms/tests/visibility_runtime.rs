@@ -10,16 +10,17 @@
 //! The transform unit tests pin the text of the emitted `__all__`. This test
 //! closes the loop by importing the module the way `__all__` is for.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
-mod common;
 use common::python;
 
+mod common;
 mod interpreters;
 
 /// Every visibility shape that reaches `__all__`, in both keyword orders.
@@ -56,18 +57,13 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn every_exported_name_exists_at_runtime() {
-    let Some(python) = python() else {
-        eprintln!("skipping visibility runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
@@ -76,7 +72,7 @@ fn every_exported_name_exists_at_runtime() {
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
     std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(IMPORTER)
         .current_dir(dir.path())
@@ -138,18 +134,13 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_renamed_member_is_the_same_attribute_from_every_place_that_may_reach_it() {
-    let Some(python) = python() else {
-        eprintln!("skipping member visibility runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(MEMBERS, &config).expect("transpile should succeed");
@@ -157,7 +148,7 @@ fn a_renamed_member_is_the_same_attribute_from_every_place_that_may_reach_it() {
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
     std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(MEMBER_IMPORTER)
         .current_dir(dir.path())
@@ -220,18 +211,13 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_renamed_variable_is_the_same_binding_wherever_it_is_the_symbol() {
-    let Some(python) = python() else {
-        eprintln!("skipping variable visibility runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(VARIABLES, &config).expect("transpile should succeed");
@@ -239,7 +225,7 @@ fn a_renamed_variable_is_the_same_binding_wherever_it_is_the_symbol() {
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
     std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(VARIABLE_IMPORTER)
         .current_dir(dir.path())
@@ -348,18 +334,13 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_renamed_name_is_read_back_wherever_python_looks_it_up() {
-    let Some(python) = python() else {
-        eprintln!("skipping visibility shapes runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(SHAPES, &config).expect("transpile should succeed");
@@ -367,7 +348,7 @@ fn a_renamed_name_is_read_back_wherever_python_looks_it_up() {
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
     std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(SHAPE_IMPORTER)
         .current_dir(dir.path())

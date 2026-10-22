@@ -51,6 +51,7 @@ pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::DynamicKeyword,
     Lowering::FloatConst,
     Lowering::SymbolicTypeOp,
+    Lowering::LiteralString,
     Lowering::AnonNamedTuple,
     Lowering::ProtocolType,
     Lowering::TypedDictLiteral,
@@ -1182,6 +1183,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::TypedDictLiteral,
             Lowering::RuntimeUnion,
             Lowering::SymbolicTypeOp,
+            Lowering::LiteralString,
         ]
     }
 

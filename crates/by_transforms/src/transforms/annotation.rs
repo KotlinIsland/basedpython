@@ -84,8 +84,15 @@ impl<'src> TupleLiteralType<'src> {
     /// star form is PEP 646, python 3.11; below that it is a *syntax* error
     /// rather than something the `__future__` import could defer, so a tuple
     /// type has to say `Unpack[...]` instead.
-    fn unpack(&self, inner: &str) -> String {
-        if self.min_version >= PythonVersion::PY311 {
+    ///
+    /// `operand` is the type the element unpacks, where the source names one.
+    /// python carries out a star by iterating its operand, which the
+    /// `typing_extensions.TypeAliasType` a type alias is below 3.12 cannot do,
+    /// so a starred alias says `Unpack[...]` until 3.12.
+    fn unpack(&self, inner: &str, operand: Option<&Expr>) -> String {
+        let iterable = self.min_version >= PythonVersion::PY312
+            || !operand.is_some_and(|operand| self.types.is_type_alias(operand));
+        if self.min_version >= PythonVersion::PY311 && iterable {
             format!("*{inner}")
         } else {
             self.needs_unpack_import.set(true);
@@ -303,15 +310,15 @@ impl<'src> TupleLiteralType<'src> {
                         let inner_src = self
                             .transform_annotation(&unpacked.value)
                             .unwrap_or_else(|| self.fallback_src(&unpacked.value));
-                        return self.unpack(&inner_src);
+                        return self.unpack(&inner_src, Some(&unpacked.value));
                     }
                     let value_src = self
                         .transform_annotation(&named.value)
                         .unwrap_or_else(|| self.fallback_src(&named.value));
-                    return self.unpack(&format!(
-                        "{}[{value_src}, ...]",
-                        self.written.builtin("tuple")
-                    ));
+                    return self.unpack(
+                        &format!("{}[{value_src}, ...]", self.written.builtin("tuple")),
+                        None,
+                    );
                 }
                 self.transform_annotation(&named.value)
                     .unwrap_or_else(|| self.fallback_src(&named.value))
@@ -326,12 +333,12 @@ impl<'src> TupleLiteralType<'src> {
                     .transform_annotation(&s.value)
                     .unwrap_or_else(|| self.fallback_src(&s.value));
                 if parameter_shape {
-                    self.unpack(&format!(
-                        "{}[{value_src}, ...]",
-                        self.written.builtin("tuple")
-                    ))
+                    self.unpack(
+                        &format!("{}[{value_src}, ...]", self.written.builtin("tuple")),
+                        None,
+                    )
                 } else {
-                    self.unpack(&value_src)
+                    self.unpack(&value_src, Some(&s.value))
                 }
             }
             // a plain element type — also lower a nested `?` (`(int, str?)`),
@@ -575,6 +582,37 @@ mod tests {
             indoc! {"
                 from typing_extensions import Unpack
                 a: tuple[int, Unpack[A]]
+            "},
+        );
+    }
+
+    /// python carries out a star by iterating what it unpacks, and the
+    /// `typing_extensions.TypeAliasType` a type alias is below 3.12 cannot be
+    /// iterated, so a starred alias is spelled `Unpack[...]` on 3.11
+    #[test]
+    fn unpacked_type_alias_before_312() {
+        check_at(
+            PythonVersion::PY311,
+            indoc! {"
+                type Pair = (int, str)
+                a: (bool, *Pair)
+            "},
+            indoc! {"
+                from typing import Unpack
+                from typing_extensions import TypeAliasType
+                Pair = TypeAliasType(\"Pair\", tuple[int, str])
+                a: tuple[bool, Unpack[Pair]]
+            "},
+        );
+        check_at(
+            PythonVersion::PY312,
+            indoc! {"
+                type Pair = (int, str)
+                a: (bool, *Pair)
+            "},
+            indoc! {"
+                type Pair = tuple[int, str]
+                a: tuple[bool, *Pair]
             "},
         );
     }

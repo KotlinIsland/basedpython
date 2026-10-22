@@ -12,15 +12,17 @@
 //! - where python refuses `:=`: a comprehension's iterable, and any part of a
 //!   comprehension in a class body
 //!
-//! no third-party packages are needed, so any `python3` will do; if none is found the
-//! test skips rather than fails
+//! no third-party packages are needed, so the program is transpiled for whichever interpreter
+//! runs it; if none is found the test skips, and says so, rather than fails
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// a `??` inside an operand of another one
 const NESTED: &str = r#"
@@ -214,13 +216,13 @@ assert issubclass(Generic, Base) and annotated == 1
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -236,58 +238,35 @@ fn run(python: &str, program: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_coalesce_inside_an_operand_is_lowered() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_coalesce_inside_an_operand_is_lowered`: no `python3` interpreter found"
-        );
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, NESTED);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_coalesce_keeps_its_grouping() {
-    let Some(python) = python() else {
-        eprintln!("skipping `a_coalesce_keeps_its_grouping`: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, GROUPING);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_coalesce_binds_its_value_where_python_refuses_an_assignment_expression() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_coalesce_binds_its_value_where_python_refuses_an_assignment_expression`: no `python3` interpreter found"
-        );
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, BINDING);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_coalesce_binds_its_value_in_an_annotation_and_a_type_parameter_scope() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_coalesce_binds_its_value_in_an_annotation_and_a_type_parameter_scope`: no `python3` interpreter found"
-        );
+    // below 3.12 the `type` statement is written by the generics polyfill, which does not yet
+    // carry a `??` lowered inside the alias's value: the transpile is refused as a transform
+    // conflict
+    let Some(python) = python(PythonVersion::PY312) else {
         return;
     };
     run(&python, ANNOTATION_SCOPES);

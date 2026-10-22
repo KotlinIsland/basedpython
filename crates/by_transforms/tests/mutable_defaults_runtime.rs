@@ -8,15 +8,18 @@
 //! program returns the wrong answer (`1 is int` is `False` where
 //! `isinstance(1, int)` is `True`).
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// every lowering that can be written inside a default, checked against the
 /// same expression evaluated as ordinary body code
@@ -332,13 +335,13 @@ assert parameters["s"].default == "a", repr(parameters["s"].default)
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -355,7 +358,7 @@ fn run(python: &str, program: &str) {
 
 #[test]
 fn a_lowering_inside_a_default_survives_the_move_into_the_body() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, COMPOSITION);
@@ -363,7 +366,7 @@ fn a_lowering_inside_a_default_survives_the_move_into_the_body() {
 
 #[test]
 fn a_context_argument_inside_a_default_survives_the_move_into_the_body() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, CONTEXT);
@@ -371,22 +374,15 @@ fn a_context_argument_inside_a_default_survives_the_move_into_the_body() {
 
 #[test]
 fn an_extension_members_default_is_hoisted_below_the_preamble() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, EXTENSION);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_default_written_over_several_lines_survives_the_move_into_the_body() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_default_written_over_several_lines_survives_the_move_into_the_body`: no `python3` interpreter found"
-        );
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, MULTI_LINE);
@@ -397,11 +393,11 @@ fn a_default_written_over_several_lines_survives_the_move_into_the_body() {
 /// target below 3.10 gets
 #[test]
 fn a_leading_bom_stays_ahead_of_the_preamble() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
-
-    for version in [PythonVersion::PY313, PythonVersion::PY39] {
+    // the interpreter's own version takes the sentinel alone, and 3.9 the future import too
+    for version in [python.version, PythonVersion::PY39] {
         let config = Config {
             min_version: version,
             ..Config::default()
@@ -418,7 +414,7 @@ fn a_leading_bom_stays_ahead_of_the_preamble() {
         let path = dir.path().join("emitted.py");
         std::fs::write(&path, &transpiled).expect("failed to write the module");
 
-        let output = Command::new(&python)
+        let output = Command::new(&python.command)
             .arg(&path)
             .output()
             .expect("failed to spawn python");
@@ -435,7 +431,7 @@ fn a_leading_bom_stays_ahead_of_the_preamble() {
 
 #[test]
 fn a_name_default_shows_as_written_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, NAME_DEFAULT);
@@ -443,7 +439,7 @@ fn a_name_default_shows_as_written_in_the_signature() {
 
 #[test]
 fn a_call_default_shows_as_written_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, CALL_DEFAULT);
@@ -451,7 +447,7 @@ fn a_call_default_shows_as_written_in_the_signature() {
 
 #[test]
 fn a_late_bound_default_shows_as_written_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, LATE_BOUND_DEFAULT);
@@ -459,7 +455,7 @@ fn a_late_bound_default_shows_as_written_in_the_signature() {
 
 #[test]
 fn an_init_field_default_shows_as_written_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, INIT_FIELD_DEFAULT);
@@ -467,7 +463,7 @@ fn an_init_field_default_shows_as_written_in_the_signature() {
 
 #[test]
 fn a_required_parameter_after_a_default_shows_as_required_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, REQUIRED_AFTER_DEFAULT);
@@ -475,7 +471,7 @@ fn a_required_parameter_after_a_default_shows_as_required_in_the_signature() {
 
 #[test]
 fn a_scalar_default_shows_its_value_in_the_signature() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, SCALAR_DEFAULT);
@@ -483,7 +479,7 @@ fn a_scalar_default_shows_its_value_in_the_signature() {
 
 #[test]
 fn a_copied_or_pickled_marker_is_still_the_default() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, COPIED_MARKER);
@@ -491,7 +487,7 @@ fn a_copied_or_pickled_marker_is_still_the_default() {
 
 #[test]
 fn another_defaults_marker_is_a_value() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, ANOTHER_DEFAULTS_MARKER);
@@ -499,7 +495,7 @@ fn another_defaults_marker_is_a_value() {
 
 #[test]
 fn a_marker_shows_its_default_on_one_line() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, MULTI_LINE_MARKER);

@@ -23,6 +23,7 @@ mod common;
 use common::python;
 
 mod interpreters;
+use interpreters::Interpreter;
 
 /// every place an annotation runs with the definition, naming something bound after it
 const PROGRAM: &str = r#"
@@ -61,8 +62,8 @@ print("ok")
 "#;
 
 /// whether `python` still evaluates annotations as the definition runs
-fn evaluates_annotations_eagerly(python: &str) -> bool {
-    Command::new(python)
+fn evaluates_annotations_eagerly(python: &Interpreter) -> bool {
+    Command::new(&python.command)
         .args([
             "-c",
             "import sys; raise SystemExit(sys.version_info >= (3, 14))",
@@ -77,7 +78,7 @@ fn evaluates_annotations_eagerly(python: &str) -> bool {
     reason = "a skipped test must say why it skipped, or it reads as a pass"
 )]
 fn a_forward_reference_does_not_raise_at_import() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
     if !evaluates_annotations_eagerly(&python) {
@@ -85,11 +86,11 @@ fn a_forward_reference_does_not_raise_at_import() {
         return;
     }
     let config = Config {
-        min_version: PythonVersion::PY310,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -243,15 +244,15 @@ print("ok")
 
 #[test]
 fn a_forward_reference_outside_an_annotation_resolves() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY310,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(OUTSIDE_AN_ANNOTATION, &config).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -304,8 +305,8 @@ print(get_type_hints(uses))
 "#;
 
 /// what `program` prints on `python`
-fn printed(python: &str, program: &str) -> String {
-    let output = Command::new(python)
+fn printed(python: &Interpreter, program: &str) -> String {
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(program)
         .output()
@@ -320,11 +321,11 @@ fn printed(python: &str, program: &str) -> String {
 
 #[test]
 fn a_forward_reference_outside_an_annotation_survives_the_round_trip() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY310) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY310,
+        min_version: python.version,
         ..Config::default()
     };
     let by = reverse_transpile(QUOTED_OUTSIDE_AN_ANNOTATION, &config)

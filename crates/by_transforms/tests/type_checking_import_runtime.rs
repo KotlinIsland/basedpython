@@ -8,6 +8,7 @@
 //! `NameError` with `by check` clean, unless it looks the name up as it runs.
 
 mod common;
+mod interpreters;
 
 use std::fs;
 use std::path::Path;
@@ -267,13 +268,8 @@ fn a_class_declared_further_down_is_checked_once_it_is_bound() {
 /// a module importing a name another module binds one way for the checker and another way as
 /// it runs reads what the program binds, which need not be the class the checker resolved
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_name_imported_from_a_type_checking_block_elsewhere_is_never_evaluated() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping type checking import runtime test: no interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     let files = [
@@ -322,7 +318,7 @@ print(\"ok\")
         db.write_file(path, source).expect("write file failed");
     }
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         soundness: SoundnessPositions::all(),
         ..Config::default()
     };
@@ -333,7 +329,7 @@ print(\"ok\")
         let relative = path.trim_start_matches('/').replace(".by", ".py");
         fs::write(dir.join(relative), transpiled).expect("write module");
     }
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("main.py")
         .current_dir(&dir)
         .output()
@@ -347,22 +343,17 @@ print(\"ok\")
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn run(program: &str) {
-    let Some(python) = common::python() else {
-        eprintln!("skipping type checking import runtime test: no interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         soundness: SoundnessPositions::all(),
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

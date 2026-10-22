@@ -3,16 +3,18 @@
 //! python 3.14 gives every replacement field of a `t"..."` to the program as a
 //! `string.templatelib.Interpolation`, whose `expression` attribute is the *source text*
 //! of the field: everything between the `{` and the `=`, conversion, format spec or `}`
-//! that ends it, whitespace and grouping parentheses included.
+//! that ends the expression, its grouping parentheses kept and its comments taken out.
 //!
 //! ```python
 //! a = 3
 //! t"{ (a) !r}".interpolations[0].expression   # ' (a) '
 //! ```
 //!
-//! python 3.14.0 to 3.14.7 dropped the whitespace before that end (python/cpython#154719).
-//! the lowering writes the text the way later releases report it, and [`_by_template`]
-//! drops the trailing whitespace again when it runs on one of those releases
+//! that is the rule from 3.14.8 (python/cpython#154719). 3.14.0 to 3.14.7 also drop the
+//! whitespace at the end of it, and report `' (a)'` there. a lowered field is given the
+//! newer text, and [`_by_field_text`] trims it at runtime on those releases, so the field
+//! reads the same as the ones python built beside it. the polyfill a string tag lowers to
+//! below 3.14 runs on interpreters with no rule of their own, and takes the newer one
 //!
 //! that text is what the attribute is for — a template library names a cache entry by it,
 //! shows it in an error, or renders a `=`-style debug view from it. python reads it off
@@ -37,6 +39,7 @@
 //! gives each field the author's text as it does
 //!
 //! [`_by_template`]: crate::runtime
+//! [`_by_field_text`]: crate::runtime
 
 use ruff_python_ast::comparable::ComparableExpr;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor};
@@ -46,7 +49,8 @@ use ruff_python_ast::{
     InterpolatedElement, ModModule, Stmt,
 };
 use ruff_python_ast::{ExprContext, name::Name};
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_python_trivia::CommentRanges;
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 
 use super::ast_driver::Fragment;
 use super::debug_field::rewrites_expression;
@@ -158,26 +162,52 @@ impl Wrap {
 /// the source text python hands a reader as a field's `expression`
 ///
 /// python takes it from just past the `{` to the `=`, conversion, format spec or `}` that
-/// ends the field, keeping whatever grouping parentheses and whitespace stand around the
-/// expression. the expression node's own range holds neither, so both ends are read off
-/// the field: the start from its brace, and the end by stepping over the parentheses and
-/// whitespace between the expression's last token and the end of the field — nothing
-/// else can stand there
+/// ends the expression, keeping whatever grouping parentheses the expression was written
+/// inside and the whitespace after them, and leaving out every comment in it — though not
+/// the line break that ends one. the expression node's own range holds neither the
+/// parentheses nor the whitespace, so the end is found by stepping over what can stand
+/// between the expression's last token and that delimiter: closing parentheses,
+/// whitespace, line continuations and comments
 ///
-/// this is the text python reports from 3.14.8 on; [`_by_template`](crate::runtime) drops
-/// the trailing whitespace on the earlier 3.14 releases, which did
-pub(crate) fn author_text<'src>(source: &'src str, field: &InterpolatedElement) -> &'src str {
-    let start = usize::from(field.range().start()) + '{'.len_utf8();
-    let expression_end = usize::from(field.expression.range().end());
-    let Some(tail) = source.get(expression_end..usize::from(field.range().end())) else {
-        return "";
-    };
-    let closing = tail
-        .find(|ch: char| ch != ')' && !ch.is_whitespace())
-        .unwrap_or(tail.len());
-    source
-        .get(start..expression_end + closing)
-        .unwrap_or_default()
+/// this is the text 3.14.8 and later report. what 3.14.0 to 3.14.7 report is this with its
+/// trailing whitespace dropped, which `_by_field_text` does at runtime
+pub(crate) fn field_text(
+    source: &str,
+    comments: &CommentRanges,
+    field: &InterpolatedElement,
+) -> String {
+    let start = field.range().start() + '{'.text_len();
+    let end = expression_end(source, comments, field);
+    let mut text = String::new();
+    let mut from = start;
+    for comment in comments.comments_in_range(TextRange::new(start, end)) {
+        text.push_str(&source[TextRange::new(from, comment.start())]);
+        from = comment.end();
+    }
+    text.push_str(&source[TextRange::new(from, end)]);
+    text
+}
+
+/// where python ends a field's expression: at the first character after its last token that
+/// is not a closing parenthesis, whitespace, a line continuation or part of a comment
+fn expression_end(source: &str, comments: &CommentRanges, field: &InterpolatedElement) -> TextSize {
+    let field_end = field.range().end();
+    let mut at = field.expression.range().end();
+    while at < field_end {
+        if let Some(comment) = comments
+            .comments_in_range(TextRange::new(at, field_end))
+            .first()
+            .filter(|comment| comment.start() == at)
+        {
+            at = comment.end();
+            continue;
+        }
+        match source[usize::from(at)..].chars().next() {
+            Some(ch) if ch == ')' || ch == '\\' || ch.is_whitespace() => at += ch.text_len(),
+            _ => break,
+        }
+    }
+    at
 }
 
 /// a t-string of the source, the interpolations it hands a reader in the order it hands
@@ -318,6 +348,7 @@ pub(crate) fn replaced_in_tree(
 /// field needs rebuilding
 pub(crate) fn claim(
     source: &str,
+    comments: &CommentRanges,
     suite: &[Stmt],
     edited: &[TextRange],
     replaced: &[TextRange],
@@ -332,7 +363,7 @@ pub(crate) fn claim(
                     || edited.iter().any(|edit| {
                         rewrites_expression(*edit, field.expression.range(), field.range())
                     });
-                lowered.then(|| author_text(source, field).to_owned())
+                lowered.then(|| field_text(source, comments, field))
             })
             .collect();
         if tagged || texts.iter().any(Option::is_some) {
@@ -507,8 +538,9 @@ mod tests {
         );
     }
 
-    /// python reads the text from just past the `{` to the end of the field, keeping the
-    /// grouping parentheses and the whitespace around them. `tstring_expression_runtime`
+    /// python reads the text from just past the `{` to the delimiter that ends the
+    /// expression, keeping the grouping parentheses and the whitespace after them, in the
+    /// form 3.14.8 reports. `a_field_reports_the_source_the_author_wrote` in the runtime test
     /// holds these to a real 3.14
     #[test]
     fn the_author_text_is_the_span_python_would_have_reported() {
@@ -520,6 +552,19 @@ mod tests {
         assert_eq!(
             lowered("def go(a: int?):\n    print(t\"{ (a!) !r:>6}\")\n"),
             "print(_by_template(t\"{ (_force_unwrap(a)) !r:>6}\", (\" (a!) \",)))"
+        );
+    }
+
+    /// a comment is left out of the text, and the line break that ends it is not, as python
+    /// does — including one written after the expression, before the delimiter
+    #[test]
+    fn a_comment_is_left_out_of_the_author_text() {
+        assert_eq!(
+            lowered(
+                "def go(a: int?, b: int):\n    print(t\"\"\"{(a! # why\n    ?? b) # and\n}\"\"\")\n"
+            ),
+            // the last line of the rebuild, which closes the literal and gives the text
+            "}\"\"\", (\"(a! \\n    ?? b) \\n\",)))"
         );
     }
 

@@ -8,15 +8,18 @@
 //! loop's own cell, a decorated / annotated / recursive `def` surviving the
 //! closure rebuild, and a generator or coroutine staying one.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// the capture itself, across every form that binds an iteration
 const CAPTURES: &str = r#"
@@ -323,26 +326,14 @@ assert collect() == ["1:True", "2:True"], "the loop binding and the type argumen
 print("ok")
 "#;
 
-/// reification keeps native pep 695 syntax, so it needs a 3.12+ interpreter
-fn python_with_native_type_params(python: &str) -> bool {
-    Command::new(python)
-        .args([
-            "-c",
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)",
-        ])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn run(python: &str, program: &str, unique_loop_bindings: bool) {
+fn run(python: &Interpreter, program: &str, unique_loop_bindings: bool) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         unique_loop_bindings,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -358,56 +349,48 @@ fn run(python: &str, program: &str, unique_loop_bindings: bool) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn loop_bindings_are_per_iteration() {
-    let Some(python) = python() else {
-        eprintln!("skipping loop-binding runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, CAPTURES, true);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn the_closure_rebuild_preserves_the_function() {
-    let Some(python) = python() else {
-        eprintln!("skipping loop-binding runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, REBUILD, true);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn what_stays_pythons_stays_pythons() {
-    let Some(python) = python() else {
-        eprintln!("skipping loop-binding runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, UNCHANGED, true);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_reified_generic_in_a_loop_keeps_both_bindings() {
-    let Some(python) = python() else {
-        eprintln!("skipping loop-binding runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
-    if !python_with_native_type_params(&python) {
-        eprintln!("skipping reified-generic runtime test: {python} is older than 3.12");
+    // the type argument's cell is a pep 695 closure cell, which needs native type-parameter
+    // syntax
+    if python.version < PythonVersion::PY312 {
+        let config = Config {
+            min_version: python.version,
+            unique_loop_bindings: true,
+            ..Config::default()
+        };
+        let refusal = transpile(REIFIED, &config)
+            .expect_err("a reified generic is refused below python 3.12");
+        assert!(
+            refusal.contains("requires python 3.12 or newer"),
+            "{refusal}"
+        );
         return;
     }
     run(&python, REIFIED, true);
@@ -416,17 +399,12 @@ fn a_reified_generic_in_a_loop_keeps_both_bindings() {
 /// with the option off the output is python's, sharing one cell per loop —
 /// the same program that asserts per-iteration values must fail
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn disabling_the_option_restores_pythons_sharing() {
-    let Some(python) = python() else {
-        eprintln!("skipping loop-binding runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         unique_loop_bindings: false,
         ..Config::default()
     };
@@ -435,7 +413,7 @@ fn disabling_the_option_restores_pythons_sharing() {
         !transpiled.contains("_by_loop_bind"),
         "the disabled pass emitted its runtime:\n{transpiled}"
     );
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

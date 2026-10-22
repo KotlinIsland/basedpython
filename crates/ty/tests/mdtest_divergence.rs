@@ -34,13 +34,14 @@ fn mdtest_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../ty_python_semantic/resources/mdtest")
 }
 
-/// A CPython 3.13 interpreter, provisioned through uv so the harness runs the
-/// same interpreter everywhere instead of riding on whatever `python3` the host
-/// happens to ship. The transpiler emits modern syntax — PEP 695 generics, PEP
-/// 696 type-parameter defaults (`class C[T = int]`), PEP 646 unpacking — whose
-/// runtime floor is 3.13; CI runners range from 3.10 upward, so a checker-clean
-/// block can fail to even parse on an older interpreter. Returns `None` (the
-/// test then skips) when uv or the interpreter can't be obtained.
+/// The interpreter the blocks run on: `$PYTHON` when it is set, which is the
+/// interpreter the run was pinned to, and otherwise a CPython 3.13 provisioned
+/// through uv, so the harness runs the same interpreter everywhere instead of
+/// riding on whatever `python3` the host happens to ship. Every block is
+/// transpiled for that interpreter's version, so what runs is the lowering for
+/// it, and a section whose blocks need a newer one is listed in [`REQUIRES`].
+/// Returns `None` (the test then skips) when uv or the interpreter can't be
+/// obtained.
 #[cfg(not(windows))]
 fn python() -> Option<String> {
     if let Ok(p) = std::env::var("PYTHON") {
@@ -99,6 +100,24 @@ struct Block {
     multi_file: bool,
     /// the text of the heading the block is under
     heading: String,
+}
+
+/// a checker-clean block the harness runs
+struct Item {
+    name: String,
+    index: usize,
+    source: String,
+    /// the entry of [`REQUIRES`] that speaks for the block on this interpreter
+    requires: Option<usize>,
+    /// the entry of [`DIVERGES_BELOW`] that speaks for the block on this interpreter
+    diverges_below: Option<usize>,
+}
+
+/// whether `error` is the transpiler refusing a block for needing a python newer than
+/// `3.{minor}`, and no newer than `3.{floor}`
+fn refuses_for_version(error: &str, minor: u8, floor: u8) -> bool {
+    (minor + 1..=floor)
+        .any(|needed| error.contains(&format!("requires python 3.{needed} or newer")))
 }
 
 /// extract the `by` fenced code blocks of a markdown file, in order
@@ -328,6 +347,83 @@ const EXCLUDED: &[(&str, &str, &str)] = &[(
          `TypeError` at the instantiation",
 )];
 
+/// the sections a transpile for an older python refuses, each with the version its blocks
+/// need and the reason, keyed by mdtest file (relative to the mdtest directory) and heading
+/// text. a heading of `None` stands for every section of the file
+///
+/// below its version, a block of such a section is either refused with the transpiler's
+/// version requirement — `requires python 3.N or newer`, for an `N` the interpreter is older
+/// than — or transpiled and run like any other block, and a refusal is not a divergence. an
+/// entry that no longer matches a checker-clean block fails the test, and so does one that
+/// none of its blocks is refused for below its version
+const REQUIRES: &[(&str, Option<&str>, u8, &str)] = &[
+    (
+        "basedpython_reified_generics.md",
+        None,
+        13,
+        "a reified generic keeps its native pep 695 type-parameter list, which python has from \
+         3.12, and a pep 696 default in it, which python has from 3.13",
+    ),
+    (
+        "basedpython_reified_class_generics.md",
+        None,
+        13,
+        "a reified class keeps its native pep 695 type-parameter list, which python has from \
+         3.12, and a pep 696 default in it, which python has from 3.13",
+    ),
+    (
+        "basedpython_checked_cast.md",
+        Some("a reified type parameter is checked, not assumed"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_exceptions.md",
+        Some("an explicit specialization is read like a solved call"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_optional_type.md",
+        Some("a wrapped optional read as a value is the wrapper class"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("reified type parameters carry the answer"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a tuple target compares each element cell"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a nested generic value unifies structurally"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a reified class answers the probe from its specialization"),
+        12,
+        "a reified class keeps its native pep 695 type-parameter list",
+    ),
+];
+
+/// the sections whose checker-clean blocks diverge on a target older than a python version,
+/// each with the version and the reason, keyed like [`EXCLUDED`]
+///
+/// each entry is a known divergence that is not fixed yet. below its version a block of the
+/// section still runs, and has to diverge: an entry none of whose blocks diverges there fails
+/// the test, so the list cannot outlive its reasons. from its version on, the section runs like
+/// any other
+const DIVERGES_BELOW: &[(&str, &str, u8, &str)] = &[];
+
 /// every mdtest under `dir`, at any depth, in a stable order
 fn markdown_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -374,14 +470,12 @@ fn clean_mdtest_blocks_run() {
         return;
     };
 
-    // reified generics emit native pep 695 syntax (the closure mechanism), so
-    // they only transpile on a 3.12+ target — on an older interpreter those
-    // blocks legitimately can't run, and their transpile error is documented,
-    // not a divergence
-    let supports_reification = version
+    let Some(minor) = version
         .split_once('.')
-        .and_then(|(_, minor)| minor.parse::<u32>().ok())
-        .is_some_and(|minor| minor >= 12);
+        .and_then(|(_, minor)| minor.parse::<u8>().ok())
+    else {
+        panic!("`{python}` reports a version that is not `3.N`: {version}");
+    };
 
     // third-party runtime deps are environment-dependent; skip blocks that
     // need one the interpreter doesn't have
@@ -483,8 +577,10 @@ fn clean_mdtest_blocks_run() {
     .flatten()
     .collect();
 
-    let mut items: Vec<(String, usize, String)> = Vec::new();
+    let mut items: Vec<Item> = Vec::new();
     let mut excluded_seen = vec![false; EXCLUDED.len()];
+    let mut requires_seen = vec![false; REQUIRES.len()];
+    let mut diverges_below_seen = vec![false; DIVERGES_BELOW.len()];
     for file in &files {
         let name = file
             .strip_prefix(&dir)
@@ -503,13 +599,32 @@ fn clean_mdtest_blocks_run() {
                 excluded_seen[excluded] = true;
                 continue;
             }
+            let requires = REQUIRES.iter().position(|(file, heading, _, _)| {
+                *file == name && heading.is_none_or(|heading| heading == block.heading)
+            });
+            if let Some(entry) = requires {
+                requires_seen[entry] = true;
+            }
+            let diverges_below = DIVERGES_BELOW
+                .iter()
+                .position(|(file, heading, _, _)| *file == name && *heading == block.heading);
+            if let Some(entry) = diverges_below {
+                diverges_below_seen[entry] = true;
+            }
             if unavailable
                 .iter()
                 .any(|module| block.source.contains(module))
             {
                 continue;
             }
-            items.push((name.clone(), i, block.source));
+            items.push(Item {
+                name: name.clone(),
+                index: i,
+                source: block.source,
+                // an entry only speaks for an interpreter older than its version
+                requires: requires.filter(|&entry| minor < REQUIRES[entry].2),
+                diverges_below: diverges_below.filter(|&entry| minor < DIVERGES_BELOW[entry].2),
+            });
         }
     }
     let stale: Vec<String> = EXCLUDED
@@ -517,10 +632,27 @@ fn clean_mdtest_blocks_run() {
         .zip(&excluded_seen)
         .filter(|(_, seen)| !**seen)
         .map(|((file, heading, _), _)| format!("{file}: {heading}"))
+        .chain(
+            REQUIRES
+                .iter()
+                .zip(&requires_seen)
+                .filter(|(_, seen)| !**seen)
+                .map(|((file, heading, _, _), _)| {
+                    format!("{file}: {}", heading.unwrap_or("every section"))
+                }),
+        )
+        .chain(
+            DIVERGES_BELOW
+                .iter()
+                .zip(&diverges_below_seen)
+                .filter(|(_, seen)| !**seen)
+                .map(|((file, heading, _, _), _)| format!("{file}: {heading}")),
+        )
         .collect();
     assert!(
         stale.is_empty(),
-        "an excluded section no longer holds a checker-clean block; remove it from `EXCLUDED`:\n{}",
+        "a listed section no longer holds a checker-clean block; remove it from `EXCLUDED`, \
+         `REQUIRES` or `DIVERGES_BELOW`:\n{}",
         stale.join("\n")
     );
     let total = items.len();
@@ -528,6 +660,16 @@ fn clean_mdtest_blocks_run() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let failures: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    // the entries of `REQUIRES` a block was refused for, and of `DIVERGES_BELOW` a block
+    // diverged for, on this interpreter
+    let refused: Mutex<Vec<bool>> = Mutex::new(vec![false; REQUIRES.len()]);
+    let diverged: Mutex<Vec<bool>> = Mutex::new(vec![false; DIVERGES_BELOW.len()]);
+    // a divergence of a block `DIVERGES_BELOW` lists for this interpreter is the one expected
+    // of it, and any other is reported
+    let diverge = |item: &Item, report: String| match item.diverges_below {
+        Some(entry) => diverged.lock().unwrap()[entry] = true,
+        None => failures.lock().unwrap().push(report),
+    };
     let next = AtomicUsize::new(0);
     // each block alternates a cpu-bound `by transpile` with a wait on the python
     // subprocess, and `by` startup also reads typeshed from disk — so a little
@@ -546,20 +688,28 @@ fn clean_mdtest_blocks_run() {
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
-                while let Some((name, i, block)) =
-                    items.get(next.fetch_add(1, Ordering::Relaxed))
-                {
+                while let Some(item) = items.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let Item {
+                        name,
+                        index: i,
+                        source: block,
+                        ..
+                    } = item;
                     let transpiled = match transpile(block, &version) {
                         Ok(t) => t,
                         Err(e) => {
-                            // a reified generic on a <3.12 interpreter is a
-                            // documented transpile error, not a divergence
-                            if !supports_reification && e.contains("python 3.12 or newer") {
+                            if let Some(entry) = item.requires
+                                && refuses_for_version(&e, minor, REQUIRES[entry].2)
+                            {
+                                refused.lock().unwrap()[entry] = true;
                                 continue;
                             }
-                            failures.lock().unwrap().push(format!(
-                                "{name} block {i}: transpile failed:\n{e}\n--- block ---\n{block}"
-                            ));
+                            diverge(
+                                item,
+                                format!(
+                                    "{name} block {i}: transpile failed:\n{e}\n--- block ---\n{block}"
+                                ),
+                            );
                             continue;
                         }
                     };
@@ -604,10 +754,13 @@ fn clean_mdtest_blocks_run() {
                         .output()
                         .expect("failed to run python");
                     if !run.status.success() {
-                        failures.lock().unwrap().push(format!(
-                            "{name} block {i}: checker-clean block crashed at runtime:\n{}\n--- block ---\n{block}",
-                            String::from_utf8_lossy(&run.stderr)
-                        ));
+                        diverge(
+                            item,
+                            format!(
+                                "{name} block {i}: checker-clean block crashed at runtime:\n{}\n--- block ---\n{block}",
+                                String::from_utf8_lossy(&run.stderr)
+                            ),
+                        );
                         continue;
                     }
                     let key = format!("{}_{i}", name.trim_end_matches(".md").replace(['-', '/'], "_"));
@@ -623,7 +776,25 @@ fn clean_mdtest_blocks_run() {
         }
     });
 
-    let failures = failures.into_inner().expect("failures mutex poisoned");
+    let mut failures = failures.into_inner().expect("failures mutex poisoned");
+    let refused = refused.into_inner().expect("refusals mutex poisoned");
+    let diverged = diverged.into_inner().expect("divergences mutex poisoned");
+    for (entry, (file, heading, floor, _)) in REQUIRES.iter().enumerate() {
+        if minor < *floor && !refused[entry] {
+            failures.push(format!(
+                "{file}: {}: no block is refused below 3.{floor} any more; remove it from `REQUIRES`",
+                heading.unwrap_or("every section")
+            ));
+        }
+    }
+    for (entry, (file, heading, floor, _)) in DIVERGES_BELOW.iter().enumerate() {
+        if minor < *floor && !diverged[entry] {
+            failures.push(format!(
+                "{file}: {heading}: no block diverges below 3.{floor} any more; remove it from \
+                 `DIVERGES_BELOW`"
+            ));
+        }
+    }
     assert!(
         failures.is_empty(),
         "{} of {} checker-clean blocks diverge at runtime:\n\n{}",

@@ -5,6 +5,7 @@
 //! specialization it builds from that, where without it the class could not say which one.
 
 mod common;
+mod interpreters;
 
 use std::process::Command;
 
@@ -30,22 +31,19 @@ assert holder.box.kind() == "int", "construction through an instance"
 print("ok")
 "#;
 
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 #[test]
 fn a_reified_construction_takes_the_declared_specialization() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping attribute write runtime test: no interpreter found");
+    // a reified generic class is built from its own type-parameter list, which needs native
+    // type-parameter syntax
+    let Some(python) = common::python(PythonVersion::PY312) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

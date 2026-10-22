@@ -7,15 +7,18 @@
 //! evaluated them. A lowering that gets any of those wrong still produces
 //! python that parses and runs.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// the keys a call actually delivers, for every shape of name
 const KEYS: &str = r#"
@@ -91,13 +94,13 @@ assert collect(a.b=(7, 8).0, *[]) == {"a.b": 7}, "and so does a reordered one"
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -114,7 +117,7 @@ fn run(python: &str, program: &str) {
 
 #[test]
 fn a_flexible_name_arrives_as_the_key_it_was_written_as() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, KEYS);
@@ -122,7 +125,7 @@ fn a_flexible_name_arrives_as_the_key_it_was_written_as() {
 
 #[test]
 fn a_lowered_call_keeps_its_argument_and_evaluation_order() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, ORDER);
@@ -130,7 +133,7 @@ fn a_lowered_call_keeps_its_argument_and_evaluation_order() {
 
 #[test]
 fn a_lowering_inside_a_flexible_arguments_value_still_applies() {
-    let Some(python) = python() else {
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, COMPOSITION);

@@ -9,15 +9,18 @@
 //! of its conjuncts matches would fail here even though the type-level tests
 //! pass.
 //!
-//! No third-party packages are needed, so any `python3` will do; if none is
-//! found the test skips rather than fails.
+//! No third-party packages are needed, so the program is transpiled for whichever
+//! interpreter runs it; if none is found the test skips, and says so, rather than
+//! fails.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
+use interpreters::Interpreter;
 
 /// basedpython whose module-level `assert`s exercise the destructuring runtime
 /// contract end to end.
@@ -202,14 +205,14 @@ assert classify(Point(0, 2), 1) == "other"
 print("ok")
 "#;
 
-fn run(python: &str, program: &str) {
+fn run(python: &Interpreter, program: &str) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -225,13 +228,8 @@ fn run(python: &str, program: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn destructuring_runs_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping destructuring runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
@@ -239,15 +237,8 @@ fn destructuring_runs_correctly() {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_subject_written_over_several_lines_keeps_its_grouping() {
-    let Some(python) = python() else {
-        eprintln!(
-            "skipping `a_subject_written_over_several_lines_keeps_its_grouping`: no `python3` interpreter found"
-        );
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
     run(&python, MULTI_LINE);

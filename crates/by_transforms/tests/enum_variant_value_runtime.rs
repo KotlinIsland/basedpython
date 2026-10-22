@@ -9,6 +9,7 @@
 //! `enum.Enum`, which gets all three right, so the two lowerings have to agree.
 
 mod common;
+mod interpreters;
 
 use std::process::Command;
 
@@ -65,23 +66,18 @@ def main() -> None:
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn enum_unit_variant_round_trips_to_itself() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping enum variant value runtime test: no interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

@@ -396,21 +396,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the backend only, for now. the transpiler's runtime tests and ty's divergence
-          # and end-to-end tests do not yet say which of their programs need a newer
-          # interpreter: a reified generic refuses to transpile below 3.12, and its pep 696
-          # defaults below 3.13; a program importing `override` needs `typing_extensions`,
-          # which a bare interpreter does not have; and the django fixture's virtualenv is
-          # 3.13's. they run here once each of those says what it needs
+          # every leg runs every step. a frontend test whose program needs a newer python
+          # than the leg's says so and skips, by name: a runtime test transpiles for a fixed
+          # version and runs on an interpreter at least that new, a reified generic is
+          # refused below 3.12 and its pep 696 defaults below 3.13, and the divergence
+          # harness lists the sections that need either
           - python: "3.11"
             backend_filter: "all()"
-            frontend: false
           - python: "3.12"
             backend_filter: "all()"
-            frontend: false
           - python: "3.13"
             backend_filter: "all()"
-            frontend: true
           # the free-threaded builds run the same tests, minus one that cannot be
           # observed there: `a_closure_does_not_leak_its_environment` asserts that
           # `sys.getrefcount` *rises* while a closure holds a string, and a
@@ -421,10 +417,8 @@ jobs:
           # unchanged after 20000 closures — runs and passes on both
           - python: "3.13t"
             backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
-            frontend: true
           - python: "3.14t"
             backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
-            frontend: true
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
@@ -495,14 +489,20 @@ jobs:
           cargo nextest run \
             -p by_build -p by_ir -p by_irbuild -p by_opt -p by_codegen_c -p by_rt \
             -E "$BACKEND_FILTER"
+      # python transpiled for a version below the newest takes the typing names that version
+      # lacks from `typing_extensions` — `override` below 3.12, say — so a program built for
+      # the leg's version needs it installed, as a project targeting that version would. it
+      # goes in after the backend has run, which compiles against the interpreter as uv ships
+      # it. the pin is the one the dev dependencies lock, and uv marks its managed
+      # interpreters as externally managed, though this one belongs to the job alone
+      - name: "Install `typing_extensions` into the interpreter"
+        run: uv pip install --python "$PYTHON" --break-system-packages "typing_extensions==4.16.0"
       # a separate invocation on purpose: the backend's differential tests fork processes
       # and compile C, and sharing a run with `by_transforms`' ~1800 other tests starves
       # them into failures that pass on their own
       - name: "Run the transpiler's runtime tests"
-        if: ${{ matrix.frontend }}
         run: cargo nextest run -p by_transforms -E 'binary(/_runtime$/)'
       - name: "Run ty's divergence and end-to-end tests"
-        if: ${{ matrix.frontend }}
         run: |
           cargo nextest run -p ty \
             -E 'binary(mdtest_divergence) + binary(by_e2e) + binary(django_lookup_runtime)'

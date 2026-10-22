@@ -172,9 +172,23 @@ fn a_builtin_a_lowering_writes_is_the_builtin_below_python_310() {
     }
 }
 
+/// the newest interpreter, on python transpiled for its own version. the `override` the program
+/// writes is `typing`'s from 3.12, so an older interpreter needs `typing_extensions`
 #[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
 fn a_builtin_a_lowering_writes_is_the_builtin() {
-    if let Some(interpreter) = interpreters::interpreters().pop() {
-        run_at(&interpreter, interpreter.version);
-    }
+    let found = interpreters::interpreters()
+        .into_iter()
+        .rev()
+        .find(|interpreter| {
+            interpreter.typing_extensions || interpreter.version >= PythonVersion::PY312
+        });
+    let Some(interpreter) = found else {
+        eprintln!("skipping: no interpreter found, with `typing_extensions` below 3.12");
+        return;
+    };
+    run_at(&interpreter, interpreter.version);
 }

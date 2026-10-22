@@ -20,6 +20,7 @@ use std::process::Command;
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 
 /// basedpython whose module-level `assert`s exercise the lowering end to end
 const PROGRAM: &str = r#"
@@ -95,22 +96,17 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn decorated_bindings_run_correctly() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping decorated-binding runtime test: no python interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

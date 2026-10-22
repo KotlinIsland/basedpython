@@ -29,7 +29,7 @@ impl std::fmt::Display for Interpreter {
 
 impl Interpreter {
     /// whether `probe`, python source, runs to completion here
-    fn runs(&self, probe: &str) -> bool {
+    pub(crate) fn runs(&self, probe: &str) -> bool {
         Command::new(&self.command)
             .args(["-c", probe])
             .stdout(Stdio::null())
@@ -59,29 +59,38 @@ pub(crate) fn interpreters() -> Vec<Interpreter> {
     let mut found: Vec<Interpreter> = candidates
         .into_iter()
         .filter_map(|command| {
-            let output = Command::new(&command)
-                .args(["-c", PROBE])
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-                .filter(|output| output.status.success())?;
-            let stdout = String::from_utf8(output.stdout).ok()?;
-            let mut fields = stdout.trim_end().splitn(4, ' ');
-            let major = fields.next()?.parse().ok()?;
-            let minor = fields.next()?.parse().ok()?;
-            let typing_extensions = fields.next()? == "1";
-            let executable = fields.next()?;
-            let executable = std::fs::canonicalize(executable)
-                .unwrap_or_else(|_| std::path::PathBuf::from(executable));
-            seen.insert(executable).then(|| Interpreter {
-                command,
-                version: PythonVersion::from((major, minor)),
-                typing_extensions,
-            })
+            let (interpreter, executable) = probe(command)?;
+            seen.insert(executable).then_some(interpreter)
         })
         .collect();
     found.sort_by_key(|interpreter| interpreter.version);
     found
+}
+
+/// the interpreter `command` names, if it runs, and the file it runs from
+pub(crate) fn probe(command: String) -> Option<(Interpreter, std::path::PathBuf)> {
+    let output = Command::new(&command)
+        .args(["-c", PROBE])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut fields = stdout.trim_end().splitn(4, ' ');
+    let major = fields.next()?.parse().ok()?;
+    let minor = fields.next()?.parse().ok()?;
+    let typing_extensions = fields.next()? == "1";
+    let executable = fields.next()?;
+    let executable =
+        std::fs::canonicalize(executable).unwrap_or_else(|_| std::path::PathBuf::from(executable));
+    Some((
+        Interpreter {
+            command,
+            version: PythonVersion::from((major, minor)),
+            typing_extensions,
+        },
+        executable,
+    ))
 }
 
 /// the oldest interpreter of `at_least` or later on which `probe`, python source, runs. none is a

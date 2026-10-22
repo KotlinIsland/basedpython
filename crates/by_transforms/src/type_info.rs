@@ -20,7 +20,8 @@ use ty_python_semantic::types::repeated_underscore::{
     RepeatedUnderscoreRead, UnderscoreLowering, UnderscoreRefusal,
 };
 use ty_python_semantic::types::{
-    DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
+    DisplaySettings, DynamicType, KnownClass, KnownInstanceType, NameResolution, Type,
+    UnpackedKwargs, character,
 };
 use ty_python_semantic::{
     AnonNamedTupleClass, AnonNamedTupleId, Db, HasType, ImplicitReceiverReference, LoweringModel,
@@ -480,6 +481,11 @@ pub(crate) trait TypeInfo {
     /// nested in the class body would not. `None` when ty did not index the reference
     fn reads_class_scope_binding(&self, reference: &ExprName) -> Option<bool>;
 
+    /// where python finds the binding of the name `reference` reads or writes: a type-parameter
+    /// list, a `global` declaration, the module, a scope of its own, or nowhere. `None` when ty
+    /// did not index the reference
+    fn name_resolution(&self, reference: &ExprName) -> Option<NameResolution>;
+
     /// whether `name`, read in an annotation, is a forward reference: a name the
     /// program binds, but not by the point python evaluates the annotation where
     /// it is written, as it does before 3.14 without `from __future__ import
@@ -557,6 +563,10 @@ pub(crate) trait TypeInfo {
     /// `TypeVarTuple` is never a valid annotation for the individual arguments of a
     /// `*args`, so a starred one can only be an unpack
     fn is_typevartuple(&self, expr: &Expr) -> bool;
+
+    /// whether `expr` is a type alias — a `type` statement's, or a `TypeAliasType` — which below
+    /// 3.12 is the `typing_extensions` backport, and cannot be unpacked by a star
+    fn is_type_alias(&self, expr: &Expr) -> bool;
 
     /// whether `name` is unbound at the scope enclosing `anchor`
     /// (used to pick a fresh temp-variable name)
@@ -1149,6 +1159,17 @@ impl TypeInfo for LoweringModel<'_> {
         )
     }
 
+    fn is_type_alias(&self, expr: &Expr) -> bool {
+        // read as a type expression the alias is the `TypeAlias` it names, and read as a value
+        // the `TypeAliasType` object python binds
+        expr.inferred_type(self).is_some_and(|ty| {
+            matches!(
+                ty,
+                Type::TypeAlias(_) | Type::KnownInstance(KnownInstanceType::TypeAliasType(_))
+            )
+        })
+    }
+
     fn is_unbound_at(&self, name: &str, anchor: &Expr) -> bool {
         let db = self.db();
         let file = self.program_file();
@@ -1270,6 +1291,10 @@ impl TypeInfo for LoweringModel<'_> {
 
     fn reads_class_scope_binding(&self, reference: &ExprName) -> Option<bool> {
         SemanticModel::reads_class_scope_binding(self, reference)
+    }
+
+    fn name_resolution(&self, reference: &ExprName) -> Option<NameResolution> {
+        SemanticModel::name_resolution(self, reference)
     }
 
     fn is_forward_reference(&self, name: &ExprName) -> Option<bool> {

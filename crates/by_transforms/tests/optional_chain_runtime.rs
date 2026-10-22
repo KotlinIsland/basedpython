@@ -8,14 +8,15 @@
 //! refuses the `:=` that binds the temporary — a comprehension's iterable, and any
 //! part of a comprehension in a class body
 //!
-//! no third-party packages are needed, so any `python3` will do; if none is found the
-//! test skips rather than fails
+//! no third-party packages are needed, so the program is transpiled for whichever interpreter
+//! runs it; if none is found the test skips, and says so, rather than fails
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
 mod common;
+mod interpreters;
 use common::python;
 
 const CHAINS: &str = r#"
@@ -100,22 +101,17 @@ print("ok")
 "#;
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn optional_chains_run_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping optional chain runtime test: no `python3` interpreter found");
+    let Some(python) = python(PythonVersion::PY39) else {
         return;
     };
 
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: python.version,
         ..Config::default()
     };
     let transpiled = transpile(CHAINS, &config).expect("transpile should succeed");
-    let output = Command::new(&python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()

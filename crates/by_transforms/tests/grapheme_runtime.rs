@@ -18,6 +18,7 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
+mod common;
 mod interpreters;
 
 /// basedpython source whose module-level `assert`s exercise the grapheme
@@ -92,23 +93,23 @@ assert Letters.firsts == ["a"], "in a class body comprehension"
 print("ok")
 "#;
 
-fn transpiled(program: &str) -> String {
+fn transpiled(program: &str, target: PythonVersion) -> String {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version: target,
         ..Config::default()
     };
     transpile(program, &config).expect("transpile should succeed")
 }
 
 fn run_with_regex(program: &str) {
-    let Some(interpreter) = interpreters::oldest(
-        PythonVersion::PY313,
+    let Some(interpreter) = common::python_with(
+        PythonVersion::PY39,
         "import regex",
         "with `regex` (`pip install regex` into one, or set `PYTHON` to one that has it)",
     ) else {
         return;
     };
-    let transpiled = transpiled(program);
+    let transpiled = transpiled(program, interpreter.version);
 
     let output = Command::new(&interpreter.command)
         .arg("-c")
@@ -123,7 +124,6 @@ fn run_with_regex(program: &str) {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
-    interpreters::ran(&interpreter, PythonVersion::PY313);
 }
 
 #[test]
@@ -140,10 +140,10 @@ fn a_bound_receiver_runs_where_python_refuses_an_assignment_expression() {
 /// refuses one is a `SyntaxError` before the helpers that need `regex` ever run
 #[test]
 fn a_bound_receiver_compiles_where_python_refuses_an_assignment_expression() {
-    let Some(interpreter) = interpreters::oldest(PythonVersion::PY313, "", "") else {
+    let Some(interpreter) = common::python(PythonVersion::PY39) else {
         return;
     };
-    let transpiled = transpiled(BOUND_RECEIVER);
+    let transpiled = transpiled(BOUND_RECEIVER, interpreter.version);
 
     let output = Command::new(&interpreter.command)
         .args([
@@ -159,5 +159,4 @@ fn a_bound_receiver_compiles_where_python_refuses_an_assignment_expression() {
         "the transpiled grapheme program does not compile on {interpreter}:\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
         String::from_utf8_lossy(&output.stderr),
     );
-    interpreters::ran(&interpreter, PythonVersion::PY313);
 }

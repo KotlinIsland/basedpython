@@ -12,16 +12,19 @@
 //! method-bearing protocol degrades to an unchecked pass-through rather than
 //! raising a `TypeError` from an `isinstance` against the protocol.
 //!
-//! The programs are split by interpreter requirement: [`PROGRAM`] needs only
-//! PEP 695 (3.12+), while [`DEFAULTS_PROGRAM`] needs PEP 696 defaults in native
-//! syntax and `TypeVar.has_default()` (3.13+). Each is probed for what it
-//! actually uses — a 3.12 interpreter parses PEP 695 quite happily, so a probe
-//! that only checked that would run the defaults program and die on a
-//! `SyntaxError`. Whichever has no capable interpreter skips rather than fails.
+//! Each program is transpiled for the interpreter it runs on, so below 3.12 and
+//! 3.13 its generics reach the PEP 695 and PEP 696 polyfills. A reified type
+//! parameter is the exception: the transpiler refuses one below 3.12, so the case
+//! that needs one is [`REIFIED_CELL_PROGRAM`], and an older interpreter asserts the
+//! refusal instead of running it.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
+
+mod common;
+mod interpreters;
+use interpreters::Interpreter;
 
 /// basedpython whose module-level `assert`s exercise the structural protocol
 /// check end to end: an exact match, a mismatch, an inferred class-body
@@ -325,14 +328,6 @@ class StrList(list[str]): ...
 assert (IntList() cast? list[int]) is not None, "recorded arguments agree"
 assert (StrList() cast? list[int]) is None, "recorded arguments contradict"
 
-# a value typed by a *reified* type parameter carries the answer in a runtime
-# cell, so the cast is exact — the same `T == int` lowering `is` uses
-def cast_cell[T](data: list[T]) -> list[int] | None:
-    return data cast? list[int]
-
-assert cast_cell([1, 2]) is not None, "reified cell says int"
-assert cast_cell(["a"]) is None, "reified cell says str"
-
 # a member declared inside `__init__` has no annotation any runtime can read,
 # and the checker accepts the class as satisfying the protocol regardless — so
 # answering `False` would be a silent contradiction. the check refuses instead
@@ -364,10 +359,20 @@ else:
 print("ok")
 "#;
 
-/// The pep 696 half, split out because native defaults (`[T = int]`) and the
-/// `has_default()` accessor both need 3.13 — a 3.12 interpreter parses the pep
-/// 695 syntax in [`PROGRAM`] quite happily, so the two must be probed
-/// separately or a 3.12 box runs this and dies on a `SyntaxError`.
+/// a value typed by a *reified* type parameter, which carries the answer in a runtime cell
+const REIFIED_CELL_PROGRAM: &str = r#"
+# the cast is exact — the same `T == int` lowering `is` uses
+def cast_cell[T](data: list[T]) -> list[int] | None:
+    return data cast? list[int]
+
+assert cast_cell([1, 2]) is not None, "reified cell says int"
+assert cast_cell(["a"]) is None, "reified cell says str"
+
+print("ok")
+"#;
+
+/// the pep 696 half: a parameter's default, which the probe reads in place of an argument
+/// the value was never given
 const DEFAULTS_PROGRAM: &str = r#"
 from typing import Never, Protocol
 # a class records its generic bases *unsubstituted* (`class L[T = Never]
@@ -406,10 +411,6 @@ assert (OwnNever() is OwnNever[int]) is False, "and is not some other argument"
 print("ok")
 "#;
 
-/// Locate a usable 3.13 interpreter: `$PYTHON` first, then common names.
-/// Returns `None` (test skips) when none is found — PEP 695 class syntax is a
-/// hard requirement here.
-/// pep 695 type parameters — what [`PROGRAM`] needs (3.12+)
 /// basedpython whose module-level `assert`s exercise the runtime check each
 /// *non-parametric* target lowers to. The checker's own tests pin the type it
 /// reads and the transpiler's pin the text it emits; only running the result
@@ -708,46 +709,48 @@ assert str_is_named("a") is False
 print("ok")
 "#;
 
-const PEP695_PROBE: &str = "type X[T] = T";
+/// generic classes whose bases fix or reorder the arguments, which the probe of a value typed
+/// `object` resolves down the declared base chain. below 3.12 the pep 695 polyfill declares the parameters through
+/// `Generic[...]`, so the chain is read from what that records
+const BASE_CHAIN_PROGRAM: &str = r#"
+class Odd[T](list[int]): ...
 
-/// pep 696 defaults in native syntax plus the `has_default()` accessor the probe
-/// reads them back through — what [`DEFAULTS_PROGRAM`] needs (3.13+)
-const PEP696_PROBE: &str = "\
-class _P[T = int](list[T]): pass
-assert _P.__type_params__[0].has_default()
-";
+class Swap[A, B](dict[B, A]): ...
 
-/// Locate an interpreter satisfying `probe`: `$PYTHON` first, then common names.
-/// `None` (test skips) when none qualifies.
-fn python_supporting(probe: &str) -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3.13", "python3"].map(String::from));
+def is_list_int(x: object) -> bool:
+    return x is list[int]
 
-    candidates.into_iter().find(|py| {
-        // a rejected probe writes a `SyntaxError` to stderr; swallow it so a
-        // passing run's log doesn't look like a failure
-        Command::new(py)
-            .args(["-c", probe])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+def is_list_str(x: object) -> bool:
+    return x is list[str]
+
+def is_dict_str_int(x: object) -> bool:
+    return x is dict[str, int]
+
+def is_dict_int_str(x: object) -> bool:
+    return x is dict[int, str]
+
+assert is_list_int(Odd[str]()), "the base fixes `int`"
+assert not is_list_str(Odd[str]()), "`T` is not list's argument"
+assert is_dict_str_int(Swap[int, str]()), "the base reorders"
+assert not is_dict_int_str(Swap[int, str]()), "and not the other way round"
+
+print("ok")
+"#;
+
+/// transpile `program` for `python` and run its module-level `assert`s on it
+fn run_program(python: &Interpreter, program: &str) {
+    run_program_for(python, program, python.version);
 }
 
-/// transpile `program` and run its module-level `assert`s on `python`
-fn run_program(python: &str, program: &str) {
+/// transpile `program` for `min_version` and run its module-level `assert`s on `python`
+fn run_program_for(python: &Interpreter, program: &str, min_version: PythonVersion) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(python)
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -755,7 +758,7 @@ fn run_program(python: &str, program: &str) {
 
     assert!(
         output.status.success(),
-        "transpiled parametric-is program failed on {python}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        "transpiled parametric-is program failed on {python} at {min_version}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -763,68 +766,77 @@ fn run_program(python: &str, program: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn parametric_protocol_checks_run_correctly() {
-    let Some(python) = python_supporting(PEP695_PROBE) else {
-        eprintln!("skipping parametric-is runtime test: no PEP 695-capable interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, PROGRAM);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
+fn a_reified_cell_makes_a_cast_exact() {
+    let Some(python) = common::python(PythonVersion::PY39) else {
+        return;
+    };
+    // the reified cell is a pep 695 closure cell, which needs native type-parameter syntax
+    if python.version < PythonVersion::PY312 {
+        let config = Config {
+            min_version: python.version,
+            ..Config::default()
+        };
+        let refusal = transpile(REIFIED_CELL_PROGRAM, &config)
+            .expect_err("a reified generic is refused below python 3.12");
+        assert!(
+            refusal.contains("requires python 3.12 or newer"),
+            "{refusal}"
+        );
+        return;
+    }
+    run_program(&python, REIFIED_CELL_PROGRAM);
+}
+
+#[test]
 fn every_target_kind_checks_correctly_at_runtime() {
-    let Some(python) = python_supporting(PEP695_PROBE) else {
-        eprintln!("skipping type-test target runtime test: no PEP 695-capable interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, TARGETS_PROGRAM);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn type_param_defaults_resolve_at_runtime() {
-    let Some(python) = python_supporting(PEP696_PROBE) else {
-        eprintln!(
-            "skipping parametric-is defaults test: no PEP 696-capable (3.13+) interpreter found"
-        );
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, DEFAULTS_PROGRAM);
 }
 
-/// a reified class needs 3.13, so this is probed like [`DEFAULTS_PROGRAM`]
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
+fn a_base_chain_resolves_on_native_and_polyfilled_parameters() {
+    let Some(python) = common::python(PythonVersion::PY39) else {
+        return;
+    };
+    // the interpreter's own version declares the parameters natively from 3.12, and 3.11 is
+    // the newest version that still polyfills them
+    for target in [python.version, PythonVersion::PY311] {
+        if target <= python.version {
+            run_program_for(&python, BASE_CHAIN_PROGRAM, target);
+        }
+    }
+}
+
+/// a reified class needs 3.13
+#[test]
 fn a_check_written_from_a_float_type_checks_just_float() {
-    let Some(python) = python_supporting(PEP696_PROBE) else {
-        eprintln!("skipping just-float runtime test: no 3.13+ interpreter found");
+    let Some(python) = common::python(PythonVersion::PY313) else {
         return;
     };
     run_program(&python, JUST_FLOAT_PROGRAM);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_target_another_lowering_rewrites_checks_correctly_at_runtime() {
-    let Some(python) = python_supporting(PEP695_PROBE) else {
-        eprintln!("skipping lowered-target runtime test: no PEP 695-capable interpreter found");
+    let Some(python) = common::python(PythonVersion::PY39) else {
         return;
     };
     run_program(&python, LOWERED_TARGETS_PROGRAM);
