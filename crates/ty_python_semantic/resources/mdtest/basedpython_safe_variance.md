@@ -322,7 +322,7 @@ class Box[T](NamedTuple):
     value: T
 
 class Shadow[T](Box[T]):
-    _replace: T
+    _replace: T  # error: [invalid-attribute-override]
 
 def f(shadow: Shadow[int]):
     reveal_type(shadow._replace)  # revealed: object

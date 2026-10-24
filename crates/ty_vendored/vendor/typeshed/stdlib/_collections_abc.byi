@@ -116,10 +116,8 @@ protocol Awaitable[out Element]:
 
 # Non-default variations to accommodate coroutines, and `AwaitableGenerator` having a 4th type parameter.
 
-class Coroutine[out Yield, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd]):
-    __name__: str
-    __qualname__: str
-
+@runtime_checkable
+protocol Coroutine[out Yield, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd]):
     abstract def send(self, value: SendT_nd, /) -> Yield:
         """Send a value into the coroutine.
         Return next yielded value or raise StopIteration.
@@ -497,7 +495,7 @@ final class dict_keys[out Key, out Value](KeysView[Key]):  # undocumented
 
     __hash__: ClassVar[None]
     if sys.version_info >= (3, 13):
-        def isdisjoint(self, other: object, /) -> bool:
+        override def isdisjoint(self, other: object, /) -> bool:
             """Return True if the view and the given iterable have a null intersection."""
 
     let mapping: MappingProxyType[Key, Value]
@@ -515,7 +513,7 @@ final class dict_items[out Key, out Value](ItemsView[Key, Value]):  # undocument
 
     __hash__: ClassVar[None]
     if sys.version_info >= (3, 13):
-        def isdisjoint(self, other: object, /) -> bool:
+        override def isdisjoint(self, other: object, /) -> bool:
             """Return True if the view and the given iterable have a null intersection."""
 
     let mapping: MappingProxyType[Key, Value]

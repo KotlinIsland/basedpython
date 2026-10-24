@@ -13,8 +13,7 @@ use ty_python_core::ProgramFile;
 use ty_python_semantic::lint::LintId;
 use ty_python_semantic::suppress_single;
 use ty_python_semantic::types::{
-    MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNDEFINED_REVEAL, UNRESOLVED_IMPORT,
-    UNRESOLVED_REFERENCE,
+    MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT, UNRESOLVED_REFERENCE,
 };
 
 /// A `QuickFix` Code Action
@@ -86,9 +85,7 @@ pub fn code_actions(
     let mut actions = Vec::new();
 
     // Suggest imports/qualifications for unresolved references (often ideal)
-    let is_unresolved_reference =
-        lint_id == LintId::of(&UNRESOLVED_REFERENCE) || lint_id == LintId::of(&UNDEFINED_REVEAL);
-    if is_unresolved_reference
+    if lint_id == LintId::of(&UNRESOLVED_REFERENCE)
         && let Some(import_quick_fix) = unresolved_fixes(db, file, diagnostic_range)
     {
         actions.extend(import_quick_fix);
@@ -149,8 +146,8 @@ mod tests {
     use insta::assert_snapshot;
     use ruff_db::{
         diagnostic::{
-            Annotation, Diagnostic, DiagnosticFormat, DiagnosticId, DisplayDiagnosticConfig,
-            LintName, Span, SubDiagnostic,
+            Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, LintName, Span,
+            SubDiagnostic,
         },
         files::{File, system_path_to_file},
         system::{DbWithWritableSystem, SystemPathBuf},
@@ -716,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn undefined_reveal_type() {
+    fn add_ignore_undefined_reveal_type() {
         let test = CodeActionTest::with_source(
             r#"
             <START>reveal_type<END>(1)
@@ -724,28 +721,6 @@ mod tests {
         );
 
         assert_snapshot!(test.code_actions(&UNDEFINED_REVEAL), @"
-        info[code-action]: import typing.reveal_type
-         --> main.py:2:1
-          |
-        2 | reveal_type(1)
-          | ^^^^^^^^^^^
-        help: This is a preferred code action
-          |
-        1 + from typing import reveal_type
-        2 |
-          |
-
-        info[code-action]: import typing_extensions.reveal_type
-         --> main.py:2:1
-          |
-        2 | reveal_type(1)
-          | ^^^^^^^^^^^
-        help: This is a preferred code action
-          |
-        1 + from typing_extensions import reveal_type
-        2 |
-          |
-
         info[code-action]: Ignore 'undefined-reveal' for this line
          --> main.py:2:1
           |
@@ -1023,6 +998,37 @@ mod tests {
         ");
     }
 
+    #[test]
+    fn unresolved_namespace_descendant() {
+        let mut test = CodeActionTest::with_source("<START>NamespaceReport<END>()");
+        test.db
+            .write_file("acme/reports.py", "class NamespaceReport: ...")
+            .expect("write unopened namespace descendant");
+        assert_snapshot!(test.code_actions(&UNRESOLVED_REFERENCE), @"
+        info[code-action]: import acme.reports.NamespaceReport
+         --> main.py:1:1
+          |
+        1 | NamespaceReport()
+          | ^^^^^^^^^^^^^^^
+        help: This is a preferred code action
+        help: This is the only import that resolves the name
+          |
+        1 + from acme.reports import NamespaceReport
+        2 | NamespaceReport()
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' for this line
+         --> main.py:1:1
+          |
+        1 | NamespaceReport()
+          | ^^^^^^^^^^^^^^^
+          |
+          - NamespaceReport()
+        1 + NamespaceReport()  # ty: ignore[unresolved-reference]
+          |
+        ");
+    }
+
     struct CodeActionTest {
         db: ty_project::TestDb,
         file: File,
@@ -1069,10 +1075,7 @@ mod tests {
 
             let mut buf = String::new();
 
-            let config = DisplayDiagnosticConfig::new("ty")
-                .color(false)
-                .context(0)
-                .format(DiagnosticFormat::Full);
+            let config = DisplayDiagnosticConfig::new("ty").color(false).context(0);
 
             // every fixture this harness writes is python; the template actions
             // have their own tests

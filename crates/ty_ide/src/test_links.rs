@@ -21,15 +21,14 @@ use ruff_db::source::source_text;
 use ruff_db::system::{SystemPath, SystemPathBuf};
 use ruff_diagnostics::Edit;
 use ruff_python_ast::{self as ast};
-use ruff_python_codegen::Stylist;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_python_core::ProgramFile;
 use ty_python_core::program::Program;
 use ty_python_semantic::{CollectedTest, collected_pytest_tests};
 
-use crate::importer::{ImportRequest, Importer};
 use crate::{CallHierarchyItem, Db, SymbolKind, incoming_calls, outgoing_calls};
+use ty_python_semantic::importer::{ImportRequest, Importer};
 
 /// a test, or a subject a test exercises
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,8 +506,7 @@ fn test_directory(db: &dyn Db, file: ProgramFile<'_>) -> SystemPathBuf {
 fn import_edit(db: &dyn Db, file: ProgramFile<'_>, module: &str, name: &str) -> Option<Edit> {
     let parsed: ParsedModuleRef = parsed_module(db, file.python_file(db)).load(db);
     let source = source_text(db, file.file(db));
-    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
-    let importer = Importer::new(db, &stylist, file, source.as_str(), &parsed);
+    let importer = Importer::new(db, file, &parsed);
     // in scope at the end of the module, which is where a new test goes
     let end = TextSize::of(source.as_str());
     let members = importer.members_in_scope_at(parsed.syntax().into(), end);

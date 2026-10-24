@@ -70,18 +70,18 @@ Module(
                         ExprCompare {
                             node_index: NodeIndex(None),
                             range: 13..19,
-                            left: Name(
-                                ExprName {
-                                    node_index: NodeIndex(None),
-                                    range: 13..14,
-                                    id: Name("x"),
-                                    ctx: Load,
-                                },
-                            ),
                             ops: [
                                 In,
                             ],
-                            comparators: [
+                            operands: [
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 13..14,
+                                        id: Name("x"),
+                                        ctx: Load,
+                                    },
+                                ),
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
@@ -109,7 +109,7 @@ Module(
 
   |
 1 | (x := 1, for x in y)
-  |              ^ Syntax Error: Expected `)`, found name
+  |              ^ Syntax Error: Expected `)`, found identifier
 
 
   |

@@ -124,7 +124,7 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
     def __ior__(self, other: Iterable[(Key, Value)]) -> Self
 
     if sys.version_info >= (3, 12):
-        def get(self, key: Key, default: None = None) -> Value | None
+        override def get(self, key: Key, default: None = None) -> Value | None
         def get(self, key: Key, default: Value) -> Value
         def get[Element](self, key: Key, default: Element) -> Value | Element
 
@@ -155,12 +155,12 @@ class UserList[in out Element](MutableSequence[Element]):
     def __add__(self, other: Iterable[Element]) -> Self
     def __radd__(self, other: Iterable[Element]) -> Self
     override def __iadd__(self, other: Iterable[Element]) -> Self
-    def __mul__(self, n: int) -> Self
-    def __rmul__(self, n: int) -> Self
-    def __imul__(self, n: int) -> Self
+    def __mul__(self, n: SupportsIndex) -> Self
+    def __rmul__(self, n: SupportsIndex) -> Self
+    def __imul__(self, n: SupportsIndex) -> Self
     override def append(self, item: Element)
-    override def insert(self, i: int, item: Element)
-    override def pop(self, i: int = -1) -> Element
+    override def insert(self, i: SupportsIndex, item: Element)
+    override def pop(self, i: SupportsIndex = -1) -> Element
     override def remove(self, item: Element)
     def copy(self) -> Self
     def __copy__(self) -> Self
@@ -196,21 +196,23 @@ class UserString(Sequence[UserString]):
     override def __reversed__(self) -> Iterator[Self]
     def __add__(self, other: object) -> Self
     def __radd__(self, other: object) -> Self
-    def __mul__(self, n: int) -> Self
-    def __rmul__(self, n: int) -> Self
+    def __mul__(self, n: SupportsIndex) -> Self
+    def __rmul__(self, n: SupportsIndex) -> Self
     def __mod__(self, args: dynamic) -> Self
     def __rmod__(self, template: object) -> Self
     def capitalize(self) -> Self
     def casefold(self) -> Self
-    def center(self, width: int, *args: dynamic) -> Self
-    override def count(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
+    def center(self, width: SupportsIndex, *args: dynamic) -> Self
+    override def count(self, sub: str | UserString, start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize) -> int
     def encode(self: UserString, encoding: str? = "utf-8", errors: str? = "strict") -> bytes
-    def endswith(self, suffix: str | (*: str), start: int? = 0, end: int? = sys.maxsize) -> bool
-    def expandtabs(self, tabsize: int = 8) -> Self
-    def find(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
+    def endswith(
+        self, suffix: str | (*: str), start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize
+    ) -> bool
+    def expandtabs(self, tabsize: SupportsIndex = 8) -> Self
+    def find(self, sub: str | UserString, start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize) -> int
     def format(self, *args: dynamic, **kwds: dynamic) -> str
     def format_map(self, mapping: Mapping[str, dynamic]) -> str
-    override def index(self, sub: str, start: int = 0, end: int = sys.maxsize) -> int
+    override def index(self, sub: str, start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize) -> int
     def isalpha(self) -> bool
     def isalnum(self) -> bool
     def isdecimal(self) -> bool
@@ -224,29 +226,31 @@ class UserString(Sequence[UserString]):
     def isupper(self) -> bool
     def isascii(self) -> bool
     def join(self, seq: Iterable[str]) -> str
-    def ljust(self, width: int, *args: dynamic) -> Self
+    def ljust(self, width: SupportsIndex, *args: dynamic) -> Self
     def lower(self) -> Self
     def lstrip(self, chars: str? = None) -> Self
     maketrans = str.maketrans
     def partition(self, sep: str) -> (str, str, str)
     def removeprefix(self, prefix: str | UserString, /) -> Self
     def removesuffix(self, suffix: str | UserString, /) -> Self
-    def replace(self, old: str | UserString, new: str | UserString, maxsplit: int = -1) -> Self
-    def rfind(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
-    def rindex(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
-    def rjust(self, width: int, *args: dynamic) -> Self
+    def replace(self, old: str | UserString, new: str | UserString, maxsplit: SupportsIndex = -1) -> Self
+    def rfind(self, sub: str | UserString, start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize) -> int
+    def rindex(self, sub: str | UserString, start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize) -> int
+    def rjust(self, width: SupportsIndex, *args: dynamic) -> Self
     def rpartition(self, sep: str) -> (str, str, str)
     def rstrip(self, chars: str? = None) -> Self
-    def split(self, sep: str? = None, maxsplit: int = -1) -> list[str]
-    def rsplit(self, sep: str? = None, maxsplit: int = -1) -> list[str]
+    def split(self, sep: str? = None, maxsplit: SupportsIndex = -1) -> list[str]
+    def rsplit(self, sep: str? = None, maxsplit: SupportsIndex = -1) -> list[str]
     def splitlines(self, keepends: bool = False) -> list[str]
-    def startswith(self, prefix: str | (*: str), start: int? = 0, end: int? = sys.maxsize) -> bool
+    def startswith(
+        self, prefix: str | (*: str), start: SupportsIndex? = 0, end: SupportsIndex? = sys.maxsize
+    ) -> bool
     def strip(self, chars: str? = None) -> Self
     def swapcase(self) -> Self
     def title(self) -> Self
     def translate(self, *args: dynamic) -> Self
     def upper(self) -> Self
-    def zfill(self, width: int) -> Self
+    def zfill(self, width: SupportsIndex) -> Self
 
 @disjoint_base
 class deque[in out Element](MutableSequence[Element]):
@@ -275,10 +279,10 @@ class deque[in out Element](MutableSequence[Element]):
     def extendleft(self, iterable: Iterable[Element], /):
         """Extend the left side of the deque with elements from the iterable."""
 
-    override def insert(self, i: int, x: Element, /):
+    override def insert(self, i: SupportsIndex, x: Element, /):
         """Insert value before index."""
 
-    override def index(self, x: Element, start: int = 0, stop: int = ..., /) -> int:
+    override def index(self, x: Element, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int:
         """Return first index of value.
 
         Raises ValueError if the value is not present.
@@ -295,7 +299,7 @@ class deque[in out Element](MutableSequence[Element]):
     override def remove(self, value: Element, /):
         """Remove first occurrence of value."""
 
-    def rotate(self, n: int = 1, /):
+    def rotate(self, n: SupportsIndex = 1, /):
         """Rotate the deque n steps to the right.  If n is negative, rotates left."""
 
     def __copy__(self) -> Self:
@@ -327,13 +331,13 @@ class deque[in out Element](MutableSequence[Element]):
     def __add__(self, value: Self, /) -> Self:
         """Return self+value."""
 
-    def __mul__(self, value: int, /) -> Self:
+    def __mul__(self, value: SupportsIndex, /) -> Self:
         """Return self*value."""
 
-    def __rmul__(self, value: int, /) -> Self:
+    def __rmul__(self, value: SupportsIndex, /) -> Self:
         """Return value*self."""
 
-    def __imul__(self, value: int, /) -> Self:
+    def __imul__(self, value: SupportsIndex, /) -> Self:
         """Implement self*=value."""
 
     def __lt__(self, value: deque[Element], /) -> bool
@@ -702,21 +706,21 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     override def __eq__(self, value: object, /) -> bool
 
     if sys.version_info >= (3, 15):
-        def __or__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
+        override def __or__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
             """Return self|value."""
         def __or__[T1, T2](self, value: dict[T1, T2] | frozendict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
-        def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
+        override def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
             """Return value|self."""
         def __ror__[T1, T2](
             self, value: dict[T1, T2] | frozendict[T1, T2], /
         ) -> OrderedDict[Key | T1, Value | T2]
     else:
-        override def __or__(self, value: dict[Key, Value], /) -> Self:
+        def __or__(self, value: dict[Key, Value], /) -> Self:
             """Return self|value."""
         def __or__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
-        override def __ror__(self, value: dict[Key, Value], /) -> Self:
+        def __ror__(self, value: dict[Key, Value], /) -> Self:
             """Return value|self."""
         def __ror__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 

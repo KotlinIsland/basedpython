@@ -473,7 +473,7 @@ def stored_globally(x):
     global stored
     stored = x.name
 
-# revealed: def closed_over(x: some protocol(let name: Unknown)) -> def inner() -> Unknown
+# revealed: def closed_over(x: some protocol(let name: Unknown)) -> (() -> Unknown)
 reveal_type(closed_over)
 reveal_type(in_a_lambda)  # revealed: def in_a_lambda(x: some protocol(let name: Unknown)) -> (() -> Unknown)
 reveal_type(stored_globally)  # revealed: def stored_globally(x: some protocol(let name: Unknown))
@@ -1616,11 +1616,14 @@ python-version = "3.13"
 infer-unannotated-signatures = false
 ```
 
+turned off, a parameter with no annotation is gradual again. the return type is still recovered from
+the body: that is `return-type-inference`'s to turn off
+
 ```py
 def f(x):
     return 1
 
-reveal_type(f)  # revealed: def f(x) -> Unknown
+reveal_type(f)  # revealed: def f(x) -> Literal[1]
 
 f("anything")  # ok
 ```
@@ -1654,6 +1657,7 @@ python-version = "3.13"
 
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 ```
 
 a `.pyi` in the user's own tree is their code, and its unannotated forms answer the way the rest of
@@ -2048,6 +2052,7 @@ python-version = "3.12"
 
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 ```
 
 ```py
@@ -2110,9 +2115,10 @@ python-version = "3.12"
 
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 ```
 
-with the option off, the gradual guarantee holds throughout.
+with the options off, the gradual guarantee holds throughout.
 
 ```py
 from typing import ClassVar
@@ -2344,7 +2350,7 @@ from mod import f
 reveal_type(f())  # revealed: None
 ```
 
-## a redundant `-> None`, with the option off
+## a redundant `-> None`, with the options off
 
 ```toml
 [environment]
@@ -2352,6 +2358,7 @@ python-version = "3.12"
 
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 
 [rules]
 redundant-return-annotation = "warn"

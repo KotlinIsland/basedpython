@@ -55,14 +55,14 @@ impl BackgroundDocumentRequestHandler for CodeActionResolveRequestHandler {
                 error: anyhow::anyhow!("the document changed since the refactoring was offered"),
             });
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Err(invalid_params(
                 "the document is not a file the server knows",
             ));
         };
-        let Some(range) = data
-            .range
-            .to_text_range(db, file, snapshot.uri(), snapshot.encoding())
+        let Some(range) =
+            data.range
+                .to_text_range(db, file, snapshot.document().uri(), snapshot.encoding())
         else {
             return Err(invalid_params(
                 "the refactoring's range is not in the document",

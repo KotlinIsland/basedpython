@@ -487,7 +487,9 @@ use crate::types::may_exist_at_runtime;
 mod collection;
 mod fixtures;
 
-pub use collection::{CollectedTest, CollectedTestClass, collected_pytest_tests};
+pub use collection::{
+    CollectedTest, CollectedTestClass, PytestTest, collected_pytest_tests, pytest_tests_in_file,
+};
 pub use fixtures::{
     FixtureBinding, FixtureExposure, FixtureNameSource, fixture_bindings_for_parameter,
     fixture_exposures_for_definition, pytest_global_plugin_files,

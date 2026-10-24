@@ -186,13 +186,13 @@ impl BackgroundDocumentRequestHandler for TestSubjectsRequestHandler {
         {
             return Ok(None);
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         let Some(offset) =
             params
                 .position
-                .to_text_size(db, file, snapshot.uri(), snapshot.encoding())
+                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
         else {
             return Ok(None);
         };
@@ -237,7 +237,7 @@ impl BackgroundDocumentRequestHandler for SubjectTestsRequestHandler {
         {
             return Ok(None);
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         if !db.project().files(db).contains(file) {
@@ -246,7 +246,7 @@ impl BackgroundDocumentRequestHandler for SubjectTestsRequestHandler {
         let Some(offset) =
             params
                 .position
-                .to_text_size(db, file, snapshot.uri(), snapshot.encoding())
+                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
         else {
             return Ok(None);
         };

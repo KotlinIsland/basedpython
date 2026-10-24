@@ -1047,10 +1047,10 @@ pub(crate) fn loop_targets(body: &[Stmt]) -> HashSet<String> {
         for expr in statement_expressions(stmt) {
             visit_expressions(expr, &mut |child| {
                 let generators = match child {
-                    Expr::ListComp(node) => &node.generators,
-                    Expr::SetComp(node) => &node.generators,
-                    Expr::DictComp(node) => &node.generators,
-                    Expr::Generator(node) => &node.generators,
+                    Expr::ListComp(node) => &node.generators[..],
+                    Expr::SetComp(node) => &node.generators[..],
+                    Expr::DictComp(node) => &node.generators[..],
+                    Expr::Generator(node) => &node.generators[..],
                     _ => return,
                 };
                 for generator in generators {

@@ -86,6 +86,29 @@ def use() -> None:
     x.fn  # error: [unresolved-attribute]
 ```
 
+## an imported receiver callable
+
+an import states the name's type the way a declaration does, so a receiver callable imported from
+another module can be called through its receiver, and a later rebinding in the same scope does not
+take that away
+
+`lib.by`:
+
+```by
+shout: str.() -> str = lambda text: text.upper()
+```
+
+```by
+from typing import reveal_type
+
+def use() -> None:
+    from lib import shout
+
+    reveal_type("a".shout())  # revealed: str
+    shout = shout
+    reveal_type("b".shout())  # revealed: str
+```
+
 ## calling a receiver callable directly needs the receiver
 
 ```by

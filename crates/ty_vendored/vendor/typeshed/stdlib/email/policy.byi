@@ -2,6 +2,7 @@
 code that adds all the email6 features.
 """
 
+from _typeshed import Incomplete
 from collections.abc import Callable
 from email._policybase import Compat32 as Compat32, Policy as Policy, _MessageFactory, _MessageT, compat32 as compat32
 from email.contentmanager import ContentManager
@@ -123,38 +124,38 @@ class EmailPolicy(Policy[_MessageT]):
 
     utf8: bool
     refold_source: str
-    header_factory: (str, dynamic) -> dynamic
+    header_factory: (str, Incomplete) -> Incomplete
     content_manager: ContentManager
 
     init(
         self: EmailPolicy[EmailMessage],
         *,
-        max_line_length: int? = ...,
-        linesep: str = ...,
-        cte_type: str = ...,
-        raise_on_defect: bool = ...,
-        mangle_from_: bool = ...,
+        max_line_length: int? = 78,
+        linesep: str = "\n",
+        cte_type: str = "8bit",
+        raise_on_defect: bool = False,
+        mangle_from_: bool = ...,  # default depends on sub-class
         message_factory: None = None,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
-        verify_generated_headers: bool = ...,
-        utf8: bool = ...,
-        refold_source: str = ...,
+        verify_generated_headers: bool = True,
+        utf8: bool = False,
+        refold_source: str = "long",
         header_factory: (str, str) -> str = ...,
         content_manager: ContentManager = ...,
     )
     init(
         self,
         *,
-        max_line_length: int? = ...,
-        linesep: str = ...,
-        cte_type: str = ...,
-        raise_on_defect: bool = ...,
-        mangle_from_: bool = ...,
-        message_factory: _MessageFactory[_MessageT]? = ...,
+        max_line_length: int? = 78,
+        linesep: str = "\n",
+        cte_type: str = "8bit",
+        raise_on_defect: bool = False,
+        mangle_from_: bool = ...,  # default depends on sub-class
+        message_factory: _MessageFactory[_MessageT],
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
-        verify_generated_headers: bool = ...,
-        utf8: bool = ...,
-        refold_source: str = ...,
+        verify_generated_headers: bool = True,
+        utf8: bool = False,
+        refold_source: str = "long",
         header_factory: (str, str) -> str = ...,
         content_manager: ContentManager = ...,
     )
@@ -173,7 +174,7 @@ class EmailPolicy(Policy[_MessageT]):
 
         """
 
-    override def header_store_parse(self, name: str, value: dynamic) -> (str, dynamic):
+    override def header_store_parse(self, name: str, value) -> (str, Incomplete):
         """Given the header name and the value provided by the application
         program, return the (name, value) that should be stored in the model.
         The name is returned unchanged.  If the input value has a 'name'
@@ -185,7 +186,7 @@ class EmailPolicy(Policy[_MessageT]):
 
         """
 
-    override def header_fetch_parse(self, name: str, value: str) -> dynamic:
+    override def header_fetch_parse(self, name: str, value: str):
         """Given the header name and the value from the model, return the value
         to be returned to the application program that is requesting that
         header.  The value passed in by the email package may contain
@@ -196,11 +197,11 @@ class EmailPolicy(Policy[_MessageT]):
         Otherwise the name and the value with any linesep characters removed
         are passed to the header_factory method, and the resulting custom
         header object is returned.  Any surrogateescaped bytes get turned
-        into the unicode unknown-character glyph.
+        into the Unicode unknown-character glyph.
 
         """
 
-    override def fold(self, name: str, value: str) -> dynamic:
+    override def fold(self, name: str, value: str):
         """Given the header name and the value from the model, return a string
         containing linesep characters that implement the folding of the header
         according to the policy controls.  The value passed in by the email
@@ -241,7 +242,7 @@ class EmailPolicy(Policy[_MessageT]):
         data consists of single byte characters or multibyte characters.
 
         If utf8 is true, headers are encoded to utf8, otherwise to ascii with
-        non-ASCII unicode rendered as encoded words.
+        non-ASCII characters rendered as encoded words.
 
         """
 

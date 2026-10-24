@@ -143,7 +143,7 @@ fn get_call_expr<'ast>(
         .tokens()
         .at_offset(token_offset)
         .max_by_key(|token| match token.kind() {
-            TokenKind::Name
+            TokenKind::Identifier
             | TokenKind::String
             | TokenKind::Complex
             | TokenKind::Float
@@ -299,7 +299,6 @@ mod tests {
     use insta::assert_snapshot;
 
     use crate::MarkupKind;
-    use crate::docstring::Docstring;
     use crate::signature_help::SignatureHelpInfo;
     use crate::tests::{CursorTest, cursor_test};
 
@@ -345,7 +344,7 @@ mod tests {
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
 
@@ -426,7 +425,9 @@ mod tests {
             .and_then(|result| result.signatures.into_iter().next())
             .and_then(|signature| signature.documentation);
         assert_eq!(
-            documentation.as_ref().map(Docstring::render_plaintext),
+            documentation
+                .as_ref()
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some("Factory method documentation.\n".to_string())
         );
     }
@@ -669,6 +670,128 @@ def ab(a: str):
 
         -------------- active parameter -------------
         a: str
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_literal_list_after_keyword() {
+        let test = cursor_test(
+            r#"
+            def f(x: int, *, y: int): pass
+            f(x=1, *[2]<CURSOR>)
+            "#,
+        );
+
+        // `*[2]` still supplies the positional parameter `x`, even though `x=1` also supplies it.
+        // Highlight that binding despite the duplicate assignment.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, *, y: int) -> None
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_literal_dictionary_key_order() {
+        let test = cursor_test(
+            r#"
+            def f(x: int, *, y: int): pass
+            f(**{'y': 2, 'x': 1}<CURSOR>)
+            "#,
+        );
+
+        // Treat the unpacking as one source argument and highlight its first matched parameter.
+        // The first key is `y`, so `y` is active even though `x` appears first in the signature.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, *, y: int) -> None
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        y: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_overload_literal_list_arity() {
+        let test = cursor_test(
+            r#"
+            from typing import overload
+
+            @overload
+            def f(x: int) -> int: ...
+            @overload
+            def f(x: int, y: str) -> str: ...
+            def f(x: int, y: str = "") -> int | str: ...
+
+            f(*[1, "two"]<CURSOR>)
+            "#,
+        );
+
+        // The two list elements select the two-parameter overload. The unpacking is one source
+        // argument, so highlight its first matched parameter, `x`, in both signatures.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, y: str) -> str
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+
+        =============== other signature =============
+        (x: int) -> int
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_overload_literal_dictionary_arity() {
+        let test = cursor_test(
+            r#"
+            from typing import overload
+
+            @overload
+            def f(*, x: int) -> int: ...
+            @overload
+            def f(*, x: int, y: str) -> str: ...
+            def f(*, x: int, y: str = "") -> int | str: ...
+
+            f(**{"x": 1, "y": "two"}<CURSOR>)
+            "#,
+        );
+
+        // The two known keys select the overload that accepts both `x` and `y`. Highlight `x` in
+        // both signatures because it is the first key supplied by this single unpacked argument.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (*, x: int, y: str) -> str
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+
+        =============== other signature =============
+        (*, x: int) -> int
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
         ---------------------------------------------
         ");
     }
@@ -964,7 +1087,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -1150,7 +1273,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             None
         );
     }
@@ -1447,7 +1570,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -1478,7 +1601,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -1517,7 +1640,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some("The int overload\n".to_string())
         );
     }
@@ -1556,7 +1679,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some("The real implementation\n".to_string())
         );
     }
@@ -1625,7 +1748,7 @@ def ab(a: int, *, c: int):
                     docs = signature
                         .documentation
                         .as_ref()
-                        .map(Docstring::render_plaintext)
+                        .map(|docstring| docstring.render(MarkupKind::PlainText))
                         .unwrap_or_default(),
                 )
                 .unwrap();
@@ -1663,7 +1786,7 @@ def ab(a: int, *, c: int):
                     docs = signature
                         .documentation
                         .as_ref()
-                        .map(Docstring::render_plaintext)
+                        .map(|docstring| docstring.render(MarkupKind::PlainText))
                         .unwrap_or_default(),
                 )
                 .unwrap();

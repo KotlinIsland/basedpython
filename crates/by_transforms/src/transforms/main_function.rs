@@ -588,13 +588,10 @@ fn is_dunder_main_guard(test: &Expr) -> bool {
     let Expr::Compare(cmp) = test else {
         return false;
     };
-    let [CmpOp::Eq] = cmp.ops.as_ref() else {
+    let Some((left, CmpOp::Eq, right)) = cmp.as_single() else {
         return false;
     };
-    let [right] = cmp.comparators.as_ref() else {
-        return false;
-    };
-    let operands = [cmp.left.as_ref(), right];
+    let operands = [left, right];
     operands.iter().copied().any(|e| is_name(e, "__name__"))
         && operands.iter().copied().any(|e| is_str(e, "__main__"))
 }

@@ -441,10 +441,10 @@ impl Walk<'_> {
                 found
             }
             Expr::Compare(compare) => {
-                if let Some(found) = self.expr(&compare.left) {
+                if let Some(found) = self.expr(compare.first_operand()) {
                     return Some(found);
                 }
-                let (first, rest) = compare.comparators.split_first()?;
+                let (first, rest) = compare.comparators().split_first()?;
                 if let Some(found) = self.expr(first) {
                     return Some(found);
                 }

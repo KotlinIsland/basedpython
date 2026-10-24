@@ -202,7 +202,7 @@ or a generator hands back a coroutine or a generator rather than what its
 `return`s say, and a predicate that calls itself would be proving itself
 
 this is recovered alongside the return type itself, so it follows
-[`sound-types`](sound-types.md) and `infer-unannotated-signatures`. an
+[`sound-types`](sound-types.md) and `return-type-inference`. an
 annotation is the whole of what a function declares: nothing is recovered
 beside one, and `-> bool` is a `def` saying its result is just a `bool`. an
 overridden base is the same — except for a narrowing return type, which is a

@@ -6,6 +6,17 @@
 #
 # [tool.uv.sources]
 # mypy-primer = { git = "https://github.com/hauntsaninja/mypy_primer" }
+#
+# # mypy-primer is built from source, and the workspace requires every build
+# # dependency to be pinned by hash. a script is not part of the workspace, so it
+# # pins its own, as `setup_primer_project.py` does
+# [tool.uv]
+# build-constraint-dependencies = [
+#     { requirement = "setuptools==84.0.0", hashes = [
+#         "sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+#         "sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73",
+#     ] },
+# ]
 # ///
 
 """Round-trip ecosystem check for the basedpython transpiler.
@@ -82,7 +93,7 @@ from signal import SIGINT, SIGTERM
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +522,7 @@ async def check_project(
 
 
 @asynccontextmanager
-async def setup_primer_project(name: str, parent: Path) -> AsyncIterator[Path]:
+async def setup_primer_project(name: str, parent: Path) -> AsyncGenerator[Path, None]:
     """Clone a mypy-primer project into ``parent / name`` if not already there.
 
     `by build` resolves third-party types from the ambient Python environment

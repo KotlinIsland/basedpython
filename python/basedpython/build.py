@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
 # the backend `uv_build` version this was written against. it is requested at
 # build time rather than depended on outright: `by check` and `by run` are the
@@ -195,7 +195,7 @@ def build_sdist(
 
 
 @contextmanager
-def _staged(python_version: str | None = None) -> Iterator[Path]:
+def _staged(python_version: str | None = None) -> Generator[Path, None, None]:
     """The project, built as python, in a directory that lasts for one hook."""
     with tempfile.TemporaryDirectory() as directory:
         staging = Path(directory) / "build"
@@ -478,7 +478,7 @@ def _delegate(
 
 
 @contextmanager
-def _scripts_on_path() -> Iterator[None]:
+def _scripts_on_path() -> Generator[None, None, None]:
     """Make this environment's console scripts findable by name.
 
     `uv_build` shells out to a `uv-build` executable it finds on `PATH`. A

@@ -63,7 +63,6 @@ type _Marshallable = (
     | str
     | bytes
     | bytearray
-    | None
     | (*: _Marshallable)
     # Ideally we'd use _Marshallable for list and dict, but invariance makes that impractical
     | list[dynamic]
@@ -71,6 +70,7 @@ type _Marshallable = (
     | datetime
     | DateTime
     | Binary
+    | None
 )
 private type XMLDate = int | datetime | (*: int) | time.struct_time
 private type HostType = (str, dict[str, str]) | str

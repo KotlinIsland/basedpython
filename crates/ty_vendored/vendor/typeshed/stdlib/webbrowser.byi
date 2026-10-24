@@ -90,7 +90,7 @@ if sys.version_info < (3, 12):
         raise_opts: list[str]
 
     class Grail(BaseBrowser):
-        override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+        def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
 class Chrome(UnixBrowser):
     """Launcher class for Google Chrome browser."""
@@ -129,7 +129,7 @@ if sys.platform == "darwin":
             """
 
             init(self, name: str)
-            override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+            def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
     if sys.version_info >= (3, 15):
         class MacOS(BaseBrowser):
@@ -148,7 +148,7 @@ if sys.platform == "darwin":
             to -a.
             """
 
-            def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+            override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
         @deprecated("Deprecated since Python 3.15; will be removed in Python 3.17. Use `MacOS` instead.")
         class MacOSXOSAScript(BaseBrowser):  # In runtime this class does not have `name` and `basename`
@@ -157,7 +157,7 @@ if sys.platform == "darwin":
             else:
                 def __init__(self, name: str) -> None
 
-            def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+            override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
     else:
         class MacOSXOSAScript(BaseBrowser):  # In runtime this class does not have `name` and `basename`
@@ -166,4 +166,4 @@ if sys.platform == "darwin":
             else:
                 def __init__(self, name: str) -> None
 
-            override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+            def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool

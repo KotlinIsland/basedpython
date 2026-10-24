@@ -607,7 +607,7 @@ pub(crate) mod tests {
 
             let mut metadata = ProjectMetadata::new("test", root.clone());
             if !rules.is_empty() {
-                metadata.apply_override_options(Options {
+                metadata.set_override_options(Options {
                     rules: Some(
                         rules
                             .iter()
@@ -646,6 +646,7 @@ pub(crate) mod tests {
                 python_version: PythonVersionWithSource::default(),
                 python_platform: PythonPlatform::default(),
                 search_paths,
+                python_environment: Ok(None),
             };
             Program::from_settings(&db, &settings);
             // a project-level query (`has_django`) resolves against the project's own

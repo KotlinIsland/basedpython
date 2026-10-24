@@ -202,7 +202,7 @@ class CustomLenEnum(Enum):
     NO = 0
     YES = 1
 
-    def __len__(self):
+    def __len__(self) -> int:
         return 0
 
 reveal_type(bool(NormalEnum.NO))  # revealed: Literal[True]
@@ -227,8 +227,8 @@ reveal_type(bool(AmbiguousEnum2.YES))  # revealed: bool
 reveal_type(bool(AmbiguousEnum2.NO))  # revealed: bool
 reveal_type(bool(AmbiguousEnum2.YES))  # revealed: bool
 
-reveal_type(bool(CustomLenEnum.NO))  # revealed: Literal[False]
-reveal_type(bool(CustomLenEnum.YES))  # revealed: Literal[False]
+reveal_type(bool(CustomLenEnum.NO))  # revealed: bool
+reveal_type(bool(CustomLenEnum.YES))  # revealed: bool
 ```
 
 ## Enums with a data type
@@ -357,4 +357,15 @@ class AllKeysNotRequired(TypedDict):
 def _(a: AllKeysNotRequired) -> None:
     # This should be `bool`. `Literal[True]` would be wrong as `{}` is a valid value.
     reveal_type(bool(a))  # revealed: bool
+```
+
+## Uninhabited values
+
+Calling `bool` with an argument of type `Never` retains the constructor's return type.
+
+```py
+from typing_extensions import Never
+
+def uninhabited(value: Never):
+    reveal_type(bool(value))  # revealed: bool
 ```

@@ -18,18 +18,18 @@ Module(
                         ExprCompare {
                             node_index: NodeIndex(None),
                             range: 0..7,
-                            left: Name(
-                                ExprName {
-                                    node_index: NodeIndex(None),
-                                    range: 0..1,
-                                    id: Name("x"),
-                                    ctx: Load,
-                                },
-                            ),
                             ops: [
                                 GtE,
                             ],
-                            comparators: [
+                            operands: [
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 0..1,
+                                        id: Name("x"),
+                                        ctx: Load,
+                                    },
+                                ),
                                 Starred(
                                     ExprStarred {
                                         node_index: NodeIndex(None),
@@ -59,18 +59,18 @@ Module(
                         ExprCompare {
                             node_index: NodeIndex(None),
                             range: 8..19,
-                            left: Name(
-                                ExprName {
-                                    node_index: NodeIndex(None),
-                                    range: 8..9,
-                                    id: Name("x"),
-                                    ctx: Load,
-                                },
-                            ),
                             ops: [
                                 NotIn,
                             ],
-                            comparators: [
+                            operands: [
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 8..9,
+                                        id: Name("x"),
+                                        ctx: Load,
+                                    },
+                                ),
                                 Starred(
                                     ExprStarred {
                                         node_index: NodeIndex(None),
@@ -104,18 +104,18 @@ Module(
                                 ExprCompare {
                                     node_index: NodeIndex(None),
                                     range: 22..27,
-                                    left: Name(
-                                        ExprName {
-                                            node_index: NodeIndex(None),
-                                            range: 22..23,
-                                            id: Name("x"),
-                                            ctx: Load,
-                                        },
-                                    ),
                                     ops: [
                                         Lt,
                                     ],
-                                    comparators: [
+                                    operands: [
+                                        Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 22..23,
+                                                id: Name("x"),
+                                                ctx: Load,
+                                            },
+                                        ),
                                         Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),
@@ -145,18 +145,18 @@ Module(
                                 ExprCompare {
                                     node_index: NodeIndex(None),
                                     range: 29..39,
-                                    left: Name(
-                                        ExprName {
-                                            node_index: NodeIndex(None),
-                                            range: 29..30,
-                                            id: Name("x"),
-                                            ctx: Load,
-                                        },
-                                    ),
                                     ops: [
                                         IsNot,
                                     ],
-                                    comparators: [
+                                    operands: [
+                                        Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 29..30,
+                                                id: Name("x"),
+                                                ctx: Load,
+                                            },
+                                        ),
                                         Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),

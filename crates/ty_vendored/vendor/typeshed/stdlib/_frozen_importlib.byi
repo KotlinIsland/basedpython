@@ -118,7 +118,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        override def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
+        def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """Find the built-in module.
 
             If 'path' is ever specified then the search is considered a failure.
@@ -164,7 +164,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
 
             """
 
-    static def create_module(spec: ModuleSpec) -> types.ModuleType?:
+    override static def create_module(spec: ModuleSpec) -> types.ModuleType?:
         """Create a built-in module"""
 
     override static def exec_module(module: types.ModuleType):
@@ -182,7 +182,7 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        override def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
+        def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """Find a frozen module.
 
             This method is deprecated.  Use find_spec() instead.
@@ -226,7 +226,7 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
 
             """
 
-    static def create_module(spec: ModuleSpec) -> types.ModuleType?:
+    override static def create_module(spec: ModuleSpec) -> types.ModuleType?:
         """Set __file__, if able."""
 
     override static def exec_module(module: types.ModuleType)

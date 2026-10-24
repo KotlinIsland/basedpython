@@ -220,8 +220,8 @@ exception inside the override, or opt that method out with `raises ...`
 
 only the nearest superclass defining the method is blamed, so a violation
 introduced part-way up a hierarchy is reported once rather than at every
-descendant. constructors are exempt, matching ty's existing policy for override
-compatibility
+descendant. a constructor is exempt unless it is written with `override`, matching
+ty's policy for override compatibility
 
 ## inlay hints
 

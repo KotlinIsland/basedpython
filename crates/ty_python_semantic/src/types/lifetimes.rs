@@ -553,7 +553,7 @@ fn argument_escapes<'db>(
     // (a bound method has already consumed `self`)
     let (function, bound) = match callee {
         Type::FunctionLiteral(function) => (function, 0usize),
-        Type::BoundMethod(method) => (method.function(db), 1usize),
+        Type::BoundMethod(method) if let Some(function) = method.function(db) => (function, 1usize),
         _ => return false,
     };
     let modifiers = function

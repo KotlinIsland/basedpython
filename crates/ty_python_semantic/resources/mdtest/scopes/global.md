@@ -324,7 +324,7 @@ known_false_value = 0
 
 def known_false_global_factory(flag: Literal[False]):
     global known_false_value
-    if flag:  # error: [redundant-condition] "This condition is always false"
+    if flag:
         known_false_value = "updated"
 
     class Nested:
@@ -617,7 +617,8 @@ Normal branching and merging rules apply to the shadowing behavior described in 
 section:
 
 ```py
-def flag(): ...
+def flag() -> bool:
+    return True
 
 x = 1
 
@@ -632,10 +633,10 @@ def foo():
         if flag():
             x = 3
             # The public type of `x` is shadowed here...
-            reveal_type(x)  # revealed: Never
+            reveal_type(x)  # revealed: Literal[3]
 
         # ...but still visible here.
-        reveal_type(x)  # revealed: Literal[1, 2]
+        reveal_type(x)  # revealed: Literal[3, 1, 2]
 ```
 
 ## Parameter defaults are evaluated before a function's body

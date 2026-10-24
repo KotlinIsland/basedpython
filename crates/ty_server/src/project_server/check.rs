@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ruff_db::Db as _;
 use ruff_db::diagnostic::{
-    DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, FileResolver, Input, Severity,
-    UnifiedFile,
+    DiagnosticId, DisplayDiagnosticConfig, FileResolver, Input, Severity, UnifiedFile,
 };
 use ruff_db::files::File;
 use ruff_db::system::SystemPath;
@@ -94,7 +93,6 @@ fn answer(db: &ProjectDatabase, request: &CheckRequest) -> Response {
 
     let terminal = db.project().settings(db).terminal();
     let config = DisplayDiagnosticConfig::new("ty")
-        .format(terminal.output_format.into())
         .color(request.color)
         .context(0);
     let resolver = RelativeTo {
@@ -110,7 +108,10 @@ fn answer(db: &ProjectDatabase, request: &CheckRequest) -> Response {
     }
 
     Response::Check(CheckResponse {
-        rendered: DisplayDiagnostics::new(&resolver, &config, &diagnostics).to_string(),
+        rendered: terminal
+            .output_format
+            .display(&resolver, &config, &diagnostics)
+            .to_string(),
         diagnostics: diagnostics.len(),
         human_readable: terminal.output_format.is_human_readable(),
         max_severity: max_severity.map(SeverityLevel::from),

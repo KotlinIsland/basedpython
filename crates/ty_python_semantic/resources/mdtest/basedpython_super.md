@@ -55,7 +55,7 @@ class B:
     b: str = "x"
 
 class C(A, B):
-    def f(self):
+    def f(self):  # error: [invalid-method-override]
         reveal_type(super.f())     # revealed: int
         reveal_type(super[A].f())  # revealed: int
         reveal_type(super[B].f())  # revealed: str

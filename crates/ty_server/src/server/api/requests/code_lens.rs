@@ -46,7 +46,7 @@ impl BackgroundDocumentRequestHandler for CodeLensRequestHandler {
             return Ok(None);
         }
 
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
 
@@ -56,7 +56,7 @@ impl BackgroundDocumentRequestHandler for CodeLensRequestHandler {
             django_python_code_lenses(db, file)
         };
 
-        let uri = snapshot.uri().clone();
+        let uri = snapshot.document().uri().clone();
 
         let lenses: Vec<CodeLens> = lenses
             .into_iter()

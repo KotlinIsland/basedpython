@@ -2581,7 +2581,6 @@ else:
         """
 
 @ignorable_return_value
-@deprecated("Soft deprecated. Use the subprocess module instead.")
 def system(command: StrOrBytesPath) -> int:
     """Execute the command in a subshell."""
 

@@ -5,6 +5,7 @@
 mod add_dependency;
 mod alignment;
 mod all_symbols;
+mod annotation_expression;
 mod call_hierarchy;
 mod code_action;
 mod comma_list;
@@ -26,6 +27,7 @@ mod goto_implementation;
 mod goto_type_definition;
 mod hints;
 mod hover;
+#[cfg(test)]
 mod importer;
 mod injection;
 mod inlay_hints;
@@ -34,6 +36,8 @@ mod module_rename;
 mod on_type_formatting;
 mod override_members;
 mod pasted_imports;
+#[cfg(test)]
+mod pytest_test_discovery;
 mod refactor;
 mod references;
 mod rename;
@@ -485,24 +489,19 @@ mod tests {
     use ty_python_semantic::ProgramEnvironment;
 
     use ruff_db::Db;
-    use ruff_db::diagnostic::{
-        Annotation, Diagnostic, DiagnosticFormat, DisplayDiagnosticConfig, UnifiedFile,
-    };
+    use ruff_db::diagnostic::{Annotation, Diagnostic, DisplayDiagnosticConfig, UnifiedFile};
     use ruff_db::files::{File, FileRootKind, system_path_to_file};
     use ruff_db::parsed::{ParsedModuleRef, parsed_module};
     use ruff_db::source::{SourceText, source_text};
     use ruff_db::system::{DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
-    use ruff_python_codegen::Stylist;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::TextSize;
     use ty_module_resolver::SearchPathSettings;
     use ty_project::metadata::options::Options;
     use ty_project::{Db as _, ProjectMetadata, SemanticDb as _};
     use ty_python_core::ProgramFile;
-    use ty_python_core::platform::PythonPlatform;
-    use ty_python_core::program::{FallibleStrategy, ProgramSettings};
-    use ty_python_semantic::PythonVersionWithSource;
+    use ty_python_core::program::FallibleStrategy;
 
     /// A way to create a simple single-file (named `main.py`) cursor test.
     ///
@@ -548,10 +547,7 @@ mod tests {
 
             let mut buf = String::new();
 
-            let config = DisplayDiagnosticConfig::new("ty")
-                .color(false)
-                .context(0)
-                .format(DiagnosticFormat::Full);
+            let config = DisplayDiagnosticConfig::new("ty").color(false).context(0);
             for diagnostic in diagnostics {
                 let diag = diagnostic.into_diagnostic();
                 let config = config
@@ -594,7 +590,6 @@ mod tests {
         pub(super) offset: TextSize,
         pub(super) parsed: ParsedModuleRef,
         pub(super) source: SourceText,
-        pub(super) stylist: Stylist<'static>,
     }
 
     #[derive(Default)]
@@ -613,7 +608,7 @@ mod tests {
         pub(super) fn build(&self) -> CursorTest {
             let mut metadata = ProjectMetadata::new("test", SystemPathBuf::from("/"));
             if let Some(options) = self.options.clone() {
-                metadata.apply_override_options(options);
+                metadata.set_override_options(options);
             }
             let mut db = ty_project::TestDb::new(metadata);
 
@@ -661,14 +656,11 @@ mod tests {
                     let source = source_text(&db, file);
                     let parsed =
                         parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
-                    let stylist =
-                        Stylist::from_tokens(parsed.tokens(), source.as_str()).into_owned();
                     cursor = Some(Cursor {
                         file,
                         offset,
                         parsed,
                         source,
-                        stylist,
                     });
                 }
             }
@@ -754,7 +746,7 @@ mod tests {
 
             let mut metadata = ProjectMetadata::new("test", project_root.clone());
             if let Some(options) = self.options.clone() {
-                metadata.apply_override_options(options);
+                metadata.set_override_options(options);
             }
             let mut db = ty_project::TestDb::new(metadata);
 
@@ -779,14 +771,10 @@ mod tests {
             .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
             .expect("valid search paths");
 
-            db.project().update_program(
-                &mut db,
-                ProgramSettings {
-                    python_version: PythonVersionWithSource::default(),
-                    python_platform: PythonPlatform::default(),
-                    search_paths,
-                },
-            );
+            let project = db.project();
+            let mut settings = project.program_settings(&db).clone();
+            settings.search_paths = search_paths;
+            project.update_program(&mut db, settings);
 
             db.files()
                 .try_add_root(&db, &project_root, FileRootKind::Project);
@@ -820,14 +808,11 @@ mod tests {
                     let source = source_text(&db, file);
                     let parsed =
                         parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
-                    let stylist =
-                        Stylist::from_tokens(parsed.tokens(), source.as_str()).into_owned();
                     cursor = Some(Cursor {
                         file,
                         offset,
                         parsed,
                         source,
-                        stylist,
                     });
                 }
             }

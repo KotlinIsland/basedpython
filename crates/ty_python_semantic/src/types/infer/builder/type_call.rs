@@ -113,7 +113,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
         let name_type = self.infer_expression(name_arg, TypeContext::default());
 
-        let namespace_type = self.infer_expression(namespace_arg, TypeContext::default());
+        // the namespace is inferred against the parameter's type, as any call argument is, so that
+        // an empty `{}` is the `dict[str, Any]` it is passed as rather than a dict with nothing in it
+        let expected_namespace = KnownClass::Dict.to_specialized_instance(
+            db,
+            env,
+            &[KnownClass::Str.to_instance(db, env), Type::any()],
+        );
+        let namespace_type = self.infer_expression(
+            namespace_arg,
+            TypeContext::declared(Some(expected_namespace)),
+        );
 
         // TODO: validate other keywords against `__init_subclass__` methods of superclasses
         if keywords
@@ -174,17 +184,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             };
 
         if !matches!(namespace_type, Type::TypedDict(_))
-            && {
-                !namespace_type.is_assignable_to(
-                    db,
-                    env,
-                    KnownClass::Dict.to_specialized_instance(
-                        db,
-                        env,
-                        &[KnownClass::Str.to_instance(db, env), Type::any()],
-                    ),
-                )
-            }
+            && !namespace_type.is_assignable_to(db, env, expected_namespace)
             && let Some(builder) = self
                 .context
                 .report_lint(&INVALID_ARGUMENT_TYPE, namespace_arg)

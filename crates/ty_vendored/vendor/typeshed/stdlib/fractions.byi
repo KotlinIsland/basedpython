@@ -203,7 +203,7 @@ class Fraction(Rational):
     def __rdivmod__(a, b: float) -> (float, Fraction)
 
     if sys.version_info >= (3, 14):
-        def __pow__(a, b: int, modulo: None = None) -> Fraction:
+        override def __pow__(a, b: int, modulo: None = None) -> Fraction:
             """a ** b
 
             If b is not an integer, the result will be a float or complex
@@ -214,7 +214,7 @@ class Fraction(Rational):
         def __pow__(a, b: float | Fraction, modulo: None = None) -> float
         def __pow__(a, b: complex, modulo: None = None) -> complex
     else:
-        override def __pow__(a, b: int) -> Fraction:
+        def __pow__(a, b: int) -> Fraction:
             """a ** b
 
             If b is not an integer, the result will be a float or complex
@@ -226,11 +226,11 @@ class Fraction(Rational):
         def __pow__(a, b: complex) -> complex
 
     if sys.version_info >= (3, 14):
-        def __rpow__(b, a: int | float | Fraction, modulo: None = None) -> float:
+        override def __rpow__(b, a: int | float | Fraction, modulo: None = None) -> float:
             """a ** b"""
         def __rpow__(b, a: int | float | complex, modulo: None = None) -> complex
     else:
-        override def __rpow__(b, a: int | float | Fraction) -> float:
+        def __rpow__(b, a: int | float | Fraction) -> float:
             """a ** b"""
         def __rpow__(b, a: int | float | complex) -> complex
 

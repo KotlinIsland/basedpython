@@ -741,12 +741,13 @@ impl<'a, 'db> ReadsCollector<'a, 'db> {
     /// whose only argument is the block.
     fn record_call(&mut self, callee: Type<'db>, callee_expr: &Expr, call: Option<&ast::ExprCall>) {
         let db = self.db;
-        let (function, bound) = match callee {
-            Type::FunctionLiteral(function) => (function, false),
-            Type::BoundMethod(method) => {
-                let function = method.function(db);
-                (function, !function.is_staticmethod(db))
-            }
+        let (function, bound, binds_class) = match callee {
+            Type::FunctionLiteral(function) => (function, false, false),
+            Type::BoundMethod(method) if let Some(function) = method.function(db) => (
+                function,
+                !function.is_staticmethod(db),
+                method.binds_classmethod(db),
+            ),
             // what a `dynamic` value does when called cannot be seen
             Type::Dynamic(_) => {
                 self.opaque = true;
@@ -756,9 +757,7 @@ impl<'a, 'db> ReadsCollector<'a, 'db> {
         };
 
         let receiver = match callee_expr {
-            Expr::Attribute(attribute) if bound && !function.is_classmethod(db) => {
-                self.place_of(&attribute.value)
-            }
+            Expr::Attribute(attribute) if bound && !binds_class => self.place_of(&attribute.value),
             _ => None,
         };
 
@@ -1033,7 +1032,7 @@ impl<'ast> Visitor<'ast> for ReadsCollector<'_, '_> {
 
             // `key in table`
             Expr::Compare(compare) => {
-                for (op, comparator) in compare.ops.iter().zip(&compare.comparators) {
+                for (_, op, comparator) in compare.iter() {
                     if matches!(op, ast::CmpOp::In | ast::CmpOp::NotIn) {
                         self.record_collection_read(comparator);
                     }

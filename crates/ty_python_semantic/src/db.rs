@@ -326,6 +326,7 @@ pub(crate) mod tests {
         site_packages: Vec<SystemPathBuf>,
         /// Whether module resolution should include packages from the synthetic virtual environment.
         third_party_packages: bool,
+        rule_selection: Option<RuleSelection>,
     }
 
     impl<'a> TestDbBuilder<'a> {
@@ -337,6 +338,7 @@ pub(crate) mod tests {
                 files: vec![],
                 site_packages: vec![],
                 third_party_packages: false,
+                rule_selection: None,
             }
         }
 
@@ -367,6 +369,11 @@ pub(crate) mod tests {
             self
         }
 
+        pub(crate) fn with_rule_selection(mut self, selection: RuleSelection) -> Self {
+            self.rule_selection = Some(selection);
+            self
+        }
+
         pub(crate) fn with_file(
             mut self,
             path: &'a (impl AsRef<SystemPath> + ?Sized),
@@ -387,6 +394,10 @@ pub(crate) mod tests {
 
         pub(crate) fn build(self) -> anyhow::Result<TestDb> {
             let mut db = TestDb::new();
+
+            if let Some(selection) = self.rule_selection {
+                db.rule_selection = Arc::new(selection);
+            }
 
             for src_root in &self.src_roots {
                 db.memory_file_system().create_directory_all(src_root)?;
@@ -419,6 +430,7 @@ pub(crate) mod tests {
                 .extend(self.site_packages);
 
             let program_settings = ProgramSettings {
+                python_environment: Ok(None),
                 python_version: PythonVersionWithSource {
                     version: self.python_version,
                     source: PythonVersionSource::default(),

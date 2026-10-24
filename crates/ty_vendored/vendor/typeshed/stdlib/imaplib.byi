@@ -584,7 +584,7 @@ class IMAP4_SSL(IMAP4):
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4_SSL.file is unsupported, can cause errors, and may be removed.")
-        def file(self) -> IO[dynamic]
+        override def file(self) -> IO[dynamic]
     else:
         file: IO[dynamic]
 
@@ -612,7 +612,7 @@ class IMAP4_stream(IMAP4):
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4_stream.file is unsupported, can cause errors, and may be removed.")
-        def file(self) -> IO[dynamic]
+        override def file(self) -> IO[dynamic]
     else:
         file: IO[dynamic]
     process: subprocess.Popen[bytes]

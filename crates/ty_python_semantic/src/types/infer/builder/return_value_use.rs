@@ -99,7 +99,7 @@ fn class_result_is_ignorable<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db
 fn callee_name<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<&'db str> {
     match callee {
         Type::FunctionLiteral(function) => Some(function.name(db)),
-        Type::BoundMethod(bound) => Some(bound.function(db).name(db)),
+        Type::BoundMethod(bound) => Some(bound.function(db)?.name(db)),
         Type::ClassLiteral(class) => Some(class.name(db)),
         Type::GenericAlias(alias) => Some(ClassType::Generic(alias).class_literal(db).name(db)),
         _ => None,
@@ -114,7 +114,9 @@ fn callee_name<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<&'db str> {
 fn callee_result_is_ignorable<'db>(db: &'db dyn Db, callee: Type<'db>) -> bool {
     match callee {
         Type::FunctionLiteral(function) => *function_result_is_ignorable(db, function),
-        Type::BoundMethod(bound) => *function_result_is_ignorable(db, bound.function(db)),
+        Type::BoundMethod(bound) => bound
+            .function(db)
+            .is_some_and(|function| *function_result_is_ignorable(db, function)),
         Type::ClassLiteral(class) => class
             .as_static()
             .is_some_and(|class| class_result_is_ignorable(db, class)),

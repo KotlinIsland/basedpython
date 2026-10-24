@@ -38,9 +38,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use ruff_db::diagnostic::{
-    Diagnostic, DiagnosticFormat, DisplayDiagnosticConfig, FileResolver, Severity,
-};
+use ruff_db::diagnostic::render::{ConciseRenderer, Renderer};
+use ruff_db::diagnostic::{Diagnostic, DisplayDiagnosticConfig, FileResolver, Severity};
 use ty_project::ProjectDatabase;
 
 use crate::emit::{CheckGate, Emit, Transpiled, check_and_transpile};
@@ -484,13 +483,16 @@ fn differs_on_disk(path: &Path, digest: &str) -> bool {
 /// array of strings to a client that will put them in a list, and a multi-line
 /// entry with source carets in it reads as several broken ones.
 fn render_diagnostics(db: &dyn FileResolver, diagnostics: &[Diagnostic]) -> Vec<String> {
-    let config = DisplayDiagnosticConfig::new("ty")
-        .format(DiagnosticFormat::Concise)
-        .color(false);
+    let config = DisplayDiagnosticConfig::new("ty").color(false);
+    let renderer = ConciseRenderer::new(db, &config);
     diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.severity() >= Severity::Error)
-        .map(|diagnostic| diagnostic.display(db, &config).to_string())
+        .map(|diagnostic| {
+            renderer
+                .display(std::slice::from_ref(diagnostic))
+                .to_string()
+        })
         .map(|rendered| rendered.trim_end().to_owned())
         .collect()
 }

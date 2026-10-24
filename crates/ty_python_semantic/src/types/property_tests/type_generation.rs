@@ -227,7 +227,6 @@ fn create_bound_method<'db>(
         db,
         function.expect_function_literal(),
         self_instance,
-        self_instance,
     ))
 }
 

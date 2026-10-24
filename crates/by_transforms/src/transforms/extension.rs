@@ -833,10 +833,9 @@ fn operator_operands(expr: &Expr) -> Option<(&Expr, Option<&Expr>)> {
     match expr {
         Expr::UnaryOp(unary) => Some((&unary.operand, None)),
         Expr::BinOp(binary) => Some((&binary.left, Some(&binary.right))),
-        Expr::Compare(compare) => match compare.comparators.as_ref() {
-            [right] => Some((&compare.left, Some(right))),
-            _ => None,
-        },
+        Expr::Compare(compare) => compare
+            .as_single()
+            .map(|(left, _, right)| (left, Some(right))),
         _ => None,
     }
 }

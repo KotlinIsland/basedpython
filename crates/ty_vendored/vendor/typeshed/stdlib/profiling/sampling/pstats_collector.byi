@@ -7,10 +7,10 @@ from .collector import Collector, _Timestamps
 
 class PstatsCollector(Collector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False)
-    def collect(
+    override def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
     )
-    def export(self, filename: StrOrBytesPath)
+    override def export(self, filename: StrOrBytesPath)
     def create_stats(self)
     def print_stats(self, sort: int = -1, limit: int? = None, show_summary: bool = True, mode: int? = None):
         """Print formatted statistics to stdout."""

@@ -2,7 +2,6 @@ from _asyncio import Future
 from collections.abc import Callable, Sequence
 from contextvars import Context
 from typing import Final
-from ty_extensions import Top
 
 from . import futures
 
@@ -12,7 +11,7 @@ _PENDING: Final = "PENDING"  # undocumented
 _CANCELLED: Final = "CANCELLED"  # undocumented
 _FINISHED: Final = "FINISHED"  # undocumented
 
-def isfuture(obj: object) -> obj is Top[Future[dynamic]]:
+def isfuture(obj: object) -> obj is Future[dynamic]:
     """Check for a Future.
 
     This returns True when obj is a Future instance or is advertising

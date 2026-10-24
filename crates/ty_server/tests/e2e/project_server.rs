@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ruff_db::diagnostic::{DisplayDiagnosticConfig, DisplayDiagnostics};
+use ruff_db::diagnostic::DisplayDiagnosticConfig;
 use ruff_db::system::{OsSystem, SystemPath, TestSystem};
 use ruff_ranged_value::{ValueSource, ValueSourceGuard};
 use tempfile::TempDir;
@@ -81,9 +81,7 @@ fn cold_with(project_root: &SystemPath, overrides: Option<&str>) -> Result<Proje
     // refuses over — see [`refuses_an_environment_it_does_not_share`] — so a test that wants
     // an answer has to stand where the server stands
     let system = TestSystem::new(OsSystem::new(project_root));
-    for name in TestServerBuilder::CLEARED_ENV_VARS {
-        system.remove_env_var(*name);
-    }
+    system.clear_env_vars();
 
     let mut metadata = ProjectMetadata::discover(project_root, &system)?;
     metadata.apply_configuration_files(&system)?;
@@ -91,7 +89,7 @@ fn cold_with(project_root: &SystemPath, overrides: Option<&str>) -> Result<Proje
         // the same source a flag's value carries, which is what decides whether a range is
         // expected alongside it
         let _guard = ValueSourceGuard::new(ValueSource::Cli, false);
-        metadata.apply_override_options(serde_json::from_str(overrides)?);
+        metadata.set_override_options(serde_json::from_str(overrides)?);
     }
 
     let mut db = ProjectDatabase::fallible(metadata, system)?;
@@ -212,11 +210,14 @@ fn answers_what_a_cold_check_would_have() -> Result<()> {
     };
 
     let diagnostics = db.check();
-    let config = DisplayDiagnosticConfig::new("ty")
-        .format(db.project().settings(&db).terminal().output_format.into())
-        .color(false)
-        .context(0);
-    let expected = DisplayDiagnostics::new(&db, &config, &diagnostics).to_string();
+    let config = DisplayDiagnosticConfig::new("ty").color(false).context(0);
+    let expected = db
+        .project()
+        .settings(&db)
+        .terminal()
+        .output_format
+        .display(&db, &config, &diagnostics)
+        .to_string();
 
     assert_eq!(response.rendered, expected);
     assert_eq!(response.diagnostics, diagnostics.len());

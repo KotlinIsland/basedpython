@@ -30,8 +30,9 @@ use crate::types::member::class_member;
 use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameter, Parameters, Signature};
 use crate::types::{
-    ClassBase, ClassLiteral, ClassType, KnownClass, StaticClassLiteral, Type, UnionType,
-    binding_type, definition_expression_type,
+    BindingContext, BoundTypeVarInstance, ClassBase, ClassLiteral, ClassType, GenericContext,
+    KnownClass, SelfTypeVarOrigin, StaticClassLiteral, Type, UnionType, binding_type,
+    definition_expression_type,
 };
 use crate::{Db, FxIndexMap};
 
@@ -349,9 +350,15 @@ fn instance_static_class<'db>(
 /// the per-field facts read from a field constructor call in a class-body
 /// assignment. literal arguments only; anything dynamic leaves the default
 pub(in crate::types) struct FieldFacts {
+    /// a literal non-empty `name=`, which replaces the attribute name as the
+    /// field's name: the name django's constructor, lookups and generated
+    /// members all use
+    pub(in crate::types) name: Option<Name>,
     pub(in crate::types) primary_key: bool,
     pub(in crate::types) null: bool,
     pub(in crate::types) related_name: Option<Box<str>>,
+    /// a literal-string `to_field=` passed to a relation field
+    pub(in crate::types) to_field: Option<Box<str>>,
     pub(in crate::types) has_choices: bool,
 }
 
@@ -361,15 +368,25 @@ pub(in crate::types) fn field_facts<'db>(
     module: &ParsedModuleRef,
 ) -> FieldFacts {
     let mut facts = FieldFacts {
+        name: None,
         primary_key: false,
         null: false,
         related_name: None,
+        to_field: None,
         has_choices: false,
     };
-    let DefinitionKind::Assignment(assignment) = definition.kind(db) else {
-        return facts;
+    let kind = definition.kind(db);
+    let value = match &kind {
+        DefinitionKind::Assignment(assignment) => assignment.value(module),
+        DefinitionKind::AnnotatedAssignment(assignment) => {
+            let Some(value) = assignment.value(module) else {
+                return facts;
+            };
+            value
+        }
+        _ => return facts,
     };
-    let Some(call) = assignment.value(module).as_call_expr() else {
+    let Some(call) = value.as_call_expr() else {
         return facts;
     };
     let literal_true = |name: &str| {
@@ -377,18 +394,30 @@ pub(in crate::types) fn field_facts<'db>(
             definition_expression_type(db, definition, &keyword.value) == Type::bool_literal(true)
         })
     };
+    let literal_string = |name: &str| {
+        call.arguments
+            .find_keyword(name)
+            .and_then(|keyword| {
+                definition_expression_type(db, definition, &keyword.value).as_string_literal()
+            })
+            .map(|literal| literal.value(db))
+    };
+    // django falls back to the attribute name for an empty `name=`
+    facts.name = literal_string("name")
+        .filter(|name| !name.is_empty())
+        .map(Name::new);
     facts.primary_key = literal_true("primary_key");
     facts.null = literal_true("null");
-    // django adds `get_<field>_display` for any field constructed with a
-    // `choices=` argument, regardless of the argument's value
-    facts.has_choices = call.arguments.find_keyword("choices").is_some();
-    facts.related_name = call
+    // django adds `get_<field>_display` for a field whose `choices` is not
+    // `None`, whatever else it holds
+    facts.has_choices = call
         .arguments
-        .find_keyword("related_name")
-        .and_then(|keyword| {
-            definition_expression_type(db, definition, &keyword.value).as_string_literal()
-        })
-        .map(|literal| Box::from(literal.value(db)));
+        .find_keyword("choices")
+        .is_some_and(|choices| {
+            !definition_expression_type(db, definition, &choices.value).is_none(db)
+        });
+    facts.related_name = literal_string("related_name").map(Box::from);
+    facts.to_field = literal_string("to_field").map(Box::from);
     facts
 }
 
@@ -463,14 +492,15 @@ fn model_pk_type<'db>(
     KnownClass::Int.to_instance(db, env)
 }
 
-/// the type of a to-one relation field's `<name>_id` attname: the target
-/// model's primary-key type, `| None` when the field is nullable
+/// the type of a to-one relation field's `<name>_id` attname: the value of
+/// the target model's `to_field=` field, or of its primary key without one,
+/// `| None` when the field is nullable
 fn attname_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     field: &Field<'db>,
 ) -> Option<Type<'db>> {
-    let FieldKind::Django { null, .. } = &field.kind else {
+    let FieldKind::Django { null, to_field, .. } = &field.kind else {
         return None;
     };
     if !is_relation_field_instance(db, env, field.declared_ty) {
@@ -482,23 +512,45 @@ fn attname_type<'db>(
     if !is_model(db, target_class) {
         return None;
     }
-    let target_pk = model_pk_type(
-        db,
-        env,
-        target_class.fields(db, None, CodeGeneratorKind::Django),
-    );
+    let target_value = match to_field {
+        // the column holds the target field's own value, which for a relation
+        // is in turn its target's key. a name the target doesn't resolve
+        // leaves nothing to type it by
+        Some(to_field) => field_ref(db, env, target_class, to_field)
+            .map_or_else(Type::unknown, |target_field| target_field.value_type),
+        None => model_pk_type(
+            db,
+            env,
+            target_class.fields(db, None, CodeGeneratorKind::Django),
+        ),
+    };
     Some(if *null {
-        UnionType::from_two_elements(db, env, target_pk, Type::none(db, env))
+        UnionType::from_two_elements(db, env, target_value, Type::none(db, env))
     } else {
-        target_pk
+        target_value
     })
 }
 
 /// the members django's `ModelBase` metaclass adds to a concrete model at
-/// runtime: the auto `id` primary key, the `pk` alias, and one `<field>_id`
-/// attname per to-one relation field. abstract models (and `Model` itself)
-/// get nothing — their concrete subclasses do
+/// runtime: the attributes of [`synthesized_field_attribute`] and the methods
+/// of [`synthesized_model_method`]. abstract models (and `Model` itself) get
+/// nothing — their concrete subclasses do
 pub(in crate::types) fn synthesized_model_attribute<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: StaticClassLiteral<'db>,
+    fields: &FxIndexMap<Name, Field<'db>>,
+    name: &str,
+) -> Option<Type<'db>> {
+    synthesized_field_attribute(db, env, class, fields, name)
+        .or_else(|| synthesized_model_method(db, env, class, fields, name))
+}
+
+/// the attributes that hold a field's value: the auto `id` primary key, the
+/// `pk` alias, one `<field>_id` attname per to-one relation field, and a field
+/// whose `name=` differs from the attribute it is assigned to, which django
+/// installs under that name instead
+fn synthesized_field_attribute<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
@@ -508,39 +560,92 @@ pub(in crate::types) fn synthesized_model_attribute<'db>(
     if class.is_known(db, KnownClass::DjangoModel) || is_abstract_model(db, class) {
         return None;
     }
+    if let Some(field) = fields.get(name)
+        && is_renamed_field(db, field, name)
+    {
+        return Some(field.declared_ty);
+    }
     match name {
         "pk" => Some(model_pk_type(db, env, fields)),
-        "id" => {
-            let has_explicit_pk = fields.values().any(|field| {
-                matches!(
-                    &field.kind,
-                    FieldKind::Django {
-                        primary_key: true,
-                        ..
-                    }
-                )
-            });
-            (!has_explicit_pk).then(|| KnownClass::Int.to_instance(db, env))
-        }
+        "id" => (!has_explicit_primary_key(fields)).then(|| KnownClass::Int.to_instance(db, env)),
         _ => {
-            // `get_<field>_display()` for a field declared with `choices=`
-            if let Some(field_name) = name
-                .strip_prefix("get_")
-                .and_then(|n| n.strip_suffix("_display"))
-                && matches!(
-                    fields.get(field_name).map(|field| &field.kind),
-                    Some(FieldKind::Django {
-                        has_choices: true,
-                        ..
-                    })
-                )
-            {
-                return Some(display_method(db, env, class));
-            }
             let field_name = name.strip_suffix("_id")?;
             attname_type(db, env, fields.get(field_name)?)
         }
     }
+}
+
+/// the methods django adds per field: `get_<field>_display()` for a field
+/// declared with `choices`, and `get_next_by_<field>()` /
+/// `get_previous_by_<field>()` for a date field that isn't nullable
+fn synthesized_model_method<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: StaticClassLiteral<'db>,
+    fields: &FxIndexMap<Name, Field<'db>>,
+    name: &str,
+) -> Option<Type<'db>> {
+    if class.is_known(db, KnownClass::DjangoModel) || is_abstract_model(db, class) {
+        return None;
+    }
+    if let Some(field_name) = name
+        .strip_prefix("get_")
+        .and_then(|n| n.strip_suffix("_display"))
+        && fields.get(field_name).is_some_and(has_display_method)
+    {
+        return Some(display_method(db, env, class));
+    }
+    let field_name = name
+        .strip_prefix("get_next_by_")
+        .or_else(|| name.strip_prefix("get_previous_by_"))?;
+    let field = fields.get(field_name)?;
+    has_date_navigation_methods(db, env, field).then(|| date_navigation_method(db, env, class))
+}
+
+/// a model's fields include one declared `primary_key=True`, which replaces
+/// the auto `id`
+fn has_explicit_primary_key(fields: &FxIndexMap<Name, Field<'_>>) -> bool {
+    fields.values().any(|field| {
+        matches!(
+            &field.kind,
+            FieldKind::Django {
+                primary_key: true,
+                ..
+            }
+        )
+    })
+}
+
+/// `field` is known as `name` but its class body binds no attribute of that
+/// name: its `name=` replaced the attribute it was assigned to
+fn is_renamed_field(db: &dyn Db, field: &Field<'_>, name: &str) -> bool {
+    field.first_declaration.is_some_and(|definition| {
+        place_table(db, definition.scope(db))
+            .symbol_id(name)
+            .is_none()
+    })
+}
+
+fn has_display_method(field: &Field<'_>) -> bool {
+    matches!(
+        &field.kind,
+        FieldKind::Django {
+            has_choices: true,
+            ..
+        }
+    )
+}
+
+/// django adds `get_next_by_<field>` / `get_previous_by_<field>` for every
+/// `DateField`, `DateTimeField` included, that is not `null=True`
+fn has_date_navigation_methods<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    field: &Field<'db>,
+) -> bool {
+    matches!(&field.kind, FieldKind::Django { null: false, .. })
+        && instance_static_class(db, env, field.declared_ty)
+            .is_some_and(|class| has_base(db, class, KnownClass::DjangoDateField))
 }
 
 /// the `() -> str` bound method django synthesizes for a choices field's
@@ -556,6 +661,35 @@ fn display_method<'db>(
             Parameter::positional_or_keyword(Name::new_static("self")).with_annotated_type(self_ty)
         ]),
         KnownClass::Str.to_instance(db, env),
+    );
+    Type::function_like_callable(db, signature)
+}
+
+/// the `get_next_by_<field>` / `get_previous_by_<field>` method django
+/// synthesizes for a date field: `(self: Self, /, **kwargs: Any) -> Self`. the
+/// keyword arguments are lookups that filter the candidates, and the instance
+/// found is of the class the method is called on
+fn date_navigation_method<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: StaticClassLiteral<'db>,
+) -> Type<'db> {
+    let self_typevar = BoundTypeVarInstance::synthetic_self(
+        db,
+        SelfTypeVarOrigin::Class(class.into()),
+        Type::instance(db, env, class.default_specialization(db)),
+        BindingContext::Synthetic(env.program(db)),
+    );
+    let self_ty = Type::TypeVar(self_typevar);
+    let generic_context = GenericContext::from_typevar_instances(db, env, [self_typevar]);
+    let signature = Signature::new_generic(
+        Some(generic_context),
+        Parameters::standard([
+            Parameter::positional_only(Some(Name::new_static("self"))).with_annotated_type(self_ty),
+            Parameter::keyword_variadic(Name::new_static("kwargs"))
+                .with_annotated_type(Type::any()),
+        ]),
+        self_ty,
     );
     Type::function_like_callable(db, signature)
 }
@@ -746,21 +880,22 @@ pub(in crate::types) fn synthesized_member_names<'db>(
         return Vec::new();
     }
     let mut names = vec![Name::new_static("pk")];
-    let has_explicit_pk = fields.values().any(|field| {
-        matches!(
-            &field.kind,
-            FieldKind::Django {
-                primary_key: true,
-                ..
-            }
-        )
-    });
-    if !has_explicit_pk {
+    if !has_explicit_primary_key(fields) {
         names.push(Name::new_static("id"));
     }
     for (name, field) in fields {
+        if is_renamed_field(db, field, name) {
+            names.push(name.clone());
+        }
         if is_relation_field_instance(db, env, field.declared_ty) {
             names.push(Name::new(format!("{name}_id")));
+        }
+        if has_display_method(field) {
+            names.push(Name::new(format!("get_{name}_display")));
+        }
+        if has_date_navigation_methods(db, env, field) {
+            names.push(Name::new(format!("get_next_by_{name}")));
+            names.push(Name::new(format!("get_previous_by_{name}")));
         }
     }
     names.extend(reverse_accessors(db, class).keys().cloned());
@@ -944,8 +1079,9 @@ fn field_ref<'db>(
         });
     }
 
-    // synthesized names: the auto `id` and `<fk>_id` attnames
-    if let Some(synthesized) = synthesized_model_attribute(db, env, model, fields, name) {
+    // synthesized names: the auto `id` and `<fk>_id` attnames. a synthesized
+    // method such as `get_<field>_display` is not a field, so no lookup names one
+    if let Some(synthesized) = synthesized_field_attribute(db, env, model, fields, name) {
         return Some(FieldRef {
             relation_model: None,
             is_relation: false,
@@ -1331,7 +1467,7 @@ pub(crate) fn lookup_call_model<'db>(
     let Type::BoundMethod(bound_method) = callee else {
         return None;
     };
-    let name = bound_method.function(db).name(db);
+    let name = bound_method.function(db)?.name(db);
     if queryset_method_kind(name.as_str()) != Some(QuerysetMethodKind::Lookup)
         || !accepts_lookup_expressions(name.as_str())
     {
@@ -1395,11 +1531,9 @@ fn lookup_expression<'a, 'db>(
         return None;
     };
     // a chained comparison names no single lookup
-    let ([op], [value]) = (&*compare.ops, &*compare.comparators) else {
-        return None;
-    };
+    let (left, op, value) = compare.as_single()?;
     let suffix = lookup_suffix(*op)?;
-    let path = field_path(&compare.left)?;
+    let path = field_path(left)?;
     let root = path.first()?.as_name_expr()?;
 
     // anything that already claims the name wins, exactly as it does for an

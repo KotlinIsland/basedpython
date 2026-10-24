@@ -91,9 +91,9 @@ class SMTPChannel(asynchat.async_chat):
         decode_data: bool = False,
     )
     # base asynchat.async_chat.push() accepts bytes
-    override def push(self, msg: str)
-    override def collect_incoming_data(self, data: bytes)
-    override def found_terminator(self)
+    def push(self, msg: str)
+    def collect_incoming_data(self, data: bytes)
+    def found_terminator(self)
     def smtp_HELO(self, arg: str)
     def smtp_NOOP(self, arg: str)
     def smtp_QUIT(self, arg: str)
@@ -161,4 +161,4 @@ class PureProxy(SMTPServer):
 if sys.version_info < (3, 11):
     @deprecated("Deprecated since Python 3.9; removed in Python 3.11.")
     class MailmanProxy(PureProxy):
-        override def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str?
+        def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str?

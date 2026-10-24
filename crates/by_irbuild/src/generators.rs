@@ -335,10 +335,10 @@ fn for_loops(body: &[Stmt]) -> usize {
                 // an `async for` clause parks three: the two an `async for`
                 // statement does, and the comprehension's own accumulator
                 let clauses = match child {
-                    Expr::ListComp(node) => node.generators.as_slice(),
-                    Expr::SetComp(node) => node.generators.as_slice(),
-                    Expr::DictComp(node) => node.generators.as_slice(),
-                    Expr::Generator(node) => node.generators.as_slice(),
+                    Expr::ListComp(node) => &node.generators[..],
+                    Expr::SetComp(node) => &node.generators[..],
+                    Expr::DictComp(node) => &node.generators[..],
+                    Expr::Generator(node) => &node.generators[..],
                     _ => &[],
                 };
                 count += 3 * clauses.iter().filter(|clause| clause.is_async).count();

@@ -3,7 +3,13 @@
 ```toml
 [environment]
 python-version = "3.13"
+
+[rules]
+invalid-mutable-override = "ignore"
 ```
+
+the examples narrow a mutable attribute in a subclass to tell its types apart, which
+`invalid-mutable-override` reports, so that rule is off here.
 
 `T.a`, where `T` is a type parameter, is an *attribute type*: the type of the member `a` on whatever
 `T` turns out to be. it cannot be resolved where it is written — `T` is unknown until the class or

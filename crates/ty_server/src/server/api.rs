@@ -1,7 +1,7 @@
 use crate::Db as _;
 use crate::document::TextHash;
 use crate::server::schedule::Task;
-use crate::session::{DocumentSnapshot, Session};
+use crate::session::{DocumentRequestTarget, DocumentSnapshot, Session};
 use anyhow::anyhow;
 use lsp_server as server;
 use lsp_server::{ErrorCode, RequestId};
@@ -493,21 +493,23 @@ where
         let uri = R::document_uri(&params).into_owned();
         let revision = session.revision();
 
-        let document = match session.snapshot_document(&uri) {
-            Ok(document) => document,
-            Err(_) if asked.is_some() && R::ANSWERS_CLOSED_DOCUMENTS => {
-                match session.snapshot_closed_document(&uri) {
-                    Some(document) => document,
-                    // no file to read: the text can only come from the client opening it
-                    None => return Box::new(move |client| client.hold(as_sent, revision)),
-                }
+        let snapshot = match session.snapshot_document(&uri) {
+            // the client has said what text it means, and opening the document is how it arrives,
+            // unless the handler answers a file read from disk as it answers the client's buffer
+            Ok(snapshot)
+                if asked.is_some()
+                    && !R::ANSWERS_CLOSED_DOCUMENTS
+                    && matches!(snapshot.document(), DocumentRequestTarget::Closed { .. }) =>
+            {
+                return Box::new(move |client| client.hold(as_sent, revision));
             }
-            // the client has said what text it means, and opening the document is how it arrives
+            Ok(snapshot) => snapshot,
+            // no file to read: the text can only come from the client opening it
             Err(_) if asked.is_some() => {
                 return Box::new(move |client| client.hold(as_sent, revision));
             }
             Err(_) => {
-                let reason = format!("Document {uri} is not open in the session");
+                let reason = format!("Document {uri} is neither open nor a supported closed file");
                 tracing::warn!(
                     "Ignoring request id={id} method={} because {reason}",
                     R::METHOD
@@ -526,9 +528,9 @@ where
             }
         };
 
-        let path = document.notebook_or_file_path();
+        let path = snapshot.document().notebook_or_file_path();
         let db = session.project_db(path).clone();
-        let log_guidance = document.client_name().log_guidance();
+        let log_guidance = snapshot.client_name().log_guidance();
 
         Box::new(move |client| {
             let _span = tracing::debug_span!("request", %id, method = %R::METHOD).entered();
@@ -553,7 +555,7 @@ where
             if let Err(error) = ruff_db::panic::catch_unwind(|| {
                 scope.enter(|| salsa::attach(&db, || {
                     if let Some(asked) = asked
-                        && !holds_text(&db, &document, asked)
+                        && !holds_text(&db, &snapshot, asked)
                     {
                         tracing::debug!(
                             "Request id={id} method={} asks about text {asked}, which {uri} does not hold yet",
@@ -562,7 +564,7 @@ where
                         client.hold(as_sent, revision);
                         return;
                     }
-                    R::handle_request(&id, &db, document, client, params);
+                    R::handle_request(&id, &db, snapshot, client, params);
                 }));
             }) {
                 panic_response::<R>(&id, client, &error, retry, log_guidance);
@@ -571,13 +573,14 @@ where
     }))
 }
 
-/// Whether the text `document` names is the text a client asked about.
+/// Whether the text the document of `snapshot` names is the text a client asked about.
 ///
 /// For a document the client has opened, that is the text the client sent, and for a notebook
 /// cell it is the cell's own text rather than the notebook's cells joined together. For one it
 /// has not opened, it is the file as the server reads it. The hash is taken fresh: a text asked
 /// about is usually the one the client just sent, and nothing is cached against it yet.
-fn holds_text(db: &ProjectDatabase, document: &DocumentSnapshot, asked: TextHash) -> bool {
+fn holds_text(db: &ProjectDatabase, snapshot: &DocumentSnapshot, asked: TextHash) -> bool {
+    let document = snapshot.document();
     match db.document_at_uri(document.uri()) {
         Some(open) => open
             .as_text()
@@ -662,7 +665,13 @@ where
     let (id, params) = cast_notification::<N>(req)?;
     Ok(Task::background(schedule, move |session: &Session| {
         let uri = N::document_uri(&params);
-        let Ok(snapshot) = session.snapshot_document(&uri) else {
+        // Requiring an open document here assumes the notification is invalid for closed documents.
+        // TODO: Revisit this check before routing a notification that can target closed documents through
+        // `background_notification_thread`. Note that `snapshot_document` can already resolve closed files.
+        let Ok(snapshot) = session
+            .open_document_handle(&uri)
+            .and_then(|_| session.snapshot_document(&uri))
+        else {
             let reason = format!("Document {uri} is not open in the session");
             tracing::warn!(
                 "Ignoring notification id={id} method={} because {reason}",

@@ -204,7 +204,6 @@ A guard can observe a name that is bound by only one invalid alternative.
 match (0,):
     # error: [invalid-syntax] "alternative patterns bind different names"
     # error: [possibly-unresolved-reference]
-    # error: [redundant-condition] "This condition is always false"
     case [value] | [] if value:
         pass
 ```
@@ -217,7 +216,7 @@ not panic.
 ```py
 match 0:
     # error: [invalid-syntax] "alternative patterns bind different names"
-    # error: [invalid-syntax] "Expected `:`, found name"
+    # error: [invalid-syntax] "Expected `:`, found identifier"
     # error: [invalid-syntax] "Expected an expression"
     case first | second first:
 ```

@@ -1275,7 +1275,7 @@ fn resolve_write<'db>(
                 return None;
             };
             let kind = observable_kind(db, collector.env(), method.self_instance(db))?;
-            if !kind.is_mutator(method.function(db).name(db)) {
+            if !kind.is_mutator(method.function(db)?.name(db)) {
                 return None;
             }
             let place = match call.func.as_ref() {

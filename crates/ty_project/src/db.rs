@@ -15,13 +15,15 @@ use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::source::source_text;
-use ruff_db::system::System;
+use ruff_db::system::{DbWithWritableSystem, System, SystemPath, WritableSystem};
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_ranged_value::ValueSource;
 use salsa::{Database, Event, Setter};
 use ty_module_resolver::system_module_search_paths;
 use ty_python_core::ProgramFile;
-use ty_python_core::program::{FallibleStrategy, MisconfigurationStrategy, UseDefaultStrategy};
+use ty_python_core::program::{
+    FallibleStrategy, MisconfigurationStrategy, Program, UseDefaultStrategy,
+};
 use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::dependency::DependencyMetadata;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
@@ -61,14 +63,25 @@ fn program_file(db: &dyn Db, file: File) -> ProgramFile<'_> {
         return project_program.program_file(db, file);
     };
 
-    if project.is_file_included(db, path).is_included()
-        || system_module_search_paths(db, project_program.resolver_environment(db))
-            .any(|search_path| path.starts_with(search_path))
-    {
+    if project.is_file_included(db, path).is_included() {
         return project_program.program_file(db, file);
     }
 
-    let program = project
+    program_for_dependency(db, path)
+        .unwrap_or(project_program)
+        .program_file(db, file)
+}
+
+fn program_for_dependency<'db>(db: &'db dyn Db, path: &SystemPath) -> Option<Program<'db>> {
+    let project = db.project();
+    let project_program = project.program(db);
+    if system_module_search_paths(db, project_program.resolver_environment(db))
+        .any(|search_path| path.starts_with(search_path))
+    {
+        return Some(project_program);
+    }
+
+    project
         .script_files(db)
         .iter()
         .filter_map(|script| Script::for_file(db, script))
@@ -77,9 +90,6 @@ fn program_file(db: &dyn Db, file: File) -> ProgramFile<'_> {
             system_module_search_paths(db, program.resolver_environment(db))
                 .any(|search_path| path.starts_with(search_path))
         })
-        .unwrap_or(project_program);
-
-    program.program_file(db, file)
 }
 
 /// Tracked so that a change to the open-file set only invalidates queries
@@ -272,6 +282,14 @@ impl ProjectDatabase {
         self.project().check_mode(self)
     }
 
+    /// Returns a program whose configured search paths contain `path`.
+    ///
+    /// Prefers the project environment, then existing script environments. This does not require
+    /// the file to exist or to have been imported, and does not synchronize environments.
+    pub fn program_for_dependency(&self, path: &SystemPath) -> Option<Program<'_>> {
+        program_for_dependency(self, path)
+    }
+
     /// Set the check mode for the project.
     pub fn set_check_mode(&mut self, mode: CheckMode) {
         if self.project().check_mode(self) != mode {
@@ -291,9 +309,12 @@ impl ProjectDatabase {
         )
     }
 
-    /// Returns a [`SalsaMemoryDump`] that can be use to dump Salsa memory usage information
+    /// Returns a [`SalsaMemoryDump`] that can be used to dump Salsa memory usage information
     /// to the CLI after a typechecker run.
-    pub fn salsa_memory_dump(&self) -> SalsaMemoryDump {
+    ///
+    /// Triggers cancellation and waits for all other database handles to be dropped.
+    /// This can deadlock if the current thread owns another handle.
+    pub fn salsa_memory_dump(&mut self) -> SalsaMemoryDump {
         let memory_usage = ruff_memory_usage::attach_tracker(StandardTracker::new(), || {
             <dyn salsa::Database>::memory_usage(self)
         });
@@ -719,6 +740,17 @@ impl SourceDb for ProjectDatabase {
 #[salsa::db]
 impl salsa::Database for ProjectDatabase {}
 
+impl DbWithWritableSystem for ProjectDatabase {
+    fn writable_system(&self) -> ruff_db::system::Result<&dyn WritableSystem> {
+        self.system().as_writable().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "The system does not support writing files",
+            )
+        })
+    }
+}
+
 #[salsa::db]
 impl Db for ProjectDatabase {
     fn project(&self) -> Project {
@@ -769,7 +801,6 @@ pub(crate) mod testing {
     use ruff_python_ast::PythonVersion;
     use ty_module_resolver::SearchPathSettings;
     use ty_python_core::ProgramFile;
-    use ty_python_core::platform::PythonPlatform;
     use ty_python_core::program::Program;
     use ty_python_core::program::{FallibleStrategy, ProgramSettings};
     #[cfg(any(test, feature = "testing"))]
@@ -791,7 +822,9 @@ pub(crate) mod testing {
     #[derive(Clone)]
     pub struct TestDb {
         storage: salsa::Storage<Self>,
-        events: Events,
+        /// `None` for a database built by [`Self::new`], which records nothing
+        #[cfg(test)]
+        events: Option<Events>,
         files: Files,
         uv_environments: UvEnvironments,
         system: TestSystem,
@@ -823,10 +856,10 @@ pub(crate) mod testing {
         }
 
         fn build(project: ProjectMetadata, record_events: bool) -> Self {
-            let events = Events::default();
+            let events = record_events.then(Events::default);
             let uv_environments = UvEnvironments::new(project.use_uv());
             let mut db = Self {
-                storage: salsa::Storage::new(record_events.then(|| {
+                storage: salsa::Storage::new(events.as_ref().map(|events| {
                     let events = events.clone();
                     Box::new(move |event| {
                         let mut events = events.lock().unwrap();
@@ -837,6 +870,7 @@ pub(crate) mod testing {
                 vendored: ty_vendored::file_system().clone(),
                 files: Files::default(),
                 uv_environments,
+                #[cfg(test)]
                 events,
                 project: None,
             };
@@ -856,11 +890,8 @@ pub(crate) mod testing {
 
             db.files().try_add_root(&db, &root, FileRootKind::Project);
 
-            let program_settings = ProgramSettings {
-                python_version: PythonVersionWithSource::default(),
-                python_platform: PythonPlatform::default(),
-                search_paths,
-            };
+            let mut program_settings = ProgramSettings::empty(db.vendored());
+            program_settings.search_paths = search_paths;
             let project = Project::from_metadata(
                 &db,
                 project,
@@ -918,14 +949,12 @@ pub(crate) mod testing {
 
             self.files().try_add_root(self, root, FileRootKind::Project);
 
-            let settings = ProgramSettings {
-                python_version: PythonVersionWithSource {
-                    source: ty_python_semantic::PythonVersionSource::Default,
-                    version: python_version,
-                },
-                python_platform: PythonPlatform::default(),
-                search_paths,
+            let mut settings = ProgramSettings::empty(self.vendored());
+            settings.python_version = PythonVersionWithSource {
+                source: ty_python_semantic::PythonVersionSource::Default,
+                version: python_version,
             };
+            settings.search_paths = search_paths;
             // the project has to carry these too: `Project::program` rebuilds the program
             // from the project's own settings, so a query that asks the project rather
             // than a file would otherwise see no site-packages at all
@@ -935,16 +964,13 @@ pub(crate) mod testing {
 
         #[cfg(feature = "testing")]
         pub fn set_python_version(&mut self, python_version: PythonVersion) {
-            let program = self.project().program(self);
-            let settings = ProgramSettings {
-                python_version: PythonVersionWithSource {
-                    source: ty_python_semantic::PythonVersionSource::Default,
-                    version: python_version,
-                },
-                python_platform: program.python_platform(self).clone(),
-                search_paths: program.search_paths(self).clone(),
+            let project = self.project();
+            let mut settings = project.program_settings(self).clone();
+            settings.python_version = PythonVersionWithSource {
+                source: ty_python_semantic::PythonVersionSource::Default,
+                version: python_version,
             };
-            self.project().update_program(self, settings);
+            project.update_program(self, settings);
         }
     }
 
@@ -955,8 +981,17 @@ pub(crate) mod testing {
         }
 
         /// Takes the salsa events.
-        pub fn take_salsa_events(&mut self) -> Vec<salsa::Event> {
-            let mut events = self.events.lock().unwrap();
+        ///
+        /// Only a database built by [`Self::with_salsa_events`] has any to take. Reading
+        /// them back from one built by [`Self::new`] would hand an assertion that a query
+        /// did not run an empty list, which it passes whatever ran.
+        #[cfg(test)]
+        pub(crate) fn take_salsa_events(&mut self) -> Vec<salsa::Event> {
+            let events = self
+                .events
+                .as_ref()
+                .expect("a database built by `TestDb::with_salsa_events` records events");
+            let mut events = events.lock().unwrap();
 
             std::mem::take(&mut *events)
         }
@@ -1099,6 +1134,7 @@ mod tests {
     use ruff_db::system::{DbWithWritableSystem as _, SystemPathBuf, TestSystem};
     use ruff_db::testing::assert_function_query_was_not_run_by_name;
     use ruff_python_trivia::textwrap::dedent;
+    use salsa::plumbing::current_revision;
     use ty_module_resolver::list_modules;
     use ty_python_semantic::Db as _;
 
@@ -1134,6 +1170,29 @@ mod tests {
         let diagnostics = db.check_file(file);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].id().as_str(), "unresolved-import");
+
+        Ok(())
+    }
+
+    #[test]
+    fn unrelated_file_change_does_not_advance_revision() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let fs = system.memory_file_system().clone();
+        fs.write_files_all([
+            ("/project/main.py", ""),
+            ("/project/unrelated.log", "before"),
+        ])?;
+        let metadata = ProjectMetadata::new("test", SystemPathBuf::from("/project"));
+        let mut db = ProjectDatabase::fallible(metadata, system)?;
+        db.project().files(&db);
+        let revision = current_revision(&db);
+
+        fs.write_file_all("/project/unrelated.log", "after")?;
+        db.apply_changes(&[ChangeEvent::file_content_changed(SystemPathBuf::from(
+            "/project/unrelated.log",
+        ))]);
+
+        assert_eq!(current_revision(&db), revision);
 
         Ok(())
     }
@@ -1181,7 +1240,7 @@ mod tests {
     #[test]
     fn dependency_metadata_isnt_queried_unnecessarily() -> anyhow::Result<()> {
         let root = SystemPathBuf::from("/project");
-        let mut db = TestDb::new(ProjectMetadata::new("app", root.clone()));
+        let mut db = TestDb::with_salsa_events(ProjectMetadata::new("app", root.clone()));
         db.write_file(
             root.join("main.py"),
             "import typing\nfrom typing import Any\n",

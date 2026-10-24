@@ -109,11 +109,11 @@ impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
         _client: &Client,
         params: TranspileParams,
     ) -> crate::server::Result<Option<TranspileResponse>> {
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
 
-        let config = config_for(db, snapshot.uri());
+        let config = config_for(db, snapshot.document().uri());
         let document = ruff_db::source::source_text(db, file);
         let source = params.source.as_deref().unwrap_or(document.as_str());
 

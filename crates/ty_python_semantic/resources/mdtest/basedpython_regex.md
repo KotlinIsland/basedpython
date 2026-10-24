@@ -85,7 +85,7 @@ Truthiness narrowing wraps the receiver in an intersection; the groups still com
 import re
 
 p = re.compile("()?()")
-if p:
+if p:  # error: [redundant-condition]
     if m := p.match(""):
         reveal_type(m.groups())  # revealed: tuple[str | None, str]
 ```

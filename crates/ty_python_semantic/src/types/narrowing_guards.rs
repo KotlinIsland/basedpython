@@ -35,9 +35,9 @@ pub(crate) enum GuardRoot<'ast> {
 /// is not the place `cls.data` names.
 pub(crate) fn receiver_is_first_parameter<'db>(db: &'db dyn Db, callee_ty: Type<'db>) -> bool {
     match callee_ty {
-        Type::BoundMethod(method) => !method
-            .function(db)
-            .has_known_decorator(db, FunctionDecorators::CLASSMETHOD),
+        Type::BoundMethod(method) => !method.function(db).is_some_and(|function| {
+            function.has_known_decorator(db, FunctionDecorators::CLASSMETHOD)
+        }),
         _ => true,
     }
 }

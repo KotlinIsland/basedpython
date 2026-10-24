@@ -130,18 +130,10 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         return;
     };
 
-    let Expr::Compare(ast::ExprCompare {
-        left: test_key,
-        ops,
-        comparators: test_dict,
-        range: _,
-        node_index: _,
-        identity_ops: _,
-    }) = &**test
-    else {
+    let Expr::Compare(compare) = &**test else {
         return;
     };
-    let [test_dict] = &**test_dict else {
+    let Some((test_key, op, test_dict)) = compare.as_single() else {
         return;
     };
 
@@ -152,9 +144,9 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         return;
     }
 
-    let (expected_var, expected_value, default_var, default_value) = match ops[..] {
-        [CmpOp::In] => (body_var, body_value, orelse_var, orelse_value.as_ref()),
-        [CmpOp::NotIn] => (orelse_var, orelse_value, body_var, body_value.as_ref()),
+    let (expected_var, expected_value, default_var, default_value) = match op {
+        CmpOp::In => (body_var, body_value, orelse_var, orelse_value.as_ref()),
+        CmpOp::NotIn => (orelse_var, orelse_value, body_var, body_value.as_ref()),
         _ => {
             return;
         }
@@ -195,7 +187,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
     }
 
     let node = default_value.clone();
-    let node1 = *test_key.clone();
+    let node1 = test_key.clone();
     let node2 = ast::ExprAttribute {
         value: expected_subscript.clone(),
         attr: Identifier::new("get".to_string(), TextRange::default()),
@@ -207,7 +199,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
     let node3 = ast::ExprCall {
         func: Box::new(node2.into()),
         arguments: Arguments {
-            args: Box::from([node1, node]),
+            args: [node1, node].into(),
             keywords: std::iter::empty().collect(),
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
@@ -263,24 +255,16 @@ pub(crate) fn if_exp_instead_of_dict_get(
     body: &Expr,
     orelse: &Expr,
 ) {
-    let Expr::Compare(ast::ExprCompare {
-        left: test_key,
-        ops,
-        comparators: test_dict,
-        range: _,
-        node_index: _,
-        identity_ops: _,
-    }) = test
-    else {
+    let Expr::Compare(compare) = test else {
         return;
     };
-    let [test_dict] = &**test_dict else {
+    let Some((test_key, op, test_dict)) = compare.as_single() else {
         return;
     };
 
-    let (body, default_value) = match &**ops {
-        [CmpOp::In] => (body, orelse),
-        [CmpOp::NotIn] => (orelse, body),
+    let (body, default_value) = match op {
+        CmpOp::In => (body, orelse),
+        CmpOp::NotIn => (orelse, body),
         _ => {
             return;
         }
@@ -309,7 +293,7 @@ pub(crate) fn if_exp_instead_of_dict_get(
     }
 
     let default_value_node = default_value.clone();
-    let dict_key_node = *test_key.clone();
+    let dict_key_node = test_key.clone();
     let dict_get_node = ast::ExprAttribute {
         value: expected_subscript.clone(),
         attr: Identifier::new("get".to_string(), TextRange::default()),
@@ -321,7 +305,7 @@ pub(crate) fn if_exp_instead_of_dict_get(
     let fixed_node = ast::ExprCall {
         func: Box::new(dict_get_node.into()),
         arguments: Arguments {
-            args: Box::from([dict_key_node, default_value_node]),
+            args: [dict_key_node, default_value_node].into(),
             keywords: std::iter::empty().collect(),
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,

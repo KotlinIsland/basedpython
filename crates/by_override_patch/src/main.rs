@@ -30,8 +30,10 @@ use anyhow::{Context, Result, bail};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::source::source_text;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
+use ruff_python_ast::PythonVersion;
 use ruff_ranged_value::RangedValue;
 use ty_project::metadata::options::{Options, Rules};
+use ty_project::metadata::python_version::SupportedPythonVersion;
 use ty_project::{Db as _, ProjectDatabase, ProjectMetadata, SemanticDb as _};
 use ty_python_semantic::lint::Level;
 use ty_python_semantic::types::check_types;
@@ -101,12 +103,20 @@ fn mark_pass(stdlib_dir: &Path, typeshed_root: &Path) -> Result<(usize, usize)> 
     fs::create_dir_all(&project_root).context("creating scratch project root")?;
     let system = OsSystem::new(SystemPathBuf::from_path_buf_lossy(project_root.clone()));
     let root = SystemPathBuf::from_path_buf_lossy(project_root);
+    // an override inside a version-gated branch is only seen at a version that reaches it, so the
+    // version is pinned rather than left to whatever environment the sync happens to run in,
+    // which would make the regenerated typeshed depend on it
+    let python_version =
+        SupportedPythonVersion::try_from(PythonVersion::latest_ty()).map_err(|version| {
+            anyhow::anyhow!("ty does not support its own latest version {version}")
+        })?;
     let mut metadata = ProjectMetadata::new("typeshed-override", root);
-    metadata.apply_override_options(Options {
+    metadata.set_override_options(Options {
         environment: Some(ty_project::metadata::options::EnvironmentOptions {
             typeshed: Some(ty_project::metadata::value::RelativePathBuf::cli(
                 SystemPathBuf::from_path_buf_lossy(typeshed_root.to_path_buf()),
             )),
+            python_version: Some(RangedValue::cli(python_version)),
             ..Default::default()
         }),
         rules: Some(Rules::from_iter([(

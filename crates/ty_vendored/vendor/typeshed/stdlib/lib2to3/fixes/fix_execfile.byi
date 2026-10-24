@@ -11,4 +11,4 @@ from .. import fixer_base
 class FixExecfile(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    override def transform(self, node, results)
+    def transform(self, node, results)

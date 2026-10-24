@@ -339,13 +339,7 @@ fn unused_import_leg(
 /// the diagnostic that leaves its runtime behaviour unspecified. an entry that no
 /// longer matches a checker-clean block fails the test, so the list cannot
 /// outlive its reasons
-const EXCLUDED: &[(&str, &str, &str)] = &[(
-    "abstract.md",
-    "abstract methods are tracked",
-    "ty does not report instantiating a class that leaves an abstract method \
-         unimplemented (the block's `TODO`), so the block checks clean and python raises \
-         `TypeError` at the instantiation",
-)];
+const EXCLUDED: &[(&str, &str, &str)] = &[];
 
 /// the sections a transpile for an older python refuses, each with the version its blocks
 /// need and the reason, keyed by mdtest file (relative to the mdtest directory) and heading

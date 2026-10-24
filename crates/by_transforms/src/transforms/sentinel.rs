@@ -71,7 +71,7 @@ impl Transformer for Sentinel {
                 arguments: Arguments {
                     node_index: AtomicNodeIndex::NONE,
                     range: TextRange::default(),
-                    args: Box::new([Expr::StringLiteral(ExprStringLiteral {
+                    args: thin_vec::ThinVec::from([Expr::StringLiteral(ExprStringLiteral {
                         node_index: AtomicNodeIndex::NONE,
                         range: TextRange::default(),
                         value: StringLiteralValue::single(StringLiteral {

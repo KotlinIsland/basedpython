@@ -34,10 +34,10 @@ impl<'src> CoalesceReverse<'src> {
         if !matches!(&*cmp.ops, [CmpOp::IsNot]) {
             return None;
         }
-        if !matches!(&*cmp.comparators, [Expr::NoneLiteral(_)]) {
+        if !matches!(cmp.comparators(), [Expr::NoneLiteral(_)]) {
             return None;
         }
-        let Expr::Name(test_name) = cmp.left.as_ref() else {
+        let Expr::Name(test_name) = cmp.first_operand() else {
             return None;
         };
         let Expr::Name(body_name) = ternary.body.as_ref() else {

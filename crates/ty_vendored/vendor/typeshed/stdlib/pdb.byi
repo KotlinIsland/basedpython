@@ -505,7 +505,7 @@ class Pdb(Bdb, Cmd):
             readrc: bool = True,
         ) -> None
     if sys.version_info >= (3, 14):
-        def set_trace(self, frame: FrameType? = None, *, commands: Iterable[str]? = None)
+        override def set_trace(self, frame: FrameType? = None, *, commands: Iterable[str]? = None)
         async def set_trace_async(self, frame: FrameType? = None, *, commands: Iterable[str]? = None) -> None
 
     def forget(self)
@@ -589,7 +589,7 @@ class Pdb(Bdb, Cmd):
         def complete_multiline_names(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
 
     if sys.version_info >= (3, 13):
-        def completedefault(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
+        override def completedefault(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
 
     def do_commands(self, arg: str) -> bool?:
         """(Pdb) commands [bpnumber]
@@ -966,7 +966,7 @@ class Pdb(Bdb, Cmd):
 
     def error(self, msg: str)
     if sys.version_info >= (3, 13):
-        def completenames(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
+        override def completenames(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
     if sys.version_info >= (3, 12):
         def set_convenience_variable(self, frame: FrameType, name: str, value: dynamic)
     if sys.version_info >= (3, 13):

@@ -94,9 +94,10 @@ fn bind_receiver<'db>(
 /// basedpython: the callable `x.fn` resolves to when `fn` names a receiver
 /// callable in scope that accepts `x`, with the receiver already bound. The
 /// name must be *declared* — a receiver callable is only ever spelled as an
-/// annotation, and a declaration has one type wherever it is visible. A scope
-/// that binds the name to anything else shadows it, the same way it would shadow
-/// the name in an ordinary load
+/// annotation, and a declaration has one type wherever it is visible. An import
+/// of one stands for that declaration: it binds the name to what the other
+/// module declared. A scope that binds the name to anything else shadows it, the
+/// same way it would shadow the name in an ordinary load
 fn resolve_receiver_attribute<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -132,9 +133,11 @@ pub(crate) fn resolve_receiver_attribute_in_scope<'db>(
             continue;
         }
         // the first scope that gives the name a value decides it, exactly as a
-        // name load would. a scope that only *binds* it holds some other value,
+        // name load would. an import states the name's type the way a declaration
+        // does, so a later rebinding in the same scope does not displace it. a
+        // scope that neither declares nor imports the name holds some other value,
         // which shadows an outer receiver callable rather than deferring to it
-        if !place.is_declared() {
+        if !place.is_declared() && !is_imported(db, file, ancestor_scope, name) {
             return None;
         }
         let declared = symbol(
@@ -149,6 +152,20 @@ pub(crate) fn resolve_receiver_attribute_in_scope<'db>(
         return Some((ancestor_scope, bound));
     }
     None
+}
+
+/// whether some reachable binding of `name` in `scope` is an import
+fn is_imported<'db>(db: &'db dyn Db, file: File, scope: ScopeId<'db>, name: &str) -> bool {
+    let index = semantic_index(db, db.program_file(file));
+    let file_scope = scope.file_scope_id(db);
+    let Some(symbol) = index.place_table(file_scope).symbol_id(name) else {
+        return false;
+    };
+    index
+        .use_def_map(file_scope)
+        .reachable_symbol_bindings(symbol)
+        .filter_map(|binding| binding.binding.definition())
+        .any(|definition| definition.kind(db).is_import())
 }
 
 /// basedpython: whether `attribute` resolves through an *implicit receiver* —

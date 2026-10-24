@@ -14,17 +14,14 @@ keep it anchored:
    this is what catches a keyword being added to the language and to the docs
    but never to the lexer
 
-run directly, or through `prek`
-"""
+run through `prek`, or with the workspace's docs group, which installs the lexer
+from this checkout:
 
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["pygments", "basedpython-pygments"]
-#
-# # the lexer under test is the one in this checkout, not a built copy of it
-# [tool.uv.sources]
-# basedpython-pygments = { path = "../python/basedpython-pygments", editable = true }
-# ///
+    uv run --python 3.13 --only-group basedpython-docs python scripts/check_by_lexer.py
+
+it is not a standalone script: building the lexer needs its build backend, which
+only the workspace pins by hash
+"""
 
 from __future__ import annotations
 

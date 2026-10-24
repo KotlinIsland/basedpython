@@ -193,15 +193,17 @@ constrained(1.5)
 
 ## An argument that cannot satisfy the relation
 
-Widening is only available while nothing else pins the type parameter. An invariant occurrence pins
-it, and then the relation is decided rather than accommodated.
+Widening is only available while nothing else pins the type parameter. An invariant occurrence of a
+value whose type is already decided pins it, and then the relation is decided rather than
+accommodated.
 
 ```py
 def invariant[T, R: T](t: list[T], r: R) -> None: ...
 
-invariant([1], 2)
+ints: list[int] = [1]
+invariant(ints, 2)
 # error: [invalid-argument-type] "Argument type `Literal["s"]` does not satisfy upper bound `int` of type variable `R`"
-invariant([1], "s")
+invariant(ints, "s")
 ```
 
 A ceiling on the parameter that is named puts the same ceiling on the parameter that names it.
@@ -220,8 +222,9 @@ outside the bound.
 ```py
 def two[T, R: T](t: list[T], first: R, second: R) -> None: ...
 
+ints: list[int] = [1]
 # error: [invalid-argument-type] "Argument type `Literal["s"]` does not satisfy upper bound `int` of type variable `R`"
-two([1], 2, "s")
+two(ints, 2, "s")
 ```
 
 ## Names a bound may not use

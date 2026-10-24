@@ -162,8 +162,8 @@ if sys.version_info >= (3, 15):
         """
 
         init(self, iterable: Iterable[Element])
-        def __iter__(self) -> Self
-        def __next__(self) -> Element
+        override def __iter__(self) -> Self
+        override def __next__(self) -> Element
         def send(self, value: dynamic, /) -> Element:
             """Send a value to a generator.
 

@@ -1,3 +1,5 @@
+"""Support for building partial DOM trees from SAX events."""
+
 import sys
 from _typeshed import Incomplete, Unused
 from collections.abc import MutableSequence, Sequence
@@ -32,6 +34,11 @@ private type Event = (
 )
 
 class PullDOM(ContentHandler):
+    """Content handler which turns SAX events into pull parser events.
+
+    The nodes are created, but they are not added to the tree.
+    """
+
     document: Document?
     documentFactory: DocumentFactory
 
@@ -78,6 +85,8 @@ class ErrorHandler:
     def fatalError(self, exception: BaseException) -> Never
 
 class DOMEventStream:
+    """Stream of the pull parser events."""
+
     stream: _SupportsReadClose[bytes] | _SupportsReadClose[str]
     parser: XMLReader  # Set to none after .clear() is called
     bufsize: int
@@ -88,13 +97,21 @@ class DOMEventStream:
 
     def __next__(self) -> Event
     def __iter__(self) -> Self
-    def getEvent(self) -> Event?
-    def expandNode(self, node: Document)
-    def reset(self)
+    def getEvent(self) -> Event?:
+        """Return the next (event, node) tuple, or None at the end."""
+
+    def expandNode(self, node: Document):
+        """Expand all children of the node into the node."""
+
+    def reset(self):
+        """Discard unread events and prepare for parsing a new document."""
+
     def clear(self):
-        """clear(): Explicitly release parsing objects"""
+        """Release the parser and the document."""
 
 class SAX2DOM(PullDOM):
+    """PullDOM which also adds every created node to the tree."""
+
     override def startElementNS(self, name: NSName, tagName: str?, attrs: AttributesNSImpl)
     override def startElement(self, name: str, attrs: AttributesImpl)
     override def processingInstruction(self, target: str, data: str)
@@ -107,5 +124,8 @@ def parse(
     stream_or_string: str | _SupportsReadClose[bytes] | _SupportsReadClose[str],
     parser: XMLReader? = None,
     bufsize: int? = None,
-) -> DOMEventStream
-def parseString(string: str, parser: XMLReader? = None) -> DOMEventStream
+) -> DOMEventStream:
+    """Return a DOMEventStream for the given file name or file object."""
+
+def parseString(string: str, parser: XMLReader? = None) -> DOMEventStream:
+    """Return a DOMEventStream for the given string."""

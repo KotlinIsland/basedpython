@@ -173,7 +173,7 @@ a name imported under a condition the program decides as it runs may not be boun
 ```by
 import os
 
-if os.environ.get("BASEDPYTHON_NEVER_SET"):
+if os.environ.get("BASEDPYTHON_NEVER_SET") is not None:
     from decimal import Decimal
 
 class Ledger:
@@ -228,7 +228,7 @@ a binding inside a conditional expression is made only when that branch is taken
 import os
 from decimal import Decimal as RuntimeDecimal
 
-_ = (Decimal := RuntimeDecimal) if os.environ.get("BASEDPYTHON_NEVER_SET") else None
+_ = (Decimal := RuntimeDecimal) if os.environ.get("BASEDPYTHON_NEVER_SET") is not None else None
 entries: set[Decimal] = set()
 assert entries == set()
 ```

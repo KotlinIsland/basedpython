@@ -410,6 +410,22 @@ def recur(a):
 reveal_type(recur([]))  # list[Divergent]
 ```
 
+a class or function the body defines is a new object every time the function runs, so the return
+type does not name that one object. a returned class is a `type[C]`, which keeps its members; a
+returned function is a callable with its signature. an instance of a class the body defines is not
+one object either, so it is returned as itself
+
+```python
+def make():
+    class Point:
+        x: int
+    return Point
+
+reveal_type(make())            # type[Point]
+reveal_type(make() is make())  # bool
+reveal_type(make()())          # Point
+```
+
 ### what the body established about what it returns
 
 a return type is a summary of the function, so it carries what the body settled about the value it
@@ -485,7 +501,7 @@ class Sub(Base):
         print("hi")
 ```
 
-with neither `sound-types` nor `infer-unannotated-signatures` on, nothing is reported: there
+with neither `sound-types` nor `return-type-inference` on, nothing is reported: there
 `-> None` is load-bearing, since dropping it widens the return type to `Unknown`
 
 ## a whole signature, recovered

@@ -218,10 +218,6 @@ from typing import List
 def reveal_unsupported_tuple_results(x: A | B, items: list[int]):
     reveal_type(isinstance(x, (A, (B, bytes))))  # revealed: bool
     reveal_type(isinstance(x, (A | B,)))  # revealed: bool
-    # the fork's typeshed spells `_ClassInfo` as a pep 695 `type` alias rather than
-    # `_ClassInfo: TypeAlias = ...`; a tuple element is not admitted through the
-    # recursive lazy alias, so this argument is (wrongly) rejected
-    # error: [invalid-argument-type]
     reveal_type(isinstance(items, (List,)))  # revealed: bool
 
 def partial_tuple(x: A | B) -> bool:  # error: [invalid-return-type]
@@ -316,11 +312,9 @@ isinstance("", t.Callable | t.Deque)
 issubclass(list, t.Any)
 issubclass(list, t.Any | t.Dict)
 
-# Inside a tuple, special forms are rejected: the recursive `_ClassInfo` alias
-# checks each element, and a special form is not a class. `Any` still works in
-# `issubclass` via its dedicated allowance
-isinstance("", (int, t.Dict))  # error: [invalid-argument-type]
-isinstance("", (int, t.Callable))  # error: [invalid-argument-type]
+# The same works in tuples
+isinstance("", (int, t.Dict))
+isinstance("", (int, t.Callable))
 issubclass(list, (int, t.Any))
 ```
 
@@ -407,10 +401,9 @@ def partial_mutually_recursive_alias(x: RecursivePartialA) -> bool:  # error: [i
 ## Generic builtins should not overfit upper-bound-only callback constraints
 
 These examples are minimized from ecosystem regressions seen while preserving explicit `Never` and
-`object` bounds through the constraint solver. The current solver picks callback parameter upper
-bounds as concrete solutions when the iterable argument is otherwise unknown. That overfits the
-result to `Sized` or `object`; ideally the element type would remain `Unknown`, while the callable
-return type would still be used where possible.
+`object` bounds through the constraint solver. Callback parameter upper bounds should not overfit
+the result when the iterable argument is otherwise unknown. The callable return type should still be
+used where possible.
 
 ```py
 from ty_extensions._internal import Unknown
@@ -419,12 +412,9 @@ def _(xs: Unknown):
     # TODO: should be `list[Unknown]`
     reveal_type(sorted(xs, key=len))  # revealed: list[Sized]
 
-    # TODO: should be `map[str]`
-    reveal_type(map("{}".format, xs))  # revealed: map[object]
+    reveal_type(map("{}".format, xs))  # revealed: map[str]
 
-    # TODO: should not emit an error and should reveal `str`
-    # error: [no-matching-overload]
-    reveal_type("".join(map("{}".format, xs)))  # revealed: Unknown
+    reveal_type("".join(map("{}".format, xs)))  # revealed: str
 ```
 
 ## Mapping methods accept arbitrary object types
@@ -554,6 +544,18 @@ for function in map(Function, [object()]):
     function()
 ```
 
+## Constructing a dictionary from gradual-length tuples
+
+Each tuple supplied to `dict` must contain two elements. A gradual tuple can materialize to that
+length, and so its element type supplies both the key and value types.
+
+```py
+from typing import Any
+
+def _(values: list[tuple[Any, ...]]):
+    reveal_type(dict(values))  # revealed: dict[Any, Any]
+```
+
 ## `dict` calls do not expose internal type variables
 
 Several `dict` overloads accept one positional argument. Whichever is selected, the constructed type
@@ -596,6 +598,11 @@ def clean(value: dict[str, int] | str | None) -> None:
 ```
 
 ## `dict` keyword arguments with a shadowed `typing` module
+
+```toml
+[environment]
+python-version = "3.10"
+```
 
 An empty first-party `typing` module hides the definitions that make `dict` generic. Calls with one
 or more named keyword arguments still check their values and recover with `Unknown`, just like

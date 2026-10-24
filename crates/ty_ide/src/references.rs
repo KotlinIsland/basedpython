@@ -4,24 +4,25 @@
 //! symbol's name, this is a "semantic search" where the text and the semantic
 //! meaning must match.
 //!
-//! Some symbols (such as parameters and local variables) are visible only
-//! within their scope. All other symbols, such as those defined at the global
-//! scope or within classes, are visible outside the module. Finding
-//! all references to these externally-visible symbols therefore requires
-//! an expensive search of all source files in the workspace.
+//! Some symbols (local variables) are visible only within their scope/file.
+//! Other symbols can have references in other modules, requiring an expensive cross-module
+//! search.
+//! * Members can be visible outside the module, even when assigned inside a function.
+//! * Parameters can also have cross-file references through keyword argument labels.
 
 use crate::goto::{Definitions, GotoTarget};
 use crate::{Db, ReferenceKind, ReferenceTarget};
 use rayon::prelude::*;
 use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
-use ruff_python_ast::find_node::{CoveringNode, covering_node};
+use ruff_python_ast::find_node::CoveringNode;
 use ruff_python_ast::token::Tokens;
 use ruff_python_ast::{
     self as ast, AnyNodeRef,
     name::Name,
     visitor::source_order::{SourceOrderVisitor, TraversalSignal},
 };
+use ruff_python_trivia::NameMatcher;
 use ruff_text_size::Ranged;
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_project::parallel::{ParallelIteratorExt, minimum_parallel_job_len};
@@ -30,7 +31,7 @@ use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
 use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, ScopeKind};
 use ty_python_semantic::{
     Db as SemanticDb, FixtureExposure, FixtureNameSource, ImportAliasResolution,
-    ResolvedDefinition, SemanticModel, contains_identifier, fixture_bindings_for_parameter,
+    ResolvedDefinition, SemanticModel, fixture_bindings_for_parameter,
     fixture_exposures_for_definition, pytest_global_plugin_files,
 };
 
@@ -184,20 +185,26 @@ pub(crate) fn references_to_each(
         .filter(|other| *other != source_file)
         .collect();
     let minimum_job_len = minimum_parallel_job_len(files.len(), MAX_MIN_FILES_PER_PARALLEL_JOB);
+    let matchers: Vec<_> = searches
+        .iter()
+        .map(|search| NameMatcher::new(search.target_text.as_str()))
+        .collect();
     let in_other_files = files
         .into_par_iter()
         .with_min_len(minimum_job_len)
         .map_with_db(db, |db, other_file| {
             let source = ruff_db::source::source_text(db, other_file);
             let named: Vec<_> = (0..searches.len())
-                .filter(|&search| contains_identifier(&source, &searches[search].target_text))
+                .filter(|&search| matchers[search].may_match(&source))
                 .collect();
             if named.is_empty() {
                 return Vec::new();
             }
             let other_file = ProgramFile::new(db, other_file, program);
             let parsed = parsed_module(db, other_file.python_file(db));
-            let module = parsed.load(db);
+            // reference and rename searches can scan the whole project, so release closed files'
+            // ASTs as we go
+            let module = parsed.load_then_clear_on_drop(db);
             let model = SemanticModel::new(db, other_file);
             named
                 .into_iter()
@@ -253,7 +260,11 @@ impl<'db> PreparedSearch<'db> {
         let is_externally_visible_symbol =
             has_any_external_visible_definitions(db, &target_definitions);
 
-        let is_parameter = parameter_owner_is_externally_visible(db, &target_definitions);
+        let is_parameter = target_definitions.iter().any(|resolved| {
+            resolved
+                .definition()
+                .is_some_and(|definition| definition.kind(db).is_parameter_def())
+        });
 
         Some(Self {
             search: LocalReferenceSearch {
@@ -306,22 +317,31 @@ fn references_for_search(
                 .collect()
         };
         let minimum_job_len = minimum_parallel_job_len(files.len(), MAX_MIN_FILES_PER_PARALLEL_JOB);
+        let matcher = NameMatcher::new(search.target_text.as_str());
         let other_references = files
             .into_par_iter()
             .with_min_len(minimum_job_len)
             .map_with_db(db, |db, other_file| {
                 let source = ruff_db::source::source_text(db, other_file);
-                if !contains_identifier(&source, &search.target_text) {
+                if !matcher.may_match(&source) {
                     return Vec::new();
                 }
 
                 let other_file = ProgramFile::new(db, other_file, program);
-                if has_fixture_target || is_externally_visible_symbol {
+                // A parameter's declaration and body uses must also be searched when the
+                // request starts from a keyword argument in another file.
+                if has_fixture_target
+                    || is_externally_visible_symbol
+                    || search.target_definitions.iter().any(|resolved| {
+                        resolved
+                            .definition()
+                            .is_some_and(|definition| definition.program_file(db) == other_file)
+                    })
+                {
                     references_for_file(db, other_file, search, mode)
                 } else {
-                    // Parameters are local by scope, but they can have cross-file references via keyword
-                    // argument labels (e.g. `f(param=...)`). Handle this case with a narrow scan that only
-                    // considers keyword arguments.
+                    // Outside their defining files, parameters can be referenced via keyword
+                    // argument labels (e.g. `f(param=...)`). Only consider keyword arguments here.
                     references_for_keyword_arguments_in_file(db, other_file, search, mode)
                 }
             })
@@ -372,7 +392,9 @@ fn references_for_keyword_arguments_in_file(
     );
 
     let parsed = parsed_module(db, file.python_file(db));
-    let module = parsed.load(db);
+    // Reference and rename searches can scan the whole project, so release closed files' ASTs
+    // as we go.
+    let module = parsed.load_then_clear_on_drop(db);
     let model = SemanticModel::new(db, file);
     let mut references = Vec::new();
 
@@ -425,7 +447,9 @@ fn references_for_file(
     mode: ReferencesMode,
 ) -> Vec<ReferenceTarget> {
     let parsed = parsed_module(db, file.python_file(db));
-    let module = parsed.load(db);
+    // Reference and rename searches can scan the whole project, so release closed files' ASTs
+    // as we go.
+    let module = parsed.load_then_clear_on_drop(db);
     let model = SemanticModel::new(db, file);
     references_in_module(&model, &module, search, mode)
 }
@@ -460,91 +484,32 @@ pub(crate) fn has_any_external_visible_definitions(
     definitions: &Definitions<'_>,
 ) -> bool {
     definitions.iter().any(|definition| match definition {
-        ResolvedDefinition::Definition(definition) => match definition.scope(db).scope(db).kind() {
-            ScopeKind::Module | ScopeKind::Class => true,
-            ScopeKind::Comprehension => {
-                matches!(definition.kind(db), DefinitionKind::NamedExpression(_))
-                    && definition.place(db).as_symbol().is_some_and(|symbol_id| {
-                        ty_python_core::semantic_index(db, definition.program_file(db))
-                            .symbol_resolves_to_global_scope(symbol_id, definition.file_scope(db))
-                    })
+        ResolvedDefinition::Definition(definition) => {
+            // A member's accessibility does not depend on the scope of its assignment.
+            if definition.place(db).is_member() {
+                return true;
             }
-            ScopeKind::TypeParams
-            | ScopeKind::Function
-            | ScopeKind::Lambda
-            | ScopeKind::TypeAlias => false,
-        },
+
+            match definition.scope(db).scope(db).kind() {
+                ScopeKind::Module | ScopeKind::Class => true,
+                ScopeKind::Comprehension => {
+                    matches!(definition.kind(db), DefinitionKind::NamedExpression(_))
+                        && definition.place(db).as_symbol().is_some_and(|symbol_id| {
+                            ty_python_core::semantic_index(db, definition.program_file(db))
+                                .symbol_resolves_to_global_scope(
+                                    symbol_id,
+                                    definition.file_scope(db),
+                                )
+                        })
+                }
+                ScopeKind::TypeParams
+                | ScopeKind::Function
+                | ScopeKind::Lambda
+                | ScopeKind::TypeAlias => false,
+            }
+        }
         ResolvedDefinition::Module(_) | ResolvedDefinition::FileWithRange(_) => true,
     })
-}
-
-/// Determine whether a parameter's owning callable is externally visible.
-///
-/// Parameters are local by scope, but their keyword-argument labels can appear across files
-/// when the owning callable is visible outside of the current module.
-fn parameter_owner_is_externally_visible(
-    db: &dyn Db,
-    target_definitions: &Definitions<'_>,
-) -> bool {
-    target_definitions
-        .iter()
-        .any(|target| parameter_owner_is_externally_visible_for_target(db, target))
-}
-
-fn parameter_owner_is_externally_visible_for_target(
-    db: &dyn Db,
-    resolved: &ResolvedDefinition,
-) -> bool {
-    let Some(definition) = resolved.definition() else {
-        return false;
-    };
-    let parsed = parsed_module(db, definition.python_file(db));
-    let target = definition.focus_range(db, &parsed.load(db));
-    let module = parsed.load(db);
-
-    let covering = covering_node(module.syntax().into(), target.range());
-    let Ok(parameter_covering) =
-        covering.find_last(|node| matches!(node, AnyNodeRef::Parameter(_)))
-    else {
-        return false;
-    };
-
-    let mut owner: Option<AnyNodeRef<'_>> = None;
-    let mut seen_owner = false;
-    let mut class_ancestor_found = false;
-
-    // Heuristic: treat parameters as externally visible only when they belong to a top-level
-    // function or a method on a top-level class. Nested functions/classes are excluded to avoid
-    // broad, low-signal workspace scans.
-    for ancestor in parameter_covering.ancestors() {
-        if !seen_owner {
-            if matches!(
-                ancestor,
-                AnyNodeRef::StmtFunctionDef(_) | AnyNodeRef::ExprLambda(_)
-            ) {
-                owner = Some(ancestor);
-                seen_owner = true;
-            }
-            continue;
-        }
-
-        match ancestor {
-            AnyNodeRef::StmtFunctionDef(_) | AnyNodeRef::ExprLambda(_) => {
-                // Nested functions or lambdas are not externally visible.
-                return false;
-            }
-            AnyNodeRef::StmtClassDef(_) => {
-                if class_ancestor_found {
-                    // Nested classes are treated as not externally visible for now.
-                    return false;
-                }
-                class_ancestor_found = true;
-            }
-            _ => {}
-        }
-    }
-
-    matches!(owner, Some(AnyNodeRef::StmtFunctionDef(_)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -27,7 +27,7 @@ import os
 import re
 import sys
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,7 @@ from basedpython.build import (
 
 
 @contextlib.contextmanager
-def reports(pattern: str) -> Iterator[None]:
+def reports(pattern: str) -> Generator[None, None, None]:
     """Assert that the block fails, with a message matching `pattern`.
 
     `pytest.raises` would say this, but pytest is not a dependency of this

@@ -89,7 +89,7 @@ class InspectLoader(Loader):
         Raises ImportError if the module cannot be found.
         """
 
-    def exec_module(self, module: types.ModuleType):
+    override def exec_module(self, module: types.ModuleType):
         """Execute the module."""
 
     if sys.version_info >= (3, 15):
@@ -271,7 +271,7 @@ class FileLoader(_bootstrap_external.FileLoader, ResourceLoader, ExecutionLoader
 
     if sys.version_info < (3, 15):
         @deprecated("Deprecated since Python 3.10; removed in Python 3.15. Use `exec_module()` instead.")
-        override def load_module(self, fullname: str? = None) -> types.ModuleType:
+        def load_module(self, fullname: str? = None) -> types.ModuleType:
             """Load a module from a file.
 
             This method is deprecated.  Use exec_module() instead.
@@ -379,10 +379,10 @@ if sys.version_info < (3, 11):
         abstract def files(self) -> Traversable:
             """Return a Traversable object for the loaded package."""
 
-        override def open_resource(self, resource: str) -> BufferedReader
-        override def resource_path(self, resource: dynamic) -> str
-        override def is_resource(self, path: str) -> bool
-        override def contents(self) -> Iterator[str]
+        def open_resource(self, resource: str) -> BufferedReader
+        def resource_path(self, resource: dynamic) -> str
+        def is_resource(self, path: str) -> bool
+        def contents(self) -> Iterator[str]
 
 elif sys.version_info < (3, 14):
     from importlib.resources.abc export (

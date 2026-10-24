@@ -398,7 +398,7 @@ fn interpreter(db: &ProjectDatabase) -> Option<SystemPathBuf> {
 }
 
 /// Returns a string with detailed memory usage.
-fn debug_information(session: &Session) -> crate::Result<String> {
+fn debug_information(session: &mut Session) -> crate::Result<String> {
     let mut buffer = String::new();
 
     writeln!(
@@ -425,7 +425,7 @@ fn debug_information(session: &Session) -> crate::Result<String> {
         writeln!(buffer)?;
     }
 
-    for db in session.project_dbs() {
+    for db in session.projects_mut() {
         writeln!(buffer, "Project at {}", db.project().root(db))?;
         let program = db.project().program(db);
         writeln!(buffer, "Program:")?;

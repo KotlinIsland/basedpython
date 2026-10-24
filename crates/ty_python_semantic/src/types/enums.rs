@@ -14,9 +14,10 @@ use crate::{
     },
     reachability::DeclarationsIteratorExtension,
     types::{
-        ClassBase, ClassLiteral, DynamicType, EnumLiteralType, IntersectionType, KnownClass,
-        LiteralValueTypeKind, MemberLookupPolicy, NegativeIntersectionElements, StaticClassLiteral,
-        Type, UnionType, binding_type,
+        ApplyTypeMappingVisitor, ClassBase, ClassLiteral, DynamicType, EnumLiteralType,
+        IntersectionType, KnownClass, LiteralValueTypeKind, MemberLookupPolicy,
+        NegativeIntersectionElements, StaticClassLiteral, Type, TypeContext, TypeMapping,
+        UnionType, binding_type,
         function::FunctionType,
         set_theoretic::{
             RecursivelyDefined,
@@ -268,7 +269,7 @@ impl FlagAutoSeed {
             // python's `bit_length` ignores the sign, and answers `0` for `0`,
             // which is why this is a shift by the bit length itself
             Self::Known(seed) => {
-                let bit_length = u64::BITS - seed.unsigned_abs().leading_zeros();
+                let bit_length = seed.unsigned_abs().bit_width();
                 // a value this large is beyond what ty spells as an int literal,
                 // even though python would keep doubling
                 (bit_length < i64::BITS - 1).then(|| 1i64 << bit_length)
@@ -602,6 +603,11 @@ impl<'db> EnumMetadata<'db> {
         }
     }
 
+    /// Return whether `name` is an enum member, including aliases.
+    pub(super) fn contains_member(&self, name: &str) -> bool {
+        self.members.contains_key(name) || self.aliases.contains_key(name)
+    }
+
     /// Returns the type of `.value`/`._value_` for a given enum member.
     ///
     /// A user-defined `_value_` annotation takes priority. Otherwise, values transformed by
@@ -802,7 +808,7 @@ impl<'db> EnumComplementType<'db> {
         let mut enum_class = None;
         let mut rest = SmallVec::<[Type<'db>; 1]>::default();
         for positive in positive {
-            let Type::NominalInstance(instance) = positive else {
+            let Type::NominalInstance(instance) = positive.resolve_type_alias(db) else {
                 rest.push(*positive);
                 continue;
             };
@@ -824,7 +830,7 @@ impl<'db> EnumComplementType<'db> {
         }
         let mut excluded_names = FxHashSet::default();
         for negative in negative {
-            let enum_literal = negative.as_enum_literal()?;
+            let enum_literal = negative.resolve_type_alias(db).as_enum_literal()?;
             if enum_literal.enum_class_literal(db) != enum_class_literal {
                 return None;
             }
@@ -984,6 +990,32 @@ impl<'db> EnumComplementType<'db> {
         // `Color & Any & ~Literal[Color.RED]`, are not equivalent to that literal union because the
         // additional intersection components must remain.
         self.rest(db).is_empty()
+    }
+
+    /// Map the complement's remaining components without expanding open recursive bodies.
+    pub(super) fn apply_type_mapping_impl<'a>(
+        self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        tcx: TypeContext<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
+    ) -> Type<'db> {
+        if type_mapping.is_structural() {
+            Type::EnumComplement(EnumComplementType::new(
+                db,
+                self.enum_class_literal(db),
+                self.excluded_names(db).clone(),
+                self.rest(db)
+                    .iter()
+                    .map(|ty| {
+                        ty.apply_type_mapping_impl(db, visitor.env, type_mapping, tcx, visitor)
+                    })
+                    .collect::<FxOrderSet<_>>(),
+            ))
+        } else {
+            self.to_intersection(db, visitor.env)
+                .apply_type_mapping_impl(db, visitor.env, type_mapping, tcx, visitor)
+        }
     }
 
     /// Reconstruct the equivalent set-theoretic intersection.
@@ -1181,14 +1213,17 @@ pub(crate) fn enum_metadata<'db>(
         return None;
     }
 
+    let scope_id = class.body_scope(db);
+    let use_def_map = use_def_map(db, scope_id);
+    // As a fast path, avoid looking up base classes if the class body is empty
+    use_def_map.all_end_of_scope_symbol_bindings().next()?;
+
     let env = ProgramEnvironment::from_file(class.program_file(db));
 
     if !is_enum_class_by_inheritance(db, &env, class) {
         return None;
     }
 
-    let scope_id = class.body_scope(db);
-    let use_def_map = use_def_map(db, scope_id);
     let table = place_table(db, scope_id);
 
     let mut enum_values: FxHashMap<LiteralValueTypeKind<'db>, Name> = FxHashMap::default();

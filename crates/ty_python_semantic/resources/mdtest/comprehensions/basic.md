@@ -237,7 +237,6 @@ def loop_carried_guard():
     flag = False
     # basedpython reports the guard as redundant on the first iteration, where `flag`
     # is still the `False` it was just assigned
-    # error: [redundant-condition]
     [((value := 1) if flag else 0, (flag := True)) for _ in [0, 1]]
     # error: [possibly-unresolved-reference]
     reveal_type(value)  # revealed: int

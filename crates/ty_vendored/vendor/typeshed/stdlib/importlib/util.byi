@@ -93,7 +93,7 @@ class LazyLoader(Loader):
     class def factory(cls, loader: Loader) -> (...) -> LazyLoader:
         """Construct a callable which returns the eager loader made lazy."""
 
-    def exec_module(self, module: types.ModuleType):
+    override def exec_module(self, module: types.ModuleType):
         """Make the module load lazily."""
 
 def source_hash(source_bytes: ReadableBuffer) -> bytes:

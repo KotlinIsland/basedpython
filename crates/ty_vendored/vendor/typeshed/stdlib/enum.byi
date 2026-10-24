@@ -101,7 +101,7 @@ class _EnumDict(dict[str, dynamic]):
         #
         # Unlike with MutableMapping.update(), the first argument is required,
         # hence the type: ignore
-        def update(self, members: SupportsKeysAndGetItem[str, dynamic], **more_members: dynamic) -> None
+        override def update(self, members: SupportsKeysAndGetItem[str, dynamic], **more_members: dynamic) -> None
         def update(self, members: Iterable[(str, dynamic)], **more_members: dynamic) -> None
 
     if sys.version_info >= (3, 13):
@@ -473,7 +473,7 @@ if sys.version_info >= (3, 12):
 
         _value_: int
         @_magic_enum_attr
-        def value(self) -> int:
+        override def value(self) -> int:
             """The value of the Enum member."""
 
         def __new__(cls, value: int) -> Self
@@ -492,7 +492,7 @@ else:
 
         _value_: int
         @_magic_enum_attr
-        override def value(self) -> int:
+        def value(self) -> int:
             """The value of the Enum member."""
 
         def __new__(cls, value: int) -> Self
@@ -550,10 +550,10 @@ if sys.version_info >= (3, 11):
         def __new__(cls, value: str) -> Self
         _value_: str
         @_magic_enum_attr
-        def value(self) -> str:
+        override def value(self) -> str:
             """The value of the Enum member."""
 
-        static def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:
+        override static def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:
             """
             Return the lower-cased version of the member name.
             """
@@ -645,10 +645,10 @@ if sys.version_info >= (3, 12):
         """
 
         def __new__(cls, value: int) -> Self
-        def __or__(self, other: int) -> Self
-        def __and__(self, other: int) -> Self
-        def __xor__(self, other: int) -> Self
-        def __invert__(self) -> Self
+        override def __or__(self, other: int) -> Self
+        override def __and__(self, other: int) -> Self
+        override def __xor__(self, other: int) -> Self
+        override def __invert__(self) -> Self
         __ror__ = __or__
         __rand__ = __and__
         __rxor__ = __xor__
@@ -678,10 +678,10 @@ else:
         """
 
         def __new__(cls, value: int) -> Self
-        override def __or__(self, other: int) -> Self
-        override def __and__(self, other: int) -> Self
-        override def __xor__(self, other: int) -> Self
-        override def __invert__(self) -> Self
+        def __or__(self, other: int) -> Self
+        def __and__(self, other: int) -> Self
+        def __xor__(self, other: int) -> Self
+        def __invert__(self) -> Self
         __ror__ = __or__
         __rand__ = __and__
         __rxor__ = __xor__

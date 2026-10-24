@@ -140,7 +140,33 @@ fn divergence_bounded<'db>(
 /// A `return` that can never be reached hands nothing back, so its value is left out, as the end
 /// of the body is when control cannot fall off it. A body whose every `return` and whose end are
 /// unreachable returns `Never`: a call to it cannot return, and the checker ends the flow there.
+///
+/// A class or function the body defines is a new object on every call, so it is generalized
+/// rather than handed back as itself (see [`GeneralizeLocalTypes`]).
+///
+/// [`GeneralizeLocalTypes`]: crate::types::TypeMapping::GeneralizeLocalTypes
 pub(crate) fn return_type_from_body<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    body_scope: ScopeId<'db>,
+    node: &ast::StmtFunctionDef,
+    is_generator: bool,
+    use_def: &UseDefMap<'db>,
+    expression_type: impl Fn(&Expr) -> Type<'db>,
+) -> Type<'db> {
+    body_value_type(
+        db,
+        env,
+        body_scope,
+        node,
+        is_generator,
+        use_def,
+        expression_type,
+    )
+    .generalize_local_types(db, env, body_scope)
+}
+
+fn body_value_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     body_scope: ScopeId<'db>,
@@ -764,7 +790,10 @@ fn asserted_types<'db>(
             continue;
         };
         let predicate = Predicate {
-            node: PredicateNode::Expression(expression),
+            node: PredicateNode::Expression {
+                expression,
+                truthiness_from_type: false,
+            },
             is_positive: true,
         };
         let (Some(constraint), _) = infer_narrowing_constraints(db, env, predicate, place) else {
@@ -817,7 +846,10 @@ fn asserted_parameter_types<'db>(
             continue;
         };
         let predicate = Predicate {
-            node: PredicateNode::Expression(expression),
+            node: PredicateNode::Expression {
+                expression,
+                truthiness_from_type: false,
+            },
             is_positive: true,
         };
         for (place_id, definition) in &parameters {
@@ -1518,11 +1550,11 @@ where
         let env = self.env.clone();
         let callee = (self.expression_type)(&call.func);
         let arguments = CallArguments::from_arguments_typed(&call.arguments, |expr| {
-            if expr.range() == range {
+            Some(if expr.range() == range {
                 Type::object()
             } else {
                 (self.expression_type)(expr)
-            }
+            })
         });
         callee
             .bindings(db, &env)
@@ -2268,9 +2300,7 @@ where
             // `a < b < c` is two comparisons on the same operands read pairwise, so an operand in
             // the middle of a chain is only accounted for when both of them account for it
             Expr::Compare(compare) => {
-                let operands: Vec<&Expr> = std::iter::once(&*compare.left)
-                    .chain(&compare.comparators)
-                    .collect();
+                let operands: Vec<&Expr> = compare.operands.iter().collect();
                 let mut accounted = vec![true; operands.len()];
                 for (index, op) in compare.ops.iter().enumerate() {
                     let (Some(left), Some(right)) = (operands.get(index), operands.get(index + 1))
@@ -2403,7 +2433,8 @@ fn call_parameter_types<'db>(
     arguments: &ast::Arguments,
     expression_type: impl Fn(&Expr) -> Type<'db>,
 ) -> Option<Vec<Option<Type<'db>>>> {
-    let call_arguments = CallArguments::from_arguments_typed(arguments, expression_type);
+    let call_arguments =
+        CallArguments::from_arguments_typed(arguments, |expr| Some(expression_type(expr)));
     let bindings = callee
         .bindings(db, env)
         .match_parameters(db, env, &call_arguments)

@@ -174,7 +174,9 @@ fn continuing_keyword(
         // `case` is a soft keyword, and the parser only keeps a `case` token for one inside a
         // `match`; written in a body where it does not belong yet, it reads as a name.
         TokenKind::Case => ContinuingKeyword::Case,
-        TokenKind::Name if &source[keyword_token.range()] == "case" => ContinuingKeyword::Case,
+        TokenKind::Identifier if &source[keyword_token.range()] == "case" => {
+            ContinuingKeyword::Case
+        }
         _ => return None,
     };
     let starts_line = tokens[..first]

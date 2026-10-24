@@ -117,16 +117,19 @@ impl BackgroundDocumentRequestHandler for CopiedImportsRequestHandler {
         if snapshot.document().is_cell_or_notebook() || snapshot.is_django_template() {
             return Ok(None);
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         let copies: Vec<_> = params
             .copies
             .iter()
             .filter_map(|copy| {
-                let at =
-                    copy.position
-                        .to_text_size(db, file, snapshot.uri(), snapshot.encoding())?;
+                let at = copy.position.to_text_size(
+                    db,
+                    file,
+                    snapshot.document().uri(),
+                    snapshot.encoding(),
+                )?;
                 Some(ty_ide::CopiedCode {
                     text: &copy.text,
                     at,

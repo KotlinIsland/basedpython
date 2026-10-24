@@ -241,11 +241,9 @@ if not typing.TYPE_CHECKING:
     def p() -> str:
         raise NotImplementedError
 
-# error: [redundant-condition]
 if compat.sub.sub.TYPE_CHECKING:
     def q() -> str: ...
 
-# error: [redundant-condition]
 if not compat.sub.sub.TYPE_CHECKING:
     def r() -> str:
         raise NotImplementedError
@@ -301,7 +299,6 @@ def f() -> int:
 # no implicit return
 def f(cond: bool) -> int:
     cond = True
-    # error: [redundant-condition]
     if cond:
         return 1
 
@@ -310,7 +307,6 @@ def f(cond: bool) -> int:
         cond = True
     else:
         return 1
-    # error: [redundant-condition]
     if cond:
         return 2
 ```
@@ -423,7 +419,6 @@ def f(cond: bool) -> int:
         cond = False
     else:
         return 1
-    # error: [redundant-condition]
     if cond:
         return 2
 ```

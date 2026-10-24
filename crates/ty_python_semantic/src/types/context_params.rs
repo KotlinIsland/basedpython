@@ -359,10 +359,8 @@ fn callee_signatures<'db>(db: &'db dyn Db, callee: Type<'db>) -> Box<[Signature<
         }
         Type::BoundMethod(method) => method
             .bound_signatures(db)
-            .overloads
-            .iter()
-            .cloned()
-            .collect(),
+            .map(|signatures| signatures.overloads.iter().cloned().collect())
+            .unwrap_or_default(),
         _ => Box::default(),
     }
 }
@@ -589,7 +587,9 @@ pub(crate) fn unfilled_decoration_context_parameters<'db>(
 ) -> Vec<Name> {
     let signatures = match callee {
         Type::FunctionLiteral(function) => function.signature(db).clone(),
-        Type::BoundMethod(method) => method.bound_signatures(db).clone(),
+        Type::BoundMethod(method) if let Some(signatures) = method.bound_signatures(db) => {
+            signatures.clone()
+        }
         _ => return Vec::new(),
     };
     let mut unfilled: Option<Vec<Name>> = None;

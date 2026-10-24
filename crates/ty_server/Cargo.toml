@@ -37,6 +37,7 @@ ty_static = { workspace = true }
 anyhow = { workspace = true }
 bitflags = { workspace = true }
 crossbeam = { workspace = true }
+indexmap = { workspace = true }
 jod-thread = { workspace = true }
 lsp-server = { workspace = true }
 lsp-types = { workspace = true }

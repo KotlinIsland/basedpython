@@ -332,10 +332,10 @@ if sys.version_info >= (3, 12):
         else:
             def __init__(self, **kwargs: dynamic) -> None
 
-        def __eq__(self, value: object, /) -> bool
-        def __getattribute__(self, name: str, /) -> dynamic
-        def __setattr__(self, name: str, value: dynamic, /)
-        def __delattr__(self, name: str, /)
+        override def __eq__(self, value: object, /) -> bool
+        override def __getattribute__(self, name: str, /) -> dynamic
+        override def __setattr__(self, name: str, value: dynamic, /)
+        override def __delattr__(self, name: str, /)
         if sys.version_info >= (3, 13):
             def __replace__(self, **kwargs: dynamic) -> Self:
                 """Return a copy of the namespace object with new values for the specified attributes."""
@@ -349,10 +349,10 @@ else:
 
         __hash__: ClassVar[None]
         init(self, **kwargs: dynamic)
-        override def __eq__(self, value: object, /) -> bool
-        override def __getattribute__(self, name: str, /) -> dynamic
-        override def __setattr__(self, name: str, value: dynamic, /)
-        override def __delattr__(self, name: str, /)
+        def __eq__(self, value: object, /) -> bool
+        def __getattribute__(self, name: str, /) -> dynamic
+        def __setattr__(self, name: str, value: dynamic, /)
+        def __delattr__(self, name: str, /)
 
 @disjoint_base
 class ModuleType:
@@ -388,11 +388,10 @@ class ModuleType:
 final class CellType:
     """Create a new cell object.
 
-     contents
-       the contents of the cell. If not specified, the cell will be empty,
-       and
-    further attempts to access its cell_contents attribute will
-       raise a ValueError.
+    contents
+      the contents of the cell. If not specified, the cell will be empty,
+      and further attempts to access its cell_contents attribute will
+      raise a ValueError.
     """
 
     def __new__(cls, contents: object = ..., /) -> Self
@@ -677,25 +676,35 @@ if sys.version_info >= (3, 15):
         """
 
         def __new__(cls, frame: FrameType, /) -> Self
-        def __getitem__(self, key: str, /) -> dynamic
-        def __setitem__(self, key: str, value: dynamic, /):
+        override def __getitem__(self, key: str, /) -> dynamic
+        override def __setitem__(self, key: str, value: dynamic, /):
             """Set self[key] to value."""
 
-        def __delitem__(self, key: str, /):
+        override def __delitem__(self, key: str, /):
             """Delete self[key]."""
 
-        def __iter__(self) -> Iterator[str]:
+        override def __iter__(self) -> Iterator[str]:
             """Implement iter(self)."""
 
-        def __len__(self) -> int:
+        override def __len__(self) -> int:
             """Return len(self)."""
 
-        def __contains__(self, key: object, /) -> bool
+        override def __contains__(self, key: object, /) -> bool
         def __reversed__(self) -> Iterator[str]
+        def __or__(self, other: dict[str, dynamic] | FrameLocalsProxyType, /) -> dict[str, dynamic]:
+            """Return self|value."""
+
+        # Will raise a NameError if invoked via |=
+        def __ior__(self, other: dict[str, dynamic] | FrameLocalsProxyType, /) -> dict[str, dynamic]:  # noqa: Y034
+            """Return self|=value."""
+
+        def __ror__(self, other: dict[str, dynamic] | FrameLocalsProxyType, /) -> dict[str, dynamic]:
+            """Return value|self."""
+
         def copy(self) -> dict[str, dynamic]
-        def pop(self, key: str, default: dynamic = ..., /) -> dynamic
-        def setdefault(self, key: str, default: dynamic = ..., /) -> dynamic
-        def update(self, object: SupportsKeysAndGetItem[str, dynamic] | Iterable[(str, dynamic)], /)
+        override def pop(self, key: str, default: dynamic = ..., /) -> dynamic
+        override def setdefault(self, key: str, default: dynamic = ..., /) -> dynamic
+        override def update(self, object: SupportsKeysAndGetItem[str, dynamic] | Iterable[(str, dynamic)], /)
 
     final class LazyImportType:
         """Represents a lazy import that will be resolved on first use.
@@ -705,9 +714,8 @@ if sys.version_info >= (3, 15):
         the imported value.
         """
 
-        let __name__: str
         def resolve(self) -> dynamic:
-            """resolves the lazy import and returns the actual object"""
+            """Resolve the lazy import and return the imported object."""
 
 final class GetSetDescriptorType:
     let __name__: str

@@ -285,7 +285,7 @@ impl<'db> FluidFold<'db, '_> {
     ) -> Type<'db> {
         let file = self.file;
         let specialization = self.builder.build_merged_with(|typevar, bounds| {
-            let lower = bounds?.evidence_lower()?;
+            let lower = bounds?.inference_lower(db, env)?;
             Some(if promote && typevar.widens_literal_solutions(db) {
                 // see the note in `solve_fluid_specialization`
                 lower
@@ -582,7 +582,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 if builder.infer(parameter_ty, eventual).is_ok() {
                                     let eventual_specialization =
                                         builder.build_merged_with(|_, bounds| {
-                                            let lower = bounds?.evidence_lower()?;
+                                            let lower = bounds?.inference_lower(db, env)?;
                                             Some(lower)
                                         });
                                     overload.return_ty =
@@ -1058,7 +1058,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
 
         let specialization = builder.build_merged_with(|_, bounds| {
-            let lower = bounds?.evidence_lower()?;
+            let lower = bounds?.inference_lower(db, env)?;
             Some(lower)
         });
 
@@ -1088,7 +1088,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
         let file = self.file();
         let specialization = builder.build_merged_with(|typevar, bounds| {
-            let lower = bounds?.evidence_lower()?;
+            let lower = bounds?.inference_lower(db, env)?;
             Some(if promote && typevar.widens_literal_solutions(db) {
                 // Match the promotion policy of collection-literal inference: promote
                 // literal types in invariant position, and promote singleton types to

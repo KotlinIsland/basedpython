@@ -13,14 +13,19 @@ use crate::metadata::value::{RelativeGlobPattern, RelativePathBuf};
 use ordermap::OrderMap;
 use pep440_rs::VersionSpecifiers;
 use ruff_db::RustDoc;
+#[cfg(feature = "junit")]
+use ruff_db::diagnostic::render::JunitRenderer;
+use ruff_db::diagnostic::render::{
+    ConciseRenderer, FileResolver, FullRenderer, GithubRenderer, GitlabRenderer, Renderer,
+};
 use ruff_db::diagnostic::{
-    Annotation, Diagnostic, DiagnosticFormat, DiagnosticId, DisplayDiagnosticConfig, Severity,
-    Span, SubDiagnostic, SubDiagnosticSeverity,
+    Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, Severity, Span, SubDiagnostic,
+    SubDiagnosticSeverity,
 };
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_macros::{Combine, OptionsMetadata, RustDoc};
-use ruff_options_metadata::{OptionSet, OptionsMetadata, Visit};
+use ruff_options_metadata::{OptionSet, OptionSetKind, OptionsMetadata, Visit};
 use ruff_python_ast::PythonVersion;
 use ruff_ranged_value::{RangedValue, ValueSource, ValueSourceGuard};
 use ruff_text_size::TextRange;
@@ -40,12 +45,13 @@ use ty_module_resolver::{
     ModuleGlobSet, ModuleGlobSetBuilder, SearchPathSettings, SearchPathSettingsError, SearchPaths,
 };
 use ty_python_core::platform::PythonPlatform;
-use ty_python_core::program::{MisconfigurationStrategy, ProgramSettings};
+use ty_python_core::program::{MisconfigurationStrategy, ProgramSettings, PythonEnvironmentError};
 use ty_python_semantic::lint::{Level, LintSource, RuleSelection};
 use ty_python_semantic::{
     AnalysisSettings, ExperimentalSettings, PythonEnvironment, PythonVersionFileSource,
-    PythonVersionSource, PythonVersionWithSource, SitePackagesDiscoveryError, SitePackagesPaths,
-    SysPrefixPathOrigin, TypeCheckingPreset, inferred_python_version_source_annotation,
+    PythonVersionSource, PythonVersionWithSource, ReturnTypeInference, SitePackagesDiscoveryError,
+    SitePackagesPaths, SysPrefixPathOrigin, TypeCheckingPreset,
+    inferred_python_version_source_annotation,
 };
 use ty_static::EnvVars;
 
@@ -275,6 +281,14 @@ impl Options {
             configured => configured.map_err(ToProgramSettingsError::PythonEnvironment),
         };
 
+        let python_environment_error = match &python_environment {
+            Err(ToProgramSettingsError::PythonEnvironment(error)) => Some(PythonEnvironmentError {
+                message: error.to_string().into(),
+                last_usable: None,
+            }),
+            _ => None,
+        };
+
         // If in safe-mode, fallback to None if this fails instead of erroring.
         let python_environment = strategy
             .fallback_opt(python_environment, |_| {
@@ -365,6 +379,10 @@ impl Options {
                 python_version,
                 python_platform,
                 search_paths,
+                python_environment: match python_environment_error {
+                    Some(error) => Err(error),
+                    None => Ok(python_environment),
+                },
             },
             diagnostics,
         ))
@@ -559,7 +577,7 @@ impl Options {
                 output_format: terminal.output_format,
                 color: colored::control::SHOULD_COLORIZE.should_colorize(),
             });
-        let src = strategy.fallback(src, |_| SrcSettings::default())?;
+        let src = strategy.fallback(src, |_| SrcSettings::default(context.configuration_root()))?;
 
         let build = self
             .build
@@ -570,7 +588,9 @@ impl Options {
                 output_format: terminal.output_format,
                 color: colored::control::SHOULD_COLORIZE.should_colorize(),
             });
-        let build = strategy.fallback(build, |_| BuildSettings::default())?;
+        let build = strategy.fallback(build, |_| {
+            BuildSettings::default(context.configuration_root())
+        })?;
 
         let mut analysis_diagnostics = Vec::new();
         let analysis =
@@ -702,19 +722,24 @@ impl<'a> OptionsContext<'a> {
 fn python_version_from_config(
     ranged_version: &RangedValue<SupportedPythonVersion>,
 ) -> PythonVersionWithSource {
+    let source = match ranged_version.source() {
+        ValueSource::Cli => PythonVersionSource::Cli,
+        ValueSource::File(path) => PythonVersionSource::ConfigFile(PythonVersionFileSource::new(
+            path.clone(),
+            ranged_version.range(),
+        )),
+        ValueSource::ScriptMetadata(file) => PythonVersionSource::ScriptMetadata(
+            Span::from(*file).with_optional_range(ranged_version.range()),
+        ),
+        ValueSource::Editor => PythonVersionSource::Editor,
+        ValueSource::UvMetadata => {
+            unreachable!("uv metadata does not provide a configured Python version")
+        }
+    };
+
     PythonVersionWithSource {
         version: PythonVersion::from(**ranged_version),
-        source: match ranged_version.source() {
-            ValueSource::Cli => PythonVersionSource::Cli,
-            ValueSource::File(path) => PythonVersionSource::ConfigFile(
-                PythonVersionFileSource::new(path.clone(), ranged_version.range()),
-            ),
-            ValueSource::ScriptMetadata(file) => PythonVersionSource::ScriptMetadata(
-                Span::from(*file).with_optional_range(ranged_version.range()),
-            ),
-            ValueSource::Editor => PythonVersionSource::Editor,
-            ValueSource::UvMetadata => PythonVersionSource::UvMetadata,
-        },
+        source,
     }
 }
 
@@ -843,10 +868,6 @@ fn unsupported_inferred_python_version_diagnostic(
             SubDiagnosticSeverity::Info,
             "The version was inferred from your editor.",
         )),
-        PythonVersionSource::UvMetadata => diagnostic.sub(SubDiagnostic::new(
-            SubDiagnosticSeverity::Info,
-            "The version was provided by uv metadata.",
-        )),
         PythonVersionSource::Default => diagnostic.sub(SubDiagnostic::new(
             SubDiagnosticSeverity::Info,
             "ty fell back to its default Python version.",
@@ -965,7 +986,7 @@ pub struct EnvironmentOptions {
     /// to reflect the differing contents of the standard library across Python versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[option(
-        default = r#""3.14""#,
+        default = r#""3.15""#,
         value_type = r#""3.7" | "3.8" | "3.9" | "3.10" | "3.11" | "3.12" | "3.13" | "3.14" | "3.15""#,
         example = r#"
             python-version = "3.12"
@@ -1454,9 +1475,11 @@ fn build_exclude_filter(
     let system = db.system();
     let mut excludes = ExcludeFilterBuilder::new();
 
+    // Like excludes in a `ty.toml`, default excludes only apply under the project root.
+    // An explicit `../sibling/dist` is not excluded by project defaults.
     for pattern in default_patterns {
         PortableGlobPattern::parse(pattern, PortableGlobKind::Exclude)
-            .and_then(|exclude| Ok(excludes.add(&exclude.into_absolute(""))?))
+            .and_then(|exclude| Ok(excludes.add(&exclude.into_absolute(project_root))?))
             .unwrap_or_else(|err| {
                 panic!("Expected default exclude to be valid glob but adding it failed with: {err}")
             });
@@ -1643,18 +1666,22 @@ impl OutputFormat {
     pub const fn is_human_readable(&self) -> bool {
         matches!(self, OutputFormat::Full | OutputFormat::Concise)
     }
-}
 
-impl From<OutputFormat> for DiagnosticFormat {
-    fn from(value: OutputFormat) -> Self {
-        match value {
-            OutputFormat::Full => Self::Full,
-            OutputFormat::Concise => Self::Concise,
-            OutputFormat::Gitlab => Self::Gitlab,
-            OutputFormat::Github => Self::Github,
+    /// Display diagnostics in this output format.
+    pub fn display<'a>(
+        self,
+        resolver: &'a dyn FileResolver,
+        config: &'a DisplayDiagnosticConfig,
+        diagnostics: &'a [Diagnostic],
+    ) -> impl Display + use<'a> {
+        fmt::from_fn(move |f| match self {
+            Self::Full => FullRenderer::new(resolver, config).render(f, diagnostics),
+            Self::Concise => ConciseRenderer::new(resolver, config).render(f, diagnostics),
+            Self::Gitlab => GitlabRenderer::new(resolver, config).render(f, diagnostics),
+            Self::Github => GithubRenderer::new(resolver, config).render(f, diagnostics),
             #[cfg(feature = "junit")]
-            OutputFormat::Junit => Self::Junit,
-        }
+            Self::Junit => JunitRenderer::new(resolver, config).render(f, diagnostics),
+        })
     }
 }
 
@@ -2190,8 +2217,32 @@ impl ExperimentalOptions {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AnalysisOptions {
+    /// This setting controls when ty infers return types for functions without an explicit
+    /// return type annotation.
+    ///
+    /// - `"never"`: Do not infer return types. Unannotated functions will have a return type of
+    ///   `Unknown`, apart from what an overload group supplies.
+    /// - `"always"`: A missing return type is taken from the method the function overrides, when
+    ///   that method has one, declared or inferred, and otherwise from the body: the union of what
+    ///   it returns, plus `None` when control can also fall off the end. An empty body returns
+    ///   `None`, a body that always raises returns `Never`, and a generator returns a generator.
+    ///
+    /// An explicit annotation always wins, and so does anything an overload group supplies. Lambda
+    /// functions are not affected by this setting and their return type will always be inferred.
+    /// `sound-types` implies `"always"`.
+    ///
+    /// Defaults to `"always"`, and to `"never"` under the `ty-compatible` type checking preset.
+    #[option(
+        default = r#""always""#,
+        value_type = r#""never" | "always""#,
+        example = r#"
+            return-type-inference = "always"
+        "#
+    )]
+    pub return_type_inference: Option<ReturnTypeInference>,
+
     /// Whether ty should use strict narrowing for unspecialized generic classes in
-    /// `isinstance()` and `issubclass()` checks, as well as `match` class patterns.
+    /// `isinstance()` and `issubclass()` checks, `match` class patterns, and `TypeIs` checks.
     ///
     /// When enabled, ty narrows to the top materialization of the class. For example,
     /// `isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
@@ -2437,23 +2488,19 @@ pub struct AnalysisOptions {
     )]
     pub sound_types: Option<bool>,
 
-    /// Whether a function with no annotations is given the signature its body determines. This is
+    /// Whether a function's unannotated parameters are given the types its body determines. This is
     /// a basedpython feature.
     ///
-    /// Python's gradual guarantee makes an unannotated `def` say nothing: its parameters accept
-    /// anything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an
-    /// otherwise typed project, and it silently swallows real mistakes. With this enabled, the
-    /// missing half of the signature is recovered from what the function itself already determines:
+    /// Python's gradual guarantee makes an unannotated parameter say nothing: it accepts anything.
+    /// That is the largest remaining source of `Unknown` in an otherwise typed project, and it
+    /// silently swallows real mistakes. With this enabled, each unannotated parameter opens an
+    /// anonymous type parameter named after it — the same hole `some` spells by hand — bounded by
+    /// everything the function requires of it: the promoted type of its default, the members its
+    /// body reads and calls, the parameters it is forwarded into, and any `assert` at the top of the
+    /// body. Naming the hole is what keeps what a call passes in connected to what it gets back, so
+    /// `def ident(x): return x` is inferred as the identity function.
     ///
-    /// - **Each unannotated parameter** opens an anonymous type parameter named after it — the same
-    ///   hole `some` spells by hand — bounded by everything the function requires of it: the
-    ///   promoted type of its default, the members its body reads and calls, the parameters it is
-    ///   forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps
-    ///   what a call passes in connected to what it gets back, so `def ident(x): return x` is
-    ///   inferred as the identity function.
-    /// - **A missing return type** is the union of what the body returns, plus `None` when control
-    ///   can also fall off the end. An empty body returns `None`, a body that always raises returns
-    ///   `Never`, and a generator returns a generator.
+    /// A missing return type is recovered separately, by `return-type-inference`.
     ///
     /// Nothing is invented from a use this analysis cannot read, so such a parameter stays gradual
     /// and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
@@ -2542,12 +2589,13 @@ pub struct AnalysisOptions {
     /// A list of classes whose values do not count as a distinct member of an
     /// [`overlapping-condition`](rules.md#overlapping-condition).
     ///
-    /// `if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
-    /// because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
-    /// `int` with anything else is fine, so only `None` is left and the condition is accepted.
+    /// `if not x` over a `str | Literal[False]` selects both an empty `str` and `False`, and is
+    /// reported because the branch cannot tell them apart. Listing `str` here says that conflating
+    /// an empty `str` with anything else is fine, so only `False` is left and the condition is
+    /// accepted.
     ///
     /// Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
-    /// spelled bare (`int`), and `None` stands for the type of `None`.
+    /// spelled bare (`int`).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"[]"#,
@@ -2606,9 +2654,10 @@ pub struct AnalysisOptions {
     /// looking for an [`overlapping-condition`](rules.md#overlapping-condition).
     ///
     /// Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
-    /// default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
-    /// class means what it looks like it means, which drops the reports for the very common
-    /// `if not x` over an optional instance.
+    /// default it is a falsy member of `if not x` just as `False` is. Enabling this assumes the
+    /// class means what it looks like it means, which drops the reports for `if not x` over an
+    /// instance or a `False` sentinel. (`truthiness-test-of-none-union`, which reports a `None`
+    /// sentinel, always makes this assumption.)
     ///
     /// Defaults to `false`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2741,6 +2790,7 @@ impl AnalysisOptions {
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> AnalysisSettings {
         let Self {
+            return_type_inference,
             strict_generic_narrowing,
             strict_equality_semantics,
             respect_type_ignore_comments,
@@ -2763,6 +2813,7 @@ impl AnalysisOptions {
         } = self;
 
         let AnalysisSettings {
+            return_type_inference: return_type_inference_default,
             strict_generic_narrowing: strict_generic_narrowing_default,
             strict_equality_semantics: strict_equality_semantics_default,
             respect_type_ignore_comments: respect_type_ignore_default,
@@ -2808,6 +2859,7 @@ impl AnalysisOptions {
             };
 
         AnalysisSettings {
+            return_type_inference: return_type_inference.unwrap_or(return_type_inference_default),
             strict_generic_narrowing: strict_generic_narrowing
                 .unwrap_or(strict_generic_narrowing_default),
             strict_equality_semantics: strict_equality_semantics
@@ -3018,6 +3070,12 @@ pub struct OverridesOptions(Vec<RangedValue<OverrideOptions>>);
 impl OptionsMetadata for OverridesOptions {
     fn documentation() -> Option<&'static str> {
         Some(<Self as RustDoc>::rust_doc())
+    }
+
+    fn kind() -> OptionSetKind {
+        OptionSetKind::Array {
+            example: r#"include = ["src"]"#,
+        }
     }
 
     fn record(visit: &mut dyn Visit) {
@@ -3384,16 +3442,16 @@ impl ToSettingsError {
         let db: &dyn ruff_db::Db = db;
 
         fmt::from_fn(move |f| {
-            let display_config = DisplayDiagnosticConfig::new("ty")
-                .format(self.output_format.into())
-                .color(self.color);
+            let display_config = DisplayDiagnosticConfig::new("ty").color(self.color);
 
             write!(
                 f,
                 "{}",
-                self.diagnostic
-                    .to_diagnostic()
-                    .display(&db, &display_config)
+                self.output_format.display(
+                    &db,
+                    &display_config,
+                    &[self.diagnostic.to_diagnostic()]
+                )
             )
         })
     }

@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 ruff_db = { workspace = true, features = ["os", "testing"] }
+ruff_python_ast = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_project = { workspace = true }
 ty_python_semantic = { workspace = true }

@@ -511,8 +511,8 @@ def f(flag: bool):
     reveal_type(x)  # revealed: Literal["call", "test"]
 ```
 
-A name that is bound to one of two functions, depending on a condition, is another, even though
-neither function returns:
+A name that is bound to one of two functions, depending on a condition, is seen through: neither
+function returns, so neither does a call to the name:
 
 ```py
 def exit_two():
@@ -531,7 +531,7 @@ def g(flag: bool):
         choose(True)
     else:
         x = "test"
-    reveal_type(x)  # revealed: Literal["call", "test"]
+    reveal_type(x)  # revealed: Literal["test"]
 ```
 
 A call to something that does not resolve at all returns too:
@@ -929,8 +929,8 @@ async def h(flag: bool):
 
 ## without the setting
 
-Without `infer-unannotated-signatures`, a function that leaves its return type out returns
-`Unknown`, and a call to it is treated as returning, whatever its body does:
+Without `infer-unannotated-signatures` and `return-type-inference`, a function that leaves its
+return type out returns `Unknown`, and a call to it is treated as returning, whatever its body does:
 
 ```toml
 [environment]
@@ -938,6 +938,7 @@ python-version = "3.13"
 
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 ```
 
 ```py
@@ -1015,7 +1016,7 @@ def enable():
     check()
 
 def check():
-    if pkg.VALUE:
+    if pkg.VALUE is not None:
         sys.exit(1)
     sys.exit(2)
 ```
@@ -1034,9 +1035,10 @@ reveal_type(pkg.AFTER)  # revealed: Unknown
 
 A callee's return annotation can name a global of the module whose reachability the call decides.
 Here `NoReturn = int` runs only once `enable()` has returned, and whether `enable()` returns depends
-on what `pkg.NoReturn` is. Reading the call as one that does not return is consistent, and it is
-what happens at run time: `stop` raises before `NoReturn = int` is reached, so `AFTER` is never
-bound:
+on what `pkg.NoReturn` is. Both readings are consistent: if `enable()` does not return, `NoReturn`
+stays `typing.NoReturn`; if it does, `NoReturn = int` runs and `stop` returns `int`. The question is
+asked inside the cycle it creates, where a call is held to return, so `AFTER` is only possibly
+missing — even though at run time `stop` raises before `NoReturn = int` is reached:
 
 `pkg/__init__.py`:
 
@@ -1067,5 +1069,5 @@ def stop() -> pkg.NoReturn:
 `main.py`:
 
 ```py
-from pkg import AFTER  # error: [unresolved-import]
+from pkg import AFTER  # error: [possibly-missing-import]
 ```

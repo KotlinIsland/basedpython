@@ -64,7 +64,7 @@ if sys.version_info >= (3, 14):
             password: _PasswordType? = None,
             alpn_protocols: Iterable[str]? = None,
         )
-        def server_activate(self):
+        override def server_activate(self):
             """Wrap the socket in SSLSocket."""
 
     class ThreadingHTTPSServer(socketserver.ThreadingMixIn, HTTPSServer)

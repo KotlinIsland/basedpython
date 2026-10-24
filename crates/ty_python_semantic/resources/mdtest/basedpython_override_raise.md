@@ -157,15 +157,21 @@ class Wider(Reader[OSError]):
         return
 ```
 
-## a constructor is not checked
+## a constructor is checked only when it says it overrides
 
-`ty` exempts constructors from override compatibility, and this follows that.
+`ty` exempts constructors from override compatibility unless `override` asks for it, and this
+follows that.
 
 ```by
 class A:
     def __init__(self): ...
 
 class B(A):
+    def __init__(self):
+        raise TypeError
+
+class C(A):
+    # error: [override-raise] "`__init__` can raise `TypeError`, which the method it overrides cannot"
     override def __init__(self):
         raise TypeError
 ```

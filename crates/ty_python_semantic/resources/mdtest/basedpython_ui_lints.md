@@ -32,15 +32,20 @@ static_assert(is_deeply_immutable(Literal[1, "a", True]))
 
 ### a container is only as immutable as what it holds
 
+an element of a `frozenset` has to be hashable, which a plain class instance is, however it changes
+
 ```by
 from ty_extensions import static_assert
 from ty_extensions._internal import is_deeply_immutable
+
+class Counter:
+    count: int
 
 static_assert(is_deeply_immutable(tuple[int, str]))
 static_assert(is_deeply_immutable(tuple[int, ...]))
 static_assert(not is_deeply_immutable(tuple[int, list[int]]))
 static_assert(is_deeply_immutable(frozenset[int]))
-static_assert(not is_deeply_immutable(frozenset[tuple[list[int]]]))
+static_assert(not is_deeply_immutable(frozenset[tuple[Counter]]))
 static_assert(not is_deeply_immutable(list[int]))
 static_assert(not is_deeply_immutable(dict[str, int]))
 static_assert(not is_deeply_immutable(set[int]))

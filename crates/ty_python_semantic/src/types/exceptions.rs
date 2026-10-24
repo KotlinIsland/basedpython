@@ -859,7 +859,7 @@ where
 fn callee_function<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<FunctionType<'db>> {
     let function = match callee {
         Type::FunctionLiteral(function) => function,
-        Type::BoundMethod(method) => method.function(db),
+        Type::BoundMethod(method) => method.function(db)?,
         _ => return None,
     };
 

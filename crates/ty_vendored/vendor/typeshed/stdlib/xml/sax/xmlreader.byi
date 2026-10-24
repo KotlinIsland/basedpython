@@ -225,6 +225,8 @@ class InputSource:
 
 
 class AttributesImpl[in out AttrKey = str]:
+    """Implementation of the Attributes interface."""
+
     init(self, attrs: Mapping[AttrKey, str]):
         """Non-NS-aware implementation.
 

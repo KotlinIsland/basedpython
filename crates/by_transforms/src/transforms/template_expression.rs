@@ -137,7 +137,7 @@ impl Wrap {
             arguments: Arguments {
                 node_index: AtomicNodeIndex::NONE,
                 range: TextRange::default(),
-                args: Box::new([
+                args: thin_vec::ThinVec::from([
                     template,
                     Expr::Tuple(ExprTuple {
                         node_index: AtomicNodeIndex::NONE,

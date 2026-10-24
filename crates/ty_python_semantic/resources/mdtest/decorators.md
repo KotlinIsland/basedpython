@@ -561,7 +561,8 @@ class OverloadedCacheClient:
 ```
 
 basedpython: an unannotated class decorator has its return type recovered from its body, so the
-class it hands back is the one the decorated name is bound to:
+decorated name is bound to the class it hands back. every call to `personify` defines a new
+`Wrapped`, so that class is a `type[Wrapped]` rather than one particular class object:
 
 ```py
 def personify(cls):
@@ -576,10 +577,33 @@ def personify(cls):
 @personify
 class Animal: ...
 
-reveal_type(Animal)  # revealed: <class 'Wrapped'>
+reveal_type(Animal)  # revealed: type[Wrapped]
 reveal_type(Animal())  # revealed: Wrapped
 
 Animal().set_full_name("John")  # ok
+```
+
+When a class decorator returns `Unknown`, we preserve the current binding:
+
+```py
+from ty_extensions._internal import Unknown
+
+def unknown_personify(cls) -> Unknown:
+    class Wrapped(cls):
+        full_name: str
+
+        def set_full_name(self, full_name: str) -> None:
+            self.full_name = full_name
+
+    return Wrapped
+
+@unknown_personify
+class Person: ...
+
+reveal_type(Person)  # revealed: <class 'Person'>
+reveal_type(Person())  # revealed: Person
+
+Person().set_full_name("John")  # error: [unresolved-attribute]
 ```
 
 This also applies to unannotated callables that are not function definitions:
@@ -960,7 +984,7 @@ def dynamic(function: object) -> Any:
     return function
 
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 # snapshot: dynamic-function-decorator-return
 @dynamic

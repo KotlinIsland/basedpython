@@ -376,7 +376,7 @@ def _(x: int | None, flag: bool):
 needs_inference: Final = True
 
 def _(x: int | None):
-    if needs_inference:  # error: [redundant-condition] "This condition is always true"
+    if needs_inference:
         if x is None:
             return
         reveal_type(x)  # revealed: int
@@ -398,7 +398,7 @@ def _(x: int | None):
 
 def _(x: int | None):
     if x is None:
-        if needs_inference:  # error: [redundant-condition] "This condition is always true"
+        if needs_inference:
             return
 
     reveal_type(x)  # revealed: int
@@ -504,9 +504,8 @@ async def main(val: int | None):
 data: dict[str, str] = {}
 api_key = data.get("api_key")
 
-# error: [overlapping-condition]
-if not api_key:
+if api_key is None:
     exit(1)
 
-reveal_type(api_key)  # revealed: str & ~AlwaysFalsy
+reveal_type(api_key)  # revealed: str
 ```

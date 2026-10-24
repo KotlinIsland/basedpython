@@ -355,9 +355,9 @@ fn at_class_modifier(token_iter: &TokenIterWithContext<'_>) -> bool {
     });
     match rest.next().map(Token::kind) {
         Some(TokenKind::Def) => true,
-        Some(TokenKind::Name) => matches!(
+        Some(TokenKind::Identifier) => matches!(
             rest.next().map(Token::kind),
-            Some(TokenKind::Equal | TokenKind::Name)
+            Some(TokenKind::Equal | TokenKind::Identifier)
         ),
         _ => false,
     }

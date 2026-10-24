@@ -218,7 +218,7 @@ pub(crate) fn enclosing_block<'db>(
 pub(crate) fn callee_callback_is_once<'db>(db: &'db dyn Db, callee: Type<'db>) -> bool {
     let function = match callee {
         Type::FunctionLiteral(function) => function,
-        Type::BoundMethod(method) => method.function(db),
+        Type::BoundMethod(method) if let Some(function) = method.function(db) => function,
         _ => return false,
     };
     function
@@ -236,7 +236,7 @@ pub(crate) fn callee_callback_is_once<'db>(db: &'db dyn Db, callee: Type<'db>) -
 pub(crate) fn callee_callback_is_borrowed<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<bool> {
     let function = match callee {
         Type::FunctionLiteral(function) => function,
-        Type::BoundMethod(method) => method.function(db),
+        Type::BoundMethod(method) if let Some(function) = method.function(db) => function,
         _ => return None,
     };
     Some(

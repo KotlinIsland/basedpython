@@ -118,9 +118,9 @@ if sys.version_info >= (3, 11):
         abstract def files(self) -> Traversable:
             """Return a Traversable object for the loaded package."""
 
-        def open_resource(self, resource: str) -> BufferedReader
-        def resource_path(self, resource: dynamic) -> str
-        def is_resource(self, path: str) -> bool
-        def contents(self) -> Iterator[str]
+        override def open_resource(self, resource: str) -> BufferedReader
+        override def resource_path(self, resource: dynamic) -> str
+        override def is_resource(self, path: str) -> bool
+        override def contents(self) -> Iterator[str]
 
     __all__ = ["ResourceReader", "Traversable", "TraversableResources"]

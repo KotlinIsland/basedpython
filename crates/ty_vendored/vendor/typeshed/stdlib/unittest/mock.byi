@@ -104,11 +104,11 @@ if sys.version_info >= (3, 12):
             from_kall: bool = True,
         )
         __hash__: ClassVar[None]
-        def __eq__(self, other: object) -> bool
-        def __ne__(self, value: object, /) -> bool
+        override def __eq__(self, other: object) -> bool
+        override def __ne__(self, value: object, /) -> bool
         def __call__(self, *args: dynamic, **kwargs: dynamic) -> _Call
         def __getattr__(self, attr: str) -> dynamic
-        def __getattribute__(self, attr: str) -> dynamic
+        override def __getattribute__(self, attr: str) -> dynamic
         let args: (*: dynamic)
         let kwargs: Mapping[str, dynamic]
         def call_list(self) -> dynamic:
@@ -156,11 +156,11 @@ else:
             from_kall: bool = True,
         )
         __hash__: ClassVar[None]
-        override def __eq__(self, other: object) -> bool
-        override def __ne__(self, value: object, /) -> bool
+        def __eq__(self, other: object) -> bool
+        def __ne__(self, value: object, /) -> bool
         def __call__(self, *args: dynamic, **kwargs: dynamic) -> _Call
         def __getattr__(self, attr: str) -> dynamic
-        override def __getattribute__(self, attr: str) -> dynamic
+        def __getattribute__(self, attr: str) -> dynamic
         let args: (*: dynamic)
         let kwargs: Mapping[str, dynamic]
         def call_list(self) -> dynamic:
@@ -308,6 +308,8 @@ class NonCallableMock(Base, dynamic):
         """
 
     return_value: dynamic
+    """The value to be returned when the mock is called."""
+
     side_effect: dynamic
     called: bool
     call_count: int
@@ -982,14 +984,14 @@ if sys.version_info >= (3, 13):
     class ThreadingMixin(Base):
         final DEFAULT_TIMEOUT: (int | float)? = None
 
-        init(self, /, *args: dynamic, timeout: (int | float)? | _SentinelObject = ..., **kwargs: dynamic)
+        init(self, /, *args: dynamic, timeout: int | float | _SentinelObject | None = ..., **kwargs: dynamic)
         # Same as `NonCallableMock.reset_mock.`
         def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False):
             """
             See :func:`.Mock.reset_mock()`
             """
 
-        def wait_until_called(self, *, timeout: (int | float)? | _SentinelObject = ...):
+        def wait_until_called(self, *, timeout: int | float | _SentinelObject | None = ...):
             """Wait until the mock object is called.
 
             `timeout` - time to wait for in seconds, waits forever otherwise.

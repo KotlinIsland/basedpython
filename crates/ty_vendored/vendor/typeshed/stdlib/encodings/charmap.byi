@@ -11,33 +11,33 @@ Written by Marc-Andre Lemburg (mal@lemburg.com).
 """
 
 import codecs
-from _codecs import _CharMap
+from _codecs import _DecodeCharMap, _EncodeCharMap
 from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.charmap_encode
-    override static def encode(str: str, errors: str? = None, mapping: _CharMap? = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str? = None, mapping: _EncodeCharMap? = None, /) -> (bytes, int)
     # At runtime, this is codecs.charmap_decode
-    override static def decode(data: ReadableBuffer, errors: str? = None, mapping: _CharMap? = None, /) -> (str, int)
+    override static def decode(data: ReadableBuffer, errors: str? = None, mapping: _DecodeCharMap? = None, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    mapping: _CharMap?
-    init(self, errors: str = "strict", mapping: _CharMap? = None)
+    mapping: _EncodeCharMap?
+    init(self, errors: str = "strict", mapping: _EncodeCharMap? = None)
     override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
-    mapping: _CharMap?
-    init(self, errors: str = "strict", mapping: _CharMap? = None)
+    mapping: _DecodeCharMap?
+    init(self, errors: str = "strict", mapping: _DecodeCharMap? = None)
     override def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter):
-    mapping: _CharMap?
-    init(self, stream: codecs._WritableStream, errors: str = "strict", mapping: _CharMap? = None)
+    mapping: _EncodeCharMap?
+    init(self, stream: codecs._WritableStream, errors: str = "strict", mapping: _EncodeCharMap? = None)
     override def encode(self, input: str, errors: str = "strict") -> (bytes, int)
 
 class StreamReader(Codec, codecs.StreamReader):
-    mapping: _CharMap?
-    init(self, stream: codecs._ReadableStream, errors: str = "strict", mapping: _CharMap? = None)
+    mapping: _DecodeCharMap?
+    init(self, stream: codecs._ReadableStream, errors: str = "strict", mapping: _DecodeCharMap? = None)
     override def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

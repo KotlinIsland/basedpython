@@ -44,8 +44,8 @@ struct State<'src> {
 
 impl State<'_> {
     fn process_compare(&mut self, c: &ruff_python_ast::ExprCompare) {
-        let mut lhs_end = c.left.range().end();
-        for (index, rhs) in c.comparators.iter().enumerate() {
+        let mut lhs_end = c.first_operand().range().end();
+        for (index, rhs) in c.comparators().iter().enumerate() {
             let gap = TextRange::new(lhs_end, rhs.range().start());
             if c.is_identity_operator(index) {
                 let replacement = match c.ops.get(index) {

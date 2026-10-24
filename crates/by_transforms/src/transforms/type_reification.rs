@@ -153,9 +153,7 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                 }
                 walk_expr(self, expr);
             }
-            Expr::Compare(compare)
-                if is_version_info(&compare.left)
-                    || compare.comparators.iter().any(is_version_info) => {}
+            Expr::Compare(compare) if compare.operands.iter().any(is_version_info) => {}
             Expr::Subscript(subscript) => {
                 // in a type-context subscript (`dict[str, int]`, legacy
                 // `Callable[[int], str]`) the slice is a type expression, and

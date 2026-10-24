@@ -75,6 +75,15 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // the conversion reads one module at a time, and has to know which of the names a
+    // module imports are another module's typevars. read them all before any file is
+    // rewritten
+    let index = if skip_conversion {
+        pep695::TypeVarIndex::default()
+    } else {
+        typevar_index(&root)?
+    };
+
     let mut patched = 0_usize;
     let mut visited = 0_usize;
     for entry in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
@@ -84,7 +93,7 @@ fn run() -> Result<()> {
         }
         visited += 1;
         let rel = path.strip_prefix(&root).unwrap_or(path);
-        if apply_patches_to_file(path, rel, &patches, &post_patches, skip_conversion)
+        if apply_patches_to_file(path, rel, &patches, &post_patches, skip_conversion, &index)
             .with_context(|| format!("applying patches to {}", path.display()))?
         {
             patched += 1;
@@ -94,12 +103,36 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// the legacy typevars every module under `root` declares, keyed by its dotted name
+fn typevar_index(root: &Path) -> Result<pep695::TypeVarIndex> {
+    let mut index = pep695::TypeVarIndex::default();
+    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "byi") {
+            continue;
+        }
+        let rel = path.strip_prefix(root).unwrap_or(path).with_extension("");
+        let mut components: Vec<String> = rel
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if components.last().is_some_and(|last| last == "__init__") {
+            components.pop();
+        }
+        let source = fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
+        let parsed = parse_unchecked_source(&source, PySourceType::BasedPythonStub);
+        index.insert(components.join("."), &parsed);
+    }
+    Ok(index)
+}
+
 fn apply_patches_to_file(
     path: &Path,
     rel: &Path,
     patches: &[Box<dyn Patch>],
     post_patches: &[Box<dyn Patch>],
     skip_conversion: bool,
+    index: &pep695::TypeVarIndex,
 ) -> Result<bool> {
     let original = fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
 
@@ -130,7 +163,7 @@ fn apply_patches_to_file(
         // pass 2: pep 695 conversion over the patched source (re-parsed so it
         // sees any typevar references the patches rewrote)
         let reparsed = parse_unchecked_source(&patched, PySourceType::BasedPythonStub);
-        let conversion = pep695::convert_module(&reparsed, &patched);
+        let conversion = pep695::convert_module(&reparsed, &patched, index);
         let mut current = if conversion.is_empty() {
             patched
         } else {

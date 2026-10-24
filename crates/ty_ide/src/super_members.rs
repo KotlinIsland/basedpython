@@ -864,6 +864,6 @@ class A:
         return 'A'
 ",
         );
-        assert_snapshot!(test.super_members(), @"object.__repr__ stdlib/builtins.byi:93");
+        assert_snapshot!(test.super_members(), @"object.__repr__ stdlib/builtins.byi:94");
     }
 }

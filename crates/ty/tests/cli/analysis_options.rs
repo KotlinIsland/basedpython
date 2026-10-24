@@ -213,10 +213,12 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
             python-version = "3.13"
 
             # a gradual module has to opt out of signature recovery too, or its own unannotated
-            # parameters would be precise whatever `sound-types` says
+            # parameters would be precise whatever `sound-types` says. return-type inference
+            # is off as well, so the `-> None` below is not redundant
             [tool.ty.analysis]
             sound-types = false
             infer-unannotated-signatures = false
+            return-type-inference = "never"
 
             [[tool.ty.overrides]]
             include = ["sound/**"]
@@ -499,7 +501,9 @@ fn overlapping_condition_exempt_types_accepts_an_unresolvable_name() -> anyhow::
         (
             "test.py",
             r#"
-            def f(a: str | None):
+            from typing import Literal
+
+            def f(a: str | Literal[False]):
                 if not a:
                     ...
             "#,
@@ -510,12 +514,12 @@ fn overlapping_condition_exempt_types_accepts_an_unresolvable_name() -> anyhow::
     success: false
     exit_code: 1
     ----- stdout -----
-    warning[overlapping-condition]: This condition does not distinguish between `str & ~AlwaysTruthy` and `None`
-     --> test.py:3:8
+    warning[overlapping-condition]: This condition does not distinguish between `str & ~AlwaysTruthy` and `Literal[False]`
+     --> test.py:5:8
       |
-    3 |     if not a:
+    5 |     if not a:
       |        ^^^^^
-    info: `str | None` is tested for falsiness
+    info: `str | Literal[False]` is tested for falsiness
     help: Compare against the specific value instead of testing truthiness
 
     Found 1 diagnostic
@@ -604,7 +608,7 @@ fn implicit_object_repr_exempt_types_silences_a_default() -> anyhow::Result<()> 
 /// `redundant-return-annotation` is on by default, but only reports where dropping the annotation
 /// would have left the return type alone.
 #[test]
-fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> anyhow::Result<()> {
+fn redundant_return_annotation_is_gated_on_return_type_inference() -> anyhow::Result<()> {
     let case = CliTest::with_files([
         (
             "pyproject.toml",
@@ -612,17 +616,17 @@ fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> any
             [tool.ty.environment]
             python-version = "3.13"
 
-            # recovery is on by default, so the gradual half has to say it is off. `sound-types`
+            # inference is on by default, so the gradual half has to say it is off. `sound-types`
             # recovers the same return type from the other side, so it has to be off too
             [tool.ty.analysis]
-            infer-unannotated-signatures = false
+            return-type-inference = "never"
             sound-types = false
 
             [[tool.ty.overrides]]
             include = ["inferred/**"]
 
             [tool.ty.overrides.analysis]
-            infer-unannotated-signatures = true
+            return-type-inference = "always"
             "#,
         ),
         (
@@ -635,7 +639,7 @@ fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> any
                 raise ValueError
             "#,
         ),
-        // a first-party stub in a module that recovers signatures is reported too: a bodyless
+        // a first-party stub in a module that infers return types is reported too: a bodyless
         // `def` would return `None` on its own
         (
             "inferred/stub.pyi",

@@ -50,17 +50,7 @@ pub fn rule_documentation(rule: Rule) -> String {
         output.push('\n');
     }
 
-    if let Some(explanation) = rule.explanation() {
-        output.push_str(explanation.trim());
-    } else {
-        // Not every rule carries prose. The formats it reports under say what it looks for, which
-        // is more use than an empty document.
-        output.push_str("Message formats:");
-        for format in rule.message_formats() {
-            output.push('\n');
-            let _ = write!(&mut output, "* {format}");
-        }
-    }
+    output.push_str(rule.explanation().trim());
     output
 }
 
@@ -84,15 +74,5 @@ mod tests {
                 rule.name()
             );
         }
-    }
-
-    /// A rule with no prose still has to say what it looks for, rather than trailing off.
-    #[test]
-    fn a_rule_without_an_explanation_lists_its_message_formats() {
-        let undocumented = Rule::iter().find(|rule| rule.explanation().is_none());
-        let Some(rule) = undocumented else {
-            return; // every rule is documented, which is the better problem to have
-        };
-        assert!(rule_documentation(rule).contains("Message formats:"));
     }
 }

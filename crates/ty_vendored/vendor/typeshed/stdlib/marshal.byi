@@ -35,13 +35,8 @@ from typing import Final, TypeAlias
 final version: int
 
 type _Marshallable = (
-    # handled in w_object() in marshal.c
-    None
-    | type[StopIteration]
-    | types.EllipsisType
-    | bool
     # handled in w_complex_object() in marshal.c
-    | int
+    int
     | float
     | complex
     | bytes
@@ -53,6 +48,11 @@ type _Marshallable = (
     | frozenset[_Marshallable]
     | types.CodeType
     | ReadableBuffer
+    # handled in w_object() in marshal.c
+    | type[StopIteration]
+    | types.EllipsisType
+    | bool
+    | None
 )
 
 if sys.version_info >= (3, 15):

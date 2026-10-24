@@ -801,7 +801,7 @@ fn declared_function<'db>(
 ) -> Option<super::function::FunctionType<'db>> {
     match member_type {
         crate::types::Type::FunctionLiteral(function) => Some(function),
-        crate::types::Type::BoundMethod(method) => Some(method.function(db)),
+        crate::types::Type::BoundMethod(method) => method.function(db),
         crate::types::Type::PropertyInstance(property) => {
             declared_function(db, property.getter(db)?)
         }

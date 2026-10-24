@@ -122,7 +122,7 @@ assignment-alignment       = disabled
 docstring-code             = Enabled
 docstring-code-line-width  = "dynamic"
 preview                    = Disabled
-target_version             = 3.10
+target_version             = 3.11
 source_type                = Python
 nested-string-quote-style  = alternating
 ```
@@ -276,7 +276,7 @@ assignment-alignment       = disabled
 docstring-code             = Enabled
 docstring-code-line-width  = 88
 preview                    = Disabled
-target_version             = 3.10
+target_version             = 3.11
 source_type                = Python
 nested-string-quote-style  = alternating
 ```

@@ -123,14 +123,14 @@ class WindowsRegistryFinder(importlib.abc.MetaPathFinder):
 
             """
 
-    class def find_spec(
+    override class def find_spec(
         cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
     ) -> ModuleSpec?
 
 class PathFinder(importlib.abc.MetaPathFinder):
     """Meta path finder for sys.path and package __path__ attributes."""
 
-    static def invalidate_caches():
+    override static def invalidate_caches():
         """Call the invalidate_caches() method on all path entry finders
         stored in sys.path_importer_cache (where implemented).
         """
@@ -145,7 +145,7 @@ class PathFinder(importlib.abc.MetaPathFinder):
         of directories ``context.path``.
         """
 
-    class def find_spec(
+    override class def find_spec(
         cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
     ) -> ModuleSpec?:
         """Try to find a spec for 'fullname' on sys.path or 'path'.
@@ -163,6 +163,9 @@ class PathFinder(importlib.abc.MetaPathFinder):
             This method is deprecated.  Use find_spec() instead.
 
             """
+
+    if sys.version_info >= (3, 15):
+        override class def discover(cls, parent: ModuleSpec? = None) -> Iterator[ModuleSpec]
 
 final SOURCE_SUFFIXES: list[str]
 DEBUG_BYTECODE_SUFFIXES: Final = [".pyc"]
@@ -196,6 +199,9 @@ class FileFinder(importlib.abc.PathEntryFinder):
         raised.
 
         """
+
+    if sys.version_info >= (3, 15):
+        override def discover(self, parent: ModuleSpec? = None) -> Iterator[ModuleSpec]
 
 class _LoaderBasics:
     """Base class of common code needed by both SourceLoader and
@@ -314,17 +320,17 @@ class FileLoader:
 class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.SourceLoader, SourceLoader):
     """Concrete implementation of SourceLoader using the file system."""
 
-    def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666):
+    override def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666):
         """Write bytes data to a file."""
 
-    def path_stats(self, path: str) -> Mapping[str, dynamic]:
+    override def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Return the metadata for the path."""
 
 class SourcelessFileLoader(importlib.abc.FileLoader, FileLoader, _LoaderBasics):
     """Loader which handles sourceless file imports."""
 
-    def get_code(self, fullname: str) -> types.CodeType?
-    def get_source(self, fullname: str):
+    override def get_code(self, fullname: str) -> types.CodeType?
+    override def get_source(self, fullname: str):
         """Return None as there is no source code."""
 
 class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoader):
@@ -338,7 +344,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     override def get_filename(self, fullname: str? = None) -> str:
         """Return the path to the source file as found by the finder."""
 
-    def get_source(self, fullname: str):
+    override def get_source(self, fullname: str):
         """Return None as extension modules have no source code."""
 
     override def create_module(self, spec: ModuleSpec) -> types.ModuleType:
@@ -347,7 +353,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     override def exec_module(self, module: types.ModuleType):
         """Initialize an extension module"""
 
-    def get_code(self, fullname: str):
+    override def get_code(self, fullname: str):
         """Return None as an extension module cannot create a code object."""
 
     override def __eq__(self, other: object) -> bool
@@ -368,7 +374,7 @@ if sys.version_info >= (3, 15):
         """
 
         init(
-            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec
+            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec?
         )
         def __iter__(self) -> Iterator[str]
         def __getitem__(self, index: int) -> str
@@ -377,18 +383,20 @@ if sys.version_info >= (3, 15):
         def __contains__(self, item: str) -> bool
         def append(self, item: str)
 
+    _NamespacePath = NamespacePath
+
 if sys.version_info >= (3, 11):
     class NamespaceLoader(importlib.abc.InspectLoader):
         init(
-            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec
+            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec?
         )
-        def is_package(self, fullname: str) -> True
-        def get_source(self, fullname: str) -> ""
-        def get_code(self, fullname: str) -> types.CodeType
-        def create_module(self, spec: ModuleSpec):
+        override def is_package(self, fullname: str) -> True
+        override def get_source(self, fullname: str) -> ""
+        override def get_code(self, fullname: str) -> types.CodeType
+        override def create_module(self, spec: ModuleSpec):
             """Use default semantics for module creation."""
 
-        def exec_module(self, module: types.ModuleType)
+        override def exec_module(self, module: types.ModuleType)
         def get_resource_reader(self, module: types.ModuleType) -> importlib.readers.NamespaceReader
         if sys.version_info < (3, 15):
             @deprecated("Deprecated since Python 3.10; removed in Python 3.15. Use `exec_module()` instead.")
@@ -416,7 +424,7 @@ if sys.version_info >= (3, 11):
 else:
     class _NamespaceLoader:
         init(
-            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec
+            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec?
         )
         def is_package(self, fullname: str) -> True
         def get_source(self, fullname: str) -> ""

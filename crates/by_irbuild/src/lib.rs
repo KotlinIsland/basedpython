@@ -7074,11 +7074,11 @@ fn counted_over(node: &ast::StmtWhile) -> Option<(String, String)> {
             })
             .collect::<Vec<_>>()
             .as_slice(),
-        guard.comparators.as_ref(),
+        guard.comparators(),
     ) else {
         return None;
     };
-    let Expr::Name(index) = guard.left.as_ref() else {
+    let Expr::Name(index) = guard.first_operand() else {
         return None;
     };
     let Expr::Call(call) = bound else { return None };
@@ -9856,10 +9856,10 @@ fn local_representations(
                     return;
                 }
                 let generators = match child {
-                    Expr::ListComp(node) => &node.generators,
-                    Expr::SetComp(node) => &node.generators,
-                    Expr::DictComp(node) => &node.generators,
-                    Expr::Generator(node) => &node.generators,
+                    Expr::ListComp(node) => &node.generators[..],
+                    Expr::SetComp(node) => &node.generators[..],
+                    Expr::DictComp(node) => &node.generators[..],
+                    Expr::Generator(node) => &node.generators[..],
                     _ => return,
                 };
                 for generator in generators {
@@ -15547,9 +15547,9 @@ impl Lowering<'_, '_> {
     /// the checker was told the method returns
     fn representation_of(&self, expr: &Expr) -> Lowered<RType> {
         if let Expr::Compare(node) = expr {
-            let mut left = self.peek_type(&node.left)?;
+            let mut left = self.peek_type(node.first_operand())?;
             let mut every_bool = true;
-            for (op, right) in node.ops.iter().zip(node.comparators.iter()) {
+            for (op, right) in node.ops.iter().zip(node.comparators()) {
                 let right = self.peek_type(right)?;
                 every_bool &= Self::compares_to_a_bool(*op, &left, &right);
                 left = right;
@@ -16343,12 +16343,12 @@ impl Lowering<'_, '_> {
         if node.ops.len() > 1 {
             return self.chained_compare(node);
         }
-        let ([op], [right]) = (node.ops.as_ref(), node.comparators.as_ref()) else {
+        let Some((left, op, right)) = node.as_single() else {
             return Err(Decline::new("a comparison with no operator"));
         };
-        let left_value = self.expression(&node.left)?;
+        let left_value = self.expression(left)?;
         let right_value = self.expression(right)?;
-        self.compare_value_of(*op, left_value, right_value, Some(&node.left), Some(right))
+        self.compare_value_of(*op, left_value, right_value, Some(left), Some(right))
     }
 
     /// a condition: the truth of a value, which for a comparison is asked of the
@@ -16358,16 +16358,10 @@ impl Lowering<'_, '_> {
             if node.ops.len() > 1 {
                 return self.chained_condition(node);
             }
-            if let ([op], [right]) = (node.ops.as_ref(), node.comparators.as_ref()) {
-                let left_value = self.expression(&node.left)?;
+            if let Some((left, op, right)) = node.as_single() {
+                let left_value = self.expression(left)?;
                 let right_value = self.expression(right)?;
-                return self.emit_compare_of(
-                    *op,
-                    left_value,
-                    right_value,
-                    Some(&node.left),
-                    Some(right),
-                );
+                return self.emit_compare_of(*op, left_value, right_value, Some(left), Some(right));
             }
         }
         let (value, ty) = self.expression(expr)?;
@@ -17938,11 +17932,11 @@ impl Lowering<'_, '_> {
 
         for part in &node.value {
             match part {
-                ast::FStringPart::Literal(literal) => {
+                ast::FStringPartRef::Literal(literal) => {
                     let text = Value::Str(literal.value.to_string());
                     append(self, text, &mut accumulated);
                 }
-                ast::FStringPart::FString(fstring) => {
+                ast::FStringPartRef::FString(fstring) => {
                     for element in &fstring.elements {
                         match element {
                             ast::InterpolatedStringElement::Literal(literal) => {
@@ -18226,8 +18220,8 @@ impl Lowering<'_, '_> {
         let result = self.builder.temp(RType::BIT);
         let join = self.builder.new_block();
 
-        let mut left = self.expression(&node.left)?;
-        for (index, (op, right)) in node.ops.iter().zip(node.comparators.iter()).enumerate() {
+        let mut left = self.expression(node.first_operand())?;
+        for (index, (op, right)) in node.ops.iter().zip(node.comparators()).enumerate() {
             let right = self.expression(right)?;
             let bit = self.emit_compare(*op, left.clone(), right.clone())?;
             self.builder.assign(result, bit);
@@ -18256,8 +18250,8 @@ impl Lowering<'_, '_> {
         let result = self.builder.temp(result_ty.clone());
         let join = self.builder.new_block();
 
-        let mut left = self.expression(&node.left)?;
-        for (index, (op, right)) in node.ops.iter().zip(node.comparators.iter()).enumerate() {
+        let mut left = self.expression(node.first_operand())?;
+        for (index, (op, right)) in node.ops.iter().zip(node.comparators()).enumerate() {
             let right = self.expression(right)?;
             let (answer, answer_ty) =
                 self.compare_value_of(*op, left.clone(), right.clone(), None, None)?;

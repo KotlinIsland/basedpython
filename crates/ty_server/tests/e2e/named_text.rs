@@ -121,17 +121,15 @@ fn a_file_with_windows_line_endings_is_the_text_an_editor_holds_with_unix_ones()
     Ok(())
 }
 
+/// A request that names no text is answered about whatever the server holds, which for a document
+/// the client has not opened is the file on disk.
 #[test]
-fn a_closed_document_is_still_refused_when_no_text_is_named() -> Result<()> {
+fn a_closed_document_is_answered_from_disk_when_no_text_is_named() -> Result<()> {
     let mut server = server()?;
-    let id = server.send_request::<SyntaxOutline>(outline_params(&server, None));
-    match server.try_await_response::<SyntaxOutline>(&id, None) {
-        Err(AwaitResponseError::RequestFailed(error)) => {
-            assert_eq!(error.code, ErrorCode::InvalidParams as i32);
-            assert!(error.message.contains("is not open"), "{}", error.message);
-        }
-        other => panic!("expected the refusal a closed document always had, got {other:?}"),
-    }
+    let outline = server
+        .send_request_await::<SyntaxOutline>(outline_params(&server, None))
+        .expect("an outline of the file on disk");
+    assert_eq!(statement_lines(&outline), vec![0]);
     Ok(())
 }
 

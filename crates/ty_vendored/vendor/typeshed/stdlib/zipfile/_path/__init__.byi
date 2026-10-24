@@ -26,7 +26,7 @@ if sys.version_info >= (3, 12):
         """
 
         init(self, *args: object, **kwargs: object)
-        def __getstate__(self) -> (list[object], dict[object, object])
+        override def __getstate__(self) -> (list[object], dict[object, object])
         def __setstate__(self, state: Sequence[(list[object], dict[object, object])])
 
     class CompleteDirs(InitializedState, ZipFile):
@@ -224,11 +224,11 @@ if sys.version_info >= (3, 12):
 
         def relative_to(self, other: Path, *extra: StrPath) -> str
         def match(self, path_pattern: str) -> bool
-        def __eq__(self, other: object) -> bool:
+        override def __eq__(self, other: object) -> bool:
             """
             >>> Path(zipfile.ZipFile(io.BytesIO(), 'w')) == 'foo'
             False
             """
 
-        def __hash__(self) -> int
+        override def __hash__(self) -> int
         def __truediv__(self, add: StrPath) -> Path

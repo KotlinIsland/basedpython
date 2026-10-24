@@ -1,19 +1,15 @@
-use std::assert_matches;
-
 use ruff_python_ast::comparable::ComparableStmt;
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::{
     CastKind, Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Pattern,
     Stmt, TypeParam, UnaryOp, is_destructure_binder,
 };
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::{
-    Mode, ParseError, ParseErrorType, ParseOptions, Parsed, parse, parse_expression, parse_module,
+    Mode, ParseError, ParseErrorType, ParseOptions, Parsed, parse, parse_cells_unchecked,
+    parse_expression, parse_module,
 };
-
-// Keep recursive ASTs shallow enough for Windows's 1 MiB test-thread stacks.
-const RECURSIVE_AST_TEST_DEPTH: usize = 1_000;
 
 /// Parse a module in basedpython mode so tests for `.by`-only syntax don't
 /// trigger the `error_if_not_basedpython` parse-error gates.
@@ -165,7 +161,7 @@ fn a_type_tests_optional_marker_belongs_to_its_type() {
         let Expr::Compare(compare) = single_expression(source) else {
             panic!("expected a comparison: {source}");
         };
-        let (found, inner) = peel_optionals(&compare.comparators[0]);
+        let (found, inner) = peel_optionals(&compare.comparators()[0]);
         assert_eq!(found, depth, "{source}");
         assert!(!inner.is_unary_op_expr(), "{source}");
     }
@@ -174,7 +170,7 @@ fn a_type_tests_optional_marker_belongs_to_its_type() {
     let Expr::Compare(compare) = single_expression("x is str? | int\n") else {
         panic!("expected a comparison");
     };
-    let Expr::BinOp(union) = &compare.comparators[0] else {
+    let Expr::BinOp(union) = &compare.comparators()[0] else {
         panic!("expected a union target");
     };
     assert_eq!(union.op, Operator::BitOr);
@@ -189,7 +185,7 @@ fn a_type_tests_result_form_belongs_to_its_type() {
         let Expr::Compare(compare) = single_expression(source) else {
             panic!("expected a comparison: {source}");
         };
-        let Expr::BinOp(result) = &compare.comparators[0] else {
+        let Expr::BinOp(result) = &compare.comparators()[0] else {
             panic!("expected a result target: {source}");
         };
         assert_eq!(result.op, Operator::Result, "{source}");
@@ -201,7 +197,7 @@ fn a_type_tests_result_form_belongs_to_its_type() {
     let Expr::Compare(compare) = single_expression("x is int ? str?\n") else {
         panic!("expected a comparison");
     };
-    let (depth, inner) = peel_optionals(&compare.comparators[0]);
+    let (depth, inner) = peel_optionals(&compare.comparators()[0]);
     assert_eq!(depth, 1);
     assert!(matches!(inner, Expr::BinOp(result) if result.op == Operator::Result));
 
@@ -1669,7 +1665,6 @@ fn test_tstring_fstring_middle_fuzzer() {
     insta::assert_debug_snapshot!(error);
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn test_anon_named_tuple_alias() {
     let source = "a = (name: str, age: int)\n";
@@ -2491,198 +2486,219 @@ fn force_unwrap_in_front_of_a_debug_equal_is_refused() {
 }
 
 #[test]
-fn nested_parens_grow_stack() {
-    let src = format!("{}1{}", "(".repeat(1_000), ")".repeat(1_000));
-    let parsed = stacker::grow(32 * 1024, || parse_module(&src));
-    assert!(parsed.is_ok());
-}
-
-#[test]
-fn deeply_nested_receiver_callables_grow_stack() {
-    // basedpython `T.(...) -> R` opens a bracket and recurses through its
-    // return type, so a deep chain has to grow the stack rather than overflow it
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let src = format!("f: {}int{} -> str", "a.(".repeat(depth), ")".repeat(depth));
-    let parsed = stacker::grow(32 * 1024, || {
-        crate::parse_unchecked(
-            &src,
-            ParseOptions::from(ruff_python_ast::PySourceType::BasedPython),
-        )
-    });
-    // reaching here at all is the point: the parse completes instead of
-    // overflowing the stack
-    assert_matches!(parsed.syntax(), crate::Mod::Module(_));
-}
-
-#[test]
 fn normal_python_unaffected() {
     let src = format!("x = {}1{}", "(".repeat(50), ")".repeat(50));
     parse_module(&src).unwrap();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+/// The module range of a cell-wise parse matches a whole-source parse, so that offsets in the
+/// notebook's trailing newline (for example, past the end of an empty last cell) are inside it.
 #[test]
-fn deep_nesting_preserves_surrounding_statements() {
-    let src = format!(
-        "before = 1\n{}1{}\nafter = 2\n",
-        "(".repeat(1_000),
-        ")".repeat(1_000),
+fn cells_module_range_spans_source() {
+    // Two cells, `x = 1` and an empty one, each followed by a `\n` separator.
+    let source = "x = 1\n\n";
+    let ranges = [
+        TextRange::new(TextSize::new(0), TextSize::new(5)),
+        TextRange::empty(TextSize::new(6)),
+    ];
+
+    let parsed = parse_cells_unchecked(source, ranges, &ParseOptions::from(Mode::Ipython));
+
+    assert_eq!(
+        parsed.syntax().range(),
+        parse_module(source).unwrap().syntax().range()
     );
-    let parsed = parse_module(&src).unwrap();
-
-    assert_matches!(parsed.suite().first(), Some(Stmt::Assign(_)));
-    assert_matches!(parsed.suite().last(), Some(Stmt::Assign(_)));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_def_blocks_grow_stack() {
-    // Each nested function crosses the suite boundary where the parser rechecks the stack.
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let mut src = String::new();
-    for i in 0..depth {
-        src.push_str(&"\t".repeat(i));
-        src.push_str("def f():\n");
+#[cfg(all(
+    feature = "stacker",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+mod stack_growth {
+    use std::assert_matches;
+
+    use ruff_python_ast::Stmt;
+
+    use crate::{Mode, ParseOptions, parse_module};
+
+    // Keep recursive ASTs shallow enough for Windows's 1 MiB test-thread stacks.
+    const RECURSIVE_AST_TEST_DEPTH: usize = 1_000;
+
+    #[test]
+    fn nested_parens_grow_stack() {
+        let src = format!("{}1{}", "(".repeat(1_000), ")".repeat(1_000));
+        let parsed = stacker::grow(32 * 1024, || parse_module(&src));
+        assert!(parsed.is_ok());
     }
-    src.push_str(&"\t".repeat(depth));
-    src.push_str("pass\n");
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_lists_grow_stack() {
-    let src = format!("{}1{}", "[".repeat(1_000), "]".repeat(1_000));
-    parse_module(&src).unwrap();
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_calls_grow_stack() {
-    let src = format!("x = {}1{}", "f(".repeat(1_000), ")".repeat(1_000));
-    parse_module(&src).unwrap();
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_subscripts_grow_stack() {
-    let src = format!("x = {}1{}", "a[".repeat(1_000), "]".repeat(1_000));
-    parse_module(&src).unwrap();
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_match_patterns_grow_stack() {
-    // Deeply parenthesised match patterns — exercises pattern-parsing
-    // instrumentation in addition to statement / expression paths.
-    let mut src = String::from("match x:\n case ");
-    for _ in 0..600 {
-        src.push('(');
+    #[test]
+    fn deeply_nested_receiver_callables_grow_stack() {
+        // basedpython `T.(...) -> R` opens a bracket and recurses through its
+        // return type, so a deep chain has to grow the stack rather than overflow it
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let src = format!("f: {}int{} -> str", "a.(".repeat(depth), ")".repeat(depth));
+        let parsed = stacker::grow(32 * 1024, || {
+            crate::parse_unchecked(
+                &src,
+                ParseOptions::from(ruff_python_ast::PySourceType::BasedPython),
+            )
+        });
+        // reaching here at all is the point: the parse completes instead of
+        // overflowing the stack
+        assert_matches!(parsed.syntax(), crate::Mod::Module(_));
     }
-    src.push('y');
-    for _ in 0..600 {
-        src.push(')');
+
+    #[test]
+    fn deep_nesting_preserves_surrounding_statements() {
+        let src = format!(
+            "before = 1\n{}1{}\nafter = 2\n",
+            "(".repeat(1_000),
+            ")".repeat(1_000),
+        );
+        let parsed = parse_module(&src).unwrap();
+
+        assert_matches!(parsed.suite().first(), Some(Stmt::Assign(_)));
+        assert_matches!(parsed.suite().last(), Some(Stmt::Assign(_)));
     }
-    src.push_str(": pass\n");
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_invalid_mapping_pattern_keys_grow_stack() {
-    let depth = 512;
-    let src = format!(
-        "match value:\n    case {}0{}:\n        pass\n",
-        "{".repeat(depth),
-        ": 0}".repeat(depth)
-    );
-    let parsed = crate::parse_unchecked(&src, ParseOptions::from(Mode::Module));
-    assert!(!parsed.errors().is_empty());
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn binary_paren_interplay_grows_stack() {
-    // `1+(1+(1+(1+...)))` — each level alternates a binary operator and a
-    // parenthesised sub-expression, exactly like the pattern described in
-    // the tracking issue.
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let mut src = String::new();
-    for _ in 0..depth {
-        src.push_str("1+(");
+    #[test]
+    fn nested_def_blocks_grow_stack() {
+        // Each nested function crosses the suite boundary where the parser rechecks the stack.
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let mut src = String::new();
+        for i in 0..depth {
+            src.push_str(&"\t".repeat(i));
+            src.push_str("def f():\n");
+        }
+        src.push_str(&"\t".repeat(depth));
+        src.push_str("pass\n");
+        parse_module(&src).unwrap();
     }
-    src.push('1');
-    for _ in 0..depth {
-        src.push(')');
+
+    #[test]
+    fn nested_lists_grow_stack() {
+        let src = format!("{}1{}", "[".repeat(1_000), "]".repeat(1_000));
+        parse_module(&src).unwrap();
     }
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn right_assoc_pow_chain_grows_stack() {
-    // `1**1**1**...**1` — `**` is right-associative, so the right operand
-    // is parsed by a recursive `parse_binary_expression_or_higher` call
-    // *without* any intervening parentheses or atom nesting. This exercises
-    // the binary-expression recursion path directly, unlike the
-    // `1+(1+(...))` interplay test which recurses through parenthesised
-    // atoms.
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let mut src = String::with_capacity(depth * 3 + 1);
-    for _ in 0..depth {
-        src.push_str("1**");
+    #[test]
+    fn nested_calls_grow_stack() {
+        let src = format!("x = {}1{}", "f(".repeat(1_000), ")".repeat(1_000));
+        parse_module(&src).unwrap();
     }
-    src.push('1');
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn ternary_else_chain_grows_stack() {
-    // `1 if 1 else 1 if 1 else ...` — the `else` operand recurses at the
-    // conditional layer (`parse_if_expression` -> `orelse`), which is not
-    // covered by the binary-expression guard.
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let mut src = String::with_capacity(depth * 12 + 1);
-    for _ in 0..depth {
-        src.push_str("1 if 1 else ");
+    #[test]
+    fn nested_subscripts_grow_stack() {
+        let src = format!("x = {}1{}", "a[".repeat(1_000), "]".repeat(1_000));
+        parse_module(&src).unwrap();
     }
-    src.push('1');
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_lambda_chain_grows_stack() {
-    // `lambda: lambda: lambda: ...` — the lambda body recurses at the
-    // conditional layer (`parse_lambda_expr` -> body), bypassing the
-    // binary-expression guard entirely.
-    let depth = RECURSIVE_AST_TEST_DEPTH;
-    let mut src = String::from("x = ");
-    for _ in 0..depth {
-        src.push_str("lambda: ");
+    #[test]
+    fn nested_match_patterns_grow_stack() {
+        // Deeply parenthesised match patterns — exercises pattern-parsing
+        // instrumentation in addition to statement / expression paths.
+        let mut src = String::from("match x:\n case ");
+        for _ in 0..600 {
+            src.push('(');
+        }
+        src.push('y');
+        for _ in 0..600 {
+            src.push(')');
+        }
+        src.push_str(": pass\n");
+        parse_module(&src).unwrap();
     }
-    src.push('1');
-    parse_module(&src).unwrap();
-}
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn invalid_async_chain_grows_stack() {
-    let source = format!("{}x = 1\n", "async ".repeat(5_000));
-    let parsed = crate::parse_unchecked(&source, ParseOptions::from(Mode::Module));
-    assert!(!parsed.errors().is_empty());
-}
+    #[test]
+    fn nested_invalid_mapping_pattern_keys_grow_stack() {
+        let depth = 512;
+        let src = format!(
+            "match value:\n    case {}0{}:\n        pass\n",
+            "{".repeat(depth),
+            ": 0}".repeat(depth)
+        );
+        let parsed = crate::parse_unchecked(&src, ParseOptions::from(Mode::Module));
+        assert!(!parsed.errors().is_empty());
+    }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-#[test]
-fn nested_unary_chains_grow_stack() {
-    let depth = 300;
-    let source = format!("{}1\n", "-~+".repeat(depth));
-    parse_module(&source).unwrap();
+    #[test]
+    fn binary_paren_interplay_grows_stack() {
+        // `1+(1+(1+(1+...)))` — each level alternates a binary operator and a
+        // parenthesised sub-expression, exactly like the pattern described in
+        // the tracking issue.
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let mut src = String::new();
+        for _ in 0..depth {
+            src.push_str("1+(");
+        }
+        src.push('1');
+        for _ in 0..depth {
+            src.push(')');
+        }
+        parse_module(&src).unwrap();
+    }
 
-    let source = format!("{}True\n", "not ".repeat(depth));
-    parse_module(&source).unwrap();
+    #[test]
+    fn right_assoc_pow_chain_grows_stack() {
+        // `1**1**1**...**1` — `**` is right-associative, so the right operand
+        // is parsed by a recursive `parse_binary_expression_or_higher` call
+        // *without* any intervening parentheses or atom nesting. This exercises
+        // the binary-expression recursion path directly, unlike the
+        // `1+(1+(...))` interplay test which recurses through parenthesised
+        // atoms.
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let mut src = String::with_capacity(depth * 3 + 1);
+        for _ in 0..depth {
+            src.push_str("1**");
+        }
+        src.push('1');
+        parse_module(&src).unwrap();
+    }
+
+    #[test]
+    fn ternary_else_chain_grows_stack() {
+        // `1 if 1 else 1 if 1 else ...` — the `else` operand recurses at the
+        // conditional layer (`parse_if_expression` -> `orelse`), which is not
+        // covered by the binary-expression guard.
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let mut src = String::with_capacity(depth * 12 + 1);
+        for _ in 0..depth {
+            src.push_str("1 if 1 else ");
+        }
+        src.push('1');
+        parse_module(&src).unwrap();
+    }
+
+    #[test]
+    fn nested_lambda_chain_grows_stack() {
+        // `lambda: lambda: lambda: ...` — the lambda body recurses at the
+        // conditional layer (`parse_lambda_expr` -> body), bypassing the
+        // binary-expression guard entirely.
+        let depth = RECURSIVE_AST_TEST_DEPTH;
+        let mut src = String::from("x = ");
+        for _ in 0..depth {
+            src.push_str("lambda: ");
+        }
+        src.push('1');
+        parse_module(&src).unwrap();
+    }
+
+    #[test]
+    fn invalid_async_chain_grows_stack() {
+        let source = format!("{}x = 1\n", "async ".repeat(5_000));
+        let parsed = crate::parse_unchecked(&source, ParseOptions::from(Mode::Module));
+        assert!(!parsed.errors().is_empty());
+    }
+
+    #[test]
+    fn nested_unary_chains_grow_stack() {
+        let depth = 300;
+        let source = format!("{}1\n", "-~+".repeat(depth));
+        parse_module(&source).unwrap();
+
+        let source = format!("{}True\n", "not ".repeat(depth));
+        parse_module(&source).unwrap();
+    }
 }
 
 #[test]

@@ -51,7 +51,7 @@ pub fn evaluatable_expression(
     let token = parsed
         .tokens()
         .at_offset(offset)
-        .find(|token| token.kind() == TokenKind::Name || token.kind().is_soft_keyword())?;
+        .find(|token| token.kind() == TokenKind::Identifier || token.kind().is_soft_keyword())?;
     let covering = covering_node(parsed.syntax().into(), token.range());
 
     let mut ancestors = covering.ancestors();

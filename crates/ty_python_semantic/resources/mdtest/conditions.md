@@ -1,31 +1,10 @@
 # conditions
 
-A condition collapses a value to a single bit. Two checks watch for the ways that goes wrong:
-`overlapping-condition` when the selected branch holds a value that is always there alongside one
-that is only sometimes there, and `redundant-condition` when the outcome is fixed and there is no
-branch at all.
-
-## a truthy test that tells `True` apart
-
-Only the branch the condition *selects* is analysed. `bool | None` has exactly one truthy member, so
-`if a` asks a question with one answer.
-
-```py
-def f(a: bool | None):
-    if a:
-        reveal_type(a)  # revealed: Literal[True]
-```
-
-## a falsy test that does not
-
-The falsy side has two, and the branch cannot say which one it got.
-
-```py
-def f(a: bool | None):
-    # error: [overlapping-condition] "This condition does not distinguish between `Literal[False]` and `None`"
-    if not a:
-        reveal_type(a)  # revealed: Literal[False] | None
-```
+A condition collapses a value to a single bit. Three checks watch for the ways that goes wrong:
+`truthiness-test-of-none-union` when an optional value's `None` shares a branch with another falsy
+value, `overlapping-condition` when the selected branch holds any other value that is always there
+alongside one that is only sometimes there, and `redundant-condition` when the outcome is fixed and
+there is no branch at all.
 
 ## an optional string
 
@@ -33,7 +12,7 @@ The classic one: an empty string and an absent value share a branch.
 
 ```py
 def f(name: str | None):
-    # error: [overlapping-condition] "This condition does not distinguish between `str & ~AlwaysTruthy` and `None`"
+    # error: [truthiness-test-of-none-union] "Boolean test on `str | None` does not distinguish `None` from other falsy values: `None` and the empty string are both falsy"
     if not name: ...
 ```
 
@@ -42,6 +21,56 @@ def f(name: str | None):
 ```py
 def f(name: str | None):
     if name is None: ...
+```
+
+## an optional instance is taken to be truthy
+
+A class with no `__bool__` and no `__len__` is taken at face value, so `None` is the only falsy
+member.
+
+```py
+class A: ...
+
+def f(a: A | None):
+    if not a: ...
+```
+
+## an optional instance that defines `__len__` is not
+
+```py
+class A:
+    def __len__(self) -> int:
+        return 0
+
+def f(a: A | None):
+    # error: [truthiness-test-of-none-union]
+    if not a: ...
+```
+
+## a truthy test that tells the members apart
+
+Only the branch the condition *selects* is analysed. `list[int] | Literal[False]` has one kind of
+truthy member, so `if a` asks a question with one answer.
+
+```py
+from typing import Literal
+
+def f(a: list[int] | Literal[False]):
+    if a:
+        reveal_type(a)  # revealed: list[int] & ~AlwaysFalsy
+```
+
+## a falsy test that does not
+
+The falsy side has two, and the branch cannot say which one it got.
+
+```py
+from typing import Literal
+
+def f(a: list[int] | Literal[False]):
+    # error: [overlapping-condition] "This condition does not distinguish between `list[int] & ~AlwaysTruthy` and `Literal[False]`"
+    if not a:
+        reveal_type(a)  # revealed: (list[int] & ~AlwaysTruthy) | Literal[False]
 ```
 
 ## a class that settles its own truthiness
@@ -55,24 +84,26 @@ class A:
     def __bool__(self) -> Literal[True]:
         return True
 
-def f(a: A | None):
+def f(a: A | Literal[False]):
     if a:
         reveal_type(a)  # revealed: A
     if not a:
-        reveal_type(a)  # revealed: None
+        reveal_type(a)  # revealed: Literal[False]
 ```
 
 ## a class that does not
 
-Without `__bool__`, a subclass may still be falsy, so `A` is a falsy member alongside `None`.
+Without `__bool__`, a subclass may still be falsy, so `A` is a falsy member alongside `False`.
 
 ```py
+from typing import Literal
+
 class A: ...
 
-def f(a: A | None):
+def f(a: A | Literal[False]):
     if a:
         reveal_type(a)  # revealed: A & ~AlwaysFalsy
-    # error: [overlapping-condition] "This condition does not distinguish between `A & ~AlwaysTruthy` and `None`"
+    # error: [overlapping-condition] "This condition does not distinguish between `A & ~AlwaysTruthy` and `Literal[False]`"
     if not a: ...
 ```
 
@@ -81,9 +112,11 @@ def f(a: A | None):
 Polarity is read off the whole chain of `not`s, so the selected branch is the truthy one again.
 
 ```py
-def f(a: bool | None):
+from typing import Literal
+
+def f(a: list[int] | Literal[False]):
     if not not a:
-        reveal_type(a)  # revealed: Literal[True]
+        reveal_type(a)  # revealed: list[int] & ~AlwaysFalsy
 ```
 
 ## three overlapping members
@@ -91,8 +124,8 @@ def f(a: bool | None):
 ```py
 from typing import Literal
 
-def f(a: Literal[0] | str | None):
-    # error: [overlapping-condition] "This condition does not distinguish between `Literal[0]`, `str & ~AlwaysTruthy` and `None`"
+def f(a: Literal[0] | str | bytes):
+    # error: [overlapping-condition] "This condition does not distinguish between `Literal[0]`, `str & ~AlwaysTruthy` and `bytes & ~AlwaysTruthy`"
     if not a: ...
 ```
 
@@ -101,20 +134,22 @@ def f(a: Literal[0] | str | None):
 Each position gets its own function: narrowing from one test would otherwise decide the next.
 
 ```py
-def while_(a: bool | None) -> None:
+from typing import Literal
+
+def while_(a: str | Literal[False]) -> None:
     while not a:  # error: [overlapping-condition]
         ...
 
-def assert_(a: bool | None) -> None:
+def assert_(a: str | Literal[False]) -> None:
     assert not a  # error: [overlapping-condition]
 
-def if_expression(a: bool | None) -> None:
+def if_expression(a: str | Literal[False]) -> None:
     x = 1 if not a else 2  # error: [overlapping-condition]
 
-def comprehension(a: bool | None) -> None:
+def comprehension(a: str | Literal[False]) -> None:
     y = [n for n in range(3) if not a]  # error: [overlapping-condition]
 
-def match_guard(a: bool | None) -> None:
+def match_guard(a: str | Literal[False]) -> None:
     match 1:
         case int() if not a:  # error: [overlapping-condition]
             ...
@@ -145,7 +180,7 @@ class AlsoTruthy:
     def __bool__(self) -> Literal[True]:
         return True
 
-def f(x: Truthy | AlsoTruthy | None):
+def f(x: Truthy | AlsoTruthy | Literal[False]):
     if x: ...
 ```
 
@@ -175,20 +210,12 @@ def f(count: int, leftovers: dict[str, int]):
 ## and each operand is checked on its own
 
 ```py
-def f(a: bool | None, name: str | None):
-    # error: [overlapping-condition] "This condition does not distinguish between `Literal[False]` and `None`"
-    # error: [overlapping-condition] "This condition does not distinguish between `str & ~AlwaysTruthy` and `None`"
-    if not a or not name: ...
-```
-
-## polarity carries into the operands
-
-```py
 from typing import Literal
 
-def f(a: Literal[True], b: bool):
-    # error: [redundant-condition] "This condition is always false"
-    if not a and b: ...
+def f(a: list[int] | Literal[False], name: str | Literal[False]):
+    # error: [overlapping-condition] "This condition does not distinguish between `list[int] & ~AlwaysTruthy` and `Literal[False]`"
+    # error: [overlapping-condition] "This condition does not distinguish between `str & ~AlwaysTruthy` and `Literal[False]`"
+    if not a or not name: ...
 ```
 
 ## an attribute or a subscript is a value read too
@@ -197,14 +224,11 @@ def f(a: Literal[True], b: bool):
 from typing import Literal
 
 class Holder:
-    flag: bool | None
-    always: Literal[True]
+    flag: str | Literal[False]
 
-def f(h: Holder, d: dict[str, bool | None]):
+def f(h: Holder, d: dict[str, str | Literal[False]]):
     # error: [overlapping-condition]
     if not h.flag: ...
-    # error: [redundant-condition] "This condition is always true"
-    if h.always: ...
     # error: [overlapping-condition]
     if not d["k"]: ...
 ```
@@ -257,43 +281,33 @@ overlapping-condition-assume-truthy-instances = true
 ```
 
 ```py
-from typing import Protocol
+from typing import Literal, Protocol
 
 class HasName(Protocol):
     name: str
 
-def f(x: HasName | None):
+def f(x: HasName | Literal[False]):
     if not x: ...
 ```
 
 ## exempting a type
 
-`analysis.overlapping-condition-exempt-types` says a member is not worth telling apart. With `int`
-exempt, only `None` is left in the falsy branch.
+`analysis.overlapping-condition-exempt-types` says a member is not worth telling apart. With `str`
+exempt, only `False` is left in the falsy branch.
 
 ```toml
 [analysis]
-overlapping-condition-exempt-types = ["int"]
+overlapping-condition-exempt-types = ["str"]
 ```
 
 ```py
-def f(a: int | None):
+from typing import Literal
+
+def f(a: str | Literal[False]):
     if not a: ...
 
-def g(a: str | None):
+def g(a: bytes | Literal[False]):
     # error: [overlapping-condition]
-    if not a: ...
-```
-
-## exempting `None`
-
-```toml
-[analysis]
-overlapping-condition-exempt-types = ["None"]
-```
-
-```py
-def f(a: int | None):
     if not a: ...
 ```
 
@@ -306,15 +320,17 @@ overlapping-condition-exempt-types = ["decimal.Decimal"]
 
 ```py
 from decimal import Decimal
+from typing import Literal
 
-def f(a: Decimal | None):
+def f(a: Decimal | Literal[False]):
     if not a: ...
 ```
 
 ## assuming an instance is truthy
 
 `analysis.overlapping-condition-assume-truthy-instances` takes a class with no `__bool__` and no
-`__len__` at face value, which drops the report for `if not x` over an optional instance.
+`__len__` at face value, which drops the report for `if not x` over an instance or a `False`
+sentinel.
 
 ```toml
 [analysis]
@@ -322,11 +338,13 @@ overlapping-condition-assume-truthy-instances = true
 ```
 
 ```py
+from typing import Literal
+
 class A: ...
 
-def f(a: A | None):
+def f(a: A | Literal[False]):
     if not a:
-        reveal_type(a)  # revealed: (A & ~AlwaysTruthy) | None
+        reveal_type(a)  # revealed: (A & ~AlwaysTruthy) | Literal[False]
 ```
 
 ## a class that does define `__len__` is unaffected
@@ -337,11 +355,13 @@ overlapping-condition-assume-truthy-instances = true
 ```
 
 ```py
+from typing import Literal
+
 class A:
     def __len__(self) -> int:
         return 0
 
-def f(a: A | None):
+def f(a: A | Literal[False]):
     # error: [overlapping-condition]
     if not a: ...
 ```
@@ -349,10 +369,8 @@ def f(a: A | None):
 ## a condition that is always true
 
 ```py
-from typing import Literal
-
-def f(a: Literal[True]):
-    # error: [redundant-condition] "This condition is always true"
+def f(a: tuple[int]):
+    # error: [redundant-condition]
     if a: ...
 ```
 
@@ -362,8 +380,28 @@ def f(a: Literal[True]):
 from typing import Literal
 
 def f(a: Literal[""]):
-    # error: [redundant-condition] "This condition is always false"
+    # error: [redundant-condition]
     if a: ...
+```
+
+## a bare `case` name that captures is not an environment guard
+
+a value decided by an environment guard such as `sys.platform` is exempt from `redundant-condition`,
+since the guard can go the other way on another platform. a bare `case q:` over such a subject only
+captures it when `q` is not a member of the subject's enum, and a capture matches every value, so it
+guards nothing and the code after the `match` is not exempt
+
+```by
+import sys
+
+match sys.platform:
+    case q:
+        pass
+
+y = "fixed"
+# error: [redundant-condition]
+if y:
+    pass
 ```
 
 ## a literal condition is deliberate
@@ -542,11 +580,11 @@ def f(a: bool):
 ```py
 from typing import Literal
 
-def overlap(a: bool | None):
+def overlap(a: list[int] | Literal[False]):
     # snapshot: overlapping-condition
     if not a: ...
 
-def redundant(a: Literal[True]):
+def redundant(a: tuple[int]):
     # snapshot: redundant-condition
     if a: ...
 
@@ -556,21 +594,26 @@ def comparison(a: bool):
 ```
 
 ```snapshot
-warning[overlapping-condition]: This condition does not distinguish between `Literal[False]` and `None`
+warning[overlapping-condition]: This condition does not distinguish between `list[int] & ~AlwaysTruthy` and `Literal[False]`
  --> src/mdtest_snippet.py:5:8
   |
 5 |     if not a: ...
   |        ^^^^^
-info: `bool | None` is tested for falsiness
+info: `list[int] | Literal[False]` is tested for falsiness
 help: Compare against the specific value instead of testing truthiness
 
 
-warning[redundant-condition]: This condition is always true
+warning[redundant-condition]: A 1-element tuple is always truthy
  --> src/mdtest_snippet.py:9:8
   |
+7 | def redundant(a: tuple[int]):
+  |                  ----------
+  |                  |
+  |                  Inferred as a 1-element tuple due to this annotation
+  |                  Did you mean `tuple[int, ...]`?
+8 |     # snapshot: redundant-condition
 9 |     if a: ...
-  |        ^
-info: `Literal[True]` is always truthy
+  |        ^ Inferred type `tuple[int]` is always truthy
 
 
 warning[redundant-boolean-comparison]: Comparison of a `bool` with `False` is redundant

@@ -162,6 +162,15 @@ protocol SupportsKeysAndGetItem[in out Key, out Value]:
     def keys(self) -> Iterable[Key]
     def __getitem__(self, key: Key, /) -> Value
 
+protocol SupportsKeysAndGet[in out Key, out Value]:
+    def keys(self) -> Iterable[Key]
+
+    def get(self, key: Key, /) -> Value | None
+    def get(  # pyrefly: ignore[invalid-variance]
+        self, key: Key, default: Value, /
+    ) -> Value
+    def get[Element](self, key: Key, default: Element, /) -> Value | Element
+
 # stable
 protocol SupportsGetItem[in KT, out Value]:
     def __getitem__(self, key: KT, /) -> Value

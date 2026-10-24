@@ -4,7 +4,6 @@ exclude: |
   (?x)^(
     scratch\..*|
     \.claude/.*|
-    .github/workflows/release.yml|
     crates/ty_vendored/vendor/.*|
     crates/ty_project/resources/.*|
     crates/ty/docs/(configuration|rules|cli|environment).md|
@@ -35,13 +34,13 @@ repos:
         priority: 0
 
   - repo: https://github.com/abravalheri/validate-pyproject
-    rev: 4b2e70d08cb2ccd26d1fba73588de41c7a5d50b7 # frozen: v0.25
+    rev: 17e12779811926f000bdfa1795f9e3735dd71ac3 # frozen: 0.26
     hooks:
       - id: validate-pyproject
         priority: 0
 
   - repo: https://github.com/crate-ci/typos
-    rev: 8a48f81b6c64dcfea44b3633223084c4be58ac5f # frozen: v1.49.0
+    rev: 512fc24f32f44ab01972217aaaf3dc86ec234d53 # frozen: v1.50.2
     hooks:
       - id: typos
         priority: 0
@@ -66,11 +65,11 @@ repos:
 
       - id: check-by-lexer
         name: check the basedpython pygments lexer
-        # `--no-project` avoids building ruff from source. the lexer goes in
-        # editable, because a plain `--with <path>` is served from uv's build
-        # cache and would check a stale copy of the very thing being edited
-        entry: uv run --no-project --python 3.13 --with pygments --with-editable
-          ./python/basedpython-pygments python scripts/check_by_lexer.py
+        # `--only-group` avoids building ruff from source. it has to be a group
+        # of the workspace rather than `--no-project`: building the lexer needs
+        # its build backend, and only the workspace pins that by hash
+        entry: uv run --python 3.13 --only-group basedpython-docs --locked
+          python scripts/check_by_lexer.py
         language: system
         files: '^(docs/basedpython/.*\.md|python/basedpython-pygments/.*|scripts/check_by_lexer\.py)$'
         pass_filenames: false
@@ -91,7 +90,7 @@ repos:
 
   # Prettier
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: 0ee178619d696787ca73d210cc191d720868c631 # frozen: v3.9.6
+    rev: 5c9b20b95f2bc1c4d3d929b83a96d5c96a29e752 # frozen: v3.9.8
     hooks:
       - id: prettier
         types: [yaml]
@@ -100,15 +99,20 @@ repos:
   # zizmor detects security vulnerabilities in GitHub Actions workflows.
   # Additional configuration for the tool is found in `.github/zizmor.yml`
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # frozen: v1.29.0
+    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2 # frozen: v1.30.1
     hooks:
       - id: zizmor
         priority: 0
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 6b63472e72e1a91ed8a2f6d483790dfb644fa1d3 # frozen: 0.37.4
+    rev: 12e63946db2c5cfcc9030fac21c3883ba88c6ed8 # frozen: 0.38.0
     hooks:
       - id: check-github-workflows
+        # The bundled schema predates GitHub's cache-mode feature. Use a pinned
+        # upstream schema until check-jsonschema includes it in a release.
+        entry: >-
+          check-jsonschema --schemafile
+          https://raw.githubusercontent.com/SchemaStore/schemastore/a1bfb2b17627062b6a938153c065cb58baef6fe7/src/schemas/json/github-workflow.json
         priority: 0
 
   # `actionlint` hook, for verifying correct syntax in GitHub Actions workflows.
@@ -150,14 +154,14 @@ repos:
         priority: 0
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: d153933366256874470b9d8395de436c50714f41 # frozen: 0.12.9
+    rev: eeca16c54e09b4d9a848259e46bae14737944348 # frozen: 0.13.5
     hooks:
       - id: uv-lock
         priority: 0
         args: [--default-index=https://pypi.org/simple, --check, --refresh]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49 # frozen: v0.16.5
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
     hooks:
       - id: ruff-format
         types_or: [python, pyi, jupyter]
@@ -166,7 +170,7 @@ repos:
 
   # Priority 1: Second-pass fixers (e.g., markdownlint-fix runs after mdformat).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49 # frozen: v0.16.5
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
     hooks:
       - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
@@ -189,7 +193,7 @@ repos:
 
   # Priority 2: ruffen-docs runs after markdownlint-fix (both modify markdown).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49 # frozen: v0.16.5
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # frozen: v0.17.1
     hooks:
       - id: ruff-format
         name: mdtest format

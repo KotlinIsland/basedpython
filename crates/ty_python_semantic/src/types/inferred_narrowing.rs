@@ -493,7 +493,10 @@ fn returned_constraints<'db>(
                 db,
                 env,
                 Predicate {
-                    node: PredicateNode::Expression(expression),
+                    node: PredicateNode::Expression {
+                        expression,
+                        truthiness_from_type: false,
+                    },
                     is_positive: true,
                 },
                 place,

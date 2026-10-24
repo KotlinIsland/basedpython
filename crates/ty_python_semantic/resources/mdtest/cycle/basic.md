@@ -7,7 +7,7 @@ inferring the lambda's return type, which depends on that same assignment.
 
 ```py
 (f := lambda: f)
-while lambda: f:
+while lambda: f:  # error: [redundant-condition] "always truthy"
     pass
 f = 0
 ```
@@ -18,7 +18,7 @@ The same cycle can arise when a conditional filters the bindings visible to a re
 
 ```py
 f = lambda: f
-if not (lambda: f):
+if not (lambda: f):  # error: [redundant-condition] "always truthy"
     f = 0
 ```
 
@@ -48,6 +48,32 @@ while 1:
 
 while 1:
     y = (y, *y)
+```
+
+## Concatenating a recursively growing tuple
+
+A loop can append any number of elements. The inferred tuple becomes variable-length instead of
+accumulating a new fixed-length alternative on each inference iteration.
+
+```py
+def repeat(flag: bool) -> None:
+    value = ()
+    while flag:
+        value += (1,)
+    reveal_type(value)  # revealed: tuple[Literal[1], ...]
+```
+
+## Alternating between fixed-length tuples
+
+A loop can alternate between a finite set of tuple shapes without growing the tuple. The inferred
+type preserves those shapes:
+
+```py
+def alternate(flag: bool):
+    value = (1,)
+    while flag:
+        value = ("a", "b") if len(value) == 1 else (1,)
+    reveal_type(value)  # revealed: tuple[Literal[1]] | tuple[Literal["a"], Literal["b"]]
 ```
 
 ## Generic `NamedTuple` with recursive fields
@@ -159,10 +185,8 @@ from typing import Union, TypeAliasType, Sequence, Mapping
 A = list["A | None"]
 
 def f(x: A):
-    # TODO: should be `list[A | None]`?
-    reveal_type(x)  # revealed: list[Divergent]
-    # TODO: should be `A | None`?
-    reveal_type(x[0])  # revealed: Divergent
+    reveal_type(x)  # revealed: A
+    reveal_type(x[0])  # revealed: A | None
 
 JSONPrimitive = Union[str, int, float, bool, None]
 JSONValue = TypeAliasType("JSONValue", 'Union[JSONPrimitive, Sequence["JSONValue"], Mapping[str, "JSONValue"]]')
@@ -269,7 +293,7 @@ an earlier assertion and prevent inference from converging. This is a regression
 
 ```py
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 @property
 def f(x=lambda: f): ...
@@ -279,7 +303,7 @@ The same cycle must converge when the parameter and return type are annotated:
 
 ```py
 g = lambda: g
-assert g  # error: [redundant-condition] "This condition is always true"
+assert g  # error: [redundant-condition] "always truthy"
 
 @property
 def g(x: object = lambda: g) -> None: ...
@@ -298,7 +322,7 @@ def decorator(value: int) -> int:
     return value
 
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 # error: [invalid-argument-type] "Expected `int`, found `def f(x: some () -> int = ...)`"
 @decorator
@@ -311,7 +335,7 @@ Constructing a property explicitly has the same behavior as decorator syntax:
 
 ```py
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 def getter(x=lambda: f): ...
 
@@ -331,7 +355,7 @@ def decorator(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
     return fn
 
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 @decorator
 def f(x=lambda: f): ...
@@ -354,7 +378,7 @@ def decorator[**P](fn: Callable[P, None]) -> Callable[[], None]:
     return lambda: None
 
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 @decorator
 def f(x=lambda: f) -> None: ...
@@ -374,13 +398,113 @@ python-version = "3.12"
 
 ```py
 f = lambda: f
-assert f  # error: [redundant-condition] "This condition is always true"
+assert f  # error: [redundant-condition] "always truthy"
 
 @property
 def f[T](value: T, callback=lambda: f) -> T:
     return value
 
 reveal_type(f)  # revealed: property
+```
+
+## Class decorator annotations depend on the decorated class
+
+A decorator's annotations can refer to an instance of the decorated class. We report the invalid
+annotations and preserve the class binding, so constructor calls can still be checked.
+
+```pyi
+from typing_extensions import reveal_type
+
+# error: [invalid-type-form] "Variable of type `Example` is not allowed in a parameter annotation"
+# error: [invalid-type-form] "Variable of type `Example` is not allowed in a return type annotation"
+def identity(value: annotation) -> annotation: ...
+
+@identity
+class Example:
+    def __init__(self, name: str) -> None: ...
+
+annotation = Example("example")
+
+reveal_type(Example)  # revealed: <class 'Example'>
+Example(123)  # error: [invalid-argument-type] "Expected `str`, found `Literal[123]`"
+```
+
+## Class decorator annotations depend on the decorated class through a type alias
+
+A type alias can introduce the same dependency on the decorated class. Importers still see the class
+and can check its constructor arguments.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+`example.pyi`:
+
+```pyi
+type Alias = annotation
+
+def identity(value: Alias) -> Alias: ...
+
+@identity
+class Example:
+    def __init__(self, name: str) -> None: ...
+
+annotation = type[Example]
+```
+
+`main.py`:
+
+```py
+from example import Example
+
+reveal_type(Example)  # revealed: <class 'Example'>
+Example("example")
+Example(123)  # error: [invalid-argument-type] "Expected `str`, found `Literal[123]`"
+```
+
+## Dataclass outside a decorator whose annotations depend on the class
+
+An outer `@dataclass` still generates an initializer when the inner decorator's annotations depend
+on the decorated class.
+
+```pyi
+from dataclasses import dataclass
+from typing_extensions import reveal_type
+
+# error: [invalid-type-form] "Variable of type `Example` is not allowed in a parameter annotation"
+# error: [invalid-type-form] "Variable of type `Example` is not allowed in a return type annotation"
+def identity(value: annotation) -> annotation: ...
+
+@dataclass
+@identity
+class Example:
+    name: str
+
+annotation = Example("example")
+
+reveal_type(Example)  # revealed: <class 'Example'>
+reveal_type(Example("example").name)  # revealed: str
+Example()  # error: [missing-argument] "No argument provided for required parameter `name`"
+Example(123)  # error: [invalid-argument-type] "Expected `str`, found `Literal[123]`"
+```
+
+## Recursive lambda used as a class decorator
+
+The lambda returns a name that can refer back to the lambda itself. Inferring the decorated class
+converges even when another binding of that name has an unknown type.
+
+```py
+make = lambda cls: result
+try:
+    raise Exception
+except Exception:
+    @make
+    class result: ...
+
+    result = make
+finally:
+    from unknown_module import member as result  # error: [unresolved-import]
 ```
 
 ## Decorated methods with implicit class attributes
@@ -951,6 +1075,7 @@ the shape under test is the one the attribute makes on its own:
 ```toml
 [analysis]
 infer-unannotated-signatures = false
+return-type-inference = "never"
 ```
 
 ```py
@@ -1121,7 +1246,7 @@ class Tracer:
         return self.trace
 
     def use(self):
-        # revealed: bound method Self@use.exception(event) -> bound method Self@use.trace(event) -> (bound method Self@use.trace(event) -> Divergent) | (bound method Self@use.trace(...))
+        # revealed: bound method Self@use.exception(event) -> bound method Self@use.trace(event) -> (bound method Self@use.trace(event) -> Divergent) | (bound method Self@use.trace(event) -> (bound method Self@use.trace(event) -> Divergent) | (bound method Self@use.trace(event) -> (bound method Self@use.trace(...)) | (bound method Self@use.trace(...))))
         reveal_type(self.exception)
 ```
 
@@ -1331,6 +1456,14 @@ own `typing`, `warnings` and `linecache` are in a cycle with each other. `typing
 typeshed reaches for the pieces `builtins` is written in terms of, so while that cycle is being
 untangled, *which class `str` is* has no answer yet either.
 
+`typing_extensions` takes `reveal_type` from `typing` from 3.11 on, and the `typing` here does not
+define it, so this runs at 3.10:
+
+```toml
+[environment]
+python-version = "3.10"
+```
+
 `linecache.py`:
 
 ```py
@@ -1375,6 +1508,11 @@ reveal_type([1, 2, 3])  # revealed: list[int]
 
 ## Known class instances with a shadowed typing module
 
+```toml
+[environment]
+python-version = "3.10"
+```
+
 String members retain their types when a local `typing.py` introduces an inference cycle. Resolving
 `str`'s bases looks up `Sequence` in that module. Determining whether the assignment is reachable
 requires inferring `trigger`'s return annotation. Resolving `C.attribute` requires determining `C`'s
@@ -1402,6 +1540,11 @@ Sequence = object
 
 ## Known class instances after checking the shadowing module
 
+```toml
+[environment]
+python-version = "3.10"
+```
+
 String members retain their types when the shadowing module is checked first, as they do when the
 consumer is checked first.
 
@@ -1420,4 +1563,27 @@ Sequence = object
 
 ```py
 reveal_type("a".encode())  # revealed: bytes
+```
+
+## Dynamic class metaclasses in loop conditions
+
+Determining whether a loop body is reachable can depend on the metaclass of a dynamic class created
+in the loop, whose base in turn depends on that reachability.
+
+### `type`
+
+```py
+value = 0
+while value:
+    value = type("C", (value,), {})
+```
+
+### `types.new_class`
+
+```py
+from types import new_class
+
+value = 0
+while value:
+    value = new_class("C", (value,))
 ```

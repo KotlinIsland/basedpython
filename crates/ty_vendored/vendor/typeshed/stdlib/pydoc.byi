@@ -278,7 +278,7 @@ class HTMLDoc(Doc):
         """Produce HTML documentation for a data object."""
 
     if sys.version_info >= (3, 11):
-        def docroutine(
+        override def docroutine(
             self,
             object: object,
             name: str? = None,
@@ -291,18 +291,18 @@ class HTMLDoc(Doc):
         ) -> str:
             """Produce HTML documentation for a function or method object."""
 
-        def docproperty(
+        override def docproperty(
             self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None, *ignored: Unused
         ) -> str:
             """Produce html documentation for a data descriptor."""
 
-        def docdata(
+        override def docdata(
             self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None, *ignored: Unused
         ) -> str:
             """Produce html documentation for a data descriptor."""
 
     else:
-        override def docroutine(
+        def docroutine(
             self,
             object: object,
             name: str? = None,
@@ -314,10 +314,10 @@ class HTMLDoc(Doc):
         ) -> str:
             """Produce HTML documentation for a function or method object."""
 
-        override def docproperty(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
+        def docproperty(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
             """Produce html documentation for a data descriptor."""
 
-        override def docdata(self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None) -> str:
+        def docdata(self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None) -> str:
             """Produce html documentation for a data descriptor."""
 
     if sys.version_info >= (3, 11):
@@ -365,7 +365,7 @@ class TextDoc(Doc):
         """Format an argument default value as text."""
 
     if sys.version_info >= (3, 11):
-        def docroutine(
+        override def docroutine(
             self,
             object: object,
             name: str? = None,
@@ -375,20 +375,20 @@ class TextDoc(Doc):
         ) -> str:
             """Produce text documentation for a function or method object."""
 
-        def docmodule(self, object: object, name: str? = None, mod: dynamic? = None, *ignored: Unused) -> str:
+        override def docmodule(self, object: object, name: str? = None, mod: dynamic? = None, *ignored: Unused) -> str:
             """Produce text documentation for a given module object."""
 
-        def docproperty(
+        override def docproperty(
             self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None, *ignored: Unused
         ) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docdata(
+        override def docdata(
             self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None, *ignored: Unused
         ) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docother(
+        override def docother(
             self,
             object: object,
             name: str? = None,
@@ -401,19 +401,19 @@ class TextDoc(Doc):
             """Produce text documentation for a data object."""
 
     else:
-        override def docroutine(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
+        def docroutine(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
             """Produce text documentation for a function or method object."""
 
-        override def docmodule(self, object: object, name: str? = None, mod: dynamic? = None) -> str:
+        def docmodule(self, object: object, name: str? = None, mod: dynamic? = None) -> str:
             """Produce text documentation for a given module object."""
 
-        override def docproperty(self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None) -> str:
+        def docproperty(self, object: object, name: str? = None, mod: dynamic? = None, cl: dynamic? = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        override def docdata(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
+        def docdata(self, object: object, name: str? = None, mod: str? = None, cl: dynamic? = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        override def docother(
+        def docother(
             self,
             object: object,
             name: str? = None,

@@ -87,10 +87,10 @@ pub(super) trait BackgroundDocumentRequestHandler: RetriableRequestHandler {
     /// Whether a document the client has not opened is answered from the file as the server
     /// reads it, for a request that says which text it is about.
     ///
-    /// A request that does not say is refused for a closed document, whatever this says: the
-    /// server cannot know that the client's copy is the file on disk. One that says is held until
-    /// the server has that text, and this decides whether the file on disk may be it, or only a
-    /// buffer the client opens. See [`crate::document::TextHash`].
+    /// A request that does not say is answered about whatever the server holds, whatever this
+    /// says, which for a supported closed document is the file on disk. One that says is held
+    /// until the server has that text, and this decides whether the file on disk may be it, or
+    /// only a buffer the client opens. See [`crate::document::TextHash`].
     ///
     /// The snapshot of a closed document carries no version the client gave it, so a handler that
     /// reads the version cannot say yes.

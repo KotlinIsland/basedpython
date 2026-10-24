@@ -73,8 +73,8 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
         """
 
         def __new__(cls, id: int, /, _whence: _Whence? = None, _ownsref: bool? = None) -> Self
-        def __reduce__(self) -> (type[Self], int)
-        def __hash__(self) -> int
+        override def __reduce__(self) -> (type[Self], int)
+        override def __hash__(self) -> int
         def __del__(self)
         let id: int
         let whence: "unknown" | "runtime init" | "legacy C-API" | "C-API" | "cross-interpreter C-API" | "_interpreters module"

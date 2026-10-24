@@ -260,9 +260,9 @@ if sys.platform != "win32":
             # Doesn't actually have ABCMeta metaclass at runtime, but mypy complains if we don't have it in the stub.
             # See discussion in #7412
             class BaseChildWatcher(AbstractChildWatcher, metaclass=ABCMeta):
-                override def close(self)
-                override def is_active(self) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop?)
+                def close(self)
+                def is_active(self) -> bool
+                def attach_loop(self, loop: events.AbstractEventLoop?)
 
             class SafeChildWatcher(BaseChildWatcher):
                 """'Safe' child watcher implementation.
@@ -275,14 +275,14 @@ if sys.platform != "win32":
                 big number of children (O(n) each time SIGCHLD is raised)
                 """
 
-                override def __enter__(self) -> Self
-                override def __exit__(
+                def __enter__(self) -> Self
+                def __exit__(
                     self, a: type[BaseException]?, b: BaseException?, c: types.TracebackType?
                 )
-                override def add_child_handler[*Args](
+                def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 )
-                override def remove_child_handler(self, pid: int) -> bool
+                def remove_child_handler(self, pid: int) -> bool
 
             class FastChildWatcher(BaseChildWatcher):
                 """'Fast' child watcher implementation.
@@ -295,14 +295,14 @@ if sys.platform != "win32":
                 (O(1) each time a child terminates).
                 """
 
-                override def __enter__(self) -> Self
-                override def __exit__(
+                def __enter__(self) -> Self
+                def __exit__(
                     self, a: type[BaseException]?, b: BaseException?, c: types.TracebackType?
                 )
-                override def add_child_handler[*Args](
+                def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 )
-                override def remove_child_handler(self, pid: int) -> bool
+                def remove_child_handler(self, pid: int) -> bool
 
     class _UnixSelectorEventLoop(BaseSelectorEventLoop):
         """Unix event loop.
@@ -312,7 +312,7 @@ if sys.platform != "win32":
         """
 
         if sys.version_info >= (3, 13):
-            async def create_unix_server(
+            override async def create_unix_server(
                 self,
                 protocol_factory: _ProtocolFactory,
                 path: StrPath? = None,
@@ -347,13 +347,13 @@ if sys.platform != "win32":
                     """Set the watcher for child processes."""
 
             else:
-                override def get_child_watcher(self) -> AbstractChildWatcher:
+                def get_child_watcher(self) -> AbstractChildWatcher:
                     """Get the watcher for child processes.
 
                     If not yet set, a ThreadedChildWatcher object is automatically created.
                     """
 
-                override def set_child_watcher(self, watcher: AbstractChildWatcher?) -> None:
+                def set_child_watcher(self, watcher: AbstractChildWatcher?) -> None:
                     """Set the watcher for child processes."""
 
     SelectorEventLoop = _UnixSelectorEventLoop
@@ -458,17 +458,17 @@ if sys.platform != "win32":
                 SIGCHLD is received).
                 """
 
-                override def is_active(self) -> bool
-                override def close(self)
-                override def __enter__(self) -> Self
-                override def __exit__(
+                def is_active(self) -> bool
+                def close(self)
+                def __enter__(self) -> Self
+                def __exit__(
                     self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: types.TracebackType?
                 )
-                override def add_child_handler[*Args](
+                def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 )
-                override def remove_child_handler(self, pid: int) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop?)
+                def remove_child_handler(self, pid: int) -> bool
+                def attach_loop(self, loop: events.AbstractEventLoop?)
 
             class ThreadedChildWatcher(AbstractChildWatcher):
                 """Threaded child watcher implementation.
@@ -483,18 +483,18 @@ if sys.platform != "win32":
                 on amount of spawn processes.
                 """
 
-                override def is_active(self) -> True
-                override def close(self)
-                override def __enter__(self) -> Self
-                override def __exit__(
+                def is_active(self) -> True
+                def close(self)
+                def __enter__(self) -> Self
+                def __exit__(
                     self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: types.TracebackType?
                 )
                 def __del__(self)
-                override def add_child_handler[*Args](
+                def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 )
-                override def remove_child_handler(self, pid: int) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop?)
+                def remove_child_handler(self, pid: int) -> bool
+                def attach_loop(self, loop: events.AbstractEventLoop?)
 
             class PidfdChildWatcher(AbstractChildWatcher):
                 """Child watcher implementation using Linux's pid file descriptors.
@@ -508,14 +508,14 @@ if sys.platform != "win32":
                 recent (5.3+) kernels.
                 """
 
-                override def __enter__(self) -> Self
-                override def __exit__(
+                def __enter__(self) -> Self
+                def __exit__(
                     self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: types.TracebackType?
                 )
-                override def is_active(self) -> bool
-                override def close(self)
-                override def attach_loop(self, loop: events.AbstractEventLoop?)
-                override def add_child_handler[*Args](
+                def is_active(self) -> bool
+                def close(self)
+                def attach_loop(self, loop: events.AbstractEventLoop?)
+                def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 )
-                override def remove_child_handler(self, pid: int) -> bool
+                def remove_child_handler(self, pid: int) -> bool

@@ -180,6 +180,7 @@ pub enum KnownClass {
     // Django
     DjangoModel,
     DjangoField,
+    DjangoDateField,
     DjangoForeignKey,
     DjangoOneToOneField,
     DjangoManyToManyField,
@@ -329,6 +330,7 @@ impl KnownClass {
             | Self::ByStaticProperty
             | Self::DjangoModel
             | Self::DjangoField
+            | Self::DjangoDateField
             | Self::DjangoForeignKey
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
@@ -393,7 +395,11 @@ impl KnownClass {
             | Self::MethodWrapperType
             | Self::CoroutineType
             | Self::BuiltinFunctionType
-            | Self::Template => Some(Truthiness::AlwaysTrue),
+            | Self::Template
+            // `re` documents a match as always truthy, and neither class defines `__bool__` or
+            // `__len__`
+            | Self::ReMatch
+            | Self::RePattern => Some(Truthiness::AlwaysTrue),
 
             Self::NoneType => Some(Truthiness::AlwaysFalse),
 
@@ -473,8 +479,6 @@ impl KnownClass {
             | Self::Specialization
             | Self::ProtocolMeta
             | Self::FunctoolsPartial
-            | Self::ReMatch
-            | Self::RePattern
             | Self::Path
             | Self::ExtensionTypedDictFallback
             | Self::TypedDictFallback
@@ -486,6 +490,7 @@ impl KnownClass {
             | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
+            | Self::DjangoDateField
             | Self::DjangoForeignKey
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
@@ -634,6 +639,7 @@ impl KnownClass {
             | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
+            | KnownClass::DjangoDateField
             | KnownClass::DjangoForeignKey
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
@@ -767,13 +773,14 @@ impl KnownClass {
             | KnownClass::ReMatch
             | KnownClass::RePattern
             | KnownClass::UnittestTestCase
+            | KnownClass::DjangoModel
+            | KnownClass::DjangoField
+            | KnownClass::DjangoDateField
+            | KnownClass::DjangoForeignKey
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticRootModel
             | KnownClass::PydanticStrict
-            | KnownClass::DjangoModel
-            | KnownClass::DjangoField
-            | KnownClass::DjangoForeignKey
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
             | KnownClass::DjangoManager
@@ -914,6 +921,7 @@ impl KnownClass {
             | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
+            | KnownClass::DjangoDateField
             | KnownClass::DjangoForeignKey
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
@@ -1066,6 +1074,7 @@ impl KnownClass {
             | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
+            | Self::DjangoDateField
             | Self::DjangoForeignKey
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
@@ -1207,6 +1216,7 @@ impl KnownClass {
             | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
+            | KnownClass::DjangoDateField
             | KnownClass::DjangoForeignKey
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
@@ -1361,6 +1371,7 @@ impl KnownClass {
             Self::PydanticStrict => "Strict",
             Self::DjangoModel => "Model",
             Self::DjangoField => "Field",
+            Self::DjangoDateField => "DateField",
             Self::DjangoForeignKey => "ForeignKey",
             Self::DjangoOneToOneField => "OneToOneField",
             Self::DjangoManyToManyField => "ManyToManyField",
@@ -1825,7 +1836,7 @@ impl KnownClass {
             Self::PydanticRootModel => KnownModule::PydanticRootModel,
             Self::PydanticStrict => KnownModule::PydanticTypes,
             Self::DjangoModel => KnownModule::DjangoDbModelsBase,
-            Self::DjangoField => KnownModule::DjangoDbModelsFields,
+            Self::DjangoField | Self::DjangoDateField => KnownModule::DjangoDbModelsFields,
             Self::DjangoForeignKey | Self::DjangoOneToOneField | Self::DjangoManyToManyField => {
                 KnownModule::DjangoDbModelsFieldsRelated
             }
@@ -1966,6 +1977,7 @@ impl KnownClass {
             | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
+            | Self::DjangoDateField
             | Self::DjangoForeignKey
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
@@ -2082,6 +2094,7 @@ impl KnownClass {
             "EllipsisType" => &[Self::EllipsisType],
             "NotImplementedType" => &[Self::NotImplementedType],
             "Field" => &[Self::Field, Self::DjangoField],
+            "DateField" => &[Self::DjangoDateField],
             "KW_ONLY" => &[Self::KwOnly],
             "NamedTupleFallback" => &[Self::NamedTupleFallback],
             "NamedTupleLike" => &[Self::NamedTupleLike],
@@ -2244,6 +2257,7 @@ impl KnownClass {
             | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
+            | Self::DjangoDateField
             | Self::DjangoForeignKey
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
@@ -2483,11 +2497,10 @@ impl<'db> KnownClassLookupError<'db> {
 mod tests {
     use super::*;
     use crate::db::tests::{TestDbBuilder, setup_db};
-    use crate::{PythonVersionSource, PythonVersionWithSource};
     use strum::IntoEnumIterator;
     use ty_module_resolver::resolve_module_confident;
     use ty_python_core::TestProgramDb as _;
-    use ty_python_core::program::{Program, ProgramSettings};
+    use ty_python_core::program::Program;
 
     #[test]
     fn known_class_roundtrip_from_str() {
@@ -2583,22 +2596,12 @@ mod tests {
         classes.sort_unstable_by_key(|(_, version)| *version);
 
         let mut program = db.program();
-        let mut current_version = program.python_version(&db);
-        let python_platform = program.python_platform(&db).clone();
-        let search_paths = program.search_paths(&db).clone();
+        let mut settings = db.program_settings().clone();
 
         for (class, version_added) in classes {
-            if version_added != current_version {
-                let settings = ProgramSettings {
-                    python_version: PythonVersionWithSource {
-                        version: version_added,
-                        source: PythonVersionSource::default(),
-                    },
-                    python_platform: python_platform.clone(),
-                    search_paths: search_paths.clone(),
-                };
+            if version_added != settings.python_version.version {
+                settings.python_version.version = version_added;
                 program = Program::from_settings(&db, &settings);
-                current_version = version_added;
             }
 
             // Check the class can be looked up successfully

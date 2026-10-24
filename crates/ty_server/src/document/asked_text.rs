@@ -1,9 +1,9 @@
 //! Which text a document request is about, when the client says.
 //!
 //! A document request names a document by its URI, and the server answers about whatever it holds
-//! for that URI when the request runs: the buffer the client last synchronised, or nothing at all
-//! when the client has not opened it, which is refused. That is enough for a client that only asks
-//! about documents it has opened and that sends every edit before the request that depends on it.
+//! for that URI when the request runs: the buffer the client last synchronised, or, when the client
+//! has not opened it, the file on disk. That is enough for a client that sends every edit before the
+//! request that depends on it.
 //!
 //! It is not enough for a client that keeps an answer against a revision of its own. The server
 //! cannot tell such a client which text an answer was for, so the client has to assume it was the

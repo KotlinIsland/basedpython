@@ -40,7 +40,7 @@ impl<'src> NoneChainReverse<'src> {
         if !matches!(&*cmp.ops, [CmpOp::Is]) {
             return None;
         }
-        if !matches!(&*cmp.comparators, [Expr::NoneLiteral(_)]) {
+        if !matches!(cmp.comparators(), [Expr::NoneLiteral(_)]) {
             return None;
         }
 
@@ -53,7 +53,7 @@ impl<'src> NoneChainReverse<'src> {
         // `expr?.…` form when the orelse itself was a none-if chain, or the
         // verbatim source otherwise. either way the leading `{name}.` prefix
         // is the guard name (or walrus temp); strip it and prepend `name?.`
-        match cmp.left.as_ref() {
+        match cmp.first_operand() {
             Expr::Name(guard_name) => {
                 let prefix = format!("{}.", guard_name.id.as_str());
                 let rest = orelse_str.strip_prefix(prefix.as_str())?;

@@ -232,7 +232,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:2293:2299 object :: builtins",
+            @"vendored://stdlib/builtins.byi:2319:2325 object :: builtins",
         );
     }
 
@@ -345,10 +345,10 @@ mod tests {
 
         let subtypes = test.subtypes();
         insta::assert_snapshot!(snapshot(&test.db, &subtypes), @"
-        vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
-        vendored://stdlib/enum.byi:17901:17908 StrEnum :: enum
-        vendored://stdlib/pdb.byi:37873:37878 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:9260:9269 Character :: ty_extensions
+        vendored://stdlib/email/headerregistry.byi:731:741 BaseHeader :: email.headerregistry
+        vendored://stdlib/enum.byi:17910:17917 StrEnum :: enum
+        vendored://stdlib/pdb.byi:37900:37905 _rstr :: pdb
+        vendored://stdlib/ty_extensions/__init__.pyi:9810:9819 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -378,11 +378,11 @@ mod tests {
 
         let subtypes = test.subtypes();
         insta::assert_snapshot!(snapshot(&test.db, &subtypes), @"
-        vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
-        vendored://stdlib/enum.byi:17901:17908 StrEnum :: enum
+        vendored://stdlib/email/headerregistry.byi:731:741 BaseHeader :: email.headerregistry
+        vendored://stdlib/enum.byi:17910:17917 StrEnum :: enum
         /main.py:77:89 MyEventTypeA :: main
-        vendored://stdlib/pdb.byi:37873:37878 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:9260:9269 Character :: ty_extensions
+        vendored://stdlib/pdb.byi:37900:37905 _rstr :: pdb
+        vendored://stdlib/ty_extensions/__init__.pyi:9810:9819 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -448,12 +448,12 @@ mod tests {
         let item = test.prepare().unwrap();
         insta::assert_snapshot!(
             snapshot(&test.db, &[item]),
-            @"vendored://stdlib/builtins.byi:6982:6986 type :: builtins",
+            @"vendored://stdlib/builtins.byi:7008:7012 type :: builtins",
         );
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:2293:2299 object :: builtins",
+            @"vendored://stdlib/builtins.byi:2319:2325 object :: builtins",
         );
     }
 
@@ -505,7 +505,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:97124:97129 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:97634:97639 tuple :: builtins",
         );
     }
 

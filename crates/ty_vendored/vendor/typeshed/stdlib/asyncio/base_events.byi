@@ -35,7 +35,7 @@ __all__ = ("BaseEventLoop", "Server")
 type _Context = dict[str, dynamic]
 private type ExceptionHandler = (AbstractEventLoop, _Context) -> object
 type _ProtocolFactory = () -> BaseProtocol
-type _SSLContext = bool? | ssl.SSLContext
+type _SSLContext = bool | ssl.SSLContext | None
 
 class Server(AbstractServer):
     if sys.version_info >= (3, 11):
@@ -61,8 +61,8 @@ class Server(AbstractServer):
         ) -> None
 
     if sys.version_info >= (3, 13):
-        def close_clients(self)
-        def abort_clients(self)
+        override def close_clients(self)
+        override def abort_clients(self)
 
     override def get_loop(self) -> AbstractEventLoop
     override def is_serving(self) -> bool
@@ -183,7 +183,7 @@ class BaseEventLoop(AbstractEventLoop):
     # Tasks methods
     # `eager_start` is supported as an arbitrary kwarg starting in 3.13.3.
     if sys.version_info >= (3, 13):
-        def create_task[Element](
+        override def create_task[Element](
             self,
             coro: _CoroutineLike[Element],
             *,
@@ -204,7 +204,7 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
     else:
-        override def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None) -> Task[Element]:
+        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None) -> Task[Element]:
             """Schedule a coroutine object.
 
             Return a task object.
@@ -247,7 +247,7 @@ class BaseEventLoop(AbstractEventLoop):
     override async def getnameinfo(self, sockaddr: (str, int) | (str, int, int, int), flags: int = 0) -> (str, str)
 
     if sys.version_info >= (3, 12):
-        async def create_connection[ProtocolT: BaseProtocol](
+        override async def create_connection[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             host: str = ...,
@@ -345,7 +345,7 @@ class BaseEventLoop(AbstractEventLoop):
             interleave: int? = None,
         ) -> (Transport, ProtocolT)
     else:
-        override async def create_connection[ProtocolT: BaseProtocol](
+        async def create_connection[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             host: str = ...,
@@ -393,11 +393,11 @@ class BaseEventLoop(AbstractEventLoop):
 
     if sys.version_info >= (3, 13):
         # 3.13 added `keep_alive`.
-        async def create_server(
+        override async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
-            host: str | Sequence[str] | None = None,
-            port: int = ...,
+            host: str | Sequence[str] | None,
+            port: int,
             *,
             family: int = 0,
             flags: int = 1,
@@ -429,12 +429,48 @@ class BaseEventLoop(AbstractEventLoop):
         async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
+            host: str | Sequence[str],
+            port: int? = None,
+            *,
+            family: int = 0,
+            flags: int = 1,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            keep_alive: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
+            host: None = None,
+            *,
+            port: int,
+            family: int = 0,
+            flags: int = 1,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            keep_alive: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
             host: None = None,
             port: None = None,
             *,
             family: int = 0,
             flags: int = 1,
-            sock: socket = ...,
+            sock: socket,
             backlog: int = 100,
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
@@ -448,8 +484,8 @@ class BaseEventLoop(AbstractEventLoop):
         async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
-            host: str | Sequence[str] | None = None,
-            port: int = ...,
+            host: str | Sequence[str] | None,
+            port: int,
             *,
             family: int = AddressFamily.AF_UNSPEC,
             flags: int = AddressInfo.AI_PASSIVE,
@@ -480,12 +516,46 @@ class BaseEventLoop(AbstractEventLoop):
         async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
+            host: str | Sequence[str],
+            port: int? = None,
+            *,
+            family: int = AddressFamily.AF_UNSPEC,
+            flags: int = AddressInfo.AI_PASSIVE,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
+            host: None = None,
+            *,
+            port: int,
+            family: int = AddressFamily.AF_UNSPEC,
+            flags: int = AddressInfo.AI_PASSIVE,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
             host: None = None,
             port: None = None,
             *,
             family: int = AddressFamily.AF_UNSPEC,
             flags: int = AddressInfo.AI_PASSIVE,
-            sock: socket = ...,
+            sock: socket,
             backlog: int = 100,
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
@@ -495,11 +565,11 @@ class BaseEventLoop(AbstractEventLoop):
             start_serving: bool = True,
         ) -> Server
     else:
-        override async def create_server(
+        async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
-            host: str | Sequence[str] | None = None,
-            port: int = ...,
+            host: str | Sequence[str] | None,
+            port: int,
             *,
             family: int = AddressFamily.AF_UNSPEC,
             flags: int = AddressInfo.AI_PASSIVE,
@@ -529,12 +599,44 @@ class BaseEventLoop(AbstractEventLoop):
         async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
+            host: str | Sequence[str],
+            port: int? = None,
+            *,
+            family: int = AddressFamily.AF_UNSPEC,
+            flags: int = AddressInfo.AI_PASSIVE,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
+            host: None = None,
+            *,
+            port: int,
+            family: int = AddressFamily.AF_UNSPEC,
+            flags: int = AddressInfo.AI_PASSIVE,
+            sock: None = None,
+            backlog: int = 100,
+            ssl: _SSLContext = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            start_serving: bool = True,
+        ) -> Server
+        async def create_server(
+            self,
+            protocol_factory: _ProtocolFactory,
             host: None = None,
             port: None = None,
             *,
             family: int = AddressFamily.AF_UNSPEC,
             flags: int = AddressInfo.AI_PASSIVE,
-            sock: socket = ...,
+            sock: socket,
             backlog: int = 100,
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
@@ -544,33 +646,6 @@ class BaseEventLoop(AbstractEventLoop):
         ) -> Server
 
     if sys.version_info >= (3, 11):
-        async def start_tls(
-            self,
-            transport: BaseTransport,
-            protocol: BaseProtocol,
-            sslcontext: ssl.SSLContext,
-            *,
-            server_side: bool = False,
-            server_hostname: str? = None,
-            ssl_handshake_timeout: (int | float)? = None,
-            ssl_shutdown_timeout: (int | float)? = None,
-        ) -> Transport?:
-            """Upgrade transport to TLS.
-
-            Return a new transport that *protocol* should start using
-            immediately.
-            """
-
-        async def connect_accepted_socket[ProtocolT: BaseProtocol](
-            self,
-            protocol_factory: () -> ProtocolT,
-            sock: socket,
-            *,
-            ssl: _SSLContext = None,
-            ssl_handshake_timeout: (int | float)? = None,
-            ssl_shutdown_timeout: (int | float)? = None,
-        ) -> (Transport, ProtocolT)
-    else:
         override async def start_tls(
             self,
             transport: BaseTransport,
@@ -580,6 +655,7 @@ class BaseEventLoop(AbstractEventLoop):
             server_side: bool = False,
             server_hostname: str? = None,
             ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
         ) -> Transport?:
             """Upgrade transport to TLS.
 
@@ -588,6 +664,32 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
         override async def connect_accepted_socket[ProtocolT: BaseProtocol](
+            self,
+            protocol_factory: () -> ProtocolT,
+            sock: socket,
+            *,
+            ssl: _SSLContext = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+        ) -> (Transport, ProtocolT)
+    else:
+        async def start_tls(
+            self,
+            transport: BaseTransport,
+            protocol: BaseProtocol,
+            sslcontext: ssl.SSLContext,
+            *,
+            server_side: bool = False,
+            server_hostname: str? = None,
+            ssl_handshake_timeout: (int | float)? = None,
+        ) -> Transport?:
+            """Upgrade transport to TLS.
+
+            Return a new transport that *protocol* should start using
+            immediately.
+            """
+
+        async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             sock: socket,
@@ -626,7 +728,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     if sys.version_info >= (3, 11):
-        async def create_datagram_endpoint[ProtocolT: BaseProtocol](
+        override async def create_datagram_endpoint[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             local_addr: (str, int) | str | None = None,
@@ -642,7 +744,7 @@ class BaseEventLoop(AbstractEventLoop):
             """Create datagram connection."""
 
     else:
-        override async def create_datagram_endpoint[ProtocolT: BaseProtocol](
+        async def create_datagram_endpoint[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             local_addr: (str, int) | str | None = None,
@@ -709,9 +811,9 @@ class BaseEventLoop(AbstractEventLoop):
     override async def sock_connect(self, sock: socket, address: _Address) -> None
     override async def sock_accept(self, sock: socket) -> (socket, _RetAddress)
     if sys.version_info >= (3, 11):
-        async def sock_recvfrom(self, sock: socket, bufsize: int) -> (bytes, _RetAddress)
-        async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
-        async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
+        override async def sock_recvfrom(self, sock: socket, bufsize: int) -> (bytes, _RetAddress)
+        override async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
+        override async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
     # Signal handling.
     override def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> dynamic, *args: *Args)
     override def remove_signal_handler(self, sig: int) -> bool
@@ -777,7 +879,7 @@ class BaseEventLoop(AbstractEventLoop):
     override def get_debug(self) -> bool
     override def set_debug(self, enabled: bool)
     if sys.version_info >= (3, 12):
-        async def shutdown_default_executor(self, timeout: (int | float)? = None) -> None:
+        override async def shutdown_default_executor(self, timeout: (int | float)? = None) -> None:
             """Schedule the shutdown of the default executor.
 
             The timeout parameter specifies the amount of time the executor will
@@ -786,7 +888,7 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
     else:
-        override async def shutdown_default_executor(self) -> None:
+        async def shutdown_default_executor(self) -> None:
             """Schedule the shutdown of the default executor."""
 
     def __del__(self)

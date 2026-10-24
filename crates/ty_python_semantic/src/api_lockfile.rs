@@ -600,7 +600,13 @@ fn render_generic_context<'db>(
     out
 }
 
-fn render_generic_args<'db>(db: &'db dyn Db, context: crate::types::GenericContext<'db>) -> String {
+fn render_generic_args<'db>(
+    db: &'db dyn Db,
+    context: Option<crate::types::GenericContext<'db>>,
+) -> String {
+    let Some(context) = context else {
+        return String::new();
+    };
     let names: Vec<String> = context
         .variables(db)
         .map(|tv| tv.name(db).as_str().to_string())

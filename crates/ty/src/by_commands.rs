@@ -8,8 +8,8 @@ use std::process::Command;
 use anyhow::Context;
 use by_transforms::config::{Config, PythonVersion};
 use ruff_db::diagnostic::{
-    Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, LintName,
-    Severity, Span, SubDiagnostic, SubDiagnosticSeverity,
+    Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, LintName, Severity, Span,
+    SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::system_path_to_file;
 use ruff_db::system::{OsSystem, SystemPath};
@@ -2638,14 +2638,13 @@ fn render_diagnostics_as(
     use std::io::Write as _;
 
     let display_config = DisplayDiagnosticConfig::new("ty")
-        .format(format.into())
         .color(colored::control::SHOULD_COLORIZE.should_colorize())
         .context(0);
     let mut stderr = std::io::stderr().lock();
     write!(
         stderr,
         "{}",
-        DisplayDiagnostics::new(db, &display_config, diagnostics)
+        format.display(db, &display_config, diagnostics)
     )?;
     if !format.is_human_readable() {
         return Ok(());

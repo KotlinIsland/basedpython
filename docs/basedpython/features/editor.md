@@ -222,7 +222,7 @@ on
 | `lambdaParameterTypes`       | the type of an unannotated `lambda` parameter                   |
 | `inheritedParameterTypes`    | the type a parameter takes from the method it overrides         |
 | `inheritedParameterDefaults` | the [default](inherited-defaults.md) it takes from that method  |
-| `inferredReturnTypes`        | the return type of a `def` that leaves it out                   |
+| `returnTypes`                | the return type of a `def` that leaves it out                   |
 | `inferredParameterTypes`     | the `some` bound an unannotated parameter takes from its body   |
 | `inferredBaseTypeArguments`  | the type arguments a generic base takes from its overrides      |
 | `propertyTypes`              | the type a [property](properties.md) leaves to its accessors    |

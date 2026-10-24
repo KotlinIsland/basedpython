@@ -4,6 +4,14 @@
 that leaves its return type out states the same thing by returning `a is int`, and its callers
 narrow by it too — the claim is recovered from the body alongside the return type itself.
 
+the examples narrow an optional value by testing its truthiness on purpose, so the lint that flags
+such a test is off
+
+```toml
+[rules]
+truthiness-test-of-none-union = "ignore"
+```
+
 ## a returned predicate narrows the argument it is about
 
 ```by
@@ -214,9 +222,9 @@ def yields_int(a: object):
 
 def f(x: object, y: object):
     reveal_type(is_int)  # revealed: def is_int(a: object) -> CoroutineType[Any, Any, bool]
-    if is_int(x):
+    if is_int(x):  # error: [redundant-condition]
         reveal_type(x)  # revealed: object
-    if yields_int(y):
+    if yields_int(y):  # error: [redundant-condition]
         reveal_type(y)  # revealed: object
 ```
 
@@ -779,6 +787,9 @@ def f(base: Base, silent: Silent, a: int | None, b: int | None):
 ```toml
 [analysis]
 sound-types = true
+
+[rules]
+truthiness-test-of-none-union = "ignore"
 ```
 
 ```py

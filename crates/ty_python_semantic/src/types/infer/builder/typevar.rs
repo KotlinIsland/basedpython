@@ -1343,6 +1343,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => covariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1369,6 +1370,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => contravariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1395,6 +1397,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => infer_variance = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1595,6 +1598,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => infer_variance = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1612,6 +1616,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => covariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1629,6 +1634,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => contravariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1823,6 +1829,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => covariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1840,6 +1847,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => contravariant = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,
@@ -1883,6 +1891,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     {
                         Truthiness::AlwaysTrue => infer_variance = true,
                         Truthiness::AlwaysFalse => {}
+                        Truthiness::Uninhabited => return Type::Never,
                         Truthiness::Ambiguous => {
                             return error(
                                 &self.context,

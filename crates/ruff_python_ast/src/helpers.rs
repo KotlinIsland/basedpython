@@ -398,13 +398,8 @@ where
             }) => value
                 .as_ref()
                 .is_some_and(|value| any_over_expr(value, func)),
-            Expr::Compare(ast::ExprCompare {
-                left, comparators, ..
-            }) => {
-                any_over_expr(left, &mut *func)
-                    || comparators
-                        .iter()
-                        .any(|expr| any_over_expr(expr, &mut *func))
+            Expr::Compare(ast::ExprCompare { operands, .. }) => {
+                operands.iter().any(|expr| any_over_expr(expr, &mut *func))
             }
             Expr::Call(ast::ExprCall {
                 func: call_func,
@@ -1260,14 +1255,14 @@ pub fn predicate_guard(returns: &Expr) -> Option<ReturnGuard<'_>> {
     let Expr::Compare(compare) = returns else {
         return None;
     };
-    if !matches!(&*compare.ops, [ast::CmpOp::Is]) || !is_guard_place(&compare.left) {
-        return None;
-    }
-    let [ty] = &*compare.comparators else {
+    let Some((place, ast::CmpOp::Is, ty)) = compare.as_single() else {
         return None;
     };
+    if !is_guard_place(place) {
+        return None;
+    }
     Some(ReturnGuard {
-        place: &compare.left,
+        place,
         form: ReturnGuardForm::Predicate { ty },
     })
 }
@@ -1283,21 +1278,21 @@ pub fn negated_narrowing_predicate(annotation: &Expr) -> Option<&ast::ExprCompar
     let Expr::Compare(compare) = annotation else {
         return None;
     };
-    (matches!(&*compare.ops, [ast::CmpOp::IsNot])
-        && compare.comparators.len() == 1
-        && is_guard_place(&compare.left))
+    matches!(
+        compare.as_single(),
+        Some((place, ast::CmpOp::IsNot, _)) if is_guard_place(place)
+    )
     .then_some(compare)
 }
 
 /// One term of an `asserts` annotation: a place, a negated place, or a place tested with `is`.
 fn asserted_guard(term: &Expr) -> Option<ReturnGuard<'_>> {
     if let Expr::Compare(compare) = term
-        && let [op @ (ast::CmpOp::Is | ast::CmpOp::IsNot)] = &*compare.ops
-        && let [ty] = &*compare.comparators
-        && is_guard_place(&compare.left)
+        && let Some((place, op @ (ast::CmpOp::Is | ast::CmpOp::IsNot), ty)) = compare.as_single()
+        && is_guard_place(place)
     {
         return Some(ReturnGuard {
-            place: &compare.left,
+            place,
             form: ReturnGuardForm::AssertsType {
                 is_positive: matches!(op, ast::CmpOp::Is),
                 ty,
@@ -2946,8 +2941,8 @@ fn is_non_empty_f_string(expr: &ast::ExprFString) -> bool {
     }
 
     expr.value.iter().any(|part| match part {
-        ast::FStringPart::Literal(string_literal) => !string_literal.is_empty(),
-        ast::FStringPart::FString(f_string) => {
+        ast::FStringPartRef::Literal(string_literal) => !string_literal.is_empty(),
+        ast::FStringPartRef::FString(f_string) => {
             // The part is a concatenation of elements, so it's guaranteed non-empty if any element is
             f_string.elements.iter().any(|element| match element {
                 InterpolatedStringElement::Literal(string_literal) => !string_literal.is_empty(),
@@ -2995,8 +2990,8 @@ pub fn is_empty_f_string(expr: &ast::ExprFString) -> bool {
     }
 
     expr.value.iter().all(|part| match part {
-        ast::FStringPart::Literal(string_literal) => string_literal.is_empty(),
-        ast::FStringPart::FString(f_string) => {
+        ast::FStringPartRef::Literal(string_literal) => string_literal.is_empty(),
+        ast::FStringPartRef::FString(f_string) => {
             is_empty_interpolated_elements(f_string.elements.iter())
         }
     })

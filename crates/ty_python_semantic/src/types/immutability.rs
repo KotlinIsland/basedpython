@@ -123,6 +123,15 @@ fn is_deeply_immutable_impl<'db>(db: &'db dyn Db, ty: Type<'db>, program: Progra
         Type::Deferred(deferred) => immutable(deferred.reduced(db, env)),
         Type::TypeAlias(alias) => immutable(alias.value_type(db)),
         Type::NewTypeInstance(newtype) => immutable(newtype.concrete_base_type(db)),
+        // a recursive type is as immutable as one unfolding of it; a reference back to itself
+        // is the cycle this query recovers from. one that never unfolds (`μa. a`) holds no value
+        Type::Recursive(recursive) => recursive
+            .unfold(db, env)
+            .into_unfolded()
+            .is_none_or(immutable),
+        Type::RecursiveVar(_) => {
+            unreachable!("semantic operation on an unbound recursive variable")
+        }
 
         Type::NominalInstance(instance) => instance_is_deeply_immutable(db, env, instance),
     }

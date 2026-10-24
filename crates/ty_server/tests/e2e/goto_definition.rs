@@ -59,17 +59,17 @@ from dependency import script_only
 
 #[cfg(feature = "test-uv")]
 mod uv_metadata {
-    use anyhow::{Context, Result, anyhow};
+    use anyhow::{Context, Result, anyhow, ensure};
     use lsp_types::{
-        Code, Definition, DefinitionResponse, FileChangeType, FileEvent, Position,
-        TextDocumentContentChangeEvent, TextDocumentContentChangeWholeDocument,
+        BaseUri, Code, Definition, DefinitionResponse, FileChangeType, FileEvent, GlobPattern,
+        Position, TextDocumentContentChangeEvent, TextDocumentContentChangeWholeDocument, Uri,
         WorkspaceDocumentDiagnosticReport,
     };
     use ruff_db::system::{SystemPath, SystemPathBuf};
     use ty_project::UseUv;
     use ty_server::{ClientOptions, DiagnosticMode};
 
-    use crate::TestServerBuilder;
+    use crate::{TestServer, TestServerBuilder};
 
     #[test]
     fn synchronization_reports_progress_before_resolving_dependency_definitions() -> Result<()> {
@@ -222,12 +222,14 @@ from idna import encode
             .with_workspace(workspace_root, None)?
             .with_file(script, initial)?
             .with_real_uv(UseUv::Scripts)?
+            .with_watched_file_support(true)
             .enable_workspace_diagnostic_refresh(true)
             .build()
             .wait_until_workspaces_are_initialized();
 
         server.open_text_document(script, initial, 1);
         server.await_diagnostic_refresh();
+        let (_, site_packages) = watched_site_packages(&mut server)?;
 
         server.change_text_document(
             script,
@@ -271,6 +273,8 @@ from idna import encode
         // the finished synchronization refreshes diagnostics, and the save itself may refresh
         // them before it
         server.await_diagnostic_refresh();
+        installed_package_event(&mut server, &site_packages, "idna")?;
+
         while server
             .goto_definition_request(script, Position::new(4, 19))
             .is_none()
@@ -300,6 +304,7 @@ from attrs import define
             .with_workspace(SystemPath::new("src"), None)?
             .with_file(script, initial)?
             .with_real_uv(UseUv::Scripts)?
+            .with_watched_file_support(true)
             .enable_workspace_diagnostic_refresh(true)
             .build()
             .wait_until_workspaces_are_initialized();
@@ -307,6 +312,7 @@ from attrs import define
         // Opening synchronizes the backing file, not the unsaved metadata.
         server.open_text_document(script, updated, 1);
         server.await_diagnostic_refresh();
+        let (_, site_packages) = watched_site_packages(&mut server)?;
         assert!(
             server
                 .goto_definition_request(script, Position::new(4, 18))
@@ -317,6 +323,7 @@ from attrs import define
         server.write_file(script, updated)?;
         server.save_text_document(script);
         server.await_diagnostic_refresh();
+        installed_package_event(&mut server, &site_packages, "attrs")?;
         assert!(
             server
                 .goto_definition_request(script, Position::new(4, 18))
@@ -397,12 +404,14 @@ from attrs import define
             .with_workspace(workspace_root, None)?
             .with_file(script, initial)?
             .with_real_uv(UseUv::Scripts)?
+            .with_watched_file_support(true)
             .enable_workspace_diagnostic_refresh(true)
             .build()
             .wait_until_workspaces_are_initialized();
 
         server.open_text_document(script, initial, 1);
         server.await_diagnostic_refresh();
+        let (mut registration_id, site_packages) = watched_site_packages(&mut server)?;
 
         assert!(
             server
@@ -447,7 +456,20 @@ from attrs import define
             server.write_file(script, updated)?;
             server.save_text_document(script);
             server.await_diagnostic_refresh();
+
+            // Invalid metadata removes the environment watch; correcting it restores the watch.
+            let (request_id, next_id, _) = server.watcher_registration_request()?;
+            server.acknowledge_request(request_id);
+            ensure!(server.acknowledge_unregistration()? == registration_id);
+            registration_id = next_id;
         }
+
+        // Restoring the environment rescans its previously unwatched dependencies.
+        server.await_diagnostic_refresh();
+
+        // that rescan already read the installed package, so the watcher reporting it changes
+        // nothing and the server has no reason to refresh
+        report_installed_package(&mut server, &site_packages, "attrs")?;
 
         assert!(
             server
@@ -481,12 +503,12 @@ from idna import encode
             .with_workspace(workspace_root, None)?
             .with_file(script, initial)?
             .with_real_uv(UseUv::Scripts)?
-            .enable_workspace_diagnostic_refresh(true)
+            .enable_work_done_progress(true)
             .build()
             .wait_until_workspaces_are_initialized();
 
         server.open_text_document(script, initial, 1);
-        server.await_diagnostic_refresh();
+        server.assert_work_done_progress("Synchronizing scripts")?;
         server.close_text_document(script);
         server.write_file(script, updated)?;
 
@@ -495,25 +517,78 @@ from idna import encode
             kind: FileChangeType::Created,
         }]);
 
-        // the finished synchronization refreshes diagnostics. whether the event refreshes them
-        // before it depends on whether the server read the rewritten file when the document
-        // closed, which races the write, so each refresh is checked until the new dependency
-        // resolves: a closed script is looked at by opening it, and closed again to go on
-        // waiting
-        let mut version = 2;
-        loop {
-            server.await_diagnostic_refresh();
-            server.open_text_document(script, updated, version);
-            if server
-                .goto_definition_request(script, Position::new(4, 19))
-                .is_some()
-            {
-                break;
-            }
-            server.close_text_document(script);
-            version += 1;
-        }
+        // the rewritten metadata is synchronized whether the close or the event reads it first.
+        // nothing looks at the script before that finishes: a module looked up while uv is still
+        // installing into the environment is remembered as missing, and only a watcher reports
+        // the install
+        server.assert_work_done_progress("Synchronizing scripts")?;
 
+        server.open_text_document(script, updated, 2);
+        assert!(
+            server
+                .goto_definition_request(script, Position::new(4, 19))
+                .is_some(),
+            "watched changes must update environments even while scripts are closed"
+        );
+
+        Ok(())
+    }
+
+    fn watched_site_packages(server: &mut TestServer) -> Result<(String, Uri)> {
+        let mut previous_id = None;
+        // uv may finish after the initial project-only watch was requested.
+        for _ in 0..2 {
+            let (request_id, id, watchers) = server.watcher_registration_request()?;
+            let site_packages = watchers.iter().find_map(|watcher| {
+                if let GlobPattern::RelativePattern(pattern) = &watcher.glob_pattern
+                    && let BaseUri::Uri(uri) = &pattern.base_uri
+                    && uri.to_string().ends_with("/site-packages")
+                {
+                    Some(uri.clone())
+                } else {
+                    None
+                }
+            });
+            server.acknowledge_request(request_id);
+            if let Some(previous_id) = previous_id {
+                ensure!(server.acknowledge_unregistration()? == previous_id);
+                server.await_diagnostic_refresh();
+            }
+            if let Some(site_packages) = site_packages {
+                return Ok((id, site_packages));
+            }
+            previous_id = Some(id);
+        }
+        Err(anyhow!("expected a watcher for the script's site-packages"))
+    }
+
+    fn installed_package_event(
+        server: &mut TestServer,
+        site_packages: &Uri,
+        package: &str,
+    ) -> Result<()> {
+        report_installed_package(server, site_packages, package)?;
+        server.await_diagnostic_refresh();
+        Ok(())
+    }
+
+    fn report_installed_package(
+        server: &mut TestServer,
+        site_packages: &Uri,
+        package: &str,
+    ) -> Result<()> {
+        let directory = Uri::parse(&format!("{site_packages}/{package}"))?;
+        let uri = Uri::parse(&format!("{site_packages}/{package}/__init__.py"))?;
+        server.did_change_watched_files(vec![
+            FileEvent {
+                uri: directory,
+                kind: FileChangeType::Created,
+            },
+            FileEvent {
+                uri,
+                kind: FileChangeType::Created,
+            },
+        ]);
         Ok(())
     }
 }

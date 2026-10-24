@@ -248,28 +248,21 @@ pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
 
                 Expr::Compare(ast::ExprCompare {
                     ops,
-                    left,
-                    comparators,
+                    operands,
                     identity_ops,
                     ..
-                }) if matches!(
-                    ops.as_ref(),
-                    [ast::CmpOp::Eq
-                        | ast::CmpOp::NotEq
-                        | ast::CmpOp::In
-                        | ast::CmpOp::NotIn
-                        | ast::CmpOp::Is
-                        | ast::CmpOp::IsNot]
-                ) =>
+                }) if let [
+                    op @ (ast::CmpOp::Eq
+                    | ast::CmpOp::NotEq
+                    | ast::CmpOp::In
+                    | ast::CmpOp::NotIn
+                    | ast::CmpOp::Is
+                    | ast::CmpOp::IsNot),
+                ] = ops.as_ref() =>
                 {
-                    let ([op], [right]) = (ops.as_ref(), comparators.as_ref()) else {
-                        unreachable!("Single comparison with multiple comparators");
-                    };
-
                     Some(Expr::Compare(ast::ExprCompare {
-                        ops: Box::new([op.negate()]),
-                        left: left.clone(),
-                        comparators: Box::new([right.clone()]),
+                        ops: [op.negate()].into(),
+                        operands: operands.clone(),
                         // negating `is` gives `is not`, which is still the
                         // basedpython type test the source spelled; dropping the
                         // flag would rewrite it to the `!==` identity operator
@@ -301,7 +294,7 @@ pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
             let call_node = ast::ExprCall {
                 func: Box::new(func_node.into()),
                 arguments: Arguments {
-                    args: Box::from([if_test.clone()]),
+                    args: [if_test.clone()].into(),
                     keywords: std::iter::empty().collect(),
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,

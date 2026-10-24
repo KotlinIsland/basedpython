@@ -81,7 +81,7 @@ use crate::types::Type;
 use crate::types::definition_resolution::{find_symbol_in_scope, visible_definitions_for_name};
 use crate::types::function::{
     FunctionForm, FunctionHeader, FunctionType, OverloadLiteral, OverriddenReturnType,
-    ReturnTypeSource, infers_unannotated_signatures,
+    ReturnTypeSource, infers_return_types,
 };
 use crate::types::signatures::function_signature_expression_type;
 use crate::{Db, ProgramEnvironment, attribute_assignments, attribute_declarations};
@@ -208,7 +208,10 @@ fn return_type_seen_by_overrides<'db>(
         | ReturnTypeSource::Overloads(return_ty) => OverriddenReturnType::of(db, &env, return_ty),
         ReturnTypeSource::Body => match body_call_returns(db, base.body_scope(db)) {
             Truthiness::AlwaysTrue => OverriddenReturnType::Declared(Type::unknown()),
-            Truthiness::AlwaysFalse => OverriddenReturnType::Declared(Type::Never),
+            // a body with no outcome at all never completes either
+            Truthiness::AlwaysFalse | Truthiness::Uninhabited => {
+                OverriddenReturnType::Declared(Type::Never)
+            }
             Truthiness::Ambiguous => return None,
         },
         ReturnTypeSource::Gradual => OverriddenReturnType::NotOverridden,
@@ -300,18 +303,18 @@ impl<'db> PredicateReading<'db> for ControlFlowReading<'_, 'db> {
     fn statement_call(&mut self, call: CallableAndCallExpr<'db>) -> Truthiness {
         let db = self.db;
         let module = parsed_module(db, self.scope.python_file(db)).load(db);
-        let callee = call.callable.node_ref(db).node(&module);
+        let callee = call.callable(db).node_ref(db).node(&module);
         let mut resolver = CalleeResolver {
             db,
             env: &self.env,
             visited: FxHashSet::default(),
         };
-        match resolver.resolve(call.callable.scope(db), callee) {
+        match resolver.resolve(call.callable(db).scope(db), callee) {
             Some(Resolved::Function(definition)) => {
-                call_truthiness(db, &self.env, definition, false, call.is_await)
+                call_truthiness(db, &self.env, definition, false, call.is_await(db))
             }
             Some(Resolved::Method(definition)) => {
-                call_truthiness(db, &self.env, definition, true, call.is_await)
+                call_truthiness(db, &self.env, definition, true, call.is_await(db))
             }
             Some(Resolved::Module(_) | Resolved::Class(_) | Resolved::Receiver(_)) | None => {
                 Truthiness::Ambiguous
@@ -425,7 +428,7 @@ fn call_truthiness<'db>(
     }
 
     // without the setting, what an unannotated function returns is the gradual type
-    if !infers_unannotated_signatures(db, definition.file(db)) {
+    if !infers_return_types(db, definition.file(db)) {
         return Truthiness::AlwaysTrue;
     }
     // `__new__`'s return type is never read off its body, and what a method of a class with no

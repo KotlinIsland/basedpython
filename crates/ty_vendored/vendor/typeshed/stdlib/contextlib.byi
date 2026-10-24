@@ -415,5 +415,5 @@ if sys.version_info >= (3, 11):
 
         path: T_fd_or_any_path
         init(self, path: T_fd_or_any_path)
-        def __enter__(self)
-        def __exit__(self, *excinfo: Unused)
+        override def __enter__(self)
+        override def __exit__(self, *excinfo: Unused)

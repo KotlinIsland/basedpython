@@ -3,7 +3,7 @@ use anyhow::{Error, bail};
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::helpers;
 use ruff_python_ast::token::{TokenKind, Tokens};
-use ruff_python_ast::{self as ast, CmpOp};
+use ruff_python_ast::{CmpOp, ExprCompare};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
@@ -81,14 +81,13 @@ impl AlwaysFixableViolation for IsLiteral {
 }
 
 /// F632
-pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ast::ExprCompare) {
+pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ExprCompare) {
     // basedpython keeps `is` as python identity only where its right-hand side is a
     // literal; anywhere else `is` is a type test, and `===` is the spelling that always
     // compares identity. the parser records which of the two was written, so the tokens
     // are needed only to place a fix
     let mut lazy_located = None;
-    let mut left = &*compare.left;
-    for (index, (op, right)) in compare.ops.iter().zip(&compare.comparators).enumerate() {
+    for (index, (left, op, right)) in compare.iter().enumerate() {
         let spells_identity = compare.is_identity_operator(index);
 
         if matches!(op, CmpOp::Is | CmpOp::IsNot)
@@ -139,7 +138,6 @@ pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ast::ExprC
                 }
             });
         }
-        left = right;
     }
 }
 

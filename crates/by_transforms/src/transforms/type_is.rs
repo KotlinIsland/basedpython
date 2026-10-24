@@ -195,7 +195,7 @@ impl TypeExprVisitor for State {
     }
 
     fn visit_predicate(&mut self, predicate: &ExprCompare) {
-        let [target] = &*predicate.comparators else {
+        let [target] = predicate.comparators() else {
             return;
         };
         self.needs_import = true;

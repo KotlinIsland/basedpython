@@ -10,6 +10,7 @@ from _typeshed import SupportsGetItem, SupportsLenAndGetItem, SupportsRichCompar
 from collections.abc import Callable, MutableSequence
 from typing import TypeVar
 
+_T = TypeVar("_T")
 
 def bisect_left(
     a: SupportsLenAndGetItem[SupportsRichComparisonT],
@@ -36,19 +37,19 @@ def bisect_left(
 def bisect_left(
     a: SupportsGetItem[int, SupportsRichComparisonT], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: None = None
 ) -> int
-def bisect_left[Element](
-    a: SupportsLenAndGetItem[Element],
+def bisect_left(
+    a: SupportsLenAndGetItem[_T],
     x: SupportsRichComparisonT,
     lo: int = 0,
     hi: int? = None,
     *,
-    key: (Element) -> SupportsRichComparisonT,
+    key: (_T) -> SupportsRichComparisonT,
 ) -> int
-def bisect_left[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (Element) -> SupportsRichComparisonT
+def bisect_left(
+    a: SupportsGetItem[int, _T], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (_T) -> SupportsRichComparisonT
 ) -> int
-def bisect_left[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (Element) -> SupportsRichComparisonT
+def bisect_left(
+    a: SupportsGetItem[int, _T], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (_T) -> SupportsRichComparisonT
 ) -> int
 
 def bisect_right(
@@ -76,19 +77,19 @@ def bisect_right(
 def bisect_right(
     a: SupportsGetItem[int, SupportsRichComparisonT], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: None = None
 ) -> int
-def bisect_right[Element](
-    a: SupportsLenAndGetItem[Element],
+def bisect_right(
+    a: SupportsLenAndGetItem[_T],
     x: SupportsRichComparisonT,
     lo: int = 0,
     hi: int? = None,
     *,
-    key: (Element) -> SupportsRichComparisonT,
+    key: (_T) -> SupportsRichComparisonT,
 ) -> int
-def bisect_right[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (Element) -> SupportsRichComparisonT
+def bisect_right(
+    a: SupportsGetItem[int, _T], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (_T) -> SupportsRichComparisonT
 ) -> int
-def bisect_right[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (Element) -> SupportsRichComparisonT
+def bisect_right(
+    a: SupportsGetItem[int, _T], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (_T) -> SupportsRichComparisonT
 ) -> int
 
 def insort_left(
@@ -108,8 +109,8 @@ def insort_left(
 
     A custom key function can be supplied to customize the sort order.
     """
-def insort_left[Element](
-    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int? = None, *, key: (Element) -> SupportsRichComparisonT
+def insort_left(
+    a: MutableSequence[_T], x: _T, lo: int = 0, hi: int? = None, *, key: (_T) -> SupportsRichComparisonT
 ) -> None
 
 def insort_right(
@@ -129,6 +130,6 @@ def insort_right(
 
     A custom key function can be supplied to customize the sort order.
     """
-def insort_right[Element](
-    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int? = None, *, key: (Element) -> SupportsRichComparisonT
+def insort_right(
+    a: MutableSequence[_T], x: _T, lo: int = 0, hi: int? = None, *, key: (_T) -> SupportsRichComparisonT
 ) -> None

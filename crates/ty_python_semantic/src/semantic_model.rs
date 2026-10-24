@@ -14,13 +14,22 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{
     ImportingFile, KnownModule, Module, ModuleName, list_modules, resolve_module,
+    resolve_module_for_import_from,
 };
 
 use crate::Db;
 use crate::RuntimeSpelling;
+use crate::place::definitions::DefinitionResolution;
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::imported_symbol;
-use crate::place::{builtins_module_scope, implicit_builtins_symbol_scope};
+use crate::place::{
+    builtins_module_scope, class_body_implicit_symbol, implicit_builtins_symbol_scope,
+    loop_header_reachability, place_from_bindings,
+};
+use crate::place_load::{
+    ImplicitPlaceLoad, PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind,
+    resolve_place_load,
+};
 use crate::types::AnonNamedTupleClass;
 use crate::types::TypeExpressionFlags;
 use crate::types::check_order::{InferredInCheckOrder, infer_file_in_check_order};
@@ -33,15 +42,17 @@ use crate::types::soundness::CastCheck;
 use crate::types::{
     ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
     SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
-    class_pattern_positional_sources, infer_complete_scope_types, inferred_declaration,
+    class_pattern_positional_sources, infer_complete_scope_types, infer_definition_types,
+    inferred_declaration, is_discarded_dict_key_assignment,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
+use ty_python_core::place::PlaceExpr;
 use ty_python_core::place_table;
 use ty_python_core::scope::{FileScopeId, Scope};
 use ty_python_core::semantic_index;
 use ty_python_core::symbol::Symbol;
-use ty_python_core::{Program, ProgramFile};
+use ty_python_core::{BindingWithConstraintsIterator, Program, ProgramFile};
 
 /// The primary interface the LSP should use for querying semantic information about a [`File`].
 ///
@@ -418,7 +429,7 @@ impl<'db> SemanticModel<'db> {
             Some(Type::FunctionLiteral(function)) if function.is_classmethod(db) => {
                 conformance::WitnessKind::ClassMethod
             }
-            Some(Type::BoundMethod(method)) if method.function(db).is_classmethod(db) => {
+            Some(Type::BoundMethod(method)) if method.binds_classmethod(db) => {
                 conformance::WitnessKind::ClassMethod
             }
             Some(Type::BoundMethod(_) | Type::FunctionLiteral(_) | Type::Callable(_)) => {
@@ -593,13 +604,8 @@ impl<'db> SemanticModel<'db> {
             // only a single comparison lowers: a chain (`a < b < c`) is two
             // calls joined by a short-circuit, which is a different rewrite
             Expr::Compare(compare) => {
-                let [op] = compare.ops.as_ref() else {
-                    return None;
-                };
-                let [right_expr] = compare.comparators.as_ref() else {
-                    return None;
-                };
-                let left = compare.left.inferred_type(self)?;
+                let (left_expr, op, right_expr) = compare.as_single()?;
+                let left = left_expr.inferred_type(self)?;
                 let right = right_expr.inferred_type(self)?;
                 crate::types::extensions::comparison_extension_operator(
                     db,
@@ -768,7 +774,10 @@ impl<'db> SemanticModel<'db> {
         }
         let signature = match callable_ty {
             Type::FunctionLiteral(function) => function.signature(db),
-            Type::BoundMethod(method) => method.function(db).signature(db),
+            Type::BoundMethod(method) => match method.function(db) {
+                Some(function) => function.signature(db),
+                None => return true,
+            },
             // a class, a callable instance, a union: the parameter types are not
             // one cached signature away, so do the full check
             _ => return true,
@@ -1934,10 +1943,15 @@ impl<'db> SemanticModel<'db> {
         }
     }
 
-    /// Returns completion candidates for a string-literal expression based on its expected type.
+    /// Returns completion candidates from a string's expected type and dictionary initializer.
+    ///
+    /// If provided, `subscript` must have `string_expr` as its complete slice.
+    /// Initializer keys are suggestions, not a guarantee that a mutable dictionary still contains
+    /// them or that it contains no other keys.
     pub fn expected_string_literal_completions(
         &self,
         string_expr: &ast::ExprStringLiteral,
+        subscript: Option<&ast::ExprSubscript>,
     ) -> Vec<ExpectedStringLiteralCompletion<'db>> {
         struct StringLiteralCandidates;
         type StringLiteralCandidatesVisitor<'db> = CycleDetector<
@@ -1977,19 +1991,240 @@ impl<'db> SemanticModel<'db> {
                 Type::TypeAlias(alias) => {
                     visitor.visit(db, ty, || collect(db, alias.value_type(db), visitor))
                 }
+                Type::Recursive(recursive) => visitor.visit(db, ty, || {
+                    recursive
+                        .unfold(db, &recursive.environment(db))
+                        .map(|unfolded| collect(db, unfolded, visitor))
+                        .unwrap_or_else(Vec::new)
+                }),
                 _ => Vec::new(),
             }
         }
         let db = self.db;
 
-        let Some(expected_ty) = self.string_literal_completion_expected_type(string_expr) else {
-            return Vec::new();
-        };
-
-        let mut candidates = collect(db, expected_ty, &StringLiteralCandidatesVisitor::default());
+        let expected_ty = self.string_literal_completion_expected_type(string_expr);
+        let mut candidates = expected_ty
+            .map(|expected_ty| collect(db, expected_ty, &StringLiteralCandidatesVisitor::default()))
+            .unwrap_or_default();
+        // Finite choices from the expected type take precedence. A string used as the complete
+        // subscript key can fall back to initializer keys that fit any known expected type.
+        if candidates.is_empty()
+            && self.in_string_annotation_expr.is_none()
+            && let Some(subscript) = subscript
+        {
+            self.dictionary_initializer_keys(
+                &subscript.value,
+                &mut FxHashSet::default(),
+                &mut candidates,
+            );
+            if let Some(expected_ty) = expected_ty {
+                candidates.retain(|candidate| {
+                    candidate
+                        .ty
+                        .is_assignable_to(db, &self.program_environment(), expected_ty)
+                });
+            }
+        }
         candidates.sort_unstable_by(|left, right| left.value.cmp(&right.value));
         candidates.dedup_by(|left, right| left.value == right.value);
         candidates
+    }
+
+    /// Appends literal string keys from dictionary initializers that can reach `receiver`.
+    ///
+    /// Follows reaching definitions, aliases, `from` imports, and nested dictionary lookups,
+    /// ignoring unreachable or discarded assignments. The caller's `visited` set breaks
+    /// definition cycles. The caller filters candidates against the expected type, sorts them,
+    /// and removes duplicates.
+    fn dictionary_initializer_keys(
+        &self,
+        receiver: &ast::Expr,
+        visited: &mut FxHashSet<Definition<'db>>,
+        candidates: &mut Vec<ExpectedStringLiteralCompletion<'db>>,
+    ) {
+        if let ast::Expr::Dict(dict) = receiver {
+            candidates.extend(dict.items.iter().filter_map(|item| {
+                let ast::Expr::StringLiteral(key) = item.key.as_ref()? else {
+                    return None;
+                };
+                let value = key.value.to_string();
+                Some(ExpectedStringLiteralCompletion {
+                    ty: Type::string_literal(self.db, value.as_str()),
+                    value,
+                })
+            }));
+            return;
+        }
+
+        let mut definitions = self.reaching_definitions_at(receiver);
+        while let Some(definition) = definitions.pop() {
+            if !visited.insert(definition) {
+                continue;
+            }
+            let kind = definition.kind(self.db);
+            if kind.is_loop_header() {
+                definitions.extend(
+                    loop_header_reachability(self.db, definition)
+                        .reachable_bindings
+                        .iter()
+                        .map(|binding| binding.definition),
+                );
+                continue;
+            }
+            if kind.is_import() {
+                self.extend_imported_definitions(definition, &mut definitions);
+                continue;
+            }
+            let file = definition.program_file(self.db);
+            let module = parsed_module(self.db, file.python_file(self.db)).load(self.db);
+            let value = match kind {
+                DefinitionKind::Assignment(assignment) => assignment
+                    .unpack()
+                    .is_none()
+                    .then(|| assignment.value(&module)),
+                DefinitionKind::AnnotatedAssignment(assignment) => assignment.value(&module),
+                DefinitionKind::DictKeyAssignment(assignment) => Some(assignment.value(&module)),
+                _ => None,
+            };
+            if let Some(value) = value
+                && !infer_definition_types(self.db, definition).discards_dict_key_assignments()
+                && !is_discarded_dict_key_assignment(self.db, definition)
+            {
+                Self::new(self.db, file).dictionary_initializer_keys(value, visited, candidates);
+            }
+        }
+    }
+
+    /// Returns definitions that can reach this expression's load.
+    ///
+    /// Names follow Python's scope lookup rules, stopping at a definitely bound source.
+    /// Other tracked places use the bindings recorded at their use site.
+    fn reaching_definitions_at(&self, receiver: &ast::Expr) -> Vec<Definition<'db>> {
+        let index = semantic_index(self.db, self.file);
+        let Some(scope) = index.try_expression_scope_id(receiver) else {
+            return Vec::new();
+        };
+        let Some(use_id) = index.try_expression_use_id(receiver.into()) else {
+            return Vec::new();
+        };
+        let mut definitions = Vec::new();
+        let mut add_bindings = |bindings: BindingWithConstraintsIterator<'db, 'db>| {
+            let resolution = DefinitionResolution::from_bindings(self.db, bindings);
+            definitions.extend_from_slice(resolution.definitions());
+        };
+        if let ast::Expr::Name(name) = receiver {
+            let mut resolution = resolve_place_load(
+                self.db,
+                index,
+                scope.to_scope_id(self.db, self.file),
+                PlaceExpr::from_expr_name(name),
+                PlaceLoadMode::AtExpression(name.into()),
+            );
+            while let Some(PlaceLoadResolutionStep::Source(source)) = resolution.next() {
+                match source.kind {
+                    PlaceLoadSourceKind::Bindings(bindings) => {
+                        let bound = place_from_bindings(
+                            self.db,
+                            &self.program_environment(),
+                            bindings.clone(),
+                        )
+                        .place
+                        .is_definitely_bound();
+                        add_bindings(bindings);
+                        if bound {
+                            break;
+                        }
+                    }
+                    PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+                        let index = semantic_index(self.db, scope.program_file(self.db));
+                        add_bindings(
+                            index
+                                .use_def_map(scope.file_scope_id(self.db))
+                                .reachable_bindings(id),
+                        );
+                        break;
+                    }
+                    PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ClassBodySymbol(name)) => {
+                        if class_body_implicit_symbol(self.db, &self.program_environment(), &name)
+                            .place
+                            .is_definitely_bound()
+                        {
+                            break;
+                        }
+                    }
+                    PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol {
+                        file,
+                        name,
+                    }) => {
+                        let index = semantic_index(self.db, file);
+                        if let Some(id) = index.place_table(FileScopeId::global()).symbol_id(&name)
+                        {
+                            add_bindings(
+                                index
+                                    .use_def_map(FileScopeId::global())
+                                    .reachable_symbol_bindings(id),
+                            );
+                        }
+                        break;
+                    }
+                    // basedpython: a debugger's observation supersedes the bindings and names no
+                    // definition of its own
+                    PlaceLoadSourceKind::Observed(_) | PlaceLoadSourceKind::Implicit(_) => break,
+                }
+            }
+        } else {
+            add_bindings(index.use_def_map(scope).bindings_at_use(use_id));
+        }
+        definitions
+    }
+
+    /// Appends the reachable bindings of a `from` import's symbol in its target module.
+    ///
+    /// Follows one import at a time so an overwritten re-export cannot contribute keys.
+    fn extend_imported_definitions(
+        &self,
+        definition: Definition<'db>,
+        definitions: &mut Vec<Definition<'db>>,
+    ) {
+        let file = definition.program_file(self.db);
+        let kind = definition.kind(self.db);
+        let module = parsed_module(self.db, file.python_file(self.db)).load(self.db);
+        let (import, name) = match &kind {
+            DefinitionKind::ImportFrom(import) => {
+                (import.import(&module), import.alias(&module).name.as_str())
+            }
+            DefinitionKind::StarImport(import) => {
+                let Some(symbol) = semantic_index(self.db, file)
+                    .place_table(definition.file_scope(self.db))
+                    .place(definition.place(self.db))
+                    .as_symbol()
+                else {
+                    return;
+                };
+                (import.import(&module), symbol.name().as_str())
+            }
+            _ => return,
+        };
+        let env = ProgramEnvironment::from_file(file);
+        let importing_file =
+            ImportingFile::File(file.file(self.db), env.resolver_environment(self.db));
+        let Some(target_file) = resolve_module_for_import_from(self.db, importing_file, import)
+            .and_then(|module| module.file(self.db))
+        else {
+            return;
+        };
+        let target_file = ProgramFile::new(self.db, target_file, env.program(self.db));
+        let index = semantic_index(self.db, target_file);
+        let Some(id) = index.place_table(FileScopeId::global()).symbol_id(name) else {
+            return;
+        };
+        let resolution = DefinitionResolution::from_bindings(
+            self.db,
+            index
+                .use_def_map(FileScopeId::global())
+                .end_of_scope_symbol_bindings(id),
+        );
+        definitions.extend_from_slice(resolution.definitions());
     }
 
     fn string_literal_completion_expected_type(
@@ -2057,12 +2292,12 @@ impl<'db> LoweringModel<'db> {
         let env = &self.program_environment();
         let db = self.db;
         let callee_ty = call.func.inferred_type(self)?;
-        let function = match callee_ty {
-            Type::FunctionLiteral(function) => function,
-            Type::BoundMethod(method) => method.function(db),
+        let (function, is_classmethod) = match callee_ty {
+            Type::FunctionLiteral(function) => (function, function.is_classmethod(db)),
+            Type::BoundMethod(method) => (method.function(db)?, method.binds_classmethod(db)),
             _ => return None,
         };
-        if function.is_classmethod(db) || !function.is_unspecialized_reified(db) {
+        if is_classmethod || !function.is_unspecialized_reified(db) {
             return None;
         }
         let mut positional = Vec::with_capacity(call.arguments.args.len());

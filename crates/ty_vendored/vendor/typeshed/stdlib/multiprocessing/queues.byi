@@ -13,7 +13,7 @@ class Queue[in out Element]:
     # FIXME: `ctx` is a circular dependency and it's not actually optional.
     # It's marked as such to be able to use the generic Queue in __init__.pyi.
     init(self, maxsize: int = 0, *, ctx: dynamic = ...)
-    def __getstate__(self) -> _QueueState
+    override def __getstate__(self) -> _QueueState
     def __setstate__(self, state: _QueueState)
     def put(self, obj: Element, block: bool = True, timeout: (int | float)? = None)
     def get(self, block: bool = True, timeout: (int | float)? = None) -> Element
@@ -43,7 +43,7 @@ class SimpleQueue[in out Element]:
     init(self, *, ctx: dynamic = ...)
     def close(self)
     def empty(self) -> bool
-    def __getstate__(self) -> _SimpleQueueState
+    override def __getstate__(self) -> _SimpleQueueState
     def __setstate__(self, state: _SimpleQueueState)
     def get(self) -> Element
     def put(self, obj: Element)

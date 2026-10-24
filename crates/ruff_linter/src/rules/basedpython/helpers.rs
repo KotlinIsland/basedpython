@@ -1,4 +1,4 @@
-use ruff_python_ast::{self as ast, CmpOp, Expr};
+use ruff_python_ast::{CmpOp, Expr};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
@@ -6,19 +6,13 @@ use crate::checkers::ast::Checker;
 /// The operand and operator of a `<expr> is None` / `<expr> is not None` test,
 /// which is the guard both of basedpython's optional operators lower to.
 pub(super) fn none_test(test: &Expr) -> Option<(&Expr, CmpOp)> {
-    let Expr::Compare(ast::ExprCompare {
-        left,
-        ops,
-        comparators,
-        ..
-    }) = test
-    else {
+    let Expr::Compare(compare) = test else {
         return None;
     };
-    let ([op], [Expr::NoneLiteral(_)]) = (&**ops, &**comparators) else {
+    let Some((left, op, Expr::NoneLiteral(_))) = compare.as_single() else {
         return None;
     };
-    matches!(op, CmpOp::Is | CmpOp::IsNot).then(|| (&**left, *op))
+    matches!(op, CmpOp::Is | CmpOp::IsNot).then_some((left, *op))
 }
 
 /// True when an expression of comparison precedence can replace `node` inside

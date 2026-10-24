@@ -23,6 +23,10 @@ a pep 696 default takes priority over `Never`. `ParamSpec`, `TypeVarTuple` and k
 packs are unaffected: their specializations are callable-, tuple- and mapping-shaped, and `Never` is
 not a valid value for one
 
+a type variable is only unsolved when the checker read all of the evidence for it. a call whose
+inference gives up partway — too many combinations of argument types to work through — leaves the
+type variable undetermined instead, and that stays `Unknown`
+
 for a [reified](reified-generics.md) type parameter an unsolved type variable is always an error
 (`unspecialized-reified-generic`), whatever this option says — the specialization is a runtime step,
 so there is no type that could stand in for it

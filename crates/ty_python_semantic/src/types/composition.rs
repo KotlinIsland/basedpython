@@ -625,7 +625,10 @@ fn set_root_argument<'db, 'ast>(
     let Type::BoundMethod(method) = callee else {
         return None;
     };
-    is_set_root(db, method.function(db)).then(|| Span::from(file).with_range(root.range()))
+    method
+        .function(db)
+        .is_some_and(|function| is_set_root(db, function))
+        .then(|| Span::from(file).with_range(root.range()))
 }
 
 /// The computation the lambda scope `scope`, written at `lambda`, is the
@@ -1317,8 +1320,10 @@ where
                 }
             }
             Type::BoundMethod(method) => {
-                if let Some((_, call)) = call {
-                    self.check_method_call(call, method.self_instance(db), method.function(db));
+                if let Some((_, call)) = call
+                    && let Some(function) = method.function(db)
+                {
+                    self.check_method_call(call, method.self_instance(db), function);
                 }
             }
             _ => {}

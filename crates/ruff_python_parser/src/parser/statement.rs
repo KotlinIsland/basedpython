@@ -145,7 +145,7 @@ fn mark_context(stmt: Stmt, has_context: bool) -> Stmt {
 /// of `kind` could be a value that a following `cast` operates on (`protocol cast
 /// int`), ask [`Parser::peek_is_name`] instead
 fn declares_a_name(kind: TokenKind) -> bool {
-    kind == TokenKind::Name || kind.is_soft_keyword()
+    kind == TokenKind::Identifier || kind.is_soft_keyword()
 }
 
 /// The marker a modifier keyword contributes to the `def` or `class` it
@@ -609,7 +609,7 @@ impl<'src> Parser<'src> {
         let token = self.current_token_kind();
         matches!(
             token,
-            TokenKind::Star | TokenKind::DoubleStar | TokenKind::Name
+            TokenKind::Star | TokenKind::DoubleStar | TokenKind::Identifier
         ) || token.is_keyword()
             // basedpython: `/` divides a type parameter list the way it divides a value one
             || (self.options.is_basedpython && token == TokenKind::Slash)
@@ -656,7 +656,7 @@ impl<'src> Parser<'src> {
                 // `class` is unambiguous here: a class definition always follows
                 // its name with `(`, `[` or `:`, so a binding keyword and a name
                 // is the declaration
-                if self.peek() == TokenKind::Name && declares_a_name(self.peek2().1) {
+                if self.peek() == TokenKind::Identifier && declares_a_name(self.peek2().1) {
                     let keyword_range = self.peek_nth(0).1;
                     let keyword = self.src_text(keyword_range).to_owned();
                     if matches!(keyword.as_str(), "let" | "var") {
@@ -715,7 +715,7 @@ impl<'src> Parser<'src> {
                 // rewrite `init` to `def __init__` and emit self-assignments
                 // for any `let` parameters.
                 if self.class_body_depth > 0
-                    && token == TokenKind::Name
+                    && token == TokenKind::Identifier
                     && self.peek() == TokenKind::Lpar
                     && self.src_text(self.current_token_range()) == "init"
                 {
@@ -729,7 +729,7 @@ impl<'src> Parser<'src> {
                 //   - modifier chains (final, abstract, open, override, static, data, enum,
                 //     frozen, export, public, private) before def/class/let/assignment
                 //   - single-keyword introducers: let, newtype, protocol, abstract a: T
-                if token == TokenKind::Name
+                if token == TokenKind::Identifier
                     && let Some(mut stmt) = self.try_parse_modifier_or_introducer(start)
                 {
                     // basedpython: a class-body `var`/`let` declaration may be
@@ -897,7 +897,7 @@ impl<'src> Parser<'src> {
                     self.error_if_not_basedpython(
                         "`private` type aliases are not valid in .py files".to_string(),
                     );
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                     let mut alias = self.parse_type_alias_statement();
                     self.check_visibility_placement(MemberVisibility::Private, alias.range);
                     alias.is_private = true;
@@ -943,7 +943,7 @@ impl<'src> Parser<'src> {
                             "`let` declarations are not valid in .py files".to_string(),
                         );
                         for _ in 0..idx {
-                            self.bump(TokenKind::Name);
+                            self.bump(TokenKind::Identifier);
                         }
                         let decl = self.parse_let_decl(start);
                         return Some(mark_context(decl, has_context));
@@ -1153,7 +1153,7 @@ impl<'src> Parser<'src> {
     /// the name `init` followed by a parameter list, inside a class body.
     fn at_init_shorthand(&mut self) -> bool {
         self.class_body_depth > 0
-            && self.at(TokenKind::Name)
+            && self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "init"
             && self.peek() == TokenKind::Lpar
     }
@@ -1183,16 +1183,16 @@ impl<'src> Parser<'src> {
                 "classmethod"
             } else {
                 let kw = self.src_text(self.current_token_range()).to_owned();
-                self.bump(TokenKind::Name);
+                self.bump(TokenKind::Identifier);
                 if kw == "frozen" {
                     // the one two-word modifier. `frozen` qualifies `data`, so it
                     // only consumes a second keyword when that keyword is there —
                     // consuming whatever follows swallowed a neighbouring modifier
                     // and ran off the end of a chain that had none
-                    if self.at(TokenKind::Name)
+                    if self.at(TokenKind::Identifier)
                         && self.src_text(self.current_token_range()) == "data"
                     {
-                        self.bump(TokenKind::Name);
+                        self.bump(TokenKind::Identifier);
                         "frozen_data_class"
                     } else {
                         self.add_error(
@@ -1282,7 +1282,7 @@ impl<'src> Parser<'src> {
             }
             // another modifier keyword follows — keep looping. an `enum class` /
             // `protocol` introducer also ends the chain (handled after the loop)
-            if self.at(TokenKind::Name) {
+            if self.at(TokenKind::Identifier) {
                 let kw = self.src_text(self.current_token_range());
                 // any modifier keyword may follow another, in any order — reuse
                 // the canonical set so none is accidentally omitted (a missing
@@ -1385,14 +1385,14 @@ impl<'src> Parser<'src> {
             })
         } else if self.at(TokenKind::Def) {
             Stmt::FunctionDef(self.parse_function_definition(decorators, start))
-        } else if self.at(TokenKind::Name)
+        } else if self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "protocol"
             && self.peek_is_name(0)
         {
             // `private protocol P:` — the modifier decorators ride alongside the
             // synthetic `protocol_class` marker; both lower by disjoint edits
             self.parse_protocol_def(start, decorators)
-        } else if self.at(TokenKind::Name)
+        } else if self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "enum"
             && self.peek() == TokenKind::Class
         {
@@ -1552,7 +1552,7 @@ impl<'src> Parser<'src> {
         let visibility = prefix_visibility(
             self.src_text(TextRange::new(start, self.current_token_range().start())),
         );
-        self.bump(TokenKind::Name); // consume "let"
+        self.bump(TokenKind::Identifier); // consume "let"
         let name = self.parse_identifier();
         self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
         // the marker spans the whole keyword prefix, from the statement's start — a
@@ -1651,7 +1651,7 @@ impl<'src> Parser<'src> {
                 "protected" => visibility = MemberVisibility::Protected,
                 _ => {}
             }
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         }
         let name = self.parse_identifier();
         self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
@@ -1689,7 +1689,7 @@ impl<'src> Parser<'src> {
     /// `modifiers` transform rewrites to `Foo = NewType("Foo", int)`.
     fn parse_newtype_decl(&mut self, start: TextSize) -> Stmt {
         let newtype_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "newtype"
+        self.bump(TokenKind::Identifier); // consume "newtype"
         let name = self.parse_identifier();
         self.bump(TokenKind::Equal);
         let value = self
@@ -1725,7 +1725,7 @@ impl<'src> Parser<'src> {
     /// that the `sentinel` transform rewrites to `A = Sentinel("A")`.
     fn parse_sentinel_decl(&mut self, start: TextSize) -> Stmt {
         let kw_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "sentinel"
+        self.bump(TokenKind::Identifier); // consume "sentinel"
         let name = self.parse_identifier();
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
@@ -1765,7 +1765,7 @@ impl<'src> Parser<'src> {
     /// `final x = v` is a `__modifier_assign__` instead).
     fn parse_final_annot_decl(&mut self, start: TextSize) -> Stmt {
         let final_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "final"
+        self.bump(TokenKind::Identifier); // consume "final"
         let name = self.parse_identifier();
         let final_marker = Expr::Name(ast::ExprName {
             id: Name::new_static(
@@ -1868,7 +1868,7 @@ impl<'src> Parser<'src> {
                 "protected" => visibility = MemberVisibility::Protected,
                 _ => {}
             }
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         }
         let name = self.parse_identifier();
         self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
@@ -1944,7 +1944,7 @@ impl<'src> Parser<'src> {
     /// transform expands into overloads + a runtime dispatcher
     fn parse_decorator_def(&mut self, start: TextSize) -> Stmt {
         let kw_start = self.current_token_range().start();
-        self.bump(TokenKind::Name); // consume "decorator"
+        self.bump(TokenKind::Identifier); // consume "decorator"
         let def_start = self.current_token_range().start();
         let decorator_range = TextRange::new(kw_start, def_start);
 
@@ -1968,7 +1968,7 @@ impl<'src> Parser<'src> {
     /// to `class Foo(Protocol):`.
     fn parse_protocol_def(&mut self, start: TextSize, mut decorators: DecoratorList) -> Stmt {
         let protocol_start = self.current_token_range().start();
-        self.bump(TokenKind::Name); // consume "protocol"
+        self.bump(TokenKind::Identifier); // consume "protocol"
         let class_name_start = self.current_token_range().start();
         let decorator_range = TextRange::new(protocol_start, class_name_start);
 
@@ -2028,7 +2028,7 @@ impl<'src> Parser<'src> {
     /// [`ClassDef`]: ast::StmtClassDef
     fn parse_extension_def(&mut self, start: TextSize) -> Stmt {
         let extension_start = self.current_token_range().start();
-        self.bump(TokenKind::Name); // consume "extension"
+        self.bump(TokenKind::Identifier); // consume "extension"
         let name_start = self.current_token_range().start();
         let decorator_range = TextRange::new(extension_start, name_start);
 
@@ -2123,7 +2123,7 @@ impl<'src> Parser<'src> {
     /// [`ClassDef`]: ast::StmtClassDef
     fn parse_build_def(&mut self, start: TextSize) -> Stmt {
         let keyword_start = self.current_token_range().start();
-        self.bump(TokenKind::Name); // consume "build"
+        self.bump(TokenKind::Identifier); // consume "build"
         let keyword_range = TextRange::new(keyword_start, self.current_token_range().start());
 
         let mut decorators = DecoratorList::new();
@@ -2172,11 +2172,11 @@ impl<'src> Parser<'src> {
     /// dotted name
     fn parse_implements_decl(&mut self, start: TextSize) -> Stmt {
         let keyword_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "implements"
+        self.bump(TokenKind::Identifier); // consume "implements"
 
         let mut args: Vec<Expr> = Vec::new();
         loop {
-            if !self.at_name_or_soft_keyword() {
+            if !self.at_identifier_or_soft_keyword() {
                 self.add_error(
                     ParseErrorType::OtherError("`implements` takes an interface name".to_string()),
                     self.current_token_range(),
@@ -2263,7 +2263,7 @@ impl<'src> Parser<'src> {
             value: Box::new(Expr::Call(ast::ExprCall {
                 func: Box::new(marker),
                 arguments: ast::Arguments {
-                    args: args.into_boxed_slice(),
+                    args: ThinVec::from(args),
                     keywords: ThinVec::new(),
                     range: TextRange::new(keyword_range.end(), range.end()),
                     node_index: AtomicNodeIndex::NONE,
@@ -2414,7 +2414,7 @@ impl<'src> Parser<'src> {
     /// [`AnnAssign`]: ast::StmtAnnAssign
     fn parse_enum_def(&mut self, start: TextSize, mut decorators: DecoratorList) -> Stmt {
         let enum_start = self.current_token_range().start();
-        self.bump(TokenKind::Name); // consume "enum"
+        self.bump(TokenKind::Identifier); // consume "enum"
         // the canonical surface is `enum class E:`; the `class` keyword is part
         // of the declaration. (a bare `enum E:` is reported as an error by the
         // caller and recovered here by leaving `class` un-consumed.)
@@ -2526,7 +2526,9 @@ impl<'src> Parser<'src> {
         // a bare name statement is a no-op in a class body and is almost
         // certainly a variant missing its `case` — say so rather than letting
         // it silently parse to dead code
-        if self.at(TokenKind::Name) && matches!(self.peek(), TokenKind::Newline | TokenKind::Semi) {
+        if self.at(TokenKind::Identifier)
+            && matches!(self.peek(), TokenKind::Newline | TokenKind::Semi)
+        {
             self.add_error(
                 ParseErrorType::OtherError(
                     "enum variants must be declared with `case`, e.g. `case Red, Green`"
@@ -2590,7 +2592,7 @@ impl<'src> Parser<'src> {
                 break;
             }
             // a trailing comma ends the list
-            if !(self.at(TokenKind::Name) || self.current_token_kind().is_soft_keyword()) {
+            if !(self.at(TokenKind::Identifier) || self.current_token_kind().is_soft_keyword()) {
                 break;
             }
         }
@@ -2628,7 +2630,7 @@ impl<'src> Parser<'src> {
         while !self.at(TokenKind::Rpar) && !self.at(TokenKind::EndOfFile) {
             let field_start = self.node_start();
             let (target_id, target_range) =
-                if self.at(TokenKind::Name) && self.peek() == TokenKind::Colon {
+                if self.at(TokenKind::Identifier) && self.peek() == TokenKind::Colon {
                     let ident = self.parse_identifier();
                     self.bump(TokenKind::Colon);
                     (ident.id, ident.range)
@@ -3014,7 +3016,7 @@ impl<'src> Parser<'src> {
                     // it's followed by an unexpected token.
                     let (first, second) = self.peek2();
 
-                    if (first == TokenKind::Name || first.is_soft_keyword())
+                    if (first == TokenKind::Identifier || first.is_soft_keyword())
                         && matches!(second, TokenKind::Lsqb | TokenKind::Equal)
                     {
                         return Stmt::TypeAlias(self.parse_type_alias_statement());
@@ -3024,7 +3026,7 @@ impl<'src> Parser<'src> {
                 // basedpython: `let <pattern> := <subject>` destructures the
                 // subject. Reached after `let NAME [: T] = ...` has been ruled
                 // out, since that shape is a declaration rather than a match
-                if token == TokenKind::Name
+                if token == TokenKind::Identifier
                     && self.src_text(self.current_token_range()) == "let"
                     && let Some(let_stmt) = self.try_parse_let_statement()
                 {
@@ -3369,7 +3371,7 @@ impl<'src> Parser<'src> {
     /// Returns whether the parser sits on basedpython's `export` keyword — the
     /// re-exporting spelling of `import` in `from x export y`.
     fn at_export_keyword(&mut self) -> bool {
-        self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "export"
+        self.at(TokenKind::Identifier) && self.src_text(self.current_token_range()) == "export"
     }
 
     /// Returns whether the parser sits on the `export` keyword of a relative
@@ -3415,27 +3417,27 @@ impl<'src> Parser<'src> {
             }
         }
 
-        let module = if self.at_name_or_soft_keyword() && !self.at_module_less_export(leading_dots)
-        {
-            // test_ok from_import_soft_keyword_module_name
-            // from match import pattern
-            // from type import bar
-            // from case import pattern
-            // from lazy import qux
-            // from match.type.case import foo
-            Some(self.parse_dotted_name())
-        } else {
-            if leading_dots == 0 {
-                // test_err from_import_missing_module
-                // from
-                // from import x
-                self.add_error(
-                    ParseErrorType::OtherError("Expected a module name".to_string()),
-                    self.current_token_range(),
-                );
-            }
-            None
-        };
+        let module =
+            if self.at_identifier_or_soft_keyword() && !self.at_module_less_export(leading_dots) {
+                // test_ok from_import_soft_keyword_module_name
+                // from match import pattern
+                // from type import bar
+                // from case import pattern
+                // from lazy import qux
+                // from match.type.case import foo
+                Some(self.parse_dotted_name())
+            } else {
+                if leading_dots == 0 {
+                    // test_err from_import_missing_module
+                    // from
+                    // from import x
+                    self.add_error(
+                        ParseErrorType::OtherError("Expected a module name".to_string()),
+                        self.current_token_range(),
+                    );
+                }
+                None
+            };
 
         // test_ok from_import_no_space
         // from.import x
@@ -3448,7 +3450,7 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(
                 "`from ... export ...` is not valid in `.py` files".to_string(),
             );
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         } else {
             self.expect(TokenKind::Import);
         }
@@ -3587,7 +3589,7 @@ impl<'src> Parser<'src> {
         };
 
         let asname = if self.eat(TokenKind::As) {
-            if self.at_name_or_soft_keyword() {
+            if self.at_identifier_or_soft_keyword() {
                 // test_ok import_as_name_soft_keyword
                 // import foo as match
                 // import bar as case
@@ -3644,7 +3646,7 @@ impl<'src> Parser<'src> {
         };
 
         let asname = if self.eat(TokenKind::As) {
-            if self.at_name_or_soft_keyword() {
+            if self.at_identifier_or_soft_keyword() {
                 Some(self.parse_identifier())
             } else {
                 self.add_error(
@@ -3810,8 +3812,8 @@ impl<'src> Parser<'src> {
             // when the call has no value to bind
             TokenKind::Break => (Stmt::Break(self.parse_break_statement()), false),
             TokenKind::Continue => (Stmt::Continue(self.parse_continue_statement()), false),
-            // `parse_atom` only enters here at one of the tokens above; `match` is
-            // the only one that can turn out not to start a statement expression
+            // `parse_primary_expression_impl` only enters here at one of the tokens above;
+            // `match` is the only one that can turn out not to start a statement expression
             _ => return None,
         };
 
@@ -4546,13 +4548,13 @@ impl<'src> Parser<'src> {
     /// been parsed. No such sequence is a valid python condition, which is why
     /// the basedpython gate below can be applied after the fact
     fn parse_if_let_pattern(&mut self) -> Option<Pattern> {
-        if !(self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "let") {
+        if !(self.at(TokenKind::Identifier) && self.src_text(self.current_token_range()) == "let") {
             return None;
         }
 
         let checkpoint = self.checkpoint();
         let let_range = self.current_token_range();
-        self.bump(TokenKind::Name);
+        self.bump(TokenKind::Identifier);
 
         if !self.at_pattern_start() {
             self.rewind(checkpoint);
@@ -4635,7 +4637,7 @@ impl<'src> Parser<'src> {
     fn try_parse_let_statement(&mut self) -> Option<ast::StmtLet> {
         let start = self.node_start();
         let checkpoint = self.checkpoint();
-        self.bump(TokenKind::Name);
+        self.bump(TokenKind::Identifier);
 
         if !self.at_pattern_start() {
             self.rewind(checkpoint);
@@ -4995,7 +4997,7 @@ impl<'src> Parser<'src> {
         };
 
         let name = if self.eat(TokenKind::As) {
-            if self.at_name_or_soft_keyword() {
+            if self.at_identifier_or_soft_keyword() {
                 // test_ok except_stmt_as_name_soft_keyword
                 // try: ...
                 // except Exception as match: ...
@@ -5309,14 +5311,14 @@ impl<'src> Parser<'src> {
             // annotation is an assertion guard, not a type. the keyword is consumed
             // here and recorded on the function; the asserted expression takes the
             // place of the annotation. a bare `-> asserts` is still the type `asserts`
-            if self.at(TokenKind::Name)
+            if self.at(TokenKind::Identifier)
                 && self.src_text(self.current_token_range()) == "asserts"
                 && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
             {
                 self.error_if_not_basedpython(
                     "`asserts` return annotations are not valid in .py files".to_string(),
                 );
-                self.bump(TokenKind::Name);
+                self.bump(TokenKind::Identifier);
                 is_asserts_return = true;
             }
 
@@ -5376,26 +5378,27 @@ impl<'src> Parser<'src> {
         // basedpython `def f() -> int raises TypeError`: the declared exception
         // set. an ordinary type expression — `Never` cannot raise, `...` opts out
         // of tracking, `A | B` is a union — so no tuple form is accepted here
-        let raises =
-            if self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "raises" {
-                self.error_if_not_basedpython(
-                    "`raises` clauses are not valid in .py files".to_string(),
-                );
-                self.bump(TokenKind::Name);
+        let raises = if self.at(TokenKind::Identifier)
+            && self.src_text(self.current_token_range()) == "raises"
+        {
+            self.error_if_not_basedpython(
+                "`raises` clauses are not valid in .py files".to_string(),
+            );
+            self.bump(TokenKind::Identifier);
 
-                if self.at_expr() {
-                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
-                } else {
-                    self.add_error(
-                        ParseErrorType::ExpectedExpression,
-                        self.current_token_range(),
-                    );
-
-                    None
-                }
+            if self.at_expr() {
+                Some(Box::new(self.parse_conditional_expression_or_higher().expr))
             } else {
+                self.add_error(
+                    ParseErrorType::ExpectedExpression,
+                    self.current_token_range(),
+                );
+
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         // basedpython: `def f(a: int) -> int` (no colon, no body) is permitted as
         // a bodyless overload declaration. The `overload` transform adds `@overload`
@@ -5457,7 +5460,7 @@ impl<'src> Parser<'src> {
         mut decorator_list: DecoratorList,
     ) -> ast::StmtFunctionDef {
         let init_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "init"
+        self.bump(TokenKind::Identifier); // consume "init"
 
         decorator_list.push(ast::Decorator {
             expression: Expr::Name(ast::ExprName {
@@ -5723,7 +5726,7 @@ impl<'src> Parser<'src> {
     /// unambiguous signal inside a class body.
     fn at_accessor_block_start(&mut self) -> bool {
         let (kind, range) = self.peek_nth(0);
-        kind == TokenKind::Name
+        kind == TokenKind::Identifier
             && matches!(
                 self.src_text(range),
                 // `late` may lead the block as a prefix on `field`
@@ -5878,12 +5881,12 @@ impl<'src> Parser<'src> {
             progress.assert_progressing(self);
             let mut kw_range = self.current_token_range();
             // `late field: T` defers the backing field's initialisation
-            let field_late = self.at(TokenKind::Name) && self.src_text(kw_range) == "late";
+            let field_late = self.at(TokenKind::Identifier) && self.src_text(kw_range) == "late";
             if field_late {
-                self.bump(TokenKind::Name);
+                self.bump(TokenKind::Identifier);
                 kw_range = self.current_token_range();
             }
-            let entry = if self.at(TokenKind::Name) {
+            let entry = if self.at(TokenKind::Identifier) {
                 self.src_text(kw_range)
             } else {
                 ""
@@ -5899,7 +5902,7 @@ impl<'src> Parser<'src> {
             match entry {
                 "get" | "set" => {
                     let is_get = entry == "get";
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                     self.expect(TokenKind::Lpar);
                     let param = if self.at(TokenKind::Rpar) {
                         None
@@ -5964,7 +5967,7 @@ impl<'src> Parser<'src> {
                     }
                 }
                 "field" => {
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                     let annotation = if self.eat(TokenKind::Colon) {
                         Some(self.parse_conditional_expression_or_higher().expr)
                     } else {
@@ -7556,7 +7559,7 @@ impl<'src> Parser<'src> {
         // `@runtime_checkable protocol P:`. carry the decorators into
         // `parse_protocol_def` so the synthetic `protocol_class` marker is
         // appended after them.
-        if self.at(TokenKind::Name)
+        if self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "protocol"
             && self.peek_is_name(0)
         {
@@ -7572,7 +7575,7 @@ impl<'src> Parser<'src> {
         // the synthetic modifier decorator is appended after them. a bare `class`
         // (not `class def`) stays a normal decorated class definition below.
         let at_modifier = (self.at(TokenKind::Class) && self.peek() == TokenKind::Def)
-            || (self.at(TokenKind::Name)
+            || (self.at(TokenKind::Identifier)
                 && is_modifier_kw(self.src_text(self.current_token_range())));
         // basedpython: a modifier chain also prefixes a *binding* — `export let
         // a = 1` — which is not what `parse_with_modifier` reads. When the chain
@@ -7671,10 +7674,10 @@ impl<'src> Parser<'src> {
                         continue;
                     }
                     // `class let x` / `class var x` declares a class variable
-                    return !(next == TokenKind::Name
+                    return !(next == TokenKind::Identifier
                         && matches!(self.src_text(next_range), "let" | "var"));
                 }
-                TokenKind::Name => {
+                TokenKind::Identifier => {
                     let text = self.src_text(range);
                     // `protocol P:` and `enum class E:` introduce a definition
                     if text == "protocol" && self.peek_is_name(idx) {
@@ -7885,7 +7888,7 @@ impl<'src> Parser<'src> {
         // `synthesize_let_assignments` — no AST field needed. the parser is
         // permissive here; the `init_method` lowering rejects combinations that
         // are invalid for this context
-        while self.at(TokenKind::Name)
+        while self.at(TokenKind::Identifier)
             && declares_a_name(self.peek())
             && is_param_modifier_kw(self.src_text(self.current_token_range()))
         {
@@ -7893,21 +7896,21 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(format!(
                 "`{kw}` parameter modifier is not valid in .py files"
             ));
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         }
         // basedpython: optional `context` prefix marks the parameter as
         // implicitly fillable from `context` declarations in scope at the
         // call site. not meaningful on `*args` / `**kwargs`
         let mut is_context = false;
         if matches!(allow_context, AllowContextModifier::Yes)
-            && self.at(TokenKind::Name)
+            && self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "context"
             && declares_a_name(self.peek())
         {
             self.error_if_not_basedpython(
                 "`context` parameter modifier is not valid in .py files".to_string(),
             );
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
             is_context = true;
         }
 
@@ -7919,14 +7922,14 @@ impl<'src> Parser<'src> {
         // strip transform + ty analysis detect them from the source span. The
         // trailing name guard keeps a parameter literally named `local`/`once`
         // (`def f(local)`) from being read as a modifier.
-        while self.at(TokenKind::Name)
+        while self.at(TokenKind::Identifier)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
             && declares_a_name(self.peek())
         {
             self.error_if_not_basedpython(
                 "`local` / `once` parameter modifiers are not valid in .py files".to_string(),
             );
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         }
         // basedpython: a parameter may destructure its argument,
         // `def foo(Point(x, y): Point)`. Only attempted for a parameter that does
@@ -7934,7 +7937,7 @@ impl<'src> Parser<'src> {
         // named with a soft keyword, `def foo(match: int)` — is never reparsed
         let pattern = (self.options.is_basedpython
             && matches!(function_kind, FunctionKind::FunctionDef)
-            && !(self.at_name_or_soft_keyword()
+            && !(self.at_identifier_or_soft_keyword()
                 && matches!(
                     self.peek(),
                     TokenKind::Colon | TokenKind::Comma | TokenKind::Equal | TokenKind::Rpar
@@ -7976,7 +7979,7 @@ impl<'src> Parser<'src> {
                 // the bound is any type, including one that does not start with a name
                 // (`some () -> int`, `some (A | B)`), so this asks whether an expression
                 // follows rather than `peek_is_name`
-                if self.at(TokenKind::Name)
+                if self.at(TokenKind::Identifier)
                     && self.src_text(self.current_token_range()) == "some"
                     && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
                 {
@@ -8000,7 +8003,7 @@ impl<'src> Parser<'src> {
                             self.current_token_range(),
                         );
                     }
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                 }
                 if self.at_expr() {
                     let parsed_expr = match allow_star_annotation {
@@ -8220,7 +8223,7 @@ impl<'src> Parser<'src> {
 
                     kwonlyargs_snapshot.get_or_insert_with(|| parser.parameter_scratch.snapshot());
 
-                    if parser.at_name_or_soft_keyword() {
+                    if parser.at_identifier_or_soft_keyword() {
                         let param = parser.parse_parameter(
                             param_start,
                             function_kind,
@@ -8410,7 +8413,7 @@ impl<'src> Parser<'src> {
 
                     last_keyword_only_separator_range = None;
                 }
-                _ if parser.at_name_or_soft_keyword() => {
+                _ if parser.at_identifier_or_soft_keyword() => {
                     let param = parser.parse_parameter_with_default(param_start, function_kind);
 
                     // TODO(dhruvmanila): Pyright seems to only highlight the first non-default argument
@@ -8448,7 +8451,7 @@ impl<'src> Parser<'src> {
                 }
                 _ => {
                     // This corresponds to the expected token kinds for `is_list_element`.
-                    unreachable!("Expected Name, '*', '**', or '/'");
+                    unreachable!("Expected identifier, '*', '**', or '/'");
                 }
             }
         });
@@ -8871,15 +8874,18 @@ impl<'src> Parser<'src> {
         } else {
             // basedpython variance keywords: `out T`, `in T`, `in out T`
             let variance = if self.eat(TokenKind::In) {
-                if self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "out" {
-                    self.bump(TokenKind::Name);
+                if self.at(TokenKind::Identifier)
+                    && self.src_text(self.current_token_range()) == "out"
+                {
+                    self.bump(TokenKind::Identifier);
                     Some(Variance::Invariant)
                 } else {
                     Some(Variance::Contravariant)
                 }
-            } else if self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "out"
+            } else if self.at(TokenKind::Identifier)
+                && self.src_text(self.current_token_range()) == "out"
             {
-                self.bump(TokenKind::Name);
+                self.bump(TokenKind::Identifier);
                 Some(Variance::Covariant)
             } else {
                 None
@@ -9049,12 +9055,13 @@ impl<'src> Parser<'src> {
     /// after it (`[reified]`, `[reified: int]`, `[reified = int]`) declares a parameter *named*
     /// `reified`.
     fn eat_reified_modifier(&mut self) -> bool {
-        if !self.at(TokenKind::Name) || self.src_text(self.current_token_range()) != "reified" {
+        if !self.at(TokenKind::Identifier) || self.src_text(self.current_token_range()) != "reified"
+        {
             return false;
         }
         if !matches!(
             self.peek(),
-            TokenKind::Name | TokenKind::Star | TokenKind::DoubleStar | TokenKind::In
+            TokenKind::Identifier | TokenKind::Star | TokenKind::DoubleStar | TokenKind::In
         ) {
             return false;
         }
@@ -9066,7 +9073,7 @@ impl<'src> Parser<'src> {
         self.error_if_not_basedpython(
             "reified type parameters are not valid in `.py` files".to_string(),
         );
-        self.bump(TokenKind::Name);
+        self.bump(TokenKind::Identifier);
         true
     }
 
@@ -9277,7 +9284,7 @@ impl<'src> Parser<'src> {
             // test_err match_classify_as_keyword
             // match yield foo:
             //     case _: ...
-            TokenKind::Name
+            TokenKind::Identifier
             | TokenKind::Int
             | TokenKind::Float
             | TokenKind::Complex

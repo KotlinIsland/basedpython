@@ -95,10 +95,10 @@ def f(a: f"the {Outer}", b: f"[{Tagged}]") -> None:
 ## an alias that names itself is followed only once
 
 ```by
-type Loop = Loop | "q"  # error: [cyclic-type-alias-definition] "Cyclic definition of `Loop`"
+type Loop = Loop | "q"  # error: [cyclic-type-alias-definition] "Type alias `Loop` has a circular definition"
 
-type Left = Right | int  # error: [cyclic-type-alias-definition] "Cyclic definition of `Left`"
-type Right = Left | str  # error: [cyclic-type-alias-definition] "Cyclic definition of `Right`"
+type Left = Right | int  # error: [cyclic-type-alias-definition] "Type alias `Left` has a circular definition"
+type Right = Left | str  # error: [cyclic-type-alias-definition] "Type alias `Right` has a circular definition"
 
 def f(a: f"a{Loop}b", b: f"a{Right}b") -> None:
     reveal_type(a)  # revealed: "aqb"

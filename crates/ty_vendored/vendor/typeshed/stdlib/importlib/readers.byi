@@ -73,11 +73,11 @@ class MultiplexedPath(abc.Traversable):
     override def is_file(self) -> False
 
     if sys.version_info >= (3, 12):
-        def joinpath(self, *descendants: StrPath) -> abc.Traversable
+        override def joinpath(self, *descendants: StrPath) -> abc.Traversable
     elif sys.version_info >= (3, 11):
         def joinpath(self, child: StrPath) -> abc.Traversable
     else:
-        override def joinpath(self, child: str) -> abc.Traversable
+        def joinpath(self, child: str) -> abc.Traversable
 
     if sys.version_info < (3, 12):
         __truediv__ = joinpath

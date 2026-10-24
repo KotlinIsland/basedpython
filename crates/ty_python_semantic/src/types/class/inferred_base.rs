@@ -394,10 +394,9 @@ fn written_method<'db>(
     }
 
     let index = semantic_index(db, definition.program_file(db));
-    let generic_context = node
-        .type_params
-        .as_ref()
-        .map(|type_params| GenericContext::from_type_params(db, index, definition, type_params));
+    let generic_context = node.type_params.as_ref().and_then(|type_params| {
+        GenericContext::from_type_params(db, index, definition, type_params)
+    });
     // the receiver is bound away below, so whether it is positional-only changes nothing
     let signature = Signature::from_function(
         db,

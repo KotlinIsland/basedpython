@@ -158,3 +158,31 @@ def f(m: Mapping[int | str, object]):
     # error: [unsupported-operator]
     b"x" in m  # `bytes` is disjoint from `int | str`
 ```
+
+## inferring through `Overlapping` solves to the wrapped type
+
+`Overlapping` only marks a parameter; inferring a type variable from a protocol that uses it solves
+to the type the marker wraps, whether the argument names the protocol or only matches it
+
+```py
+from typing import Protocol
+from ty_extensions import Overlapping
+
+class Container[Element](Protocol):
+    def has(self, x: Overlapping[Element], /) -> bool: ...
+
+def element[T](items: Container[T]) -> T:
+    raise NotImplementedError
+
+class Named[Element](Container[Element]):
+    def has(self, x: Overlapping[Element], /) -> bool:
+        return True
+
+class Matching:
+    def has(self, x: Overlapping[str], /) -> bool:
+        return True
+
+def f(named: Named[str], matching: Matching):
+    reveal_type(element(named))  # revealed: str
+    reveal_type(element(matching))  # revealed: str
+```

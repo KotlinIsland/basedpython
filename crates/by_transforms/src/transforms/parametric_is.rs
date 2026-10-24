@@ -609,8 +609,8 @@ impl ParametricIs<'_, '_> {
     }
 
     fn process_compare(&mut self, compare: &ast::ExprCompare) {
-        let mut lhs: &Expr = &compare.left;
-        for (index, rhs) in compare.comparators.iter().enumerate() {
+        let mut lhs: &Expr = compare.first_operand();
+        for (index, rhs) in compare.comparators().iter().enumerate() {
             // every type test is lowered here, whatever shape its target was
             // written in. the plan comes from the target's *type*, so a target
             // the source spells as one word (`x is Alias`) and the union that

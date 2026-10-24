@@ -405,23 +405,19 @@ spelled bare (`int`).
 
 ### `infer-unannotated-signatures`
 
-Whether a function with no annotations is given the signature its body determines. This is
+Whether a function's unannotated parameters are given the types its body determines. This is
 a basedpython feature.
 
-Python's gradual guarantee makes an unannotated `def` say nothing: its parameters accept
-anything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an
-otherwise typed project, and it silently swallows real mistakes. With this enabled, the
-missing half of the signature is recovered from what the function itself already determines:
+Python's gradual guarantee makes an unannotated parameter say nothing: it accepts anything.
+That is the largest remaining source of `Unknown` in an otherwise typed project, and it
+silently swallows real mistakes. With this enabled, each unannotated parameter opens an
+anonymous type parameter named after it — the same hole `some` spells by hand — bounded by
+everything the function requires of it: the promoted type of its default, the members its
+body reads and calls, the parameters it is forwarded into, and any `assert` at the top of the
+body. Naming the hole is what keeps what a call passes in connected to what it gets back, so
+`def ident(x): return x` is inferred as the identity function.
 
-- **Each unannotated parameter** opens an anonymous type parameter named after it — the same
-  hole `some` spells by hand — bounded by everything the function requires of it: the
-  promoted type of its default, the members its body reads and calls, the parameters it is
-  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps
-  what a call passes in connected to what it gets back, so `def ident(x): return x` is
-  inferred as the identity function.
-- **A missing return type** is the union of what the body returns, plus `None` when control
-  can also fall off the end. An empty body returns `None`, a body that always raises returns
-  `Never`, and a generator returns a generator.
+A missing return type is recovered separately, by `return-type-inference`.
 
 Nothing is invented from a use this analysis cannot read, so such a parameter stays gradual
 and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
@@ -459,9 +455,10 @@ Whether an instance with no `__bool__` and no `__len__` counts as always truthy 
 looking for an [`overlapping-condition`](rules.md#overlapping-condition).
 
 Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
-default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
-class means what it looks like it means, which drops the reports for the very common
-`if not x` over an optional instance.
+default it is a falsy member of `if not x` just as `False` is. Enabling this assumes the
+class means what it looks like it means, which drops the reports for `if not x` over an
+instance or a `False` sentinel. (`truthiness-test-of-none-union`, which reports a `None`
+sentinel, always makes this assumption.)
 
 Defaults to `false`.
 
@@ -494,12 +491,13 @@ Defaults to `false`.
 A list of classes whose values do not count as a distinct member of an
 [`overlapping-condition`](rules.md#overlapping-condition).
 
-`if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
-because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
-`int` with anything else is fine, so only `None` is left and the condition is accepted.
+`if not x` over a `str | Literal[False]` selects both an empty `str` and `False`, and is
+reported because the branch cannot tell them apart. Listing `str` here says that conflating
+an empty `str` with anything else is fine, so only `False` is left and the condition is
+accepted.
 
 Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
-spelled bare (`int`), and `None` stands for the type of `None`.
+spelled bare (`int`).
 
 **Default value**: `[]`
 
@@ -651,6 +649,46 @@ Defaults to `true`.
     [analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+### `return-type-inference`
+
+This setting controls when ty infers return types for functions without an explicit
+return type annotation.
+
+- `"never"`: Do not infer return types. Unannotated functions will have a return type of
+  `Unknown`, apart from what an overload group supplies.
+- `"always"`: A missing return type is taken from the method the function overrides, when
+  that method has one, declared or inferred, and otherwise from the body: the union of what
+  it returns, plus `None` when control can also fall off the end. An empty body returns
+  `None`, a body that always raises returns `Never`, and a generator returns a generator.
+
+An explicit annotation always wins, and so does anything an overload group supplies. Lambda
+functions are not affected by this setting and their return type will always be inferred.
+`sound-types` implies `"always"`.
+
+Defaults to `"always"`, and to `"never"` under the `ty-compatible` type checking preset.
+
+**Default value**: `"always"`
+
+**Type**: `"never" | "always"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    return-type-inference = "always"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    return-type-inference = "always"
     ```
 
 ---
@@ -890,7 +928,7 @@ Defaults to `false`.
 ### `strict-generic-narrowing`
 
 Whether ty should use strict narrowing for unspecialized generic classes in
-`isinstance()` and `issubclass()` checks, as well as `match` class patterns.
+`isinstance()` and `issubclass()` checks, `match` class patterns, and `TypeIs` checks.
 
 When enabled, ty narrows to the top materialization of the class. For example,
 `isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
@@ -1383,7 +1421,7 @@ For some language features, ty can also understand conditionals based on compari
 with `sys.version_info`. These are commonly found in typeshed, for example,
 to reflect the differing contents of the standard library across Python versions.
 
-**Default value**: `"3.14"`
+**Default value**: `"3.15"`
 
 **Type**: `"3.7" | "3.8" | "3.9" | "3.10" | "3.11" | "3.12" | "3.13" | "3.14" | "3.15"`
 
@@ -1764,6 +1802,9 @@ any module where the first component contains the substring `test`, use `*test*.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
@@ -1772,6 +1813,9 @@ any module where the first component contains the substring `test`, use `*test*.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
@@ -1811,6 +1855,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Let private attributes constrain inferred variance to covariance
     bivariant-private-attributes = false
@@ -1819,6 +1866,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Let private attributes constrain inferred variance to covariance
     bivariant-private-attributes = false
@@ -1856,6 +1906,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Let a `let` or `var` in a block be visible for the rest of the scope
     block-scoped-declarations = false
@@ -1864,6 +1917,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Let a `let` or `var` in a block be visible for the rest of the scope
     block-scoped-declarations = false
@@ -1892,7 +1948,6 @@ dependency group, because nothing installs one alongside the project.
 === "pyproject.toml"
 
     ```toml
-    [tool.ty.overrides.analysis]
     [[tool.ty.overrides]]
     include = ["tests/**"]
 
@@ -1903,7 +1958,6 @@ dependency group, because nothing installs one alongside the project.
 === "ty.toml"
 
     ```toml
-    [overrides.analysis]
     [[overrides]]
     include = ["tests/**"]
 
@@ -1933,6 +1987,9 @@ Defaults to `false`, and to `true` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
@@ -1941,6 +1998,9 @@ Defaults to `false`, and to `true` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
@@ -1973,6 +2033,9 @@ is what its users have — a `pyproject.toml` is not installed with the package.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     exported-dependencies = ["numpy"]
     ```
@@ -1980,6 +2043,9 @@ is what its users have — a `pyproject.toml` is not installed with the package.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     exported-dependencies = ["numpy"]
     ```
@@ -2006,6 +2072,9 @@ spelled bare (`int`).
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Never report a bare `Thread` or `Lock`
     implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
@@ -2014,6 +2083,9 @@ spelled bare (`int`).
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Never report a bare `Thread` or `Lock`
     implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
@@ -2046,6 +2118,9 @@ spelled bare (`int`).
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Also report a bare module object
     implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
@@ -2054,6 +2129,9 @@ spelled bare (`int`).
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Also report a bare module object
     implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
@@ -2063,23 +2141,19 @@ spelled bare (`int`).
 
 #### `infer-unannotated-signatures`
 
-Whether a function with no annotations is given the signature its body determines. This is
+Whether a function's unannotated parameters are given the types its body determines. This is
 a basedpython feature.
 
-Python's gradual guarantee makes an unannotated `def` say nothing: its parameters accept
-anything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an
-otherwise typed project, and it silently swallows real mistakes. With this enabled, the
-missing half of the signature is recovered from what the function itself already determines:
+Python's gradual guarantee makes an unannotated parameter say nothing: it accepts anything.
+That is the largest remaining source of `Unknown` in an otherwise typed project, and it
+silently swallows real mistakes. With this enabled, each unannotated parameter opens an
+anonymous type parameter named after it — the same hole `some` spells by hand — bounded by
+everything the function requires of it: the promoted type of its default, the members its
+body reads and calls, the parameters it is forwarded into, and any `assert` at the top of the
+body. Naming the hole is what keeps what a call passes in connected to what it gets back, so
+`def ident(x): return x` is inferred as the identity function.
 
-- **Each unannotated parameter** opens an anonymous type parameter named after it — the same
-  hole `some` spells by hand — bounded by everything the function requires of it: the
-  promoted type of its default, the members its body reads and calls, the parameters it is
-  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps
-  what a call passes in connected to what it gets back, so `def ident(x): return x` is
-  inferred as the identity function.
-- **A missing return type** is the union of what the body returns, plus `None` when control
-  can also fall off the end. An empty body returns `None`, a body that always raises returns
-  `Never`, and a generator returns a generator.
+A missing return type is recovered separately, by `return-type-inference`.
 
 Nothing is invented from a use this analysis cannot read, so such a parameter stays gradual
 and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
@@ -2096,6 +2170,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Leave an unannotated function gradual
     infer-unannotated-signatures = false
@@ -2104,6 +2181,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Leave an unannotated function gradual
     infer-unannotated-signatures = false
@@ -2117,9 +2197,10 @@ Whether an instance with no `__bool__` and no `__len__` counts as always truthy 
 looking for an [`overlapping-condition`](rules.md#overlapping-condition).
 
 Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
-default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
-class means what it looks like it means, which drops the reports for the very common
-`if not x` over an optional instance.
+default it is a falsy member of `if not x` just as `False` is. Enabling this assumes the
+class means what it looks like it means, which drops the reports for `if not x` over an
+instance or a `False` sentinel. (`truthiness-test-of-none-union`, which reports a `None`
+sentinel, always makes this assumption.)
 
 Defaults to `false`.
 
@@ -2132,6 +2213,9 @@ Defaults to `false`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # `if not x` over a `Foo | None` only selects `None`
     overlapping-condition-assume-truthy-instances = true
@@ -2140,6 +2224,9 @@ Defaults to `false`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # `if not x` over a `Foo | None` only selects `None`
     overlapping-condition-assume-truthy-instances = true
@@ -2152,12 +2239,13 @@ Defaults to `false`.
 A list of classes whose values do not count as a distinct member of an
 [`overlapping-condition`](rules.md#overlapping-condition).
 
-`if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
-because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
-`int` with anything else is fine, so only `None` is left and the condition is accepted.
+`if not x` over a `str | Literal[False]` selects both an empty `str` and `False`, and is
+reported because the branch cannot tell them apart. Listing `str` here says that conflating
+an empty `str` with anything else is fine, so only `False` is left and the condition is
+accepted.
 
 Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
-spelled bare (`int`), and `None` stands for the type of `None`.
+spelled bare (`int`).
 
 **Default value**: `[]`
 
@@ -2168,6 +2256,9 @@ spelled bare (`int`), and `None` stands for the type of `None`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Accept a falsy `int` or `str` sharing a branch with another member
     overlapping-condition-exempt-types = ["int", "str"]
@@ -2176,6 +2267,9 @@ spelled bare (`int`), and `None` stands for the type of `None`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Accept a falsy `int` or `str` sharing a branch with another member
     overlapping-condition-exempt-types = ["int", "str"]
@@ -2221,6 +2315,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Solve an unsolved type variable to `Unknown` rather than `Never`
     precise-unsolved-typevars = false
@@ -2229,6 +2326,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Solve an unsolved type variable to `Unknown` rather than `Never`
     precise-unsolved-typevars = false
@@ -2262,6 +2362,9 @@ When multiple patterns match, later entries take precedence.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Replace all pandas and numpy imports with Any
     replace-imports-with-any = ["pandas.**", "numpy.**"]
@@ -2270,6 +2373,9 @@ When multiple patterns match, later entries take precedence.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Replace all pandas and numpy imports with Any
     replace-imports-with-any = ["pandas.**", "numpy.**"]
@@ -2298,6 +2404,9 @@ Defaults to `true`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
@@ -2306,9 +2415,58 @@ Defaults to `true`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+#### `return-type-inference`
+
+This setting controls when ty infers return types for functions without an explicit
+return type annotation.
+
+- `"never"`: Do not infer return types. Unannotated functions will have a return type of
+  `Unknown`, apart from what an overload group supplies.
+- `"always"`: A missing return type is taken from the method the function overrides, when
+  that method has one, declared or inferred, and otherwise from the body: the union of what
+  it returns, plus `None` when control can also fall off the end. An empty body returns
+  `None`, a body that always raises returns `Never`, and a generator returns a generator.
+
+An explicit annotation always wins, and so does anything an overload group supplies. Lambda
+functions are not affected by this setting and their return type will always be inferred.
+`sound-types` implies `"always"`.
+
+Defaults to `"always"`, and to `"never"` under the `ty-compatible` type checking preset.
+
+**Default value**: `"always"`
+
+**Type**: `"never" | "always"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    return-type-inference = "always"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    return-type-inference = "always"
     ```
 
 ---
@@ -2330,6 +2488,9 @@ module is not named after it, needs to say.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     shipped-modules = ["foo", "foo_plugins"]
     ```
@@ -2337,6 +2498,9 @@ module is not named after it, needs to say.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     shipped-modules = ["foo", "foo_plugins"]
     ```
@@ -2384,6 +2548,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Fall back to a gradual type wherever an annotation is missing
     sound-types = false
@@ -2392,6 +2559,9 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Fall back to a gradual type wherever an annotation is missing
     sound-types = false
@@ -2491,6 +2661,9 @@ def narrow_match(x: str) -> None:
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Preserve broad builtin types instead of narrowing them to literals
     strict-equality-semantics = true
@@ -2499,6 +2672,9 @@ def narrow_match(x: str) -> None:
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Preserve broad builtin types instead of narrowing them to literals
     strict-equality-semantics = true
@@ -2530,6 +2706,9 @@ Defaults to `false`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # `float` means float, so a numeric module compiles to unboxed doubles
     strict-float = true
@@ -2538,6 +2717,9 @@ Defaults to `false`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # `float` means float, so a numeric module compiles to unboxed doubles
     strict-float = true
@@ -2548,7 +2730,7 @@ Defaults to `false`.
 #### `strict-generic-narrowing`
 
 Whether ty should use strict narrowing for unspecialized generic classes in
-`isinstance()` and `issubclass()` checks, as well as `match` class patterns.
+`isinstance()` and `issubclass()` checks, `match` class patterns, and `TypeIs` checks.
 
 When enabled, ty narrows to the top materialization of the class. For example,
 `isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
@@ -2573,6 +2755,9 @@ Defaults to `false`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Use the top materialization when narrowing to an unspecialized generic class
     strict-generic-narrowing = true
@@ -2581,6 +2766,9 @@ Defaults to `false`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Use the top materialization when narrowing to an unspecialized generic class
     strict-generic-narrowing = true

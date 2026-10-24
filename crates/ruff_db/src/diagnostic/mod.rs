@@ -1,4 +1,4 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::{borrow::Cow, path::Path, sync::Arc};
 
 use ruff_diagnostics::{Applicability, Fix};
@@ -9,14 +9,13 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 #[cfg(feature = "serde")]
 use serde::Serialize;
 
-pub use self::render::{
-    DisplayDiagnostic, DisplayDiagnostics, DummyFileResolver, FileResolver, Input,
-};
+pub use self::render::{DummyFileResolver, FileResolver, Input};
+use self::render::{FullRenderer, Renderer};
 pub use self::stylesheet::{DiagnosticStylesheet, fmt_with_hyperlink};
 use crate::cancellation::CancellationToken;
 use crate::{Db, files::File};
 
-mod render;
+pub mod render;
 mod stylesheet;
 
 /// A collection of information that can be rendered into a diagnostic.
@@ -145,7 +144,13 @@ impl Diagnostic {
     /// should be constructed via [`Annotation::primary`]. A diagnostic with no
     /// primary annotations is allowed, but its rendering may be sub-optimal.
     pub fn annotate(&mut self, ann: Annotation) {
-        Arc::make_mut(&mut self.inner).annotations.push(ann);
+        let annotations = &mut Arc::make_mut(&mut self.inner).annotations;
+        // Most diagnostics have exactly one annotation. Avoid the default allocation of four
+        // annotations on the first push, while retaining normal amortized growth thereafter.
+        if annotations.is_empty() {
+            annotations.reserve_exact(1);
+        }
+        annotations.push(ann);
     }
 
     /// Adds an "info" sub-diagnostic with the given message.
@@ -172,9 +177,11 @@ impl Diagnostic {
 
     /// Adds an "info" sub-diagnostic before any existing sub-diagnostics.
     pub fn prepend_info<'a>(&mut self, message: impl IntoDiagnosticMessage + 'a) {
-        Arc::make_mut(&mut self.inner)
-            .subs
-            .insert(0, SubDiagnostic::new(SubDiagnosticSeverity::Info, message));
+        let subs = &mut Arc::make_mut(&mut self.inner).subs;
+        if subs.is_empty() {
+            subs.reserve_exact(1);
+        }
+        subs.insert(0, SubDiagnostic::new(SubDiagnosticSeverity::Info, message));
     }
 
     /// Adds a "help" sub-diagnostic with the given message.
@@ -190,11 +197,15 @@ impl Diagnostic {
     /// to it. For the simpler case of a sub-diagnostic with only a message,
     /// using a method like [`Diagnostic::info`] may be more convenient.
     pub fn sub(&mut self, sub: SubDiagnostic) {
-        Arc::make_mut(&mut self.inner).subs.push(sub);
+        let subs = &mut Arc::make_mut(&mut self.inner).subs;
+        if subs.is_empty() {
+            subs.reserve_exact(1);
+        }
+        subs.push(sub);
     }
 
     /// Return a `std::fmt::Display` implementation that renders this
-    /// diagnostic into a human readable format.
+    /// diagnostic in the full, human-readable format.
     ///
     /// Note that this `Display` impl includes a trailing line terminator, so
     /// callers should prefer using this with `write!` instead of `writeln!`.
@@ -202,8 +213,10 @@ impl Diagnostic {
         &'a self,
         resolver: &'a dyn FileResolver,
         config: &'a DisplayDiagnosticConfig,
-    ) -> DisplayDiagnostic<'a> {
-        DisplayDiagnostic::new(resolver, config, self)
+    ) -> impl Display + 'a {
+        fmt::from_fn(move |f| {
+            FullRenderer::new(resolver, config).render(f, std::slice::from_ref(self))
+        })
     }
 
     /// Returns the identifier for this diagnostic.
@@ -685,6 +698,9 @@ impl SubDiagnostic {
     /// to have no annotations (e.g., a simple note) than for a diagnostic to
     /// have no annotations.
     pub fn annotate(&mut self, ann: Annotation) {
+        if self.inner.annotations.is_empty() {
+            self.inner.annotations.reserve_exact(1);
+        }
         self.inner.annotations.push(ann);
     }
 
@@ -1475,10 +1491,6 @@ pub enum HyperlinkMode {
 pub struct DisplayDiagnosticConfig {
     /// The program name used in structured output formats (e.g., JUnit, GitHub).
     program: &'static str,
-    /// The format to use for diagnostic rendering.
-    ///
-    /// This uses the "full" format by default.
-    format: DiagnosticFormat,
     /// Whether to enable colors or not.
     ///
     /// Disabled by default.
@@ -1516,7 +1528,7 @@ pub struct DisplayDiagnosticConfig {
     hide_severity: bool,
     /// Whether to show the availability of a fix in a diagnostic.
     show_fix_status: bool,
-    /// The lowest applicability that should be shown when reporting diagnostics.
+    /// The lowest applicability considered available for automatic fixing.
     fix_applicability: Applicability,
 
     cancellation_token: Option<CancellationToken>,
@@ -1526,7 +1538,6 @@ impl DisplayDiagnosticConfig {
     pub fn new(program: &'static str) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig {
             program,
-            format: DiagnosticFormat::default(),
             color: false,
             hyperlinks: HyperlinkMode::Auto,
             anonymized_line_numbers: false,
@@ -1539,11 +1550,6 @@ impl DisplayDiagnosticConfig {
             fix_applicability: Applicability::Safe,
             cancellation_token: None,
         }
-    }
-
-    /// Whether to enable concise diagnostic output or not.
-    pub fn format(self, format: DiagnosticFormat) -> DisplayDiagnosticConfig {
-        DisplayDiagnosticConfig { format, ..self }
     }
 
     /// Whether to enable colors or not.
@@ -1628,12 +1634,10 @@ impl DisplayDiagnosticConfig {
         }
     }
 
-    /// Set the lowest fix applicability that should be shown.
+    /// Set the lowest applicability considered available for automatic fixing.
     ///
-    /// In other words, an applicability of `Safe` (the default) would suppress showing fixes or fix
-    /// availability for unsafe or display-only fixes.
-    ///
-    /// Note that this option is currently ignored when `hide_severity` is false.
+    /// This controls fix availability indicators. Full output shows all suggested fix diffs
+    /// regardless of applicability.
     pub fn with_fix_applicability(self, applicability: Applicability) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig {
             fix_applicability: applicability,
@@ -1662,66 +1666,6 @@ impl DisplayDiagnosticConfig {
             .as_ref()
             .is_some_and(|token| token.is_cancelled())
     }
-}
-
-/// The diagnostic output format.
-#[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum DiagnosticFormat {
-    /// The default full mode will print "pretty" diagnostics.
-    ///
-    /// That is, color will be used when printing to a `tty`.
-    /// Moreover, diagnostic messages may include additional
-    /// context and annotations on the input to help understand
-    /// the message.
-    #[default]
-    Full,
-    /// Print diagnostics in a concise mode.
-    ///
-    /// This will guarantee that each diagnostic is printed on
-    /// a single line. Only the most important or primary aspects
-    /// of the diagnostic are included. Contextual information is
-    /// dropped.
-    ///
-    /// This may use color when printing to a `tty`.
-    Concise,
-    /// Print diagnostics in the [Azure Pipelines] format.
-    ///
-    /// [Azure Pipelines]: https://learn.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#logissue-log-an-error-or-warning
-    Azure,
-    /// Print diagnostics in JSON format.
-    ///
-    /// Unlike `json-lines`, this prints all of the diagnostics as a JSON array.
-    #[cfg(feature = "serde")]
-    Json,
-    /// Print diagnostics in JSON format, one per line.
-    ///
-    /// This will print each diagnostic as a separate JSON object on its own line. See the `json`
-    /// format for an array of all diagnostics. See <https://jsonlines.org/> for more details.
-    #[cfg(feature = "serde")]
-    JsonLines,
-    /// Print diagnostics in the JSON format expected by [reviewdog].
-    ///
-    /// [reviewdog]: https://github.com/reviewdog/reviewdog
-    #[cfg(feature = "serde")]
-    Rdjson,
-    /// Print diagnostics in the format emitted by Pylint.
-    Pylint,
-    /// Print diagnostics in the format expected by JUnit.
-    #[cfg(feature = "junit")]
-    Junit,
-    /// Print diagnostics in the JSON format used by GitLab [Code Quality] reports.
-    ///
-    /// [Code Quality]: https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format
-    #[cfg(feature = "serde")]
-    Gitlab,
-
-    /// Print diagnostics in the format used by [GitHub Actions] workflow error annotations.
-    ///
-    /// [GitHub Actions]: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message
-    Github,
 }
 
 /// A representation of the kinds of messages inside a diagnostic.

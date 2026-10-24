@@ -672,7 +672,9 @@ fn bound_own_member<'db>(
 /// comparing the bound methods themselves would reject every conformance
 fn shed_receiver<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
     match ty {
-        Type::BoundMethod(method) => Type::Callable(method.into_callable_type(db)),
+        Type::BoundMethod(method) if let Some(callable) = method.into_callable_type(db) => {
+            Type::Callable(callable)
+        }
         other => other,
     }
 }

@@ -494,7 +494,6 @@ fn reduce<'db>(
         };
         let receiver = match receiver.as_typevar() {
             Some(bound_typevar) => bound_typevar
-                .typevar(db)
                 .require_bound_or_constraints(db, env)
                 .as_type(db, env),
             None => *receiver,
@@ -582,9 +581,9 @@ fn evaluate<'db>(
             // folding `KnownBoundMethod`, whereas the stored method was bound to the
             // still-abstract type parameter
             let callee = match callee {
-                Type::BoundMethod(method) => method
+                Type::BoundMethod(method) if let Some(function) = method.function(db) => method
                     .self_instance(db)
-                    .member(db, env, method.function(db).name(db))
+                    .member(db, env, function.name(db))
                     .ignore_possibly_undefined()
                     .unwrap_or(*callee),
                 _ => *callee,

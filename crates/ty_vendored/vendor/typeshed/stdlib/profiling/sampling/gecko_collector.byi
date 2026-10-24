@@ -105,7 +105,7 @@ class GeckoCollector(Collector):
     opcode_state: dict[int, (Incomplete, int, int, str, str, float)]
 
     init(self, sample_interval_usec: int, *, skip_idle: bool = False, opcodes: bool = False)
-    def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None):
+    override def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None):
         """Collect samples from stack frames.
 
         Args:
@@ -113,5 +113,5 @@ class GeckoCollector(Collector):
             timestamps_us: List of timestamps in microseconds (None for live sampling)
         """
 
-    def export(self, filename: StrOrBytesPath):
+    override def export(self, filename: StrOrBytesPath):
         """Export the profile to a Gecko JSON file."""

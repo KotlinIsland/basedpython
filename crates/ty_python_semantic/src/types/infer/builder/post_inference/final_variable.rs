@@ -42,12 +42,6 @@ pub(crate) fn check_final_without_value<'db>(
             return;
         }
 
-        // Imports inherit the `Final` qualifier from the source module, but the
-        // import itself provides the value.
-        if first_declaration.is_some_and(|decl| decl.kind(db).is_import()) {
-            return;
-        }
-
         // Whether the scope ever gives the symbol a value, which is not the same
         // as whether one is still live where the scope ends: a `del`, or a
         // basedpython `let` that went out of scope with its block, unbinds a value

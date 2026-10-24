@@ -41,13 +41,13 @@ impl BackgroundDocumentRequestHandler for OnTypeFormattingRequestHandler {
         if snapshot.document().is_cell_or_notebook() || snapshot.is_django_template() {
             return Ok(None);
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         let Some(offset) =
             params
                 .position
-                .to_text_size(db, file, snapshot.uri(), snapshot.encoding())
+                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
         else {
             return Ok(None);
         };

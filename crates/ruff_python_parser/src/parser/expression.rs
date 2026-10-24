@@ -47,7 +47,7 @@ const LITERAL_SET: TokenSet = TokenSet::new([
 
 /// Tokens that represents either an expression or the start of one.
 pub(super) const EXPR_SET: TokenSet = TokenSet::new([
-    TokenKind::Name,
+    TokenKind::Identifier,
     TokenKind::Minus,
     TokenKind::Plus,
     TokenKind::Tilde,
@@ -147,7 +147,7 @@ pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
 /// whether a token can name an inline protocol member: a name, or a soft keyword such as `match`
 /// or `type`, which is a name everywhere its keyword meaning does not apply
 fn is_member_name(kind: TokenKind) -> bool {
-    kind == TokenKind::Name || kind.is_soft_keyword()
+    kind == TokenKind::Identifier || kind.is_soft_keyword()
 }
 
 fn force_unwrap_before_debug_equal() -> ParseErrorType {
@@ -171,14 +171,14 @@ fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
 }
 
 impl<'src> Parser<'src> {
-    /// Returns `true` if the parser is at a name or keyword (including soft keyword) token.
-    pub(super) fn at_name_or_keyword(&self) -> bool {
-        self.at(TokenKind::Name) || self.current_token_kind().is_keyword()
+    /// Returns `true` if the parser is at an identifier or keyword (including soft keyword) token.
+    pub(super) fn at_identifier_or_keyword(&self) -> bool {
+        self.at(TokenKind::Identifier) || self.current_token_kind().is_keyword()
     }
 
-    /// Returns `true` if the parser is at a name or soft keyword token.
-    pub(super) fn at_name_or_soft_keyword(&self) -> bool {
-        self.at(TokenKind::Name) || self.at_soft_keyword()
+    /// Returns `true` if the parser is at an identifier or soft keyword token.
+    pub(super) fn at_identifier_or_soft_keyword(&self) -> bool {
+        self.at(TokenKind::Identifier) || self.at_soft_keyword()
     }
 
     /// Returns `true` if the parser is at a soft keyword token.
@@ -198,7 +198,7 @@ impl<'src> Parser<'src> {
     /// `declares_a_name` answers for a single token kind
     pub(super) fn peek_is_name(&mut self, n: usize) -> bool {
         match self.peek_nth(n).0 {
-            TokenKind::Name => true,
+            TokenKind::Identifier => true,
             TokenKind::Cast => infix_cast_kind(self.peek_nth(n + 1).0).is_none(),
             kind => kind.is_soft_keyword(),
         }
@@ -248,17 +248,18 @@ impl<'src> Parser<'src> {
             // `in` is a hard keyword, so its presence in subscript-start
             // position is unambiguously variance.
             self.bump(TokenKind::In);
-            if self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "out" {
-                self.bump(TokenKind::Name);
+            if self.at(TokenKind::Identifier) && self.src_text(self.current_token_range()) == "out"
+            {
+                self.bump(TokenKind::Identifier);
                 Some(UseSiteVariance::InOut)
             } else {
                 Some(UseSiteVariance::In)
             }
-        } else if self.at(TokenKind::Name)
+        } else if self.at(TokenKind::Identifier)
             && self.src_text(self.current_token_range()) == "out"
             && next_starts_type_expr
         {
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
             Some(UseSiteVariance::Out)
         } else {
             None
@@ -321,12 +322,12 @@ impl<'src> Parser<'src> {
     ) -> Option<(ruff_python_ast::helpers::TypeModifier, TextRange)> {
         use ruff_python_ast::helpers::TypeModifier;
 
-        if !self.at(TokenKind::Name) || !self.peek_is_name(0) {
+        if !self.at(TokenKind::Identifier) || !self.peek_is_name(0) {
             return None;
         }
         let range = self.current_token_range();
         let modifier = TypeModifier::from_keyword(self.src_text(range))?;
-        self.bump(TokenKind::Name);
+        self.bump(TokenKind::Identifier);
         self.error_if_not_basedpython_at(
             format!(
                 "the `{}` type modifier is not valid in .py files",
@@ -432,9 +433,8 @@ impl<'src> Parser<'src> {
     /// basedpython: reads the decorator of a decorated type — a primary
     /// expression: a name, an attribute path, a call, or a subscript.
     fn parse_type_decorator(&mut self, calls: PostfixCalls) -> Expr {
-        let start = self.node_start();
-        let decorator = self.parse_atom(ExpressionContext::default()).expr;
-        self.parse_postfix_expression_impl(decorator, start, ExpressionContext::default(), calls)
+        self.parse_primary_expression_impl(ExpressionContext::default(), calls)
+            .expr
     }
 
     /// Returns `true` if the current token ends a sequence.
@@ -652,7 +652,7 @@ impl<'src> Parser<'src> {
                 let arguments = ast::Arguments {
                     range: args_range,
                     node_index: AtomicNodeIndex::NONE,
-                    args: Box::from([type_expr, value_expr]),
+                    args: ThinVec::from([type_expr, value_expr]),
                     keywords: ThinVec::new(),
                 };
                 left = ParsedExpr {
@@ -830,129 +830,123 @@ impl<'src> Parser<'src> {
         }
 
         let token = self.current_token_kind();
-        let start = self.node_start();
 
-        if let Some(unary_op) = token.as_unary_operator() {
-            let expr = self.parse_unary_expression(unary_op, context);
+        if token != TokenKind::Identifier {
+            if let Some(unary_op) = token.as_unary_operator() {
+                let expr = self.parse_unary_expression(unary_op, context);
 
-            if matches!(unary_op, UnaryOp::Not) {
-                if left_precedence > OperatorPrecedence::Not {
-                    self.add_error(
-                        ParseErrorType::OtherError(
-                            "Boolean 'not' expression cannot be used here".to_string(),
-                        ),
-                        &expr,
-                    );
+                if matches!(unary_op, UnaryOp::Not) {
+                    if left_precedence > OperatorPrecedence::Not {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "Boolean 'not' expression cannot be used here".to_string(),
+                            ),
+                            &expr,
+                        );
+                    }
+                } else {
+                    // > The power operator `**` binds less tightly than an arithmetic
+                    // > or bitwise unary operator on its right, that is, 2**-1 is 0.5.
+                    //
+                    // Reference: https://docs.python.org/3/reference/expressions.html#id21
+                    if left_precedence > OperatorPrecedence::PosNegBitNot
+                        && left_precedence != OperatorPrecedence::Exponent
+                    {
+                        self.add_error(
+                            ParseErrorType::OtherError(format!(
+                                "Unary '{unary_op}' expression cannot be used here",
+                            )),
+                            &expr,
+                        );
+                    }
                 }
-            } else {
-                // > The power operator `**` binds less tightly than an arithmetic
-                // > or bitwise unary operator on its right, that is, 2**-1 is 0.5.
-                //
-                // Reference: https://docs.python.org/3/reference/expressions.html#id21
-                if left_precedence > OperatorPrecedence::PosNegBitNot
-                    && left_precedence != OperatorPrecedence::Exponent
-                {
-                    self.add_error(
-                        ParseErrorType::OtherError(format!(
-                            "Unary '{unary_op}' expression cannot be used here",
-                        )),
-                        &expr,
-                    );
-                }
+
+                return Expr::UnaryOp(expr).into();
             }
 
-            return Expr::UnaryOp(expr).into();
+            match token {
+                TokenKind::Star => {
+                    // basedpython: bare `*` inside a subscript slice, followed by a
+                    // slice/type terminator, is the top-star marker for `Top[...]`
+                    // lowering. Handles nested cases like `list[int | *]` where the
+                    // marker is the right operand of a type-position `|` or `&`
+                    if context.is_subscript_slice()
+                        && matches!(
+                            self.peek(),
+                            TokenKind::Rsqb | TokenKind::Comma | TokenKind::Vbar | TokenKind::Amper
+                        )
+                    {
+                        self.error_if_not_basedpython(
+                            "bare `*` in subscription is not valid in .py files".to_string(),
+                        );
+                        let star_start = self.node_start();
+                        self.bump(TokenKind::Star);
+                        let star_range = self.node_range(star_start);
+                        let marker_name = Expr::Name(ast::ExprName {
+                            range: TextRange::empty(star_range.end()),
+                            id: Name::empty(),
+                            ctx: ExprContext::Invalid,
+                            node_index: AtomicNodeIndex::NONE,
+                        });
+                        return Expr::Starred(ast::ExprStarred {
+                            value: Box::new(marker_name),
+                            ctx: ExprContext::Load,
+                            range: star_range,
+                            node_index: AtomicNodeIndex::NONE,
+                        })
+                        .into();
+                    }
+                    let starred_expr = self.parse_starred_expression(context);
+
+                    if left_precedence > OperatorPrecedence::None
+                        || !context.is_starred_expression_allowed()
+                    {
+                        self.add_error(
+                            ParseErrorType::InvalidStarredExpressionUsage,
+                            &starred_expr,
+                        );
+                    }
+
+                    return Expr::Starred(starred_expr).into();
+                }
+                TokenKind::Await => {
+                    let await_expr = self.parse_await_expression();
+
+                    // `await` expressions cannot be nested
+                    if left_precedence >= OperatorPrecedence::Await {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "Await expression cannot be used here".to_string(),
+                            ),
+                            &await_expr,
+                        );
+                    }
+
+                    return Expr::Await(await_expr).into();
+                }
+                TokenKind::Lambda => {
+                    // Lambda expression isn't allowed in this context but we'll still parse it and
+                    // report an error for better recovery.
+                    let lambda_expr = self.parse_lambda_expr();
+                    self.add_error(ParseErrorType::InvalidLambdaExpressionUsage, &lambda_expr);
+                    return Expr::Lambda(lambda_expr).into();
+                }
+                TokenKind::Yield => {
+                    let expr = self.parse_yield_expression();
+
+                    if left_precedence > OperatorPrecedence::None
+                        || !context.is_yield_expression_allowed()
+                    {
+                        self.add_error(ParseErrorType::InvalidYieldExpressionUsage, &expr);
+                    }
+
+                    return expr.into();
+                }
+                _ => {}
+            }
         }
 
-        match token {
-            TokenKind::Star => {
-                // basedpython: bare `*` inside a subscript slice, followed by a
-                // slice/type terminator, is the top-star marker for `Top[...]`
-                // lowering. Handles nested cases like `list[int | *]` where the
-                // marker is the right operand of a type-position `|` or `&`
-                if context.is_subscript_slice()
-                    && matches!(
-                        self.peek(),
-                        TokenKind::Rsqb | TokenKind::Comma | TokenKind::Vbar | TokenKind::Amper
-                    )
-                {
-                    self.error_if_not_basedpython(
-                        "bare `*` in subscription is not valid in .py files".to_string(),
-                    );
-                    let star_start = self.node_start();
-                    self.bump(TokenKind::Star);
-                    let star_range = self.node_range(star_start);
-                    let marker_name = Expr::Name(ast::ExprName {
-                        range: TextRange::empty(star_range.end()),
-                        id: Name::empty(),
-                        ctx: ExprContext::Invalid,
-                        node_index: AtomicNodeIndex::NONE,
-                    });
-                    return Expr::Starred(ast::ExprStarred {
-                        value: Box::new(marker_name),
-                        ctx: ExprContext::Load,
-                        range: star_range,
-                        node_index: AtomicNodeIndex::NONE,
-                    })
-                    .into();
-                }
-                let starred_expr = self.parse_starred_expression(context);
-
-                if left_precedence > OperatorPrecedence::None
-                    || !context.is_starred_expression_allowed()
-                {
-                    self.add_error(ParseErrorType::InvalidStarredExpressionUsage, &starred_expr);
-                }
-
-                return Expr::Starred(starred_expr).into();
-            }
-            TokenKind::Await => {
-                let await_expr = self.parse_await_expression();
-
-                // `await` expressions cannot be nested
-                if left_precedence >= OperatorPrecedence::Await {
-                    self.add_error(
-                        ParseErrorType::OtherError(
-                            "Await expression cannot be used here".to_string(),
-                        ),
-                        &await_expr,
-                    );
-                }
-
-                return Expr::Await(await_expr).into();
-            }
-            TokenKind::Lambda => {
-                // Lambda expression isn't allowed in this context but we'll still parse it and
-                // report an error for better recovery.
-                let lambda_expr = self.parse_lambda_expr();
-                self.add_error(ParseErrorType::InvalidLambdaExpressionUsage, &lambda_expr);
-                return Expr::Lambda(lambda_expr).into();
-            }
-            TokenKind::Yield => {
-                let expr = self.parse_yield_expression();
-
-                if left_precedence > OperatorPrecedence::None
-                    || !context.is_yield_expression_allowed()
-                {
-                    self.add_error(ParseErrorType::InvalidYieldExpressionUsage, &expr);
-                }
-
-                return expr.into();
-            }
-            _ => {}
-        }
-
-        let lhs = self.parse_atom(context);
-
-        if self.expression_ended_with_suite() {
-            return lhs;
-        }
-
-        ParsedExpr {
-            expr: self.parse_postfix_expression(lhs.expr, start, context),
-            is_parenthesized: lhs.is_parenthesized,
-            parameter_borrow: lhs.parameter_borrow,
-        }
+        self.parse_primary_expression(context)
     }
 
     /// Parses an expression with a minimum precedence of bitwise `or`.
@@ -1070,8 +1064,8 @@ impl<'src> Parser<'src> {
     fn parse_identifier_with_context(&mut self, context: ExpressionContext) -> ast::Identifier {
         let range = self.current_token_range();
 
-        if self.at(TokenKind::Name) {
-            let name = self.bump_name();
+        if self.at(TokenKind::Identifier) {
+            let name = self.bump_identifier();
             return ast::Identifier {
                 id: name,
                 range,
@@ -1082,7 +1076,7 @@ impl<'src> Parser<'src> {
         if self.current_token_kind().is_soft_keyword() {
             let text = self.src_text(range);
             let id = self.intern_name(text);
-            self.bump_soft_keyword_as_name();
+            self.bump_soft_keyword_as_identifier();
             return ast::Identifier {
                 id,
                 range,
@@ -1141,13 +1135,26 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parses an atom.
+    /// Parses an atom and any following calls, subscripts, or attributes.
     ///
-    /// See: <https://docs.python.org/3/reference/expressions.html#atoms>
-    fn parse_atom(&mut self, context: ExpressionContext) -> ParsedExpr {
+    /// See: <https://docs.python.org/3/reference/expressions.html#primaries>
+    fn parse_primary_expression(&mut self, context: ExpressionContext) -> ParsedExpr {
+        self.parse_primary_expression_impl(context, PostfixCalls::Allowed)
+    }
+
+    /// [`Self::parse_primary_expression`], with a say in whether a `(` is read as
+    /// a call. The basedpython decorated type `@meta (int | None)` needs the
+    /// answer to be no — see [`Self::parse_decorated_type`].
+    fn parse_primary_expression_impl(
+        &mut self,
+        context: ExpressionContext,
+        calls: PostfixCalls,
+    ) -> ParsedExpr {
+        let mut is_parenthesized = false;
+        let mut parameter_borrow = ParameterBorrow::None;
         let start = self.node_start();
 
-        let lhs = match self.current_token_kind() {
+        let mut lhs = match self.current_token_kind() {
             TokenKind::Float => {
                 let value = self.bump_float();
 
@@ -1208,7 +1215,7 @@ impl<'src> Parser<'src> {
             // parser takes it. anywhere else two adjacent names are never valid python, so
             // `some` followed by a name is this keyword written where it cannot stand.
             // parsing on from the name keeps one error rather than a cascade
-            TokenKind::Name
+            TokenKind::Identifier
                 if self.options.is_basedpython
                     && self.src_text(self.current_token_range()) == "some"
                     && self.peek_is_name(0) =>
@@ -1219,10 +1226,10 @@ impl<'src> Parser<'src> {
                     ),
                     self.current_token_range(),
                 );
-                self.bump(TokenKind::Name);
-                return self.parse_atom(context);
+                self.bump(TokenKind::Identifier);
+                return self.parse_primary_expression_impl(context, calls);
             }
-            TokenKind::Name => {
+            TokenKind::Identifier => {
                 // basedpython `typeof <expr>` keyword: when the current
                 // identifier is `typeof` and the following token starts an
                 // expression, treat as `typeof X` and emit an `ExprSubscript`
@@ -1236,7 +1243,7 @@ impl<'src> Parser<'src> {
                         "`typeof` keyword is not valid in .py files".to_string(),
                     );
                     let typeof_range = self.current_token_range();
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                     // synthetic placeholder for the subscript's `value`. we
                     // don't use `Name("typeof")` because that would be picked
                     // up by name-resolution as an unresolved reference. an
@@ -1308,7 +1315,10 @@ impl<'src> Parser<'src> {
                 self.parse_strings()
             }
             TokenKind::Lpar => {
-                return self.parse_parenthesized_expression(context);
+                let parsed = self.parse_parenthesized_expression(context);
+                is_parenthesized = parsed.is_parenthesized;
+                parameter_borrow = parsed.parameter_borrow;
+                parsed.expr
             }
             TokenKind::Lsqb => self.parse_list_like_expression(context),
             TokenKind::Lbrace => self.parse_set_or_dict_like_expression(context),
@@ -1331,37 +1341,17 @@ impl<'src> Parser<'src> {
             }
         };
 
-        lhs.into()
-    }
+        if self.expression_ended_with_suite() {
+            return ParsedExpr {
+                expr: lhs,
+                is_parenthesized,
+                parameter_borrow,
+            };
+        }
 
-    /// Parses a postfix expression in a loop until there are no postfix expressions left to parse.
-    ///
-    /// For a given left-hand side, a postfix expression can begin with either `(` for a call
-    /// expression, `[` for a subscript expression, or `.` for an attribute expression.
-    ///
-    /// This method does nothing if the current token is not a candidate for a postfix expression.
-    fn parse_postfix_expression(
-        &mut self,
-        lhs: Expr,
-        start: TextSize,
-        context: ExpressionContext,
-    ) -> Expr {
-        self.parse_postfix_expression_impl(lhs, start, context, PostfixCalls::Allowed)
-    }
-
-    /// [`Self::parse_postfix_expression`], with a say in whether a `(` is read as
-    /// a call. The basedpython decorated type `@meta (int | None)` needs the
-    /// answer to be no — see [`Self::parse_decorated_type`].
-    fn parse_postfix_expression_impl(
-        &mut self,
-        mut lhs: Expr,
-        start: TextSize,
-        context: ExpressionContext,
-        calls: PostfixCalls,
-    ) -> Expr {
         loop {
             lhs = match self.current_token_kind() {
-                TokenKind::Lpar if calls == PostfixCalls::Forbidden => break lhs,
+                TokenKind::Lpar if calls == PostfixCalls::Forbidden => break,
                 TokenKind::Lpar => Expr::Call(self.parse_call_expression(lhs, start)),
                 TokenKind::Lsqb => Expr::Subscript(self.parse_subscript_expression(lhs, start)),
                 // basedpython: in a bound range `T: Lower..Upper` the `..` separates the two
@@ -1369,7 +1359,7 @@ impl<'src> Parser<'src> {
                 TokenKind::Dot
                     if context.is_in_type_param_bound() && self.second_dot_is_adjacent() =>
                 {
-                    break lhs;
+                    break;
                 }
                 // the same `..` anywhere else is not a range. left alone it parses
                 // as two attribute accesses with an empty name between them, which
@@ -1383,7 +1373,7 @@ impl<'src> Parser<'src> {
                         ),
                         self.current_token_range(),
                     );
-                    break lhs;
+                    break;
                 }
                 // basedpython: `int.() -> str` — a callable with an implicit
                 // receiver. `.` followed by `(` is never valid python, so the
@@ -1396,7 +1386,8 @@ impl<'src> Parser<'src> {
                     );
                     self.bump(TokenKind::Dot);
                     let params = self.parse_parenthesized_expression(context);
-                    break self.parse_callable_type_arrow(Some(lhs), params, start, context);
+                    lhs = self.parse_callable_type_arrow(Some(lhs), params, start, context);
+                    break;
                 }
                 TokenKind::Dot => {
                     // basedpython: postfix `.await` is sugar for a prefix
@@ -1462,7 +1453,7 @@ impl<'src> Parser<'src> {
                     let arguments = ast::Arguments {
                         range: template.range(),
                         node_index: AtomicNodeIndex::NONE,
-                        args: Box::from([template]),
+                        args: ThinVec::from([template]),
                         keywords: ThinVec::new(),
                     };
                     Expr::Call(ast::ExprCall {
@@ -1523,7 +1514,7 @@ impl<'src> Parser<'src> {
                 {
                     let range = self.current_token_range();
                     self.add_error(force_unwrap_before_debug_equal(), range);
-                    break lhs;
+                    break;
                 }
                 // basedpython postfix `!` force-unwrap. Inside an interpolated
                 // string replacement field a `!` introduces python's conversion
@@ -1558,10 +1549,19 @@ impl<'src> Parser<'src> {
                 }
                 TokenKind::Float => match self.parse_tuple_member_expression(lhs, start) {
                     Ok(expr) => Expr::Attribute(expr),
-                    Err(prev) => break prev,
+                    Err(prev) => {
+                        lhs = prev;
+                        break;
+                    }
                 },
-                _ => break lhs,
+                _ => break,
             };
+        }
+
+        ParsedExpr {
+            expr: lhs,
+            is_parenthesized,
+            parameter_borrow,
         }
     }
 
@@ -1638,7 +1638,7 @@ impl<'src> Parser<'src> {
             return ast::Arguments {
                 range: self.node_range(start),
                 node_index: AtomicNodeIndex::NONE,
-                args: Box::default(),
+                args: ThinVec::new(),
                 keywords: ThinVec::default(),
             };
         }
@@ -1812,7 +1812,7 @@ impl<'src> Parser<'src> {
         let arguments = ast::Arguments {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
-            args: self.expr_scratch.take(args_snapshot),
+            args: self.expr_scratch.take_thin_vec(args_snapshot),
             keywords,
         };
 
@@ -1915,7 +1915,7 @@ impl<'src> Parser<'src> {
         // detect before parse_slice (which would error on the `=`)
         let mut slice = if let Some(marker) = bare_star_marker {
             marker
-        } else if self.at(TokenKind::Name) && self.peek() == TokenKind::Equal {
+        } else if self.at(TokenKind::Identifier) && self.peek() == TokenKind::Equal {
             self.error_if_not_basedpython(
                 "keyword arguments in subscription are not valid in .py files".to_string(),
             );
@@ -1986,7 +1986,7 @@ impl<'src> Parser<'src> {
                 // basedpython: keyword arg in subscription `x[a, k=v]` —
                 // store as `Expr::Named(target=Name(k), value=v)` like
                 // anonymous-named-tuple value form
-                if parser.at(TokenKind::Name) && parser.peek() == TokenKind::Equal {
+                if parser.at(TokenKind::Identifier) && parser.peek() == TokenKind::Equal {
                     parser.error_if_not_basedpython(
                         "keyword arguments in subscription are not valid in .py files".to_string(),
                     );
@@ -2393,7 +2393,7 @@ impl<'src> Parser<'src> {
         // nothing on its right is never valid, so the author meant the debug form —
         // but claiming it here would make `f"{a!=}"` and `f"{a!=b}"` different
         // operators, told apart by what follows. see the `Exclamation` arm in
-        // `parse_lhs_expression` for the other half
+        // `parse_primary_expression_impl` for the other half
         if self.options.is_basedpython
             && op == CmpOp::NotEq
             && context.is_in_interpolation()
@@ -2412,7 +2412,8 @@ impl<'src> Parser<'src> {
         let mut at_type_test = self.at_type_test(op);
         self.bump_cmp_op(op);
 
-        let comparators_snapshot = self.expr_scratch.snapshot();
+        let operands_snapshot = self.expr_scratch.snapshot();
+        self.expr_scratch.push(lhs);
         let mut operators = vec![op];
 
         let mut progress = ParserProgress::default();
@@ -2472,9 +2473,8 @@ impl<'src> Parser<'src> {
         }
         let operator_count = operators.len();
         ast::ExprCompare {
-            left: Box::new(lhs),
             ops: operators.into_boxed_slice(),
-            comparators: self.expr_scratch.take(comparators_snapshot),
+            operands: self.expr_scratch.take(operands_snapshot),
             // the common case — a `.py` file, or basedpython written with the
             // `is` keyword — stores nothing at all
             identity_ops: ast::IdentityOperators::into_stored(identity_ops, operator_count),
@@ -3081,12 +3081,12 @@ impl<'src> Parser<'src> {
         };
 
         let conversion = if self.eat(TokenKind::Exclamation) {
-            // Ensure that the `r` is lexed as a `r` name token instead of a raw string
+            // Ensure that the `r` is lexed as an identifier token instead of a raw string
             // in `f{abc!r"` (note the missing `}`).
             self.tokens.re_lex_raw_string_in_format_spec();
 
             let conversion_flag_range = self.current_token_range();
-            if self.at(TokenKind::Name) {
+            if self.at(TokenKind::Identifier) {
                 // test_err f_string_conversion_follows_exclamation
                 // f"{x! s}"
                 // t"{x! s}"
@@ -3100,7 +3100,7 @@ impl<'src> Parser<'src> {
                         TextRange::new(self.prev_token_end, conversion_flag_range.start()),
                     );
                 }
-                let name = self.bump_name();
+                let name = self.bump_identifier();
                 match &*name {
                     "s" => ConversionFlag::Str,
                     "r" => ConversionFlag::Repr,
@@ -3654,7 +3654,7 @@ impl<'src> Parser<'src> {
     /// (it implies the borrow) and wins.
     fn skip_callable_type_modifiers(&mut self) -> ParameterBorrow {
         let mut borrow = ParameterBorrow::None;
-        while self.at(TokenKind::Name)
+        while self.at(TokenKind::Identifier)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
             && self.peek_is_name(0)
             // `(local x=1)` is an anonymous named tuple *value*, which has no
@@ -3670,7 +3670,7 @@ impl<'src> Parser<'src> {
             } else if borrow.is_none() {
                 borrow = ParameterBorrow::Local;
             }
-            self.bump(TokenKind::Name);
+            self.bump(TokenKind::Identifier);
         }
         borrow
     }
@@ -3745,7 +3745,7 @@ impl<'src> Parser<'src> {
     /// already established that the parenthesized list is a member list rather than a call
     /// argument list.
     fn parse_inline_protocol_type(&mut self, start: TextSize) -> ast::ExprProtocolType {
-        self.bump(TokenKind::Name); // `protocol`
+        self.bump(TokenKind::Identifier); // `protocol`
         self.bump(TokenKind::Lpar);
 
         let mut members: Vec<Expr> = vec![];
@@ -3839,11 +3839,11 @@ impl<'src> Parser<'src> {
             } else {
                 // `let name: T` is a read-only member. a member that is itself named `let` is
                 // still `let: T`, since the keyword is followed by a name rather than a `:`
-                let is_let = self.at(TokenKind::Name)
+                let is_let = self.at(TokenKind::Identifier)
                     && self.src_text(self.current_token_range()) == "let"
                     && is_member_name(self.peek());
                 if is_let {
-                    self.bump(TokenKind::Name);
+                    self.bump(TokenKind::Identifier);
                 }
                 if !(is_member_name(self.current_token_kind()) && self.peek() == TokenKind::Colon) {
                     self.add_error(
@@ -3964,7 +3964,9 @@ impl<'src> Parser<'src> {
         // Detected before parsing the first element: the very first token after
         // `(` is a `Name` followed by `:`. We don't dispatch here for single-
         // field cases (`(name: T)`) without a trailing comma — see below.
-        if matches!(self.current_token_kind(), TokenKind::Name) && self.peek() == TokenKind::Colon {
+        if matches!(self.current_token_kind(), TokenKind::Identifier)
+            && self.peek() == TokenKind::Colon
+        {
             self.error_if_not_basedpython(
                 "anonymous named tuple type `(name: T, ...)` is not valid in .py files".to_string(),
             );
@@ -3985,8 +3987,8 @@ impl<'src> Parser<'src> {
             // `(*: T, ...)` — anonymous variadic at start
             (TokenKind::Star, TokenKind::Colon) => true,
             // `(*name: T, ...)` — named variadic at start
-            (TokenKind::Star, TokenKind::Name) if self.peek2().1 == TokenKind::Colon => true,
-            (TokenKind::DoubleStar, TokenKind::Name | TokenKind::Colon) => true,
+            (TokenKind::Star, TokenKind::Identifier) if self.peek2().1 == TokenKind::Colon => true,
+            (TokenKind::DoubleStar, TokenKind::Identifier | TokenKind::Colon) => true,
             _ => false,
         };
         if starts_params_spec {
@@ -4005,7 +4007,9 @@ impl<'src> Parser<'src> {
         // basedpython: `(name=expr, ...)` — anonymous named tuple value
         // construction. Same dispatch trigger as the type form, but uses `=`
         // rather than `:`.
-        if matches!(self.current_token_kind(), TokenKind::Name) && self.peek() == TokenKind::Equal {
+        if matches!(self.current_token_kind(), TokenKind::Identifier)
+            && self.peek() == TokenKind::Equal
+        {
             self.error_if_not_basedpython(
                 "anonymous named tuple value `(name=expr, ...)` is not valid in .py files"
                     .to_string(),
@@ -4034,7 +4038,7 @@ impl<'src> Parser<'src> {
         // tuple is a type form or a value form.
         if self.at(TokenKind::Comma) {
             let (after_comma, after_name) = self.peek2();
-            if after_comma == TokenKind::Name
+            if after_comma == TokenKind::Identifier
                 && matches!(after_name, TokenKind::Colon | TokenKind::Equal)
             {
                 self.error_if_not_basedpython(
@@ -4071,7 +4075,7 @@ impl<'src> Parser<'src> {
                     TokenKind::Comma | TokenKind::Rpar
                 ) | (TokenKind::Star | TokenKind::DoubleStar, TokenKind::Colon)
                     // `, **P` — a trailing bare `ParamSpec` (Concatenate form)
-                    | (TokenKind::DoubleStar, TokenKind::Name)
+                    | (TokenKind::DoubleStar, TokenKind::Identifier)
             );
             if mid_tuple_marker {
                 self.error_if_not_basedpython(
@@ -4338,7 +4342,7 @@ impl<'src> Parser<'src> {
             // `=`-form tuple). consume both tokens + the trailing expression
             // so the rest of the tuple parses cleanly, and emit a basedpython
             // parse error pointing the user at the consistency rule
-            if self.at(TokenKind::Name) && self.peek() == other_separator {
+            if self.at(TokenKind::Identifier) && self.peek() == other_separator {
                 let expected = if is_type_form { ":" } else { "=" };
                 self.add_error(
                     ParseErrorType::BasedPythonOnly(format!(
@@ -4366,7 +4370,7 @@ impl<'src> Parser<'src> {
             }
             // Decide field shape: `Name SEPARATOR ...` is named, anything else
             // is positional.
-            let is_named_field = self.at(TokenKind::Name) && self.peek() == separator;
+            let is_named_field = self.at(TokenKind::Identifier) && self.peek() == separator;
 
             if is_named_field {
                 let mut target_name = self.parse_name(ExpressionContext::default());
@@ -4464,11 +4468,11 @@ impl<'src> Parser<'src> {
                         TokenKind::Comma | TokenKind::Rpar | TokenKind::Colon
                     ))
                 || (self.at(TokenKind::Star)
-                    && self.peek() == TokenKind::Name
+                    && self.peek() == TokenKind::Identifier
                     && self.peek2().1 == TokenKind::Colon)
                 || (self.at(TokenKind::DoubleStar) && matches!(self.peek(), TokenKind::Colon))
                 // `**name: T` (kwargs) or a bare `**P` (ParamSpec, Concatenate form)
-                || (self.at(TokenKind::DoubleStar) && self.peek() == TokenKind::Name);
+                || (self.at(TokenKind::DoubleStar) && self.peek() == TokenKind::Identifier);
             if is_marker {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
@@ -4481,7 +4485,7 @@ impl<'src> Parser<'src> {
             // the existing anon-named-tuple mixed dispatch upstream already
             // catches it; here we handle the case where it appears only
             // after several positional elements
-            if self.at(TokenKind::Name) && self.peek() == TokenKind::Colon {
+            if self.at(TokenKind::Identifier) && self.peek() == TokenKind::Colon {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
                 );
@@ -4493,7 +4497,7 @@ impl<'src> Parser<'src> {
             // — the upstream dispatch only catches it after the first
             // element, so detect it again mid-tuple and switch to the value
             // parser
-            if self.at(TokenKind::Name) && self.peek() == TokenKind::Equal {
+            if self.at(TokenKind::Identifier) && self.peek() == TokenKind::Equal {
                 self.error_if_not_basedpython(
                     "anonymous named tuple is not valid in .py files".to_string(),
                 );
@@ -4548,7 +4552,7 @@ impl<'src> Parser<'src> {
                 break;
             }
             let field_start = self.node_start();
-            let is_named_field = self.at(TokenKind::Name) && self.peek() == TokenKind::Equal;
+            let is_named_field = self.at(TokenKind::Identifier) && self.peek() == TokenKind::Equal;
             if is_named_field {
                 let mut target_name = self.parse_name(ExpressionContext::default());
                 target_name.ctx = ExprContext::Invalid;
@@ -4729,7 +4733,7 @@ impl<'src> Parser<'src> {
             }
             // `*name: T` — named variadic
             else if self.at(TokenKind::Star)
-                && self.peek() == TokenKind::Name
+                && self.peek() == TokenKind::Identifier
                 && self.peek2().1 == TokenKind::Colon
             {
                 let field_start = self.node_start();
@@ -4784,7 +4788,7 @@ impl<'src> Parser<'src> {
             else if self.at(TokenKind::DoubleStar) {
                 let doublestar_start = self.node_start();
                 self.bump(TokenKind::DoubleStar);
-                if self.at(TokenKind::Name) {
+                if self.at(TokenKind::Identifier) {
                     let target_name = self.parse_name(ExpressionContext::default());
                     let target_range = target_name.range;
                     // `**name: T` — kwargs catch-all: `Named(Starred(Starred(name)), T)`.
@@ -4833,7 +4837,8 @@ impl<'src> Parser<'src> {
                 }
             } else {
                 let field_start = self.node_start();
-                let is_named_field = self.at(TokenKind::Name) && self.peek() == TokenKind::Colon;
+                let is_named_field =
+                    self.at(TokenKind::Identifier) && self.peek() == TokenKind::Colon;
                 if is_named_field {
                     let mut target_name = self.parse_name(ExpressionContext::default());
                     target_name.ctx = ExprContext::Invalid;
@@ -5206,7 +5211,7 @@ impl<'src> Parser<'src> {
         ast::ExprDictComp {
             key: key.map(Box::new),
             value: Box::new(value),
-            generators,
+            generators: generators.into_boxed_slice(),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }

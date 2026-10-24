@@ -12,8 +12,31 @@ use crate::types::signatures::Parameter;
 use crate::types::typevar::TypeVarNonceGenerator;
 use crate::types::{
     ApplyTypeMappingVisitor, BoundTypeVarInstance, ClassLiteral, DynamicType, Type, TypeContext,
-    TypeMapping, UnsafeUnionType,
+    TypeMapping, UnionType, UnsafeUnionType,
 };
+
+impl<'db> CallableBinding<'db> {
+    pub(crate) fn typing_self_type(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+        self.bound_type.map(|bound_type| match self.signature_type {
+            Type::BoundMethod(method) => method.typing_self_type(db),
+            _ => bound_type,
+        })
+    }
+
+    pub(crate) fn bind_unused_self(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        self_type: Type<'db>,
+    ) {
+        for overload in &mut self.overloads {
+            if let Some(signature) = overload.signature.bind_unused_self(db, env, self_type) {
+                overload.signature = signature;
+                overload.return_ty = overload.initial_return_type(db);
+            }
+        }
+    }
+}
 
 /// Bindings for a constructor call.
 ///
@@ -84,7 +107,17 @@ impl<'db> ConstructorBinding<'db> {
             return;
         };
         let generic_context = specialization.generic_context(db);
-        if generic_context_has_parameter_pack(db, generic_context)
+        // A constructor can use a class specialization reached through a fixed TypeVar's domain
+        // without owning that class's type variables. Only a context inherited by the constructor
+        // signature is eligible for freshening.
+        let owns_generic_context = self.entry.overloads.iter().any(|overload| {
+            overload
+                .signature
+                .generic_context
+                .is_some_and(|owned| generic_context.is_subset_of(db, owned))
+        });
+        if !owns_generic_context
+            || generic_context_has_parameter_pack(db, generic_context)
             || !nonce_generator.should_freshen(db, generic_context)
         {
             return;
@@ -97,10 +130,6 @@ impl<'db> ConstructorBinding<'db> {
         };
         let fresh_instance_type =
             instance_type.apply_type_mapping(db, env, &type_mapping, TypeContext::default());
-        // Only freshen a generic context that belongs to the constructed instance itself.
-        // `class_specialization` can also find a context through a class-object type variable's
-        // bound, but freshening that context would detach the constructor parameters from the
-        // receiver.
         if fresh_instance_type == instance_type {
             return;
         }
@@ -135,11 +164,29 @@ impl<'db> ConstructorBinding<'db> {
             )
         });
         for overload in &mut self.entry.overloads {
+            // The constructor's `Self` bound must use the same fresh class type variables as
+            // its receiver. Include only `Self` variables owned by this signature, so a caller's
+            // `Self` used as an explicit class type argument retains its original bound.
+            let signature_context = GenericContext::from_typevar_instances(
+                db,
+                env,
+                generic_context.variables(db).chain(
+                    overload
+                        .signature
+                        .generic_context
+                        .into_iter()
+                        .flat_map(|context| context.variables(db))
+                        .filter(|typevar| typevar.typevar(db).is_self(db)),
+                ),
+            );
             overload.signature = overload.signature.apply_type_mapping_impl(
                 db,
-                &type_mapping,
+                &TypeMapping::FreshenBoundTypeVars {
+                    generic_context: signature_context,
+                    delta,
+                },
                 TypeContext::default(),
-                &visitor,
+                &ApplyTypeMappingVisitor::new(env),
             );
             overload.set_constructor_context(db, constructor_context);
         }
@@ -427,8 +474,8 @@ impl<'db> ConstructorBinding<'db> {
             .and_then(ClassLiteral::as_static);
         let class_context = class_specialization.generic_context(db);
 
-        let mut combined: Option<Specialization<'db>> = None;
-        let mut combine_binding_specialization = |binding: &ConstructorBinding<'db>| {
+        let mut combined: Option<Vec<Option<Type<'db>>>> = None;
+        let mut combine_binding_types = |binding: &ConstructorBinding<'db>| {
             let matching = binding.first_matching_overload();
             // no overload accepted the arguments, so nothing was inferred for the type
             // parameters the accepted one would have filled in
@@ -438,9 +485,50 @@ impl<'db> ConstructorBinding<'db> {
             else {
                 return;
             };
-            let return_specialization = static_class_literal
-                // Use the already-resolved overload return type when possible.
-                .and_then(|lit| overload.return_ty.specialization_of(db, env, lit));
+            // Parameter checking uses defaults for unsolved variables, but those defaults must
+            // not compete with types inferred by another constructor method. Project missing
+            // class bindings to a marker so we can distinguish them from inferred types, including
+            // an inferred `Unknown`. The overload's instance type contains call-local typevars.
+            //
+            // basedpython: a class type variable the call solves to `Never` (see
+            // `call_specialization`) was inferred, not missing, so it is not marked
+            let partial_specialization = (|| {
+                let (_, class_specialization) = overload
+                    .constructor_context?
+                    .instance_type()
+                    .class_specialization(db, env)?;
+                overload.specialization_with_unsolved(db, env, |typevar| {
+                    class_specialization
+                        .types(db)
+                        .contains(&Type::TypeVar(typevar))
+                        .then_some(Type::Dynamic(DynamicType::UnspecializedTypeVar))
+                })
+            })();
+            // A marker for the entire class argument means there was no inference. Structural
+            // annotations such as `C[list[T]]` still contribute a type; use their resolved form
+            // so nested markers do not escape into the constructed instance.
+            let inferred_types = |partial: Specialization<'db>, resolved: Specialization<'db>| {
+                partial
+                    .types(db)
+                    .iter()
+                    .zip(resolved.types(db))
+                    .map(|(partial, resolved)| {
+                        (*partial != Type::Dynamic(DynamicType::UnspecializedTypeVar))
+                            .then_some(*resolved)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let project_class_arguments =
+                |ty: Type<'db>, resolved_ty: Type<'db>| -> Option<Vec<Option<Type<'db>>>> {
+                    let class = static_class_literal?;
+                    let partial = ty
+                        .apply_optional_specialization(db, partial_specialization)
+                        .specialization_of(db, env, class)?;
+                    let resolved = resolved_ty.specialization_of(db, env, class)?;
+                    Some(inferred_types(partial, resolved))
+                };
+            let return_types =
+                project_class_arguments(overload.unspecialized_return_type(db), overload.return_ty);
 
             // TODO All this handling of return-specialization vs self-specialization is a hacky
             // work-around to a situation that can occur with a case like `def __init__(self:
@@ -449,93 +537,88 @@ impl<'db> ConstructorBinding<'db> {
             // the class typevars), and we consider T1 and T2 as unknowns. This will be fixed when
             // we start building up constraint sets across the full call. We should be able to just
             // use the return specialization and eliminate all this.
-            let return_specialization_is_informative =
-                return_specialization.is_some_and(|specialization| {
-                    class_context.variables(db).any(|class_typevar| {
-                        specialization
-                            .get(db, class_typevar)
-                            .is_some_and(|mapped_ty| !mapped_ty.is_unknown())
-                    })
-                });
-            let self_parameter_specialization = static_class_literal.and_then(|lit| {
-                let self_param_ty = overload.signature.parameters().get(0)?.annotated_type();
-                let resolved_self_param_ty = overload
-                    .merged_specialization(db, env)
-                    .map_or(self_param_ty, |specialization| {
-                        self_param_ty.apply_specialization(db, specialization)
-                    });
-                resolved_self_param_ty.specialization_of(db, env, lit)
+            let return_types_are_informative = return_types.as_ref().is_some_and(|types| {
+                types
+                    .iter()
+                    .flatten()
+                    .any(|mapped_ty| !mapped_ty.is_unknown())
             });
-            let refined_self_parameter_specialization =
-                self_parameter_specialization.map(|specialization| {
-                    let types: Box<[_]> = specialization
-                        .types(db)
-                        .iter()
-                        .copied()
-                        .map(|mapped_ty| {
-                            let without_unknown =
-                                mapped_ty.filter_union(db, env, |element| !element.is_unknown());
-                            let mapped_ty = if without_unknown.is_never() {
-                                mapped_ty
-                            } else {
-                                without_unknown
-                            };
-                            mapped_ty.promote(db, env)
-                        })
-                        .collect();
-                    Specialization::new(
-                        db,
-                        specialization.generic_context(db),
-                        types,
-                        specialization.materialization_kind(db),
-                        None,
-                        specialization.projections(db).to_vec().into_boxed_slice(),
-                    )
-                });
-            let specialization = if return_specialization_is_informative {
-                return_specialization
+            let types = if return_types_are_informative {
+                return_types
             } else {
-                refined_self_parameter_specialization
-                    .or(return_specialization)
-                    .or_else(|| {
-                        overload
-                            .merged_specialization(db, env)?
-                            .restrict(db, class_context)
-                    })
+                let self_parameter_types = (|| {
+                    let self_param_ty = overload.signature.parameters().get(0)?.annotated_type();
+                    let resolved_self_param_ty = self_param_ty
+                        .apply_optional_specialization(db, overload.merged_specialization(db, env));
+                    let mut types = project_class_arguments(self_param_ty, resolved_self_param_ty)?;
+                    for mapped_ty in types.iter_mut().flatten() {
+                        let without_unknown =
+                            mapped_ty.filter_union(db, env, |element| !element.is_unknown());
+                        if !without_unknown.is_never() {
+                            *mapped_ty = without_unknown;
+                        }
+                        *mapped_ty = mapped_ty.promote(db, env);
+                    }
+                    Some(types)
+                })();
+                self_parameter_types.or(return_types).or_else(|| {
+                    let resolved = overload.merged_specialization(db, env)?;
+                    Some(inferred_types(
+                        partial_specialization
+                            .unwrap_or(resolved)
+                            .restrict(db, class_context)?,
+                        resolved.restrict(db, class_context)?,
+                    ))
+                })
             };
             // end TODO
 
-            let Some(specialization) = specialization else {
+            let Some(mut types) = types else {
                 return;
             };
-            // A failing overload infers nothing, so any type parameter the specialization still
-            // maps to itself was never solved. Leaving it as the type variable would publish a
-            // type variable of the callee's own signature to everyone who reads the result, so
-            // say `Unknown` — the same answer a failed call to an overloaded function gives.
-            let specialization = if overload_failed {
-                erase_unsolved(db, specialization)
+            // A failing overload infers nothing, so any type parameter it still maps to itself was
+            // never solved. Leaving it as the type variable would publish a type variable of the
+            // callee's own signature to everyone who reads the result, so it counts as missing:
+            // another constructor method may still solve it, and otherwise it takes its default,
+            // or `Unknown` — the same answer a failed call to an overloaded function gives.
+            if overload_failed {
+                for (variable, mapped_ty) in class_context.variables(db).zip(types.iter_mut()) {
+                    if let Some(Type::TypeVar(mapped)) = *mapped_ty
+                        && mapped == variable
+                    {
+                        *mapped_ty = None;
+                    }
+                }
+            }
+            if let Some(previous) = &mut combined {
+                for (previous, inferred) in previous.iter_mut().zip(types) {
+                    *previous = match (*previous, inferred) {
+                        (Some(previous), Some(inferred)) => {
+                            Some(UnionType::from_two_elements(db, env, previous, inferred))
+                        }
+                        (previous, inferred) => previous.or(inferred),
+                    };
+                }
             } else {
-                specialization
-            };
-            combined = Some(match combined {
-                None => specialization,
-                Some(previous) => previous.combine(db, specialization),
-            });
+                combined = Some(types);
+            }
         };
 
-        combine_binding_specialization(self);
+        combine_binding_types(self);
 
         if let Some(downstream) = self.downstream_constructor() {
             for downstream_binding in downstream
                 .iter_callable_items()
                 .filter_map(CallableItem::as_constructor)
             {
-                combine_binding_specialization(downstream_binding);
+                combine_binding_types(downstream_binding);
             }
         }
 
-        combined.map(|specialization| {
-            specialization.apply_optional_specialization(db, Some(class_specialization))
+        combined.map(|types| {
+            class_context
+                .specialize_partial(db, types)
+                .apply_optional_specialization(db, Some(class_specialization))
         })
     }
 

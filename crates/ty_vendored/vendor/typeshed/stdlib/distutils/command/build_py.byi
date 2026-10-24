@@ -22,11 +22,11 @@ class build_py(Command):
     compile: int
     optimize: int
     force: Incomplete
-    override def initialize_options(self)
+    def initialize_options(self)
     packages: Incomplete
     data_files: Incomplete
-    override def finalize_options(self)
-    override def run(self)
+    def finalize_options(self)
+    def run(self)
     def get_data_files(self):
         """Generate list of '(package,src_dir,build_dir,filenames)' tuples"""
 

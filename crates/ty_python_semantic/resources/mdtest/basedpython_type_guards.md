@@ -4,6 +4,14 @@ A function's return annotation can name the place a call narrows. `-> x is T` is
 applied where the call evaluates truthy; `-> asserts x` narrows once the call returns, for the rest
 of the flow.
 
+the examples narrow an optional value by testing its truthiness on purpose, so the lint that flags
+such a test is off
+
+```toml
+[rules]
+truthiness-test-of-none-union = "ignore"
+```
+
 ## the annotation names which parameter is narrowed
 
 `TypeIs` narrows a function's first parameter. Naming the parameter picks any of them.
@@ -727,7 +735,6 @@ reveal_type(h.data)  # revealed: str
 
 ```by
 def check(a: int | None, b: str | None) -> asserts a is int and b:
-    # error: [overlapping-condition]
     if a is None or not b:
         raise ValueError
 
@@ -770,6 +777,7 @@ def check(x: int | None) -> asserts x:
     assert x
 
 def f(a: int | None):
+    # error: [redundant-condition]
     if check(a):  # error: [narrowing-guard-as-value]
         reveal_type(a)  # revealed: Never
 ```

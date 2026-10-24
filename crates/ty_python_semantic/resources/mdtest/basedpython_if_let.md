@@ -253,7 +253,7 @@ reveal_type(C.w)  # revealed: int
 `let` only introduces a pattern when the clause really is `let <pattern> := <subject>`.
 
 ```by
-def f() -> int | None:
+def f() -> int:
     return 1
 
 if let := f():

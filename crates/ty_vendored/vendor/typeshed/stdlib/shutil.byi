@@ -144,7 +144,7 @@ def copytree[StrPathT: StrPath](
     src: StrPath,
     dst: StrPathT,
     symlinks: bool = False,
-    ignore: None | ((str, list[str]) -> Iterable[str]) | ((StrPath, list[str]) -> Iterable[str]) = None,
+    ignore: ((str, list[str]) -> Iterable[str]) | ((StrPath, list[str]) -> Iterable[str]) | None = None,
     copy_function: (str, str) -> object = ...,
     ignore_dangling_symlinks: bool = False,
     dirs_exist_ok: bool = False,

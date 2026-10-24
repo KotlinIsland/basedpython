@@ -9,6 +9,11 @@ each literal entry against the model the declaring class names.
 `ModelSerializer` and `ListAPIView` without writing the type argument, and what the class body says
 instead is the subject of half of these tests.
 
+A serializer's own `class Meta:` reports `invalid-attribute-override`: the stubs declare
+`ModelSerializer.Meta`, and a nested class that replaces an inherited one without subclassing it is
+checked like any other incompatible attribute override (see astral-sh/ty#4711). `Serializer`
+declares no `Meta`, so a plain serializer's is not an override.
+
 ```toml
 [environment]
 python-version = "3.13"
@@ -49,24 +54,24 @@ class Book(models.Model):
 class Everything(serializers.ModelSerializer[Book]):
     declared = serializers.CharField(source="title")
 
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         # a field, a relation, the pk alias, an attname, a model method, a declared field
         fields = ["title", "author", "pk", "id", "author_id", "get_absolute_url", "declared"]
 
 class AllFields(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = "__all__"
 
 class Reverse(serializers.ModelSerializer[Author]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Author
         # the reverse accessor django synthesizes for `Book.author`
         fields = ["id", "name", "book_set"]
 
 class Typo(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = [
             "title",
@@ -88,12 +93,12 @@ class Book(models.Model):
     published = models.DateField()
 
 class Fine(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         exclude = ["published"]
 
 class Typo(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         # error: [invalid-field-lookup] "Model `Book` has no field `publshed` (in `exclude`)"
         exclude = ["publshed"]
@@ -116,21 +121,21 @@ class NotAModel: ...
 EXTRA = ["nope"]
 
 class NoModel(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         fields = ["nope"]
 
 class WrongModel(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = NotAModel
         fields = ["nope"]
 
 class Dynamic(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["nope", *EXTRA]
 
 class FromAName(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = EXTRA
 
@@ -252,7 +257,8 @@ def f(view: Unparameterized, viewset: ViewSet) -> None:
 ## An explicit type argument is never contradicted
 
 A view that does write the type argument keeps it: the substitution only ever fills a position that
-carries no information today.
+carries no information today. A `queryset` of another model is reported where it is assigned, since
+it does not match the `queryset` the view declares for its own model.
 
 ```py
 from django.db import models
@@ -268,7 +274,7 @@ class Explicit(generics.ListAPIView[Book]):
     queryset = Book.objects.all()
 
 class Mismatched(generics.ListAPIView[Author]):
-    queryset = Book.objects.all()
+    queryset = Book.objects.all()  # error: [invalid-assignment]
 
 def f(explicit: Explicit, mismatched: Mismatched) -> None:
     reveal_type(explicit.get_queryset())  # revealed: QuerySet[Book, Book]
@@ -288,7 +294,7 @@ class Book(models.Model):
     title = models.CharField(max_length=100)
 
 class BookSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 
@@ -317,7 +323,7 @@ class Book(models.Model):
     title = models.CharField(max_length=100)
 
 class BookSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 
@@ -344,12 +350,12 @@ class Book(models.Model):
     title = models.CharField(max_length=100)
 
 class Resolved(serializers.ModelSerializer):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 
 class Written(serializers.ModelSerializer[Book]):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 
@@ -369,7 +375,7 @@ class Book(models.Model):
     title = models.CharField(max_length=100)
 
 class BookSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 
@@ -402,7 +408,7 @@ class NoMeta(serializers.ModelSerializer): ...
 class PlainSerializer(serializers.Serializer): ...
 
 class BookSerializer(serializers.ModelSerializer):
-    class Meta:
+    class Meta:  # error: [invalid-attribute-override]
         model = Book
         fields = ["title"]
 

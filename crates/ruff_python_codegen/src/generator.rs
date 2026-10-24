@@ -1481,18 +1481,10 @@ impl<'a> Generator<'a> {
                 });
             }
             Expr::Compare(compare) => {
-                let ast::ExprCompare {
-                    left,
-                    ops,
-                    comparators,
-                    identity_ops: _,
-                    range: _,
-                    node_index: _,
-                } = compare;
                 group_if!(precedence::CMP, {
                     let new_lvl = precedence::CMP + 1;
-                    self.unparse_expr(left, new_lvl);
-                    for (index, (op, cmp)) in ops.iter().zip(comparators).enumerate() {
+                    self.unparse_expr(compare.first_operand(), new_lvl);
+                    for (index, (_, op, cmp)) in compare.iter().enumerate() {
                         // basedpython gives the `is` keyword to the type test and
                         // spells python's identity comparison `===` / `!==`. both
                         // parse to the same operator, so printing `is` for one
@@ -2014,10 +2006,10 @@ impl<'a> Generator<'a> {
         for f_string_part in value {
             self.p_delim(&mut first, " ");
             match f_string_part {
-                ast::FStringPart::Literal(string_literal) => {
+                ast::FStringPartRef::Literal(string_literal) => {
                     self.unparse_string_literal(string_literal);
                 }
-                ast::FStringPart::FString(f_string) => {
+                ast::FStringPartRef::FString(f_string) => {
                     self.unparse_interpolated_string(&f_string.elements, f_string.flags.into());
                 }
             }

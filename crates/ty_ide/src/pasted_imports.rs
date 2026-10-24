@@ -21,7 +21,6 @@ use ruff_diagnostics::Edit;
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, ExprContext, Stmt};
-use ruff_python_codegen::Stylist;
 use ruff_python_parser::{ParseOptions, parse_unchecked};
 use ruff_python_trivia::textwrap::dedent;
 use ruff_text_size::{TextRange, TextSize};
@@ -32,7 +31,7 @@ use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::SemanticModel;
 
-use crate::importer::{ImportRequest, Importer};
+use ty_python_semantic::importer::{ImportRequest, Importer};
 
 /// A name copied code uses, and the import that binds it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -320,9 +319,7 @@ pub fn pasted_imports(
     imports: &[CopiedImport],
 ) -> PastedImports {
     let parsed = parsed_module(db, file.python_file(db)).load(db);
-    let source = source_text(db, file.file(db));
-    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
-    let importer = Importer::new(db, &stylist, file, source.as_str(), &parsed);
+    let importer = Importer::new(db, file, &parsed);
     let node = landing_node(&parsed, range);
     let members = importer.members_in_scope_at(node, range.start());
     let model = SemanticModel::new(db, file);

@@ -1,20 +1,41 @@
 # boolean conditions
 
 a condition collapses a value to a single bit. that is fine when the bit answers the question the
-code is asking, and a bug when it does not. three checks watch the ways it goes wrong
+code is asking, and a bug when it does not. the checks below watch the ways it goes wrong
+
+## `None` and another falsy value
+
+`truthiness-test-of-none-union` fires when a condition tests an optional value whose other members
+can be falsy too: `None` and the empty string share the branch, so the test cannot tell an absent
+value from an empty one
+
+```python
+def f(name: str | None):
+    if not name:      # warning: `""` and `None` are both falsy
+        ...
+    if name is None:  # ok — the members are told apart
+        ...
+```
+
+an instance of a class with no `__bool__` and no `__len__` is taken to be truthy, so `if not a`
+over an optional instance is not reported
 
 ## overlapping conditions
 
-`overlapping-condition` fires when the branch a condition *selects* holds a value that is always
-there alongside one that is only sometimes there. inside that branch the two are
-indistinguishable, so whatever the condition was meant to ask, the answer it got back conflates
-them
+`overlapping-condition` reports the same mistake for every other sentinel: the branch a condition
+*selects* holds a value that is always there alongside one that is only sometimes there. inside
+that branch the two are indistinguishable, so whatever the condition was meant to ask, the answer
+it got back conflates them
 
 ```python
-def f(a: bool | None):
-    if a:      # ok — only `True` is truthy
+from typing import Literal
+
+def f(result: list[int] | Literal[False]):
+    if result:           # ok — only a non-empty list is truthy
         ...
-    if not a:  # warning: does not distinguish between `False` and `None`
+    if not result:       # warning: does not distinguish between `False` and `[]`
+        ...
+    if result is False:  # ok — the members are told apart
         ...
 ```
 
@@ -26,19 +47,8 @@ its own at runtime, and the operator's *value* — the union of the operands —
 is tested for. `if count > 0 or leftovers:` asks two questions, each with one answer
 
 ```by
-def f(a: bool?, name: str?):
+def f(a: list[int] | False, name: str | False):
     if not a or not name:  # two warnings, one per operand
-        ...
-```
-
-the classic instance is an optional string, where the empty string and the absent value share a
-branch
-
-```python
-def f(name: str | None):
-    if not name:      # warning: `""` and `None` are both falsy
-        ...
-    if name is None:  # ok — the members are told apart
         ...
 ```
 
@@ -50,15 +60,15 @@ class A:
     def __bool__(self) -> True:
         return True
 
-def f(a: A | None):
+def f(a: A | False):
     if a:      # ok — `A`
         ...
-    if not a:  # ok — `None`
+    if not a:  # ok — `False`
         ...
 ```
 
-without `__bool__` (or `__len__`), a subclass could still be falsy, so `A` joins `None` in the falsy
-branch and `if not a` is reported. the `analysis.overlapping-condition-assume-truthy-instances`
+without `__bool__` (or `__len__`), a subclass could still be falsy, so `A` joins `False` in the
+falsy branch and `if not a` is reported. the `analysis.overlapping-condition-assume-truthy-instances`
 option takes such a class at face value instead
 
 ```toml
@@ -73,88 +83,41 @@ looking for is the asymmetry: one member unconditionally here, another only in t
 that answers this way
 
 ```by
-def f(a: str | bytes, b: str?):
+def f(a: str | bytes, b: str | False):
     if a: ...      # ok — both members are only partly here
-    if not b: ...  # warning: `None` is always here, `""` only sometimes
+    if not b: ...  # warning: `False` is always here, `""` only sometimes
 ```
 
 members of one class — or of two classes where one derives the other — are one kind of value, and a
 condition was never going to tell them apart either. `Literal[1] | Literal[2]` is not an overlap,
 and neither is `list[A] | list[B]`: type arguments are not something truthiness can see.
 `analysis.overlapping-condition-exempt-types` extends that to classes of your choosing, so a project
-that does not mind conflating a falsy `int` with anything else can say so
+that does not mind conflating an empty `str` with anything else can say so
 
 ```toml
 [analysis]
-overlapping-condition-exempt-types = ["int"]
+overlapping-condition-exempt-types = ["str"]
 ```
 
 entries are qualified class names (`decimal.Decimal`); a class in `builtins` may also be spelled
-bare, and `None` stands for the type of `None`. an entry that is not spelled like a class name is a
+bare. an entry that is not spelled like a class name is a
 configuration error; one that is well-formed but resolves to nothing simply never matches
 
 ## redundant conditions
 
-`redundant-condition` fires when the tested value's own type fixes the outcome, so one of the two
-branches is dead
+a condition whose outcome the tested type already fixes leaves one of its branches dead.
+`redundant-condition` reports it, and `redundant-condition-strict` (off by default) reports the
+cases more likely to be deliberate, such as a value that is `True` or `False` itself
 
-```by
-def f(a: True):
-    if a:  # warning: always true
+```python
+def f(point: tuple[int]):
+    if point:  # warning: a 1-element tuple is always truthy
         ...
 ```
 
-the check applies to a value *read* — a name, an attribute, a subscript. a comparison or a call
-computes a fresh value, and ty folding *that* one is the statically-known-branch machinery doing its
-job: `elif isinstance(x, B):` closing an exhaustive chain is deliberate, and so is `while True`
-
-what a read is worth differs by what ty knows about the place, so the same flag written two ways
-does not report the same way. a *name* is read at its narrowed type, so a module-level constant is
-one — its single assignment fixes the outcome and a branch guarded by it is dead. an attribute or a
-subscript is read at its *declared* type, which for a `bool`-valued flag is `bool`, so the same
-constant written as a class attribute is not reported
-
-the declared type is what decides it because an attribute reaches into an object that any call in
-between may have written to. ty holds a narrowing across such a call — that is what makes attribute
-narrowing usable — so a constant read off one is the narrowing's doing rather than the program's:
-
-```by
-class Latch:
-    var on: bool
-
-    def flip(self):
-        self.on = True
-
-def f(latch: Latch):
-    latch.on = False
-    latch.flip()
-    if latch.on:  # ok — `flip` may have written it, and `on` is declared `bool`
-        ...
-```
-
-```by
-DEBUG = False
-
-if DEBUG:  # warning: always false — the branch is dead
-
-class Settings:
-    ENABLED: bool = False
-
-    def run(self) -> None:
-        if self.ENABLED:  # ok — an attribute reads as its declared `bool`
-            ...
-```
-
-a constant flag whose dead branch is deliberate is what `# ty: ignore[redundant-condition]` is for,
-or turn the rule off for the module. the [artificial](#artificial-truthiness) exemption below is not
-it: that covers constants ty *manufactures*, not ones the program sets
-
-## artificial truthiness
-
-some constants are constant only because of how ty models the build it is checking for.
-`TYPE_CHECKING`, `sys.version_info`, `sys.platform` and `os.name` all carry a fixed value that the
-program itself never computes, and selecting a branch with one is the entire point of writing it.
-their truthiness is *artificial*, and a redundant-condition report on it would be wrong
+constants that only the checker's model of the build fixes — `TYPE_CHECKING`, `sys.version_info`,
+`sys.platform`, `os.name`, and anything defined from them — are not reported: selecting a branch
+with one is the entire point of writing it
 
 ```py
 import sys
@@ -166,10 +129,6 @@ if TYPE_CHECKING:                    # ok
 if sys.version_info >= (3, 12):      # ok
     ...
 ```
-
-`sys.version_info` has a type of its own and is recognised wherever it is bound. the others are
-ordinary literals by the time they have a type, so they are recognised by the module they are read
-off (`sys.platform`) or by their name (`TYPE_CHECKING`) — an import that renames them is missed
 
 ## redundant boolean comparisons
 

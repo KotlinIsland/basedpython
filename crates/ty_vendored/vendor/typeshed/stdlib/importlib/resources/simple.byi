@@ -54,10 +54,10 @@ if sys.version_info >= (3, 11):
 
         parent: ResourceContainer
         init(self, parent: ResourceContainer, name: str)
-        def is_file(self) -> True
-        def is_dir(self) -> False
+        override def is_file(self) -> True
+        override def is_dir(self) -> False
 
-        def open(
+        override def open(
             self,
             mode: "r" = "r",
             encoding: str? = None,
@@ -69,7 +69,7 @@ if sys.version_info >= (3, 11):
         def open(self, mode: "rb") -> BinaryIO
         def open(self, mode: str) -> IO[dynamic]
 
-        def joinpath(self, name: Never) -> Never
+        override def joinpath(self, name: Never) -> Never
 
     class ResourceContainer(Traversable, metaclass=abc.ABCMeta):
         """
@@ -78,10 +78,10 @@ if sys.version_info >= (3, 11):
 
         reader: SimpleReader
         init(self, reader: SimpleReader)
-        def is_dir(self) -> True
-        def is_file(self) -> False
-        def iterdir(self) -> Iterator[ResourceHandle | ResourceContainer]
-        def open(self, *args: Never, **kwargs: Never) -> Never
+        override def is_dir(self) -> True
+        override def is_file(self) -> False
+        override def iterdir(self) -> Iterator[ResourceHandle | ResourceContainer]
+        override def open(self, *args: Never, **kwargs: Never) -> Never
         if sys.version_info < (3, 12):
             def joinpath(self, *descendants: StrPath) -> Traversable
 
@@ -92,4 +92,4 @@ if sys.version_info >= (3, 11):
         interface by supplying the SimpleReader interface.
         """
 
-        def files(self) -> ResourceContainer
+        override def files(self) -> ResourceContainer

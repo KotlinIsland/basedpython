@@ -44,7 +44,7 @@ class Token:
     address: _Address?
     id: str | bytes | int | None
     init(self, typeid: bytes | str | None, address: _Address?, id: str | bytes | int | None)
-    def __getstate__(self) -> (str | bytes | None, (str | bytes, int), str | bytes | int | None)
+    override def __getstate__(self) -> (str | bytes | None, (str | bytes, int), str | bytes | int | None)
     def __setstate__(self, state: (str | bytes | None, (str | bytes, int), str | bytes | int | None))
 
 class BaseProxy:
@@ -91,24 +91,24 @@ class ValueProxy[in out Element](BaseProxy):
 if sys.version_info >= (3, 13):
     class _BaseDictProxy[in out Key, in out Value](BaseProxy, MutableMapping[Key, Value]):
         __builtins__: ClassVar[dict[str, dynamic]]
-        def __len__(self) -> int
-        def __getitem__(self, key: Key, /) -> Value
-        def __setitem__(self, key: Key, value: Value, /)
-        def __delitem__(self, key: Key, /)
-        def __iter__(self) -> Iterator[Key]
+        override def __len__(self) -> int
+        override def __getitem__(self, key: Key, /) -> Value
+        override def __setitem__(self, key: Key, value: Value, /)
+        override def __delitem__(self, key: Key, /)
+        override def __iter__(self) -> Iterator[Key]
         def copy(self) -> dict[Key, Value]
 
-        def get(self, key: Key, /) -> Value | None
+        override def get(self, key: Key, /) -> Value | None
         def get(self, key: Key, default: Value, /) -> Value
         def get[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def pop(self, key: Key, /) -> Value
+        override def pop(self, key: Key, /) -> Value
         def pop(self, key: Key, default: Value, /) -> Value
         def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def keys(self) -> list[Key]
-        def items(self) -> list[(Key, Value)]
-        def values(self) -> list[Value]
+        override def keys(self) -> list[Key]
+        override def items(self) -> list[(Key, Value)]
+        override def values(self) -> list[Value]
         if sys.version_info >= (3, 14):
             # Next methods are copied from builtins.dict
             def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic?]
@@ -136,62 +136,62 @@ if sys.version_info >= (3, 13):
 else:
     class DictProxy[in out Key, in out Value](BaseProxy, MutableMapping[Key, Value]):
         __builtins__: ClassVar[dict[str, dynamic]]
-        override def __len__(self) -> int
-        override def __getitem__(self, key: Key, /) -> Value
-        override def __setitem__(self, key: Key, value: Value, /)
-        override def __delitem__(self, key: Key, /)
-        override def __iter__(self) -> Iterator[Key]
+        def __len__(self) -> int
+        def __getitem__(self, key: Key, /) -> Value
+        def __setitem__(self, key: Key, value: Value, /)
+        def __delitem__(self, key: Key, /)
+        def __iter__(self) -> Iterator[Key]
         def copy(self) -> dict[Key, Value]
 
-        override def get(self, key: Key, /) -> Value | None
+        def get(self, key: Key, /) -> Value | None
         def get(self, key: Key, default: Value, /) -> Value
         def get[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        override def pop(self, key: Key, /) -> Value
+        def pop(self, key: Key, /) -> Value
         def pop(self, key: Key, default: Value, /) -> Value
         def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        override def keys(self) -> list[Key]
-        override def items(self) -> list[(Key, Value)]
-        override def values(self) -> list[Value]
+        def keys(self) -> list[Key]
+        def items(self) -> list[(Key, Value)]
+        def values(self) -> list[Value]
 
 if sys.version_info >= (3, 14):
     class _BaseSetProxy[in out Element](BaseProxy, MutableSet[Element]):
         __builtins__: ClassVar[dict[str, dynamic]]
         # Copied from builtins.set
-        def add(self, element: Element, /)
+        override def add(self, element: Element, /)
         def copy(self) -> set[Element]
-        def clear(self)
+        override def clear(self)
         def difference(self, *s: Iterable[dynamic]) -> set[Element]
         def difference_update(self, *s: Iterable[dynamic])
-        def discard(self, element: Element, /)
+        override def discard(self, element: Element, /)
         def intersection(self, *s: Iterable[dynamic]) -> set[Element]
         def intersection_update(self, *s: Iterable[dynamic])
-        def isdisjoint(self, s: Iterable[dynamic], /) -> bool
+        override def isdisjoint(self, s: Iterable[dynamic], /) -> bool
         def issubset(self, s: Iterable[dynamic], /) -> bool
         def issuperset(self, s: Iterable[dynamic], /) -> bool
-        def pop(self) -> Element
-        def remove(self, element: Element, /)
+        override def pop(self) -> Element
+        override def remove(self, element: Element, /)
         def symmetric_difference(self, s: Iterable[Element], /) -> set[Element]
         def symmetric_difference_update(self, s: Iterable[Element], /)
         def union[Other](self, *s: Iterable[Other]) -> set[Element | Other]
         def update(self, *s: Iterable[Element])
-        def __len__(self) -> int
-        def __contains__(self, o: object, /) -> bool
-        def __iter__(self) -> Iterator[Element]
-        def __and__(self, value: AbstractSet[object], /) -> set[Element]
-        def __iand__(self, value: AbstractSet[object], /) -> Self
-        def __or__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
-        def __ior__(self, value: AbstractSet[Element], /) -> Self
-        def __sub__(self, value: AbstractSet[Element | None], /) -> set[Element]
-        def __isub__(self, value: AbstractSet[object], /) -> Self
-        def __xor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
-        def __ixor__(self, value: AbstractSet[Element], /) -> Self
-        def __le__(self, value: AbstractSet[object], /) -> bool
-        def __lt__(self, value: AbstractSet[object], /) -> bool
-        def __ge__(self, value: AbstractSet[object], /) -> bool
-        def __gt__(self, value: AbstractSet[object], /) -> bool
-        def __eq__(self, value: object, /) -> bool
+        override def __len__(self) -> int
+        override def __contains__(self, o: object, /) -> bool
+        override def __iter__(self) -> Iterator[Element]
+        override def __and__(self, value: AbstractSet[object], /) -> set[Element]
+        override def __iand__(self, value: AbstractSet[object], /) -> Self
+        override def __or__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
+        override def __ior__(self, value: AbstractSet[Element], /) -> Self
+        override def __sub__(self, value: AbstractSet[Element | None], /) -> set[Element]
+        override def __isub__(self, value: AbstractSet[object], /) -> Self
+        override def __xor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
+        override def __ixor__(self, value: AbstractSet[Element], /) -> Self
+        override def __le__(self, value: AbstractSet[object], /) -> bool
+        override def __lt__(self, value: AbstractSet[object], /) -> bool
+        override def __ge__(self, value: AbstractSet[object], /) -> bool
+        override def __gt__(self, value: AbstractSet[object], /) -> bool
+        override def __eq__(self, value: object, /) -> bool
         def __rand__(self, value: AbstractSet[object], /) -> set[Element]
         def __ror__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
         def __rsub__(self, value: AbstractSet[Element], /) -> set[Element]
@@ -225,7 +225,7 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     override def remove(self, value: Element, /)
     if sys.version_info >= (3, 14):
         # Next methods are copied from builtins.list
-        def clear(self)
+        override def clear(self)
         def copy(self) -> list[Element]
 
     # Use BaseListProxy[SupportsRichComparisonT] for the first overload rather than [SupportsRichComparison]

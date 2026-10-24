@@ -184,10 +184,10 @@ impl BackgroundDocumentRequestHandler for DataFlowRequestHandler {
         {
             return Ok(None);
         }
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
-        let document = snapshot.uri();
+        let document = snapshot.document().uri();
         // a one-based line of zero is not a line. answering nothing is right: there is no
         // statement above the first one for a program to be stopped after
         let Some(line) = OneIndexed::new(params.line as usize) else {

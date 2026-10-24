@@ -215,6 +215,23 @@ def sink[X](x: X) -> None: ...
 reveal_type(pipe(sink))  # revealed: (Unknown, /) -> None
 ```
 
+## an empty collection passed where a type is expected
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+an empty `{}` with nothing around it is a `dict[Never, Never]`. passed as an argument, it takes the
+parameter's type instead, and that holds for the namespace of a three-argument `type()` call too:
+
+```py
+class Base: ...
+
+Dynamic = type("Dynamic", (Base,), {})  # no diagnostic
+reveal_type(Dynamic)  # revealed: <class 'Dynamic'>
+```
+
 ## the call still returns
 
 ```toml

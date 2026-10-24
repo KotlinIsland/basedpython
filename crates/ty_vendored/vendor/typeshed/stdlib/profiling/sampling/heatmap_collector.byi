@@ -19,10 +19,10 @@ class HeatmapCollector(Collector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False):
         """Initialize the heatmap collector with data structures for analysis."""
 
-    def collect(
+    override def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
     )
-    def export(self, output_path: StrOrBytesPath):
+    override def export(self, output_path: StrOrBytesPath):
         """Export heatmap data as HTML files in a directory.
 
         Args:

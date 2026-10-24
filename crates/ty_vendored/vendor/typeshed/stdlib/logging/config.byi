@@ -142,7 +142,7 @@ if sys.version_info >= (3, 12):
     class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
-        def __getitem__(self, key: SupportsIndex) -> dynamic
+        override def __getitem__(self, key: SupportsIndex) -> dynamic
         def __getitem__(self, key: slice[SupportsIndex?]) -> dynamic
 
 else:
@@ -150,7 +150,7 @@ else:
     class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
-        override def __getitem__(self, key: SupportsIndex) -> dynamic
+        def __getitem__(self, key: SupportsIndex) -> dynamic
         def __getitem__(self, key: slice[SupportsIndex?]) -> dynamic
 
 class BaseConfigurator:

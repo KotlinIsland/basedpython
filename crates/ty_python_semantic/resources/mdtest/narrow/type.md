@@ -270,15 +270,17 @@ def _(x: A | B, y: object):
 ## No narrowing for custom `type` callable
 
 ```py
+from builtins import type as builtin_type
+
 class A: ...
 class B: ...
 
-def type(x):
+def type(x) -> builtin_type:
     return int
 
 def _(x: A | B):
     if type(x) is A:
-        reveal_type(x)  # revealed: Never
+        reveal_type(x)  # revealed: A | B
     else:
         reveal_type(x)  # revealed: A | B
 ```

@@ -294,6 +294,11 @@ class partial[in out Element]:
     def __call__(self, /, *args: dynamic, **kwargs: dynamic) -> Element:
         """Call self as a function."""
 
+    if sys.version_info >= (3, 14):
+        def __get__(self, instance: None, owner: type[dynamic]? = None, /) -> Self:
+            """Return an attribute of instance, which is of type owner."""
+        def __get__(self, instance: object, owner: type[dynamic]? = None, /) -> (...) -> Element
+
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """partial is generic over the wrapped function's return type"""
 

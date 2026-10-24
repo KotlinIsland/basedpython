@@ -40,7 +40,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
         let only = params.context.only;
         let invoked = params.context.trigger_kind == Some(types::CodeActionTriggerKind::Invoked);
 
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         let program_file = db.program_file(file);
@@ -105,7 +105,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
             // This is only for actions that are messy to compute at the time of the diagnostic.
             // For instance, suggesting imports requires finding symbols for the entire project,
             // which is dubious when you're in the middle of resolving symbols.
-            let uri = snapshot.uri();
+            let uri = snapshot.document().uri();
             let encoding = snapshot.encoding();
             if let Some(diagnostic_id) = diagnostic_id
                 && let Some(range) = diagnostic.range.to_text_range(db, file, uri, encoding)
@@ -188,7 +188,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
             && let Some(range) =
                 params
                     .range
-                    .to_text_range(db, file, snapshot.uri(), snapshot.encoding())
+                    .to_text_range(db, file, snapshot.document().uri(), snapshot.encoding())
         {
             for offer in refactors(db, program_file, range, &wanted) {
                 let kind = CodeActionKind::new(offer.kind.code_action_kind());
@@ -273,7 +273,7 @@ fn refactor_action(
         .supports_code_action_edit_resolve()
     {
         let data = RefactorData {
-            uri: snapshot.uri().clone(),
+            uri: snapshot.document().uri().clone(),
             version: snapshot.document().version(),
             refactor: kind.id().to_string(),
             range: lsp_range,

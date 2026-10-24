@@ -51,6 +51,20 @@
 //! imported typevar, an unusual base) is left in legacy form rather than
 //! risking a broken stub. generic functions and type aliases are likewise left
 //! alone — they keep referencing the legacy declarations, which are retained
+//!
+//! a function whose signature uses a typevar imported from another module is
+//! left in legacy form as a whole, unless an enclosing class binds that typevar.
+//! converting only its own typevars would give it a type-parameter list beside a
+//! legacy typevar nothing binds, which the typing spec does not allow, and which
+//! leaves that typevar unsolved at every call:
+//!
+//! ```python
+//! from _typeshed import SupportsRichComparisonT
+//! def max(iterable: Iterable[SupportsRichComparisonT], *, default: _T) -> SupportsRichComparisonT | _T: ...
+//! ```
+//!
+//! the conversion reads one module at a time, so which imported names are
+//! typevars comes from a [`TypeVarIndex`] of every module
 
 use std::collections::{HashMap, HashSet};
 
@@ -104,9 +118,69 @@ struct Decl<'a> {
 
 type Table<'a> = HashMap<&'a str, Decl<'a>>;
 
+/// the legacy typevars each module declares at module level, by module name
+#[derive(Default)]
+pub struct TypeVarIndex(HashMap<String, HashSet<String>>);
+
+impl TypeVarIndex {
+    /// record the typevars `module` declares
+    pub fn insert(&mut self, module: String, parsed: &Parsed<ModModule>) {
+        let table = collect_decls(&parsed.syntax().body);
+        if !table.is_empty() {
+            self.0
+                .insert(module, table.keys().map(ToString::to_string).collect());
+        }
+    }
+
+    /// the names `body` binds by importing a typevar another module declares
+    fn imported_into<'a>(&self, body: &'a [Stmt]) -> HashSet<&'a str> {
+        let mut names = HashSet::new();
+        self.walk_imports(body, &mut names);
+        names
+    }
+
+    fn walk_imports<'a>(&self, body: &'a [Stmt], names: &mut HashSet<&'a str>) {
+        for stmt in body {
+            match stmt {
+                Stmt::ImportFrom(import) if import.level == 0 => {
+                    let Some(declared) = import
+                        .module
+                        .as_ref()
+                        .and_then(|module| self.0.get(module.as_str()))
+                    else {
+                        continue;
+                    };
+                    for alias in &import.names {
+                        if declared.contains(alias.name.as_str()) {
+                            names.insert(alias.asname.as_ref().unwrap_or(&alias.name).as_str());
+                        }
+                    }
+                }
+                Stmt::If(node) => {
+                    self.walk_imports(&node.body, names);
+                    for clause in &node.elif_else_clauses {
+                        self.walk_imports(&clause.body, names);
+                    }
+                }
+                Stmt::Try(node) => {
+                    self.walk_imports(&node.body, names);
+                    for handler in &node.handlers {
+                        let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
+                        self.walk_imports(&handler.body, names);
+                    }
+                    self.walk_imports(&node.orelse, names);
+                    self.walk_imports(&node.finalbody, names);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// convert every legacy generic class in `parsed` to pep 695 form. returns
-/// disjoint text edits over `source` (see [`crate::apply_edits`])
-pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+/// disjoint text edits over `source` (see [`crate::apply_edits`]). `index` says
+/// which names the module imports are typevars of other modules
+pub fn convert_module(parsed: &Parsed<ModModule>, source: &str, index: &TypeVarIndex) -> Vec<Edit> {
     let module = parsed.syntax();
     let table = collect_decls(&module.body);
     if table.is_empty() {
@@ -118,6 +192,7 @@ pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
     // own type parameters exclude the ones its class already declares
     let mut ctx = Ctx {
         table: &table,
+        imported: index.imported_into(&module.body),
         source,
         module_names: collect_module_names(&module.body, &table),
         edits: Vec::new(),
@@ -163,6 +238,8 @@ pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
 /// accumulators threaded through the scope walk
 struct Ctx<'a> {
     table: &'a Table<'a>,
+    /// the names the module binds by importing another module's typevar
+    imported: HashSet<&'a str>,
     source: &'a str,
     /// every name the module itself binds, which a type-parameter name must not
     /// shadow
@@ -202,7 +279,7 @@ fn convert_scope<'a>(body: &'a [Stmt], bound: &mut Vec<Scope<'a>>, ctx: &mut Ctx
                         scope
                     }
                     None => Scope {
-                        legacy: class_bound_typevars(class, ctx.table),
+                        legacy: class_bound_typevars(class, ctx.table, &ctx.imported),
                         rendered: HashSet::new(),
                     },
                 };
@@ -241,15 +318,45 @@ fn convert_scope<'a>(body: &'a [Stmt], bound: &mut Vec<Scope<'a>>, ctx: &mut Ctx
 }
 
 /// the typevars a class declares: every known typevar appearing in its base
-/// list. these are excluded from any method's own type parameters
-fn class_bound_typevars<'a>(class: &'a StmtClassDef, table: &Table<'a>) -> HashSet<&'a str> {
+/// list, its own module's or an imported one. these are excluded from any
+/// method's own type parameters
+fn class_bound_typevars<'a>(
+    class: &'a StmtClassDef,
+    table: &Table<'a>,
+    imported: &HashSet<&'a str>,
+) -> HashSet<&'a str> {
     let mut names = Vec::new();
     if let Some(args) = &class.arguments {
         for base in &args.args {
             collect_free_typevars(base, table, &mut names);
+            names.extend(imported_typevars(base, imported));
         }
     }
     names.into_iter().collect()
+}
+
+/// the imported typevars `expr` names
+fn imported_typevars<'a>(expr: &'a Expr, imported: &HashSet<&'a str>) -> Vec<&'a str> {
+    struct Finder<'a, 'b> {
+        imported: &'b HashSet<&'a str>,
+        found: Vec<&'a str>,
+    }
+    impl<'a> SourceOrderVisitor<'a> for Finder<'a, '_> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr
+                && let Some(imported) = self.imported.get(name.id.as_str())
+            {
+                self.found.push(imported);
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut finder = Finder {
+        imported,
+        found: Vec::new(),
+    };
+    finder.visit_expr(expr);
+    finder.found
 }
 
 /// convert a generic function/method to pep 695 form, returning the legacy
@@ -275,6 +382,18 @@ fn convert_function<'a>(
     }
     params.retain(|name| !bound.iter().any(|scope| scope.legacy.contains(name)));
     if params.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // a typevar imported from another module stays legacy, so a function that
+    // uses one nothing encloses stays legacy as a whole: a type-parameter list
+    // beside an unbound legacy typevar is not a valid signature
+    let uses_unbound_import = signature.iter().any(|expr| {
+        imported_typevars(expr, &ctx.imported)
+            .iter()
+            .any(|name| !bound.iter().any(|scope| scope.legacy.contains(name)))
+    });
+    if uses_unbound_import {
         return (Vec::new(), Vec::new());
     }
 
@@ -1048,8 +1167,60 @@ mod tests {
 
     fn convert(src: &str) -> String {
         let parsed = parse_unchecked_source(src, PySourceType::BasedPythonStub);
-        let edits = convert_module(&parsed, src);
+        let edits = convert_module(&parsed, src, &TypeVarIndex::default());
         apply_edits(src, edits)
+    }
+
+    /// convert `src` knowing that `_typeshed` declares `SupportsRichComparisonT` and
+    /// `typing` declares `AnyStr`
+    fn convert_with_imports(src: &str) -> String {
+        let mut index = TypeVarIndex::default();
+        for (module, declaration) in [
+            (
+                "_typeshed",
+                "SupportsRichComparisonT = TypeVar(\"SupportsRichComparisonT\")\n",
+            ),
+            ("typing", "AnyStr = TypeVar(\"AnyStr\", str, bytes)\n"),
+        ] {
+            let parsed = parse_unchecked_source(declaration, PySourceType::BasedPythonStub);
+            index.insert(module.to_string(), &parsed);
+        }
+        let parsed = parse_unchecked_source(src, PySourceType::BasedPythonStub);
+        let edits = convert_module(&parsed, src, &index);
+        apply_edits(src, edits)
+    }
+
+    #[test]
+    fn a_function_using_an_imported_typevar_stays_legacy() {
+        let src = "\
+from _typeshed import SupportsRichComparisonT
+_T = TypeVar(\"_T\")
+def max(iterable: Iterable[SupportsRichComparisonT], *, default: _T) -> SupportsRichComparisonT | _T: ...
+def first(iterable: Iterable[_T]) -> _T: ...
+";
+        let expected = "\
+from _typeshed import SupportsRichComparisonT
+_T = TypeVar(\"_T\")
+def max(iterable: Iterable[SupportsRichComparisonT], *, default: _T) -> SupportsRichComparisonT | _T: ...
+def first[Element](iterable: Iterable[Element]) -> Element: ...
+";
+        assert_eq!(convert_with_imports(src), expected);
+    }
+
+    #[test]
+    fn an_imported_typevar_a_class_binds_does_not_stop_its_methods_converting() {
+        let src = "\
+from typing import AnyStr
+_T = TypeVar(\"_T\")
+class Match(Generic[AnyStr]):
+    def group(self, default: _T) -> AnyStr | _T: ...
+";
+        let expected = "\
+from typing import AnyStr
+class Match(Generic[AnyStr]):
+    def group[Element](self, default: Element) -> AnyStr | Element: ...
+";
+        assert_eq!(convert_with_imports(src), expected);
     }
 
     #[test]

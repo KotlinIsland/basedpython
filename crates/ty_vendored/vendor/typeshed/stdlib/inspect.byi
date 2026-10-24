@@ -315,10 +315,10 @@ def isgenerator(object: object) -> object is GeneratorType[object, Never, object
         throw()         used to raise an exception inside the generator
     """
 
-def iscoroutine(object: object) -> object is CoroutineType[object, Never, object]:
+def iscoroutine(object: object) -> object is CoroutineType[dynamic, dynamic, dynamic]:
     """Return true if the object is a coroutine."""
 
-def isawaitable(object: object) -> object is Awaitable[object]:
+def isawaitable(object: object) -> object is Awaitable[dynamic]:
     """Return true if object can be passed to an ``await`` expression."""
 
 def isasyncgenfunction(obj: (...) -> AsyncGenerator[dynamic, dynamic]) -> bool:

@@ -16,3 +16,69 @@ def h(a: int)[ -> "x" | None]:
 
 def raiser()[ -> Never][ raises TypeError]:
     raise TypeError
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL | def f()[ -> 1]:
+   |             ^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:19
+   |
+LL | def h(a: int)[ -> "x" | None]:
+   |                   ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/types.byi:LL:13
+   |
+LL | final class NoneType:
+   |             ^^^^^^^^
+info: Source
+  --> main2.py:LL:25
+   |
+LL | def h(a: int)[ -> "x" | None]:
+   |                         ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/typing_extensions.byi:LL:9
+   |
+LL |         Never,
+   |         ^^^^^
+info: Source
+  --> main2.py:LL:18
+   |
+LL | def raiser()[ -> Never][ raises TypeError]:
+   |                  ^^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+1  |
+   - def f():
+2  + def f() -> 1:
+3  |     return 1
+--------------------------------------------------------------------------------
+7  |
+   - def h(a: int):
+8  + def h(a: int) -> "x" | None:
+9  |     if a:
+10 |         return 'x'
+11 |     return None
+12 |
+   - def raiser():
+13 + def raiser() -> Never:
+14 |     raise TypeError
+   |

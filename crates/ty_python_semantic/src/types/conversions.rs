@@ -312,7 +312,7 @@ fn discards_return<'db>(
     let anything = KnownClass::Object.to_instance(db, env);
     let ignores_return = target_callables
         .map(|callable| callable.with_return_type(db, anything))
-        .into_type(db, env);
+        .to_type(db, env);
     if !source.is_assignable_to(db, env, ignores_return) {
         return false;
     }
@@ -323,7 +323,7 @@ fn discards_return<'db>(
     let none = Type::none(db, env);
     source_callables
         .map(|callable| callable.with_return_type(db, none))
-        .into_type(db, env)
+        .to_type(db, env)
         .is_assignable_to(db, env, target)
 }
 
@@ -895,7 +895,7 @@ pub(crate) fn call_parameter_types<'db>(
 
     let db = model.db();
     let arguments = CallArguments::from_arguments_typed(&call.arguments, |splatted_value| {
-        crate::HasType::inferred_type(splatted_value, model).unwrap_or_else(Type::unknown)
+        crate::HasType::inferred_type(splatted_value, model)
     });
     let constraints = ConstraintSetBuilder::new();
     // a conversion site's binding *does* carry an argument error — the checker

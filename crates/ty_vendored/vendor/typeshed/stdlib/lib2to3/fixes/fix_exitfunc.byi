@@ -13,5 +13,5 @@ class FixExitfunc(fixer_base.BaseFix):
     PATTERN: ClassVar[str]
     init(self, *args)
     sys_import: Incomplete?
-    override def start_tree(self, tree: Node, filename: StrPath)
-    override def transform(self, node, results)
+    def start_tree(self, tree: Node, filename: StrPath)
+    def transform(self, node, results)

@@ -468,7 +468,7 @@ def urlparse(url: str, scheme: str = "", allow_fragments: bool = True) -> ParseR
     urlsplit() should generally be used instead of urlparse().
     """
 def urlparse(
-    url: bytes | bytearray | None, scheme: bytes | bytearray | None | "" = "", allow_fragments: bool = True
+    url: bytes | bytearray | None, scheme: bytes | bytearray | "" | None = "", allow_fragments: bool = True
 ) -> ParseResultBytes
 if sys.version_info >= (3, 15):
     def urlparse(
@@ -500,14 +500,14 @@ if sys.version_info >= (3, 15):
     ) -> ParseResult[str]
     def urlparse(
         url: bytes | bytearray | None,
-        scheme: bytes | bytearray | None | "" = "",
+        scheme: bytes | bytearray | "" | None = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: True,
     ) -> ParseResultBytes[bytes?]
     def urlparse(
         url: bytes | bytearray | None,
-        scheme: bytes | bytearray | None | "" = "",
+        scheme: bytes | bytearray | "" | None = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: False = False,
@@ -517,7 +517,7 @@ if sys.version_info >= (3, 15):
     ) -> ParseResult[str?]
     def urlparse(
         url: bytes | bytearray | None,
-        scheme: bytes | bytearray | None | "" = "",
+        scheme: bytes | bytearray | "" | None = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: bool,
@@ -545,7 +545,7 @@ def urlsplit(url: str, scheme: str = "", allow_fragments: bool = True) -> SplitR
     """
 
 if sys.version_info >= (3, 11):
-    def urlsplit(url: bytes?, scheme: bytes? | "" = "", allow_fragments: bool = True) -> SplitResultBytes:
+    def urlsplit(url: bytes?, scheme: bytes | "" | None = "", allow_fragments: bool = True) -> SplitResultBytes:
         """Parse a URL into 5 components:
         <scheme>://<netloc>/<path>?<query>#<fragment>
 
@@ -567,7 +567,7 @@ if sys.version_info >= (3, 11):
         """
 else:
     def urlsplit(
-        url: bytes | bytearray | None, scheme: bytes | bytearray | None | "" = "", allow_fragments: bool = True
+        url: bytes | bytearray | None, scheme: bytes | bytearray | "" | None = "", allow_fragments: bool = True
     ) -> SplitResultBytes:
         """Parse a URL into 5 components:
         <scheme>://<netloc>/<path>?<query>#<fragment>
@@ -616,14 +616,14 @@ if sys.version_info >= (3, 15):
     ) -> SplitResult[str]
     def urlsplit(
         url: bytes?,
-        scheme: bytes? | "" = "",
+        scheme: bytes | "" | None = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: True,
     ) -> SplitResultBytes[bytes?]
     def urlsplit(
         url: bytes?,
-        scheme: bytes? | "" = "",
+        scheme: bytes | "" | None = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: False = False,
@@ -632,7 +632,7 @@ if sys.version_info >= (3, 15):
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: bool
     ) -> SplitResult[str?]
     def urlsplit(
-        url: bytes?, scheme: bytes? | "" = "", allow_fragments: bool = True, *, missing_as_none: bool
+        url: bytes?, scheme: bytes | "" | None = "", allow_fragments: bool = True, *, missing_as_none: bool
     ) -> SplitResultBytes[bytes?]
 
 if sys.version_info >= (3, 15):

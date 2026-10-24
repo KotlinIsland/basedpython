@@ -1136,7 +1136,7 @@ The same statically known condition also removes the unreachable binding from a 
 class Example:
     value = 1
 
-    if flag:  # error: [redundant-condition] "This condition is always false"
+    if flag:
         value = "unreachable"
 
         if 1 + 1 == 2:

@@ -53,7 +53,11 @@ fn narrowing_predicate(expr: &Expr) -> Option<(&ExprCompare, &Expr)> {
     let Expr::Compare(compare) = expr else {
         return None;
     };
-    match (&*compare.ops, &*compare.comparators, compare.left.as_ref()) {
+    match (
+        &*compare.ops,
+        compare.comparators(),
+        compare.first_operand(),
+    ) {
         ([CmpOp::Is], [target], Expr::Name(_)) => Some((compare, target)),
         _ => None,
     }

@@ -638,7 +638,9 @@ Normal branching and merging rules apply to the shadowing behavior described in 
 section:
 
 ```py
-def flag(): ...
+def flag() -> bool:
+    return True
+
 def foo():
     x = 2
 
@@ -648,10 +650,10 @@ def foo():
         if flag():
             x = 3
             # The public types of `x` is shadowed here...
-            reveal_type(x)  # revealed: Never
+            reveal_type(x)  # revealed: Literal[3]
 
         # ...but still visible here.
-        reveal_type(x)  # revealed: Literal[2]
+        reveal_type(x)  # revealed: Literal[3, 2]
 ```
 
 ## Parameter defaults are evaluated before a function's body

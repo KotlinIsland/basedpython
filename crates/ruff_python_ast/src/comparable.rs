@@ -732,10 +732,10 @@ impl<'a> From<&'a ast::FStringValue> for ComparableFString<'a> {
 
         for part in value {
             match part {
-                ast::FStringPart::Literal(string_literal) => {
+                ast::FStringPartRef::Literal(string_literal) => {
                     collector.push_literal(&string_literal.value);
                 }
-                ast::FStringPart::FString(fstring) => {
+                ast::FStringPartRef::FString(fstring) => {
                     for element in &fstring.elements {
                         match element {
                             ast::InterpolatedStringElement::Literal(literal) => {
@@ -969,9 +969,8 @@ pub struct ExprYieldFrom<'a> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ExprCompare<'a> {
-    left: Box<ComparableExpr<'a>>,
     ops: Vec<ComparableCmpOp>,
-    comparators: Vec<ComparableExpr<'a>>,
+    operands: Vec<ComparableExpr<'a>>,
     /// basedpython: `a is int` and `a === int` share an operator but not a
     /// meaning, so two comparisons are only equal when they were spelled the
     /// same way
@@ -1286,16 +1285,14 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 value: value.into(),
             }),
             ast::Expr::Compare(ast::ExprCompare {
-                left,
                 ops,
-                comparators,
+                operands,
                 identity_ops,
                 range: _,
                 node_index: _,
             }) => Self::Compare(ExprCompare {
-                left: left.into(),
                 ops: ops.iter().copied().map(Into::into).collect(),
-                comparators: comparators.iter().map(Into::into).collect(),
+                operands: operands.iter().map(Into::into).collect(),
                 identity_ops: identity_ops
                     .as_ref()
                     .map(|identity| identity.ops.to_vec())

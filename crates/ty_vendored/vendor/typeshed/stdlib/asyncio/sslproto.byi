@@ -168,7 +168,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         """Return True if this transport supports write_eof(), False if not."""
 
     if sys.version_info >= (3, 11):
-        def get_write_buffer_limits(self) -> (int, int)
+        override def get_write_buffer_limits(self) -> (int, int)
         def get_read_buffer_limits(self) -> (int, int)
         def set_read_buffer_limits(self, high: int? = None, low: int? = None):
             """Set the high- and low-water limits for read flow control.
@@ -288,7 +288,7 @@ class SSLProtocol(_SSLProtocolBase):
     def _fatal_error(self, exc: BaseException, message: str = "Fatal error on transport")
     if sys.version_info >= (3, 11):
         def _abort(self, exc: BaseException?) -> None
-        def get_buffer(self, n: int) -> memoryview
+        override def get_buffer(self, n: int) -> memoryview
     else:
         def _abort(self) -> None
         def _finalize(self)

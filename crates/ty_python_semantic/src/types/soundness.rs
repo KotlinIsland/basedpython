@@ -276,7 +276,9 @@ pub(crate) fn call_result_is_typevar_derived<'db>(
         Type::FunctionLiteral(function) => return_mentions_type_var(db, env, function),
         Type::BoundMethod(method) => {
             is_specialized_generic_instance(db, env, method.self_instance(db))
-                || return_mentions_type_var(db, env, method.function(db))
+                || method
+                    .function(db)
+                    .is_some_and(|function| return_mentions_type_var(db, env, function))
         }
         _ => false,
     }
@@ -596,7 +598,9 @@ pub(crate) fn single_signature<'db>(
 ) -> Option<crate::types::signatures::Signature<'db>> {
     let signature: CallableSignature<'db> = match callee {
         Type::FunctionLiteral(function) => function.signature(db).clone(),
-        Type::BoundMethod(method) => method.bound_signatures(db).clone(),
+        Type::BoundMethod(method) if let Some(signatures) = method.bound_signatures(db) => {
+            signatures.clone()
+        }
         _ => return None,
     };
     let [overload] = signature.overloads.as_slice() else {

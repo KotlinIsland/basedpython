@@ -36,8 +36,8 @@ impl<'src> IdentitySwapReverse<'src> {
     }
 
     fn process_compare(&mut self, c: &ruff_python_ast::ExprCompare) {
-        let mut lhs_end = c.left.range().end();
-        for (op, rhs) in c.ops.iter().zip(c.comparators.iter()) {
+        let mut lhs_end = c.first_operand().range().end();
+        for (_, op, rhs) in c.iter() {
             let rhs_start = rhs.range().start();
             let between = &self.source[usize::from(lhs_end)..usize::from(rhs_start)];
             let words: &[&str] = match op {

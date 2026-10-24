@@ -11,9 +11,14 @@ dependencies = ["pygments>=2.19"]
 [project.entry-points."pygments.lexers"]
 basedpython = "basedpython_pygments:BasedPythonLexer"
 
+# flit-core rather than another backend: the workspace pins build backends by hash
+# (`build-constraint-dependencies` in the root `pyproject.toml`), and it is already
+# pinned there. it finds the `basedpython_pygments` module from the project name
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["flit-core>=4,<5"]
+build-backend = "flit_core.buildapi"
 
-[tool.hatch.build.targets.wheel]
-packages = ["basedpython_pygments"]
+# rebuild whenever the lexer changes: installed from a path, the package is otherwise
+# served from uv's build cache, and a check against it would check a stale copy
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "basedpython_pygments/**/*.py" }]

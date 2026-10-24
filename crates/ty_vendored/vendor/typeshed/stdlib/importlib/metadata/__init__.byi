@@ -177,8 +177,8 @@ if sys.version_info >= (3, 11):
             True
             """
 
-        def __hash__(self) -> int
-        def __eq__(self, other: object) -> bool
+        override def __hash__(self) -> int
+        override def __eq__(self, other: object) -> bool
         def __lt__(self, other: object) -> bool
         if sys.version_info < (3, 12):
             def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
@@ -247,8 +247,8 @@ else:
             True
             """
 
-        override def __hash__(self) -> int
-        override def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
+        def __hash__(self) -> int
+        def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
             """
             Supply iter so one may construct dicts of EntryPoints by name.
             """
@@ -260,7 +260,7 @@ if sys.version_info >= (3, 12):
         """
 
         __slots__ = ()
-        def __getitem__(self, name: str) -> EntryPoint:
+        override def __getitem__(self, name: str) -> EntryPoint:
             """
             Get the EntryPoint in self matching name.
             """
@@ -326,7 +326,7 @@ else:
 
         # int argument is deprecated since 3.10
         __slots__ = ()
-        override def __getitem__(self, name: int | str) -> EntryPoint:
+        def __getitem__(self, name: int | str) -> EntryPoint:
             """
             Get the EntryPoint in self matching name.
             """
@@ -591,10 +591,10 @@ class MetadataPathFinder(DistributionFinder):
         """
 
     if sys.version_info >= (3, 11):
-        class def invalidate_caches(cls) -> None
+        override class def invalidate_caches(cls) -> None
     else:
         # Yes, this is an instance method that has a parameter named "cls"
-        override def invalidate_caches(cls) -> None
+        def invalidate_caches(cls) -> None
 
 class PathDistribution(Distribution):
     _path: _SimplePath

@@ -15,7 +15,7 @@
 name = "basedpython"
 version = "0.0.1-b1"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 publish = false
 # cargo-dist reads this crate (it drives the release version); it needs these
 # metadata keys, and the crate is its own workspace so it can't inherit them from
@@ -40,8 +40,8 @@ path = "src/buff.rs"
 [dependencies]
 ty = { path = "../ty" }
 ruff = { path = "../ruff" }
+ruff_command_line = { path = "../ruff_command_line" }
 anyhow = "1.0.80"
-argfile = "1.0.0"
 clap = { version = "4.5.3", features = ["derive"] }
 colored = "3.0.0"
 wild = "2"

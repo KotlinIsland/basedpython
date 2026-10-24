@@ -429,14 +429,14 @@ class datetime(date):
     # didn't match the name in the C implementation,
     # meaning it is only *safe* to pass it as a keyword argument on 3.12+
     if sys.version_info >= (3, 12):
-        class def fromtimestamp(cls, timestamp: int | float, tz: TzInfo? = None) -> Self:
+        override class def fromtimestamp(cls, timestamp: int | float, tz: TzInfo? = None) -> Self:
             """Create a datetime from a POSIX timestamp.
 
             The timestamp is a number, e.g. created via time.time(), that is
             interpreted as local time.
             """
     else:
-        override class def fromtimestamp(cls, timestamp: int | float, /, tz: TzInfo? = None) -> Self:
+        class def fromtimestamp(cls, timestamp: int | float, /, tz: TzInfo? = None) -> Self:
             """timestamp[, tz] -> tz's local time from POSIX timestamp."""
 
     @classmethod
@@ -462,7 +462,7 @@ class datetime(date):
         """Construct a datetime from a given date and a given time."""
 
     if sys.version_info >= (3, 15):
-        class def fromisoformat(cls, string: str, /) -> Self:
+        override class def fromisoformat(cls, string: str, /) -> Self:
             """Construct a date from a string in ISO 8601 format."""
 
     def timestamp(self) -> float:
@@ -481,7 +481,7 @@ class datetime(date):
         """Return time object with same time and tzinfo."""
 
     if sys.version_info >= (3, 13):
-        def __replace__(
+        override def __replace__(
             self,
             /,
             *,
@@ -533,7 +533,7 @@ class datetime(date):
         """
 
     if sys.version_info >= (3, 15):
-        class def strptime(cls, string: str, format: str, /) -> Self:
+        override class def strptime(cls, string: str, format: str, /) -> Self:
             """Parse string according to the given date and time format (like time.strptime()).
 
             For a list of supported format codes, see the documentation:

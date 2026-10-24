@@ -5,7 +5,7 @@ expression: lex_source(source)
 ## Tokens
 ```
 [
-    Name 0..3,
+    Identifier 0..3,
     String 4..12 (flags = DOUBLE_QUOTES),
     Newline 12..12,
 ]

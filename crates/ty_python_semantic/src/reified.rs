@@ -589,12 +589,10 @@ impl<'a> ValueUseFinder<'a> {
     /// against a subscripted type reifies `T` — the lowering compares the
     /// reified cell against the target's type arguments
     fn check_parametric_tests(&mut self, compare: &'a ast::ExprCompare) {
-        let mut lhs: &Expr = &compare.left;
-        for (index, rhs) in compare.comparators.iter().enumerate() {
+        for (index, (lhs, _, rhs)) in compare.iter().enumerate() {
             if matches!(rhs, Expr::Subscript(_)) && compare.is_type_test(index, self.source_type) {
                 self.reify_tested_param(lhs);
             }
-            lhs = rhs;
         }
     }
 

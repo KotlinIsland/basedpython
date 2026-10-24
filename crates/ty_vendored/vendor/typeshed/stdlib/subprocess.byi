@@ -93,7 +93,7 @@ if sys.platform == "win32":
 #    reveal_type(x)  # bytes, based on the overloads
 # except TimeoutError as e:
 #    reveal_type(e.cmd)  # Any, but morally is _CMD
-type _FILE = None | int | IO[dynamic]
+type _FILE = int | IO[dynamic] | None
 private type InputString = ReadableBuffer | str
 type _CMD = StrOrBytesPath | Sequence[StrOrBytesPath]
 if sys.platform == "win32":

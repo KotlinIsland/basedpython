@@ -68,7 +68,7 @@ impl BackgroundDocumentRequestHandler for ExplainTranspilationHandler {
         _client: &Client,
         _params: ExplainTranspilationParams,
     ) -> crate::server::Result<Option<Vec<TranspilationNote>>> {
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
         let source = ruff_db::source::source_text(db, file);

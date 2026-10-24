@@ -34,7 +34,7 @@ iter_exempt: set[str]
 class FixDict(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    override def transform(self, node, results)
+    def transform(self, node, results)
     P1: ClassVar[str]
     p1: ClassVar[Incomplete]
     P2: ClassVar[str]

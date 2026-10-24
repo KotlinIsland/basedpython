@@ -497,7 +497,7 @@ fn map_subscript_alternatives<'db>(
     }
 
     if let Type::Union(union) = full_object_ty {
-        builder = builder.recursively_defined(union.recursively_defined(db));
+        builder = builder.or_recursively_defined(union.recursively_defined(db));
     }
     if errors.is_empty() {
         Ok(if preserves_typevar {
@@ -699,7 +699,24 @@ impl<'db> Type<'db> {
         let value_ty = self;
 
         let inferred = match (value_ty, slice_ty) {
+            (Type::RecursiveVar(_), _) | (_, Type::RecursiveVar(_)) => {
+                unreachable!("semantic operation on an unbound recursive variable")
+            }
             (Type::Dynamic(_) | Type::Divergent(_) | Type::Never, _) => Some(Ok(value_ty)),
+
+            (Type::Recursive(recursive), _) => Some(
+                recursive
+                    .unfold(db, env)
+                    .map(|unfolded| unfolded.subscript(db, env, slice_ty, expr_context, tcx))
+                    .unwrap_or(Ok(value_ty)),
+            ),
+
+            (_, Type::Recursive(recursive)) => Some(
+                recursive
+                    .unfold(db, env)
+                    .map(|unfolded| value_ty.subscript(db, env, unfolded, expr_context, tcx))
+                    .unwrap_or(Ok(value_ty)),
+            ),
 
             (Type::Overlapping(overlapping), _) => Some(overlapping.value_type(db, env).subscript(
                 db,
@@ -735,6 +752,17 @@ impl<'db> Type<'db> {
 
             (_, Type::TypeAlias(alias)) => {
                 Some(value_ty.subscript(db, env, alias.value_type(db), expr_context, tcx))
+            }
+
+            // Expand overlapping alternatives before collecting their subscript errors.
+            (Type::Union(union), _) if union.has_aliases(db) => Some(
+                union
+                    .expand_aliases(db, env)
+                    .subscript(db, env, slice_ty, expr_context, tcx),
+            ),
+
+            (_, Type::Union(union)) if union.has_aliases(db) => {
+                Some(value_ty.subscript(db, env, union.expand_aliases(db, env), expr_context, tcx))
             }
 
             (Type::Union(union), _) => Some(map_subscript_alternatives(
@@ -862,12 +890,14 @@ impl<'db> Type<'db> {
             }
 
             // Ex) Given `("a", 1, Null)[0:2]`, return `("a", 1)`
-            (
-                Type::NominalInstance(maybe_tuple_nominal),
-                Type::NominalInstance(maybe_slice_nominal),
-            ) if let Some(tuple) = maybe_tuple_nominal.tuple_spec(db, env)
-                && let Some(SliceLiteral { start, stop, step }) =
-                    maybe_slice_nominal.slice_literal(db) =>
+            (value_ty, Type::NominalInstance(maybe_slice_nominal))
+                if let Some(SliceLiteral { start, stop, step }) =
+                    maybe_slice_nominal.slice_literal(db)
+                    && let Some(tuple) = match value_ty {
+                        Type::NewTypeInstance(newtype) => newtype.concrete_base_type(db),
+                        _ => value_ty,
+                    }
+                    .tuple_instance_spec(db, env) =>
             {
                 Some(
                     tuple

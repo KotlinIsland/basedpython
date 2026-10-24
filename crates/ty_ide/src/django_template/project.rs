@@ -879,9 +879,19 @@ fn installed_libraries(db: &dyn Db, project: Project) -> Box<[Library]> {
         };
 
         for module in tags.all_submodules(db) {
-            // a stub carries no `@register.filter` to find, so it is the runtime
-            // module beside it that is scanned — and never both
-            let Some(file) = module.file(db).filter(|file| !is_stub(db, *file)) else {
+            // the listing is the typing view, where a stub beside a runtime module
+            // stands in for it. a stub carries no `@register.filter` to find, so it
+            // is the runtime module of the same name that is scanned — and never both
+            let Some(file) = resolve_real_module(
+                db,
+                ImportingFile::File(
+                    importing,
+                    db.program_file(importing).resolver_environment(db),
+                ),
+                module.name(db),
+            )
+            .and_then(|module| module.file(db))
+            .filter(|file| !is_stub(db, *file)) else {
                 continue;
             };
             if let Some(discovered) = library(db, file, source, false) {

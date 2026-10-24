@@ -352,7 +352,7 @@ reveal_type(twice.b)  # revealed: 2
 ```by
 import "data/text.json" as text
 
-reveal_type(text.quoted)  # revealed: "he said \"hi\""
+reveal_type(text.quoted)  # revealed: 'he said "hi"'
 reveal_type(text.lines)  # revealed: "a\nb"
 reveal_type(text.unicode)  # revealed: "héllo"
 ```

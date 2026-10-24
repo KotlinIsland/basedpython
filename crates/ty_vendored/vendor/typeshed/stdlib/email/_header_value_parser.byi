@@ -68,6 +68,7 @@ XXX: provide complete list of token types.
 """
 
 import sys
+from _typeshed import Incomplete
 from collections.abc import Iterable, Iterator
 from email.errors import HeaderParseError, MessageDefect
 from email.policy import Policy
@@ -92,13 +93,13 @@ final NLSET: set[str]
 final SPECIALSNL: set[str]
 
 # Added in Python 3.10.17, 3.11.12, 3.12.9, 3.13.2
-def make_quoted_pairs(value: dynamic) -> str:
+def make_quoted_pairs(value) -> str:
     """Escape dquote and backslash for use within a quoted-string."""
 
-def quote_string(value: dynamic) -> str
+def quote_string(value) -> str
 
 # Added in Python 3.10.20, 3.11.15, 3.12.13, 3.13.12, 3.14.3
-def make_parenthesis_pairs(value: dynamic) -> str:
+def make_parenthesis_pairs(value) -> str:
     """Escape parenthesis and backslash for use within a comment."""
 
 final rfc2047_matcher: Pattern[str]
@@ -108,7 +109,7 @@ class TokenList(list[TokenList | Terminal]):
     syntactic_break: bool
     ew_combine_allowed: bool
     defects: list[MessageDefect]
-    init(self, *args: dynamic, **kw: dynamic)
+    init(self, *args, **kw)
     let value: str
     let all_defects: list[MessageDefect]
     def startswith_fws(self) -> bool
@@ -157,7 +158,7 @@ class BareQuotedString(QuotedString):
 
 class Comment(WhiteSpaceTokenList):
     token_type: str
-    def quote(self, value: dynamic) -> str
+    def quote(self, value) -> str
     let content: str
 
 class AddressList(TokenList):
@@ -311,7 +312,7 @@ class ContentType(ParameterizedHeaderValue):
 class ContentDisposition(ParameterizedHeaderValue):
     token_type: str
     as_ew_allowed: bool
-    content_disposition: dynamic
+    content_disposition: Incomplete
 
 class ContentTransferEncoding(TokenList):
     token_type: str
@@ -477,7 +478,7 @@ def get_dot_atom(value: str) -> (DotAtom, str):
     word.
     """
 
-def get_word(value: str) -> (dynamic, str):
+def get_word(value: str) -> (Incomplete, str):
     """word = atom / quoted-string
 
     Either atom or quoted-string may start with CFWS.  We have to peel off this

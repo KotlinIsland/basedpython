@@ -23,14 +23,14 @@ if sys.version_info >= (3, 14):
         interp: Interpreter?
         results: Queue?
 
-        class def prepare[*Args](
+        override class def prepare[*Args](
             cls, initializer: (*Args) -> object, initargs: (Unpack[Args],)
         ) -> (() -> Self, TaskFunc)
         class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, TaskFunc)
 
         init(self, initdata: Task)
         def __del__(self)
-        def run(self, task: Task)
+        override def run(self, task: Task)
 
     class BrokenInterpreterPool(BrokenThreadPool):
         """
@@ -40,7 +40,7 @@ if sys.version_info >= (3, 14):
     class InterpreterPoolExecutor(ThreadPoolExecutor):
         BROKEN: type[BrokenInterpreterPool]
 
-        class def prepare_context(
+        override class def prepare_context(
             cls, initializer: () -> object, initargs: tuple[()]
         ) -> (() -> WorkerContext, TaskFunc)
         class def prepare_context[*Args](

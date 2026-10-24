@@ -117,7 +117,7 @@ fn is_importable_module<'db>(db: &'db dyn Db, importing_file: File, module: Modu
     // Filter out non-first-party test and private modules, while retaining private
     // typeshed packages that are useful when writing type annotations.
     if is_non_first_party(db, module)
-        && (name.is_test_module() || name.is_private() && !module.is_type_check_only(db))
+        && (name.is_test_module() || name.is_private() && !module.is_bundled_typing_stub(db))
     {
         return false;
     }
@@ -133,10 +133,6 @@ fn is_importable_module<'db>(db: &'db dyn Db, importing_file: File, module: Modu
 }
 
 /// Whether `module` comes from somewhere other than the project's own code.
-///
-/// Note that this will always consider namespace packages to be "not first party." This isn't
-/// necessarily correct, and we can probably improve on this in response to user feedback. (At
-/// time of writing, 2026-02-13, we don't really handle namespace packages in auto-import anyway.)
 fn is_non_first_party<'db>(db: &'db dyn Db, module: Module<'db>) -> bool {
     module.search_path(db).is_none_or(|sp| !sp.is_first_party())
 }

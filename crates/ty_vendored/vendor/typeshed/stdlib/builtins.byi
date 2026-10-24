@@ -42,7 +42,7 @@ from _typeshed import (
     SupportsRichComparisonT,
     SupportsWrite,
 )
-from collections.abc import Awaitable, Callable, Iterable, Iterator, MutableSet, Set as AbstractSet, Sized
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Iterator, MutableSet, Set as AbstractSet, Sized
 from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
 from os import PathLike
 from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplementedType, TracebackType, UnionType
@@ -52,12 +52,13 @@ from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplemented
 from typing import ClassVar, Final, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, final, type_check_only
 
 # we can't import `Literal` from typing or mypy crashes: see #11247
-from typing_extensions import Never, Literal, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
-from ty_extensions import Top
+# ruff: ignore[deprecated-import]
+from typing_extensions import Never, Literal, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023
 
 if sys.version_info >= (3, 14):
     from _typeshed import AnnotateFunc
 
+_T = TypeVar("_T")
 
 # NOTE: step could differ from start and stop, (e.g. datetime/timedelta)l
 #   the default (start|stop) is chosen to cater to the most common case of int/index slices.
@@ -1317,7 +1318,10 @@ class str(Sequence[str]):
 
     def __mod__(self: literal str, value: literal str | (*: literal str), /) -> literal str:
         """Return self%value."""
-    def __mod__(self, value: dynamic, /) -> str
+    def __mod__(self, value: object, /) -> str
+
+    def __rmod__(self, value: str, /) -> str:
+        """Return value%self."""
 
     def __mul__(self: literal str, value: SupportsIndex, /) -> literal str:
         """Return self*value."""
@@ -1786,8 +1790,12 @@ class bytes(Sequence[int]):
     def __rmul__(self, value: SupportsIndex, /) -> bytes:
         """Return value*self."""
 
+    # The format string chooses the conversion, including numbers and %a/%r (PEP 461).
     def __mod__(self, value: dynamic, /) -> bytes:
         """Return self%value."""
+
+    def __rmod__(self, value: bytes, /) -> bytes:
+        """Return value%self."""
 
     # Incompatible with Sequence.__contains__
     override def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
@@ -2330,8 +2338,12 @@ class bytearray(MutableSequence[int]):
     def __imul__(self, value: SupportsIndex, /) -> Self:
         """Implement self*=value."""
 
-    def __mod__(self, value: dynamic, /) -> bytes:
+    # The format string chooses the conversion, including numbers and %a/%r (PEP 461).
+    def __mod__(self, value: dynamic, /) -> bytearray:
         """Return self%value."""
+
+    def __rmod__(self, value: bytearray, /) -> bytearray:
+        """Return value%self."""
 
     # Incompatible with Sequence.__contains__
     override def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
@@ -2396,7 +2408,7 @@ final class memoryview[in out I = int](Sequence[I]):
     def __enter__(self) -> Self
     def __exit__(
         self,
-        exc_type: type[BaseException]?,  # noqa: PYI036 # This is the module declaring BaseException
+        exc_type: type[BaseException]?,  # ruff: ignore[bad-exit-annotation] # This is the module declaring BaseException
         exc_val: BaseException?,
         exc_tb: TracebackType?,
         /,
@@ -2441,7 +2453,7 @@ final class memoryview[in out I = int](Sequence[I]):
     def tolist(self) -> list[int]:
         """Return the data in the buffer as a list of elements."""
 
-    def toreadonly(self) -> memoryview:
+    def toreadonly(self) -> memoryview[I]:
         """Return a readonly version of the memoryview."""
 
     def release(self):
@@ -2475,13 +2487,13 @@ final class memoryview[in out I = int](Sequence[I]):
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 14):
-        def index(self, value: object, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
+        override def index(self, value: object, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
             """Return the index of the first occurrence of a value.
 
             Raises ValueError if the value is not present.
             """
 
-        def count(self, value: object, /) -> int:
+        override def count(self, value: object, /) -> int:
             """Count the number of occurrences of a value."""
 
     else:
@@ -2564,7 +2576,7 @@ final class slice[out StartT = dynamic, out StopT = StartT, out StepT = StartT |
 
     override def __eq__(self, value: object, /) -> bool
     if sys.version_info >= (3, 12):
-        def __hash__(self) -> int
+        override def __hash__(self) -> int
 
     else:
         __hash__: ClassVar[None]
@@ -2611,7 +2623,7 @@ class tuple[out Element](Sequence[Element]):
     def __gt__(self, value: (*: Element), /) -> bool
     def __ge__(self, value: (*: Element), /) -> bool
     override def __eq__(self, value: object, /) -> bool
-    override def __hash__(self) -> int
+    override def __hash__(self: (*: Hashable)) -> int
 
     def __add__(self, value: (*: Element), /) -> (*: Element):
         """Return self+value."""
@@ -2881,15 +2893,16 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
 if sys.version_info >= (3, 15):
     @disjoint_base
     class frozendict[out Key: Hashable, out Value](Mapping[Key, Value]):
-        """dict() -> new empty dictionary
-        dict(mapping) -> new dictionary initialized from a mapping object's
-            (key, value) pairs
-        dict(iterable) -> new dictionary initialized as if via:
+        """frozendict() -> new empty immutable dictionary
+        frozendict(mapping) -> new immutable dictionary initialized from a mapping
+            object's (key, value) pairs
+        frozendict(iterable) -> new immutable dictionary initialized as if via:
             d = {}
             for k, v in iterable:
                 d[k] = v
-        dict(**kwargs) -> new dictionary initialized with the name=value pairs
-            in the keyword argument list.  For example:  dict(one=1, two=2)
+            d = frozendict(d)
+        frozendict(**kwargs) -> new immutable dictionary initialized with the name=value
+            pairs in the keyword argument list.  For example:  frozendict(one=1, two=2)
         """
 
         def __new__(cls, /) -> frozendict[dynamic, dynamic]
@@ -2910,33 +2923,33 @@ if sys.version_info >= (3, 15):
             """Create a new dictionary with keys from iterable and values set to value."""
         class def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> frozendict[Element, Other]
 
-        def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
+        override def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
             """Return the value for key if key is in the dictionary, else default."""
         def get(self, key: Overlapping[Key], default: Value, /) -> Value
         def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
-        def keys(self) -> dict_keys[Key, Value]:
+        override def keys(self) -> dict_keys[Key, Value]:
             """Return a set-like object providing a view on the dict's keys."""
 
-        def values(self) -> dict_values[Key, Value]:
+        override def values(self) -> dict_values[Key, Value]:
             """Return an object providing a view on the dict's values."""
 
-        def items(self) -> dict_items[Key, Value]:
+        override def items(self) -> dict_items[Key, Value]:
             """Return a set-like object providing a view on the dict's items."""
 
-        def __len__(self) -> int:
+        override def __len__(self) -> int:
             """Return len(self)."""
 
-        def __getitem__(self, key: Overlapping[Key], /) -> Value:
+        override def __getitem__(self, key: Overlapping[Key], /) -> Value:
             """Return self[key]."""
 
         def __reversed__(self) -> Iterator[Key]:
             """Return a reverse iterator over the dict keys."""
 
-        def __iter__(self) -> Iterator[Key]:
+        override def __iter__(self) -> Iterator[Key]:
             """Implement iter(self)."""
 
-        def __hash__(self) -> int
+        override def __hash__(self) -> int
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """frozendicts are generic over two types, signifying (respectively) the types of the frozendict's keys and values"""
 
@@ -3024,11 +3037,19 @@ class set[in out Element: Hashable](MutableSet[Element]):
     override def __iand__(self, value: AbstractSet[object], /) -> Self:
         """Return self&=value."""
 
+    def __rand__[Other](self, value: set[Other], /) -> set[Other]:
+        """Return value&self."""
+    def __rand__[Other](self, value: frozenset[Other], /) -> frozenset[Other]
+
     override def __or__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self|value."""
 
     override def __ior__(self, value: AbstractSet[Element], /) -> Self:
         """Return self|=value."""
+
+    def __ror__[Other, WidenElement = Never](self, value: set[Other], /) -> set[Element | Other | WidenElement]:
+        """Return value|self."""
+    def __ror__[Other](self, value: frozenset[Other], /) -> frozenset[Element | Other]
 
     override def __sub__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
         """Return self-value."""
@@ -3036,11 +3057,19 @@ class set[in out Element: Hashable](MutableSet[Element]):
     override def __isub__(self, value: AbstractSet[object], /) -> Self:
         """Return self-=value."""
 
+    def __rsub__[Other](self, value: set[Other], /) -> set[Other]:
+        """Return value-self."""
+    def __rsub__[Other](self, value: frozenset[Other], /) -> frozenset[Other]
+
     override def __xor__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self^value."""
 
     override def __ixor__(self, value: AbstractSet[Element], /) -> Self:
         """Return self^=value."""
+
+    def __rxor__[Other, WidenElement = Never](self, value: set[Other], /) -> set[Element | Other | WidenElement]:
+        """Return value^self."""
+    def __rxor__[Other](self, value: frozenset[Other], /) -> frozenset[Element | Other]
 
     override def __le__(self, value: AbstractSet[object], /) -> bool
     override def __lt__(self, value: AbstractSet[object], /) -> bool
@@ -3094,14 +3123,30 @@ class frozenset[out Element: Hashable](AbstractSet[Element]):
     override def __and__(self, value: AbstractSet[object], /) -> frozenset[Element]:
         """Return self&value."""
 
+    def __rand__[Other](self, value: set[Other], /) -> set[Other]:
+        """Return value&self."""
+    def __rand__[Other](self, value: frozenset[Other], /) -> frozenset[Other]
+
     override def __or__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
         """Return self|value."""
+
+    def __ror__[Other](self, value: set[Other], /) -> set[Element | Other]:
+        """Return value|self."""
+    def __ror__[Other](self, value: frozenset[Other], /) -> frozenset[Element | Other]
 
     override def __sub__(self, value: AbstractSet[object], /) -> frozenset[Element]:
         """Return self-value."""
 
+    def __rsub__[Other](self, value: set[Other], /) -> set[Other]:
+        """Return value-self."""
+    def __rsub__[Other](self, value: frozenset[Other], /) -> frozenset[Other]
+
     override def __xor__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
         """Return self^value."""
+
+    def __rxor__[Other](self, value: set[Other], /) -> set[Element | Other]:
+        """Return value^self."""
+    def __rxor__[Other](self, value: frozenset[Other], /) -> frozenset[Element | Other]
 
     override def __le__(self, value: AbstractSet[object], /) -> bool
     override def __lt__(self, value: AbstractSet[object], /) -> bool
@@ -3296,7 +3341,7 @@ def breakpoint(*args: dynamic, **kws: dynamic):
     By default, this drops you into the pdb debugger.
     """
 
-def callable(obj: object, /) -> obj is Top[(...) -> object]:
+def callable(obj: object, /) -> obj is (...) -> object:
     """Return whether the object is callable (i.e., some kind of function).
 
     Note that classes are callable, as are instances of classes with a
@@ -3861,7 +3906,7 @@ def max(
 def max[Element](arg1: Element, arg2: Element, /, *_args: Element, key: (Element) -> SupportsRichComparison) -> Element
 def max(iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None) -> SupportsRichComparisonT
 def max[Element](iterable: Iterable[Element], /, *, key: (Element) -> SupportsRichComparison) -> Element
-def max[Element](iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None, default: Element) -> SupportsRichComparisonT | Element
+def max(iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None, default: _T) -> SupportsRichComparisonT | _T
 def max[T1, T2](iterable: Iterable[T1], /, *, key: (T1) -> SupportsRichComparison, default: T2) -> T1 | T2
 
 def min(
@@ -3878,7 +3923,7 @@ def min(
 def min[Element](arg1: Element, arg2: Element, /, *_args: Element, key: (Element) -> SupportsRichComparison) -> Element
 def min(iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None) -> SupportsRichComparisonT
 def min[Element](iterable: Iterable[Element], /, *, key: (Element) -> SupportsRichComparison) -> Element
-def min[Element](iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None, default: Element) -> SupportsRichComparisonT | Element
+def min(iterable: Iterable[SupportsRichComparisonT], /, *, key: None = None, default: _T) -> SupportsRichComparisonT | _T
 def min[T1, T2](iterable: Iterable[T1], /, *, key: (T1) -> SupportsRichComparison, default: T2) -> T1 | T2
 
 def next[Element](i: SupportsNext[Element], /) -> Element:
@@ -4397,8 +4442,8 @@ def __build_class__(func: () -> (CellType | dynamic), name: str, /, *bases: dyna
     Internal helper function used by the class statement.
     """
 
-# Backwards compatibility hack for folks who relied on the ellipsis type
-# existing in typeshed in Python 3.9 and earlier.
+# Temporary compatibility hack: Pydantic 2.13 uses this legacy typeshed alias in Field overloads,
+# although it does not exist at runtime; remove in early/mid 2027?
 ellipsis = EllipsisType
 
 Ellipsis: EllipsisType
@@ -4840,14 +4885,14 @@ if sys.version_info >= (3, 11):
         let exceptions: (*: ExceptionT | ExceptionGroup[ExceptionT])
 
         # We accept a narrower type, but that's OK.
-        def subgroup[ExceptionT2: Exception](
+        override def subgroup[ExceptionT2: Exception](
             self, matcher_value: type[ExceptionT2] | (*: type[ExceptionT2]), /
         ) -> ExceptionGroup[ExceptionT2]?
         def subgroup(
             self, matcher_value: (ExceptionT | Self) -> bool, /
         ) -> ExceptionGroup[ExceptionT]?
 
-        def split[ExceptionT2: Exception](
+        override def split[ExceptionT2: Exception](
             self, matcher_value: type[ExceptionT2] | (*: type[ExceptionT2]), /
         ) -> (ExceptionGroup[ExceptionT2]?, ExceptionGroup[ExceptionT]?)
         def split(

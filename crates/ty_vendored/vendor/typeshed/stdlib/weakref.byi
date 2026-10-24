@@ -268,5 +268,8 @@ class finalize[Parameters: (*: *, **: *), in out Element]:
 
     let alive: bool
 
-    atexit: bool
-    """Whether finalizer should be called at exit"""
+    @property
+    def atexit(self) -> bool:
+        """Whether finalizer should be called at exit"""
+    @atexit.setter
+    def atexit(self, value: bool) -> None

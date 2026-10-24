@@ -9,7 +9,8 @@ from typing_extensions import Self
 __all__ = ["Client", "Listener", "Pipe", "wait"]
 
 # https://docs.python.org/3/library/multiprocessing.html#address-formats
-type _Address = str | (str, int)
+# bytes: Linux abstract AF_UNIX socket name (starts with a null byte)
+type _Address = str | bytes | (str, int)
 
 # Defaulting to Any to avoid forcing generics on a lot of pre-existing code
 
@@ -102,8 +103,10 @@ class Listener:
         Close the bound socket or named pipe of `self`.
         """
 
-    let address: _Address
-    let last_accepted: _Address?
+    # Any: the concrete type depends on the address family and platform
+    # (e.g. str or bytes for AF_UNIX), cf. _socket._RetAddress
+    let address: dynamic
+    let last_accepted: dynamic?
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?
