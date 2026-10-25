@@ -8,15 +8,18 @@ use ruff_db::files::FileRange;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_python_literal::format::FormatSpec;
 use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use std::fmt::{self, Display, Formatter};
 use ty_python_core::ProgramFile;
-use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::ide_support::{resolved_call_signature, typed_dict_key_hover};
-use ty_python_semantic::types::{KnownInstanceType, SpecialFormType, Type, TypeVarVariance};
+use ty_python_semantic::types::{
+    BoundTypeVarInstance, KnownInstanceType, SpecialFormType, Type, TypeVarVariance,
+};
+use ty_python_semantic::{DisplaySettings, ProgramEnvironment};
 
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::{HasType, SemanticModel, TypeQualifiers, with_display_for_file};
@@ -72,6 +75,7 @@ fn hover_inner<'db>(
             range: FileRange::new(file.file(db), range),
             value: Hover {
                 program_file: file,
+                type_params_in_scope: Vec::new(),
                 contents: vec![
                     HoverContent::Type {
                         ty,
@@ -204,11 +208,22 @@ fn hover_inner<'db>(
         return None;
     }
 
+    // the semantic index records no scope for a parameter's name, only for the parameter
+    let type_params_in_scope = if let GotoTarget::Parameter(parameter) = goto_target {
+        model.type_params_in_scope(AnyNodeRef::from(parameter))
+    } else {
+        covering_node(parsed.syntax().into(), goto_target.range())
+            .find_first(|node| node.is_identifier() || node.is_expression())
+            .map(|covering| model.type_params_in_scope(covering.node()))
+            .unwrap_or_default()
+    };
+
     Some(RangedValue {
         range: FileRange::new(file.file(db), goto_target.range()),
         value: Hover {
             program_file: file,
             contents,
+            type_params_in_scope,
         },
     })
 }
@@ -428,6 +443,7 @@ fn format_spec_hover<'db>(
         value: Hover {
             program_file: file,
             contents,
+            type_params_in_scope: Vec::new(),
         },
     })
 }
@@ -467,6 +483,9 @@ impl fmt::Display for FormatSpecHover {
 pub struct Hover<'db> {
     program_file: ProgramFile<'db>,
     contents: Vec<HoverContent<'db>>,
+    /// the type parameters an annotation at the hovered position names by a bare name, which
+    /// the hover writes that way too
+    type_params_in_scope: Vec<(BoundTypeVarInstance<'db>, Name)>,
 }
 
 impl<'db> Hover<'db> {
@@ -485,7 +504,9 @@ impl<'db> Hover<'db> {
                         kind.horizontal_line().fmt(f)?;
                     }
 
-                    content.display(db, &env, kind).fmt(f)?;
+                    content
+                        .display(db, &env, &self.type_params_in_scope, kind)
+                        .fmt(f)?;
                     first = false;
                 }
 
@@ -550,11 +571,13 @@ impl<'db> HoverContent<'db> {
         &'a self,
         db: &'db dyn Db,
         env: &'a ProgramEnvironment<'db>,
+        type_params_in_scope: &'a [(BoundTypeVarInstance<'db>, Name)],
         kind: MarkupKind,
     ) -> DisplayHoverContent<'a, 'db> {
         DisplayHoverContent {
             db,
             env,
+            type_params_in_scope,
             content: self,
             kind,
         }
@@ -564,6 +587,7 @@ impl<'db> HoverContent<'db> {
 pub(crate) struct DisplayHoverContent<'a, 'db> {
     db: &'db dyn Db,
     env: &'a ProgramEnvironment<'db>,
+    type_params_in_scope: &'a [(BoundTypeVarInstance<'db>, Name)],
     content: &'a HoverContent<'db>,
     kind: MarkupKind,
 }
@@ -573,7 +597,12 @@ impl<'db> DisplayHoverContent<'_, 'db> {
         let db = self.db;
         // Special types like `<special-form of whatever 'blahblah' with 'florps'>`
         // render poorly with python syntax-highlighting but well as xml
-        let ty_string = ty.display(db, self.env).multiline().to_string();
+        let settings = DisplaySettings::from_possibly_ambiguous_types(db, self.env, [*ty])
+            .with_type_params_in_scope(db, self.type_params_in_scope.iter().cloned());
+        let ty_string = ty
+            .display_with(db, self.env, settings)
+            .multiline()
+            .to_string();
         let syntax = if ty_string.starts_with('<') {
             "xml"
         } else {
@@ -4507,10 +4536,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        AB@Alias1 (invariant)
+        AB (invariant)
         ---------------------------------------------
         ```python
-        AB@Alias1 (invariant)
+        AB (invariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4533,10 +4562,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        AB@Alias1 (invariant)
+        AB (invariant)
         ---------------------------------------------
         ```python
-        AB@Alias1 (invariant)
+        AB (invariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4560,10 +4589,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        AB@Alias2 (contravariant)
+        AB (contravariant)
         ---------------------------------------------
         ```python
-        AB@Alias2 (contravariant)
+        AB (contravariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4589,10 +4618,10 @@ def function():
         // TODO: This should just be `**AB@Alias2 (<variance>)`
         // https://github.com/astral-sh/ty/issues/1581
         assert_snapshot!(test.hover(), @"
-        (**AB@Alias2) -> tuple[Unknown]
+        (**AB) -> tuple[Unknown]
         ---------------------------------------------
         ```python
-        (**AB@Alias2) -> tuple[Unknown]
+        (**AB) -> tuple[Unknown]
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4626,10 +4655,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        AB@Alias3 (covariant)
+        AB (covariant)
         ---------------------------------------------
         ```python
-        AB@Alias3 (covariant)
+        AB (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4733,10 +4762,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Alias (invariant)
+        T (invariant)
         ---------------------------------------------
         ```python
-        T@Alias (invariant)
+        T (invariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4759,10 +4788,10 @@ def function():
 
         // TODO: Should this be constravariant instead?
         assert_snapshot!(test.hover(), @"
-        P@Alias (covariant)
+        P (covariant)
         ---------------------------------------------
         ```python
-        P@Alias (covariant)
+        P (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4784,10 +4813,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        Ts@Alias (covariant)
+        Ts (covariant)
         ---------------------------------------------
         ```python
-        Ts@Alias (covariant)
+        Ts (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4797,6 +4826,194 @@ def function():
           |                               ^^- Cursor offset
           |                               |
           |                               source
+        ");
+    }
+
+    #[test]
+    fn hover_type_var_in_scope_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            def f[T](t: T):
+                a<CURSOR> = t
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (contravariant)
+        ---------------------------------------------
+        ```python
+        T (contravariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:5
+          |
+        3 |     a = t
+          |     ^- Cursor offset
+          |     |
+          |     source
+        ");
+    }
+
+    #[test]
+    fn hover_parameter_type_var_in_scope_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            def f[T](t<CURSOR>: T): ...
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (contravariant)
+        ---------------------------------------------
+        ```python
+        T (contravariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:2:10
+          |
+        2 | def f[T](t: T): ...
+          |          ^- Cursor offset
+          |          |
+          |          source
+        ");
+    }
+
+    #[test]
+    fn hover_type_var_in_its_own_signature_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            def f[T](t: T<CURSOR>): ...
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (contravariant)
+        ---------------------------------------------
+        ```python
+        T (contravariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:2:13
+          |
+        2 | def f[T](t: T): ...
+          |             ^- Cursor offset
+          |             |
+          |             source
+        ");
+    }
+
+    #[test]
+    fn hover_legacy_parameter_type_var_in_scope_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            from typing import TypeVar
+
+            T = TypeVar("T")
+
+            def f(t<CURSOR>: T): ...
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (invariant)
+        ---------------------------------------------
+        ```python
+        T (invariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:6:7
+          |
+        6 | def f(t: T): ...
+          |       ^- Cursor offset
+          |       |
+          |       source
+        ");
+    }
+
+    #[test]
+    fn hover_legacy_type_var_in_scope_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            from typing import TypeVar
+
+            T = TypeVar("T")
+
+            def f(t: T):
+                a<CURSOR> = t
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (invariant)
+        ---------------------------------------------
+        ```python
+        T (invariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:7:5
+          |
+        7 |     a = t
+          |     ^- Cursor offset
+          |     |
+          |     source
+        ");
+    }
+
+    #[test]
+    fn hover_type_var_hidden_by_a_nearer_one_keeps_its_scope() {
+        let test = hover_test(
+            r#"
+            def f[T](t: T):
+                def g[T](u: T):
+                    a<CURSOR> = (t, u)
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        tuple[T@f, T]
+        ---------------------------------------------
+        ```python
+        tuple[T@f, T]
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:9
+          |
+        4 |         a = (t, u)
+          |         ^- Cursor offset
+          |         |
+          |         source
+        ");
+    }
+
+    #[test]
+    fn hover_param_spec_component_in_scope_is_written_by_its_name() {
+        let test = hover_test(
+            r#"
+            def f[**P](*args: P.args, **kwargs: P.kwargs):
+                a<CURSOR> = args
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        P.args (covariant)
+        ---------------------------------------------
+        ```python
+        P.args (covariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:5
+          |
+        3 |     a = args
+          |     ^- Cursor offset
+          |     |
+          |     source
         ");
     }
 
@@ -6013,10 +6230,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Covariant (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@Covariant (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6037,10 +6254,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Covariant (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@Covariant (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6061,10 +6278,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Contravariant (contravariant)
+        T (contravariant)
         ---------------------------------------------
         ```python
-        T@Contravariant (contravariant)
+        T (contravariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6085,10 +6302,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Contravariant (contravariant)
+        T (contravariant)
         ---------------------------------------------
         ```python
-        T@Contravariant (contravariant)
+        T (contravariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6111,10 +6328,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@covariant (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@covariant (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6134,10 +6351,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@covariant (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@covariant (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6157,10 +6374,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@contravariant (contravariant)
+        T (contravariant)
         ---------------------------------------------
         ```python
-        T@contravariant (contravariant)
+        T (contravariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6180,10 +6397,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@contravariant (contravariant)
+        T (contravariant)
         ---------------------------------------------
         ```python
-        T@contravariant (contravariant)
+        T (contravariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6205,10 +6422,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@List (invariant)
+        T (invariant)
         ---------------------------------------------
         ```python
-        T@List (invariant)
+        T (invariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6227,10 +6444,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@List (invariant)
+        T (invariant)
         ---------------------------------------------
         ```python
-        T@List (invariant)
+        T (invariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6249,10 +6466,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Tuple (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@Tuple (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6271,10 +6488,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@Tuple (covariant)
+        T (covariant)
         ---------------------------------------------
         ```python
-        T@Tuple (covariant)
+        T (covariant)
         ```
         ---------------------------------------------
         info[hover]: Hovered content is

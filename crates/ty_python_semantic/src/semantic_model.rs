@@ -33,23 +33,25 @@ use crate::place_load::{
 use crate::types::AnonNamedTupleClass;
 use crate::types::TypeExpressionFlags;
 use crate::types::check_order::{InferredInCheckOrder, infer_file_in_check_order};
-use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
+use crate::types::ide_support::{
+    ImportAliasResolution, definition_for_name, type_params_named_from, type_params_named_in,
+};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::reified_infer::WrittenTarget;
 use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::CastCheck;
 use crate::types::{
-    ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
-    SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
-    class_pattern_positional_sources, infer_complete_scope_types, infer_definition_types,
-    inferred_declaration, is_discarded_dict_key_assignment,
+    BoundTypeVarInstance, ClassPatternPositionalResult, ClassPatternPositionalSource,
+    CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
+    class_pattern_positional_result, class_pattern_positional_sources, infer_complete_scope_types,
+    infer_definition_types, inferred_declaration, is_discarded_dict_key_assignment,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
 use ty_python_core::place::PlaceExpr;
 use ty_python_core::place_table;
-use ty_python_core::scope::{FileScopeId, Scope};
+use ty_python_core::scope::{FileScopeId, NodeWithScopeRef, Scope};
 use ty_python_core::semantic_index;
 use ty_python_core::symbol::Symbol;
 use ty_python_core::{BindingWithConstraintsIterator, Program, ProgramFile};
@@ -1764,6 +1766,47 @@ impl<'db> SemanticModel<'db> {
         self.scope(node)
             .into_iter()
             .flat_map(move |scope| index.ancestor_scopes(scope))
+    }
+
+    /// the type parameters an annotation written at `node` names by their bare names, each with
+    /// that name
+    ///
+    /// a type parameter whose name means something else there is left out, as `f`'s `T` is
+    /// inside `g`:
+    ///
+    /// ```py
+    /// def f[T](t: T):
+    ///     def g[T](u: T): ...
+    /// ```
+    pub fn type_params_in_scope(
+        &self,
+        node: ast::AnyNodeRef<'_>,
+    ) -> Vec<(BoundTypeVarInstance<'db>, Name)> {
+        self.scope(node)
+            .map(|scope| type_params_named_in(self.db, self.file, scope))
+            .unwrap_or_default()
+    }
+
+    /// [`Self::type_params_in_scope`] for an annotation in `function`'s signature, which names
+    /// the function's own type parameters too
+    pub fn type_params_in_signature(
+        &self,
+        function: &ast::StmtFunctionDef,
+    ) -> Vec<(BoundTypeVarInstance<'db>, Name)> {
+        let index = semantic_index(self.db, self.file);
+        let body = index.node_scope(NodeWithScopeRef::Function(function));
+        // a signature is evaluated outside the body, in the scope that holds the type
+        // parameters, or the one the function is defined in when it declares none
+        let Some(signature) = index.scope(body).parent() else {
+            return Vec::new();
+        };
+        type_params_named_from(
+            self.db,
+            self.file,
+            body,
+            signature,
+            Some(function.definition(self)),
+        )
     }
 
     /// Returns the first local definition created by `covering_node`, if any.

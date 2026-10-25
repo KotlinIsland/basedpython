@@ -2719,9 +2719,15 @@ impl<'db> BoundTypeVarIdentity<'db> {
                     ParamSpecAttrKind::Kwargs => "**",
                 })?;
             }
-            f.write_str(self.identity.name(db))?;
+            // `P.args` names the same `P` that a bare `P` does
+            let in_scope = settings.type_params_in_scope.get(&match paramspec_attr {
+                Some(_) => self.without_paramspec_attr(db),
+                None => self,
+            });
+            f.write_str(in_scope.map_or_else(|| self.identity.name(db), ast::name::Name::as_str))?;
             let binding_context = self.binding_context;
-            if let Some(binding_context_name) = binding_context.name(db)
+            if in_scope.is_none()
+                && let Some(binding_context_name) = binding_context.name(db)
                 && let Some(definition) = binding_context.definition()
                 && !settings.active_scopes.contains(&definition)
             {
@@ -4225,15 +4231,12 @@ impl<'db> FmtDetailed<'db> for DisplayParameters<'_, 'db> {
             }
             ParametersKind::ParamSpec(typevar) => {
                 let parameter_name = format!("**{}", typevar.name(db));
-                let mut parameter = f.with_detail(TypeDetail::Parameter(parameter_name.clone()));
-                write!(parameter, "{parameter_name}")?;
-                let binding_context = typevar.binding_context(db);
-                if let Some(binding_context_name) = binding_context.name(db)
-                    && let Some(definition) = binding_context.definition()
-                    && !self.settings.active_scopes.contains(&definition)
-                {
-                    write!(parameter, "@{binding_context_name}")?;
-                }
+                let mut parameter = f.with_detail(TypeDetail::Parameter(parameter_name));
+                write!(
+                    parameter,
+                    "**{}",
+                    typevar.identity(db).display_with(db, self.settings.clone())
+                )?;
             }
         }
 

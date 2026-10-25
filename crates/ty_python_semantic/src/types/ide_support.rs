@@ -4,7 +4,13 @@ use std::sync::LazyLock;
 use crate::FxIndexSet;
 use std::ops::ControlFlow;
 
-use crate::place::{Place, implicit_builtins_symbol_scope, imported_symbol};
+use crate::place::{
+    ConsideredDefinitions, Place, RequiresExplicitReExport, implicit_builtins_symbol_scope,
+    imported_symbol, place_by_id, place_from_bindings,
+};
+use crate::place_load::{
+    PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind, resolve_place_load,
+};
 use crate::reachability::is_range_reachable;
 use crate::types::EnumLiteralType;
 use crate::types::abstract_methods::type_as_abstract_method;
@@ -21,7 +27,7 @@ use crate::types::extensions::{
     applicable_extensions, extension_can_apply, resolve_extension_member,
 };
 use crate::types::function::FunctionDecorators;
-use crate::types::generics::GenericContext;
+use crate::types::generics::{GenericContext, bind_typevar, enclosing_generic_contexts};
 use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::{
     infer_definition_types, nearest_enclosing_function, original_class_type,
@@ -39,8 +45,8 @@ use crate::types::signatures::{
 };
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, ClassBase, ClassLiteral, ClassType, KnownClass,
-    KnownFunction, KnownUnion, PropertyAccessorRole, SpecialFormType, Type, TypeContext,
-    TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, binding_type,
+    KnownFunction, KnownInstanceType, KnownUnion, PropertyAccessorRole, SpecialFormType, Type,
+    TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
 use ruff_db::files::{File, FileRange};
@@ -56,7 +62,8 @@ use ty_module_resolver::{
     ImportingFile, Module, ModuleName, ResolverFile, resolve_module_confident,
 };
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
-use ty_python_core::scope::{FileScopeId, NodeWithScopeRef, ScopeId};
+use ty_python_core::place::PlaceExpr;
+use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, NodeWithScopeRef, ScopeId};
 use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{ProgramFile, attribute_scopes, semantic_index, use_def_map};
 
@@ -79,6 +86,120 @@ pub use crate::types::state_invalidations::WriteSite;
 
 static CLASS_MATCHER: LazyLock<NameMatcher<'static>> =
     LazyLock::new(|| NameMatcher::keyword("class"));
+
+/// the type parameters a bare name written in `scope` names, each with that name
+pub(crate) fn type_params_named_in<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+) -> Vec<(BoundTypeVarInstance<'db>, Name)> {
+    let index = semantic_index(db, file);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    // a type parameter scope holds the signature of what declares the parameters: its own
+    // scope is inside it rather than around it, and it binds the type variables the signature
+    // names
+    let owner = match index.scope(scope).node() {
+        NodeWithScopeKind::FunctionTypeParameters(function) => Some((
+            NodeWithScopeRef::Function(function.node(&module)),
+            index.expect_single_definition(function),
+        )),
+        NodeWithScopeKind::ClassTypeParameters(class) => Some((
+            NodeWithScopeRef::Class(class.node(&module)),
+            index.expect_single_definition(class),
+        )),
+        NodeWithScopeKind::TypeAliasTypeParameters(alias) => Some((
+            NodeWithScopeRef::TypeAlias(alias.node(&module)),
+            index.expect_single_definition(alias),
+        )),
+        _ => None,
+    };
+    match owner {
+        Some((owner, definition)) => {
+            type_params_named_from(db, file, index.node_scope(owner), scope, Some(definition))
+        }
+        None => type_params_named_from(db, file, scope, scope, None),
+    }
+}
+
+/// the type parameters of `scope` and the scopes around it that a bare name written in
+/// `written` resolves to, as an annotation that binds type variables to `binding_context`
+/// resolves it, each with that name
+pub(crate) fn type_params_named_from<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+    written: FileScopeId,
+    binding_context: Option<Definition<'db>>,
+) -> Vec<(BoundTypeVarInstance<'db>, Name)> {
+    let index = semantic_index(db, file);
+    enclosing_generic_contexts(db, index, scope)
+        .flat_map(|context| context.variables(db))
+        .filter_map(|param| {
+            let name = param.name(db).clone();
+            let Some(Type::KnownInstance(KnownInstanceType::TypeVar(typevar))) =
+                deferred_name_load(db, file, written, name.clone())
+            else {
+                return None;
+            };
+            bind_typevar(db, index, written, binding_context, typevar)
+                .is_some_and(|bound| bound.is_same_occurrence(db, param))
+                .then_some((param, name))
+        })
+        .collect()
+}
+
+/// what `name` holds when an annotation in `scope` that is evaluated lazily reads it, or `None`
+/// when it is not definitely bound to one value
+///
+/// the annotation is one the source does not hold, so `name` is read as a string annotation's is:
+/// the semantic index has no place for it in the scopes it is not written in
+fn deferred_name_load<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+    name: Name,
+) -> Option<Type<'db>> {
+    let env = ProgramEnvironment::from_file(file);
+    let index = semantic_index(db, file);
+    let mut resolution = resolve_place_load(
+        db,
+        index,
+        scope.to_scope_id(db, file),
+        PlaceExpr::from_name(name),
+        PlaceLoadMode::StringAnnotation,
+    );
+    while let Some(PlaceLoadResolutionStep::Source(source)) = resolution.next() {
+        let place = match source.kind {
+            PlaceLoadSourceKind::Bindings(bindings) => {
+                place_from_bindings(db, &env, bindings).place
+            }
+            PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+                place_by_id(
+                    db,
+                    scope,
+                    id,
+                    RequiresExplicitReExport::No,
+                    ConsideredDefinitions::AllReachable,
+                )
+                .place
+            }
+            PlaceLoadSourceKind::Implicit(implicit) => {
+                implicit.place(db, &env, scope.to_scope_id(db, file)).place
+            }
+            // only a program carrying a debugger's assumptions observes a place
+            PlaceLoadSourceKind::Observed(_) => return None,
+        };
+        if place.is_definitely_bound() {
+            return place.ignore_possibly_undefined();
+        }
+        // bound on some paths only: the name means this on some of them and something else on
+        // the others
+        if place.ignore_possibly_undefined().is_some() {
+            return None;
+        }
+    }
+    None
+}
 
 /// Get the primary definition kind for a name expression within a specific file.
 /// Returns the first definition kind that is reachable for this name in its scope.
