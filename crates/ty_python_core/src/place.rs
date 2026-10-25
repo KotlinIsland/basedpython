@@ -57,7 +57,12 @@ impl PlaceExpr {
     ///
     /// This always returns a `PlaceExpr::Symbol` with empty flags and `name`.
     pub fn from_expr_name(name: &ast::ExprName) -> Self {
-        PlaceExpr::Symbol(Symbol::new(name.id.clone()))
+        Self::from_name(name.id.clone())
+    }
+
+    /// a `PlaceExpr::Symbol` named `name`, with empty flags
+    pub fn from_name(name: Name) -> Self {
+        PlaceExpr::Symbol(Symbol::new(name))
     }
 
     /// Tries to create a `PlaceExpr` from an expression.

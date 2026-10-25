@@ -49,6 +49,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         AnyNodeRef::from(function),
         function.start(),
         returned,
+        &context.model.type_params_in_signature(function),
     ) else {
         return Err(Refusal::refused(
             title,

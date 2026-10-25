@@ -47,7 +47,7 @@ pub(crate) use self::infer::{
     ArgumentContextOrigin, InferredDeclaration, TruthinessAnalyzer, TypeContext,
     TypeExpressionFlags, infer_complete_scope_types, infer_deferred_types, infer_definition_types,
     infer_expression_type, infer_expression_types, infer_same_file_expression_type,
-    infer_scope_types, is_discarded_dict_key_assignment,
+    infer_scope_types, is_discarded_dict_key_assignment, original_class_type,
 };
 use self::infer::{
     implicit_alias_parameters, infer_function_default_types, infer_implicit_alias_type,

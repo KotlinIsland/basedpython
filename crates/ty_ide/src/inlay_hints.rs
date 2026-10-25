@@ -63,9 +63,16 @@ impl InlayHint {
         ty: Type<'db>,
         allow_edits: bool,
         named_type_arguments: bool,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
     ) -> Option<Self> {
         let position = expr.range().end();
-        let details = type_display_details(context.db, context.file, ty, named_type_arguments, &[]);
+        let details = type_display_details(
+            context.db,
+            context.file,
+            ty,
+            named_type_arguments,
+            type_params_in_scope,
+        );
 
         // Filter out repetitive hints like `x: T = T()`
         if call_matches_name(rhs, &details.label) {
@@ -79,7 +86,7 @@ impl InlayHint {
             expr.into(),
             expr.range().start(),
             &details,
-            &[],
+            type_params_in_scope,
         );
 
         let text_edits = if spelled.editable && allow_edits {
@@ -485,9 +492,16 @@ impl InlayHint {
         context: InlayHintImportContext<'_, 'db>,
         function: &ast::StmtFunctionDef,
         returned: Type<'db>,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
     ) -> Self {
         let position = function.parameters.end();
-        let details = type_display_details(context.db, context.file, returned, false, &[]);
+        let details = type_display_details(
+            context.db,
+            context.file,
+            returned,
+            false,
+            type_params_in_scope,
+        );
 
         // each hint carries its own imports, because a client can apply one without the others
         let spelled = spell_type(
@@ -496,7 +510,7 @@ impl InlayHint {
             function.into(),
             function.start(),
             &details,
-            &[],
+            type_params_in_scope,
         );
 
         let text_edits = if spelled.editable {
@@ -1513,18 +1527,22 @@ fn spell_type<'db>(
 /// `ty` written as an annotation in `file`, for a position in the scope around
 /// `scope_node`, with the imports it needs; `None` when no annotation the file
 /// could hold says it.
+///
+/// A type parameter in `type_params_in_scope` is written by the name it comes
+/// with: see [`spell_type`].
 pub(crate) fn annotation_for_type<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
     scope_node: AnyNodeRef<'_>,
     scope_offset: TextSize,
     ty: Type<'db>,
+    type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> Option<(String, Vec<InlayHintTextEdit>)> {
     let ast = parsed_module(db, file.python_file(db)).load(db);
     let importer = Importer::new(db, file, &ast);
     // a basedpython file writes types in basedpython's own spelling
     with_display_for_file(db, file.file(db), || {
-        let details = type_display_details(db, file, ty, false, &[]);
+        let details = type_display_details(db, file, ty, false, type_params_in_scope);
         let spelled = spell_type(
             InlayHintImportContext {
                 db,
@@ -1535,7 +1553,7 @@ pub(crate) fn annotation_for_type<'db>(
             scope_node,
             scope_offset,
             &details,
-            &[],
+            type_params_in_scope,
         );
         spelled
             .editable
@@ -1741,9 +1759,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             importer: &self.importer,
         };
 
-        if let Some(inlay_hint) =
-            InlayHint::variable_type(context, expr, rhs, ty, allow_edits, named_type_arguments)
-        {
+        let type_params_in_scope = self.model.type_params_in_scope(expr.into());
+        if let Some(inlay_hint) = InlayHint::variable_type(
+            context,
+            expr,
+            rhs,
+            ty,
+            allow_edits,
+            named_type_arguments,
+            &type_params_in_scope,
+        ) {
             self.push(inlay_hint);
         }
     }
@@ -2430,7 +2455,13 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             file: self.model.program_file(),
             importer: &self.importer,
         };
-        self.push(InlayHint::inferred_return(context, function, returned));
+        let type_params_in_scope = self.model.type_params_in_signature(function);
+        self.push(InlayHint::inferred_return(
+            context,
+            function,
+            returned,
+            &type_params_in_scope,
+        ));
     }
 
     /// basedpython: hint the type a property declaration leaves to its accessors
@@ -3928,7 +3959,7 @@ Source with applied edits:
         «_raises TypeError»
         «out_»
         «reified_»
-        «_-> T@make»
+        «_-> T»
         «unstable_»
         «_reads doubled»
         «_depends on count»
@@ -4128,13 +4159,25 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints(), @"
 
-        def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R)[ -> (**Parameters@deco) -> R@deco]:
+        def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R)[ -> (**Parameters) -> R]:
             def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
-                positional[: *Parameters@deco] = args
-                keyword[: **Parameters@deco] = kwargs
+                positional[: *Parameters] = args
+                keyword[: **Parameters] = kwargs
                 return fn(*args, **kwargs)
 
             return inner
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.by:2:37
+          |
+        2 | def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R):
+          |                                     ^
+        info: Source
+         --> main2.py:2:87
+          |
+        2 | def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R)[ -> (**Parameters) -> R]:
+          |                                                                                       ^
         ");
     }
 
@@ -6674,8 +6717,8 @@ Source with applied edits:
 
         class MyClass[T, U]:
             def __init__(self, x: list[T], y: tuple[U, U]):
-                self.x[: list[T@MyClass]] = x
-                self.y[: tuple[U@MyClass, U@MyClass]] = y
+                self.x[: list[T]] = x
+                self.y[: tuple[U, U]] = y
 
         x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
         y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a", "b")))
@@ -6691,8 +6734,19 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:18
            |
-        LL |         self.x[: list[T@MyClass]] = x
+        LL |         self.x[: list[T]] = x
            |                  ^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:2:15
+          |
+        2 | class MyClass[T, U]:
+          |               ^
+        info: Source
+         --> main2.py:4:23
+          |
+        4 |         self.x[: list[T]] = x
+          |                       ^
 
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -6702,8 +6756,30 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:18
            |
-        LL |         self.y[: tuple[U@MyClass, U@MyClass]] = y
+        LL |         self.y[: tuple[U, U]] = y
            |                  ^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:2:18
+          |
+        2 | class MyClass[T, U]:
+          |                  ^
+        info: Source
+         --> main2.py:5:24
+          |
+        5 |         self.y[: tuple[U, U]] = y
+          |                        ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:2:18
+          |
+        2 | class MyClass[T, U]:
+          |                  ^
+        info: Source
+         --> main2.py:5:27
+          |
+        5 |         self.y[: tuple[U, U]] = y
+          |                           ^
 
         info[inlay-hint-location]: Inlay Hint Target
          --> main.py:2:7
@@ -7259,6 +7335,11 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
            |
+        3  |     def __init__(self, x: list[T], y: tuple[U, U]):
+           -         self.x = x
+           -         self.y = y
+        4  +         self.x: list[T] = x
+        5  +         self.y: tuple[U, U] = y
         6  |
            - x = MyClass([42], ("a", "b"))
            - y = (MyClass([42], ("a", "b")), MyClass([42], ("a", "b")))
@@ -10354,6 +10435,58 @@ Source with applied edits:
     }
 
     #[test]
+    fn typevar_in_scope_inlay_hint() {
+        let mut test = inlay_hint_test(
+            "
+        def f[T](t: T):
+            a = t",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        def f[T](t: T):
+            a[: T] = t
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:2:7
+          |
+        2 | def f[T](t: T):
+          |       ^
+        info: Source
+         --> main2.py:3:9
+          |
+        3 |     a[: T] = t
+          |         ^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        2 | def f[T](t: T):
+          -     a = t
+        3 +     a: T = t
+          |
+        ");
+    }
+
+    #[test]
+    fn hidden_typevar_inlay_hint() {
+        let mut test = inlay_hint_test(
+            "
+        def f[T](t: T):
+            def g[T](u: T):
+                a = t",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        def f[T](t: T):
+            def g[T](u: T):
+                a[: T@f] = t
+        ");
+    }
+
+    #[test]
     fn test_meta_typevar_inlay_hint() {
         let mut test = inlay_hint_test(
             "
@@ -10364,7 +10497,7 @@ Source with applied edits:
         assert_snapshot!(test.inlay_hints(), @"
 
         def f[T](x: type[T]):
-            y[: type[T@f]] = x
+            y[: type[T]] = x
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -10374,7 +10507,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:9
            |
-        LL |     y[: type[T@f]] = x
+        LL |     y[: type[T]] = x
            |         ^^^^
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -10385,8 +10518,8 @@ Source with applied edits:
         info: Source
          --> main2.py:3:14
           |
-        3 |     y[: type[T@f]] = x
-          |              ^^^
+        3 |     y[: type[T]] = x
+          |              ^
         ");
     }
 

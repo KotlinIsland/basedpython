@@ -96,7 +96,11 @@ use ty_python_core::{
 
 use crate::Db;
 use crate::assumed::{is_at_or_below_stop_line, seeded_place};
-use crate::types::Type;
+use crate::place::{
+    Place, PlaceAndQualifiers, builtins_module_scope, class_body_implicit_symbol,
+    explicit_global_symbol, implicit_builtins_symbol, module_type_implicit_global_symbol,
+};
+use crate::types::{ProgramEnvironment, Type, original_class_type};
 use ruff_text_size::Ranged as _;
 
 /// Returns an iterator over the steps that resolve a value for a place load.
@@ -792,6 +796,45 @@ pub(crate) enum ImplicitPlaceLoad<'db> {
     ModuleImplicitGlobal { file: ProgramFile<'db>, name: Name },
     /// A name supplied by the builtin namespace.
     Builtin(Name),
+}
+
+impl<'db> ImplicitPlaceLoad<'db> {
+    /// what this source supplies to a load made in `scope`
+    pub(crate) fn place(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        scope: ScopeId<'db>,
+    ) -> PlaceAndQualifiers<'db> {
+        match self {
+            ImplicitPlaceLoad::DunderClass(definition) => original_class_type(db, definition)
+                .map_or_else(
+                    || Place::Undefined.into(),
+                    |class| Place::bound(class).into(),
+                ),
+            ImplicitPlaceLoad::ClassBodySymbol(name) => {
+                let implicit = class_body_implicit_symbol(db, env, &name);
+                if implicit.place.is_definitely_bound() {
+                    implicit
+                } else {
+                    Place::Undefined.into()
+                }
+            }
+            ImplicitPlaceLoad::ExplicitGlobalSymbol { file, name } => {
+                explicit_global_symbol(db, file, &name)
+            }
+            ImplicitPlaceLoad::ModuleImplicitGlobal { file, name } => {
+                module_type_implicit_global_symbol(db, file, &name)
+            }
+            ImplicitPlaceLoad::Builtin(name) => {
+                if Some(scope) == builtins_module_scope(db, env) {
+                    Place::Undefined.into()
+                } else {
+                    implicit_builtins_symbol(db, env, &name)
+                }
+            }
+        }
+    }
 }
 
 /// The role a source plays in a place load.
