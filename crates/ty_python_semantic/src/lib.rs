@@ -278,6 +278,23 @@ pub struct AnalysisSettings {
     /// occurrence stays gradual, since `Never` there would say nothing can be written or passed.
     pub precise_unsolved_typevars: bool,
 
+    /// Whether a type variable that only appears in a function's returned callable stays bound to
+    /// the function.
+    ///
+    /// When this is disabled, `def f[T]() -> Callable[[T], T]` is read as returning a generic
+    /// callable `[T](T) -> T`: the type variable is moved off the function and onto the callable it
+    /// returns, so every call of the result solves it afresh. That reading is unsound whenever the
+    /// function's body ties the returned callable to one solution, such as through state it
+    /// closes over.
+    pub lexical_return_callable_typevars: bool,
+
+    /// [`Self::lexical_return_callable_typevars`] for the standard library's stubs.
+    ///
+    /// typeshed is written for the other reading — `unittest.skip(reason)` returns a
+    /// `Callable[[F], F]` it relies on being generic — so it keeps that reading unless this is
+    /// enabled.
+    pub lexical_return_callable_typevars_in_typeshed: bool,
+
     /// Classes whose values do not count as a distinct member of an overlapping condition.
     ///
     /// Entries are qualified class names (`decimal.Decimal`); a class in `builtins` may also be
@@ -384,6 +401,8 @@ impl AnalysisSettings {
             infer_unannotated_signatures: basedpython,
             bivariant_private_attributes: basedpython,
             precise_unsolved_typevars: basedpython,
+            lexical_return_callable_typevars: false,
+            lexical_return_callable_typevars_in_typeshed: false,
             overlapping_condition_exempt_types: Box::default(),
             overlapping_condition_assume_truthy_instances: false,
             implicit_object_repr_exempt_types: Box::default(),

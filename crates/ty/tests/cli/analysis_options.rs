@@ -363,6 +363,89 @@ fn precise_unsolved_typevars_is_per_module() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `lexical-return-callable-typevars` is resolved per module: the module that *declares* a
+/// function decides whether a type variable only its returned callable mentions stays on the
+/// function, and callers see the result regardless of their own setting.
+#[test]
+fn lexical_return_callable_typevars_is_per_module() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.environment]
+            python-version = "3.13"
+
+            [[tool.ty.overrides]]
+            include = ["lexical/**"]
+
+            [tool.ty.overrides.analysis]
+            lexical-return-callable-typevars = true
+            "#,
+        ),
+        (
+            "lexical/lib.py",
+            r#"
+            from typing import Callable
+
+            def f[T]() -> Callable[[T], T]:
+                raise NotImplementedError
+            "#,
+        ),
+        (
+            "moved/lib.py",
+            r#"
+            from typing import Callable
+
+            def g[T]() -> Callable[[T], T]:
+                raise NotImplementedError
+            "#,
+        ),
+        (
+            "moved/main.py",
+            r#"
+            from lexical.lib import f
+            from typing_extensions import reveal_type
+
+            # `f` is declared in a lexical module, so `T` stays on `f` here too
+            reveal_type(f)
+            "#,
+        ),
+        (
+            "lexical/main.py",
+            r#"
+            from moved.lib import g
+            from typing_extensions import reveal_type
+
+            # `g` is declared in a module that moves `T`, so its returned callable is generic
+            reveal_type(g)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    info[revealed-type]: Revealed type
+     --> lexical/main.py:6:13
+      |
+    6 | reveal_type(g)
+      |             ^ `def g() -> ((T'return, /) -> T'return)`
+
+    info[revealed-type]: Revealed type
+     --> moved/main.py:6:13
+      |
+    6 | reveal_type(f)
+      |             ^ `def f[T]() -> ((T, /) -> T)`
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// `bivariant-private-attributes` is resolved per module: the module that *declares* a class
 /// governs how its variance is inferred, and consumers see the result regardless of their own
 /// setting.

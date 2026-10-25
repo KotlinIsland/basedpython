@@ -280,6 +280,10 @@ pub(crate) struct Analysis {
 
     pub(crate) precise_unsolved_typevars: Option<bool>,
 
+    pub(crate) lexical_return_callable_typevars: Option<bool>,
+
+    pub(crate) lexical_return_callable_typevars_in_typeshed: Option<bool>,
+
     pub(crate) overlapping_condition_exempt_types: Option<Vec<String>>,
 
     pub(crate) overlapping_condition_assume_truthy_instances: Option<bool>,

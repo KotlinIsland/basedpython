@@ -66,6 +66,7 @@ use ruff_python_ast::helpers::ReturnGuardForm;
 use ruff_python_ast::{self as ast, ParameterBorrow, name::Name};
 use ruff_text_size::Ranged;
 use std::borrow::Cow;
+use ty_module_resolver::{SearchPath, file_to_module};
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 
 /// Selects which binding context to use for type variables that only appear in a return-position
@@ -76,6 +77,23 @@ pub(super) enum ReturnCallableTypeVarScope {
     Lexical,
     /// Move the type variables to the returned `Callable`'s generic context.
     Public,
+}
+
+/// basedpython: whether a type variable that only appears in the callable `definition` returns
+/// stays bound to `definition`, rather than moving onto that callable.
+///
+/// The module that declares the function governs it. The standard library's stubs have their own
+/// setting, because typeshed is written for the reading that moves the type variable.
+fn lexical_return_callable_typevars<'db>(db: &'db dyn Db, definition: Definition<'db>) -> bool {
+    let settings = db.analysis_settings(definition.file(db));
+    let is_typeshed = file_to_module(db, definition.program_file(db).resolver_file(db))
+        .and_then(|module| module.search_path(db))
+        .is_some_and(SearchPath::is_standard_library);
+    if is_typeshed {
+        settings.lexical_return_callable_typevars_in_typeshed
+    } else {
+        settings.lexical_return_callable_typevars
+    }
 }
 
 /// Infer the type of a parameter or return annotation in a function signature.
@@ -1394,6 +1412,11 @@ impl<'db> Signature<'db> {
             legacy_generic_context,
         );
 
+        let return_callable_typevar_scope = if lexical_return_callable_typevars(db, definition) {
+            ReturnCallableTypeVarScope::Lexical
+        } else {
+            return_callable_typevar_scope
+        };
         let (generic_context, return_ty) = match return_callable_typevar_scope {
             ReturnCallableTypeVarScope::Lexical => (full_generic_context, return_ty),
             ReturnCallableTypeVarScope::Public => {

@@ -228,6 +228,8 @@ Settings: Settings {
         infer_unannotated_signatures: true,
         bivariant_private_attributes: true,
         precise_unsolved_typevars: true,
+        lexical_return_callable_typevars: false,
+        lexical_return_callable_typevars_in_typeshed: false,
         overlapping_condition_exempt_types: [],
         overlapping_condition_assume_truthy_instances: false,
         implicit_object_repr_exempt_types: [],
