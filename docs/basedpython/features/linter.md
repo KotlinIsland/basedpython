@@ -91,9 +91,10 @@ override in it, spelled as the configuration spells them:
 
 `indentStyle` is `space` or `tab`, `quoteStyle` is `double`, `single` or
 `preserve`, and `lineEnding` is `auto`, `lf`, `cr-lf` or `native`.
-`configurationFile` is the file the settings were read from, and `null` when no
-file configures the document. the answer is `null` for a document the editor has
-not opened
+`configurationFile` is the project's configuration file the settings were read
+from, and `null` when none configures the document; a configuration file the
+editor's own settings name is merged over it without being named here. the
+answer is `null` for a document the editor has not opened
 
 ## what the linter does not check
 

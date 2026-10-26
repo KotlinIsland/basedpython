@@ -455,8 +455,10 @@ class of its method resolution order declares, as that class's outline has it,
 attributes a method assigns on `self` among them, from the first class to
 declare the name, and none the class declares itself. `object`'s are there,
 last. each member is a document symbol of its superclass's file, with its
-`name`, `kind`, `detail`, `range` and `selectionRange`, the `uri` of that file,
-and the superclass as `containerName` and its module as `containerModule`:
+`name`, `kind`, `detail` (absent where the symbol has none), `range` and
+`selectionRange`, the `uri` of that file, and the superclass as `containerName`
+and its module as `containerModule`, absent for a superclass in a file no module
+is imported from:
 
 ```json
 [
@@ -1388,18 +1390,19 @@ its name, and the counts named in the request's `counts`:
 | `implementations` | of a class or a method, what `textDocument/implementation` finds from the name, less itself |
 
 so the count is the number of places the click on it goes to, when a client
-sends that request from the name. a method with implementations is marked
-`abstract` when it is an `@abstractmethod` or a protocol member with no body,
-so that what overrides it implements it. a count not named is not worked out
+sends that request from the name. every declaration has `abstract`, `true` for a
+method with implementations that is an `@abstractmethod` or a protocol member
+with no body, so that what overrides it implements it, and `false` otherwise. a count not named is not worked out
 
 with `implementations` comes `implementors`, the places it counts, in the
 order `textDocument/implementation` answers them, so that an editor can say
 "is overridden in Circle, Square" without asking. each is a subclass of the
 class, or a member overriding the method, with the `uri`, `range` and
 `selectionRange` it is declared at and the class it is in: `className`, the
-subclass itself or the class whose member overrides, and `qualifiedName`, that
-class's dotted name, `shapes.base.Circle`, absent for a class local to a
-function
+subclass itself or the class whose member overrides, absent for an
+implementation in no class, and `qualifiedName`, that class's dotted name,
+`shapes.base.Circle`, absent for a class local to a function or in a file no
+module is imported from
 
 ```json
 {
@@ -1548,7 +1551,8 @@ path, every prefix the route is mounted under included, with its parameters as
 the route writes them, `{item_id}` or `<int:pk>`; a `re_path()` pattern is
 joined to its prefixes with each part's `^` and `$` anchors dropped. `handler` is
 the function, or for a django view built by `as_view()` the class, with its
-qualified name, its whole declaration as `range` and its name as
+qualified name as `name` (absent where it has none, as `application`'s may
+be), its whole declaration as `range` and its name as
 `selectionRange`; `declaration` is where the route is declared, the decorator
 without its `@`, the `add_api_route(...)` or the `path(...)`; `application` is the
 FastAPI application that serves it, or the urlconf module django starts at, and
@@ -1834,9 +1838,11 @@ counted as one `\n`, written as sixteen lowercase hex digits. for a notebook cel
 that is the cell's own text. the request is then answered about that text and no
 other. when the server already holds it — the open buffer, or for
 `by/syntaxOutline`, `by/injections`, `by/superMembers`,
-`by/documentSuperMembers`, `by/transpile`, `textDocument/semanticTokens/full` and
-`textDocument/documentSymbol` the file on disk of a document the client has not
-opened — it answers at once; otherwise the
+`by/documentSuperMembers`, `by/documentInheritedMembers`,
+`by/documentUsageCounts`, `by/declaration`, `by/prepareMoveSymbol`,
+`by/moveSymbol`, `by/testSubjects`, `by/subjectTests`, `by/transpile`,
+`textDocument/semanticTokens/full` and `textDocument/documentSymbol` the file on
+disk of a document the client has not opened — it answers at once; otherwise the
 request waits for the `didOpen`, `didChange` or file write that brings the text,
 and is answered with `ServerCancelled` if nothing has after ten seconds. so a
 client need not know whether its `didOpen` has gone out before it asks, and an
