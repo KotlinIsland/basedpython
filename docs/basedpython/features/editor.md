@@ -1169,7 +1169,12 @@ holds — one per line of a dedented string, past the indentation, and around th
 interpolations of an f-string. that is what an editor needs to put another
 language into a string it was not told about, with a place in the file for every
 character of the fragment. the outline also carries the name each `def` and
-`class` declares and a `def`'s parameter names, and the elements of every
+`class` declares, a `def`'s parameter names, and on a `def` a class body makes,
+`method`: `instance`, `class` or `static`, what its first parameter is passed —
+from `@staticmethod` and `@classmethod`, `static def` and `class def`, and the
+methods python makes so by name, `__new__` static (it is handed its class
+explicitly, as its first argument) and `__init_subclass__` and `__class_getitem__`
+class methods; a plain function has none. and it carries the elements of every
 comma-separated list of two or more — what an editor moves an argument among, or
 tracks a declaration being renamed by
 

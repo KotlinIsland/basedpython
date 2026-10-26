@@ -25,6 +25,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use crate::Db;
 use crate::comma_list::comma_lists;
 use crate::injection::text_ranges;
+use crate::method_kind::{MethodKind, method_kind};
 
 /// The block structure and string literals of one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +65,8 @@ pub struct OutlineStatement {
     pub name: Option<TextRange>,
     /// For a `def`, the names of its parameters, in source order.
     pub parameters: Vec<TextRange>,
+    /// for a `def` a class body makes, what its first parameter is passed
+    pub method: Option<MethodKind>,
 }
 
 /// One clause of a compound statement: `if`, `elif`, `else`, `case`, the `def` of a function.
@@ -141,7 +144,7 @@ pub fn syntax_outline(db: &dyn Db, file: PythonFile<'_>) -> SyntaxOutline {
         tokens: parsed.tokens(),
     };
 
-    let statements = builder.statements(parsed.suite());
+    let statements = builder.statements(parsed.suite(), false);
     let lists = comma_lists(parsed.suite(), parsed.tokens())
         .into_iter()
         .filter(|list| list.elements.len() >= 2)
@@ -240,27 +243,46 @@ impl<'a> OutlineBuilder<'a> {
 }
 
 impl OutlineBuilder<'_> {
-    fn statements(&self, suite: &[Stmt]) -> Vec<OutlineStatement> {
-        suite.iter().map(|stmt| self.statement(stmt)).collect()
+    /// the statements of `suite`; `in_class` says whether it is a class's body, or a suite of
+    /// a statement in one, whose `def`s the class owns
+    fn statements(&self, suite: &[Stmt], in_class: bool) -> Vec<OutlineStatement> {
+        suite
+            .iter()
+            .map(|stmt| self.statement(stmt, in_class))
+            .collect()
     }
 
-    fn statement(&self, stmt: &Stmt) -> OutlineStatement {
+    fn statement(&self, stmt: &Stmt, in_class: bool) -> OutlineStatement {
+        let method = match stmt {
+            Stmt::FunctionDef(function) if in_class && !function.is_trailing_lambda => {
+                Some(method_kind(function))
+            }
+            _ => None,
+        };
         OutlineStatement {
             range: stmt.range(),
-            clauses: self.clauses(stmt),
+            clauses: self.clauses(stmt, in_class),
             modifiers: self.modifiers(stmt),
             call: self.call(stmt),
             name: Self::name(stmt),
             parameters: Self::parameters(stmt),
+            method,
         }
     }
 
     /// The clauses of `stmt`, each with its body.
-    fn clauses(&self, stmt: &Stmt) -> Vec<OutlineClause> {
+    fn clauses(&self, stmt: &Stmt, in_class: bool) -> Vec<OutlineClause> {
+        // a class's body is the class's; a function's is not, and any other compound statement
+        // keeps whatever the suite around it was
+        let body_in_class = match stmt {
+            Stmt::ClassDef(_) => true,
+            Stmt::FunctionDef(_) => false,
+            _ => in_class,
+        };
         self.clause_heads(stmt)
             .into_iter()
             .map(|head| {
-                let body = self.statements(head.body);
+                let body = self.statements(head.body, body_in_class);
                 OutlineClause {
                     keyword: head.keyword,
                     colon: head.colon,
@@ -1552,5 +1574,82 @@ else:
             ),
             "C\nm(self, x, rest, kw)\nf\n"
         );
+    }
+
+    /// every statement of the outline, depth first, with what `pick` says about it
+    fn each_statement(
+        statements: &[OutlineStatement],
+        text: &str,
+        pick: &dyn Fn(&OutlineStatement, &str) -> Option<String>,
+        out: &mut Vec<String>,
+    ) {
+        for statement in statements {
+            if let Some(said) = pick(statement, text) {
+                out.push(said);
+            }
+            for clause in &statement.clauses {
+                each_statement(&clause.body, text, pick, out);
+            }
+        }
+    }
+
+    fn methods(source: &str) -> String {
+        let test = test("main.by", source);
+        let file = test.program_file(test.cursor.file).python_file(&test.db);
+        let outline = syntax_outline(&test.db, file);
+        let mut out = Vec::new();
+        each_statement(
+            &outline.statements,
+            test.cursor.source.as_str(),
+            &|statement, text| {
+                let name = &text[statement.name?.to_std_range()];
+                let method = statement
+                    .method
+                    .map_or("not a method", |kind| kind.as_str());
+                Some(format!("{name}: {method}"))
+            },
+            &mut out,
+        );
+        out.join("\n")
+    }
+
+    #[test]
+    fn a_class_s_defs_say_what_their_first_parameter_is_passed() {
+        insta::assert_snapshot!(methods(
+            "
+class Shape:
+    def area(self): ...
+    class def unit(cls): ...
+    static def origin(): ...
+    @staticmethod
+    def zero(): ...
+    @classmethod
+    def build(cls): ...
+    @property
+    def size(self): ...
+    def __new__(cls): ...
+    def __init_subclass__(cls): ...
+    if True:
+        def maybe(self): ...
+    def outer(self):
+        def inner(): ...
+
+def free(): ...
+"
+        ), @"
+        Shape: not a method
+        area: instance
+        unit: class
+        origin: static
+        zero: static
+        build: class
+        size: instance
+        __new__: static
+        __init_subclass__: class
+        maybe: instance
+        outer: instance
+        inner: not a method
+        free: not a method
+        ");
     }
 }

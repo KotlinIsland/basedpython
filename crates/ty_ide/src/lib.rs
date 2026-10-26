@@ -98,7 +98,7 @@ pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
-pub use method_kind::{MethodKind, method_kind};
+pub use method_kind::MethodKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
 };

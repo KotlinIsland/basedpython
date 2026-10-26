@@ -93,6 +93,10 @@ pub(crate) struct Statement {
     /// On a `def`: the names of its parameters, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parameters: Vec<Range>,
+    /// on a `def` a class body makes: `instance`, `class` or `static`, what its first parameter
+    /// is passed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
 }
 
 /// One clause of a compound statement.
@@ -278,6 +282,7 @@ impl Converter<'_> {
                         .iter()
                         .filter_map(|range| self.range(*range))
                         .collect(),
+                    method: statement.method.map(|kind| kind.as_str().to_string()),
                 })
             })
             .collect()

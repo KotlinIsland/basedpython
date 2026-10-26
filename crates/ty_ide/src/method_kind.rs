@@ -48,7 +48,7 @@ pub(crate) fn resolved_method_kind(
 /// `builtins`), basedpython's `static def` and `class def`, and the methods python makes static
 /// or class methods by their name alone — `__new__`, and `__init_subclass__` and
 /// `__class_getitem__`. any other `def` in a class body is passed its instance, decorated or not
-pub fn method_kind(function: &ast::StmtFunctionDef) -> MethodKind {
+pub(crate) fn method_kind(function: &ast::StmtFunctionDef) -> MethodKind {
     for decorator in &function.decorator_list {
         let name = match &decorator.expression {
             // `static def` and `class def` are parsed into decorators named for the modifier,
