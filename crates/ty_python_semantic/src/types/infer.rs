@@ -2305,6 +2305,15 @@ struct ExpressionInferenceExtra<'db> {
     /// parameters to — see [`CallSolution`].
     call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
 
+    /// basedpython `?.`: the type each optional-chain link in this region has when every
+    /// `?.` receiver in its chain is present
+    ///
+    /// a region can be rooted at a chain link that the region asking for it goes on to
+    /// extend — the callee `s?.upper` of a statement-level call `s?.upper()` is a standalone
+    /// expression — and that next link must be looked up against the present receiver, not
+    /// against the short-circuit `None` the link's own type carries
+    basedpython_chain_present: FrozenMap<ExpressionNodeKey, Type<'db>>,
+
     /// The creation-time type of a fluid specialization candidate whose assigned value
     /// is this region, with literal types retained.
     fluid_creation: Option<Type<'db>>,
@@ -2406,6 +2415,14 @@ impl<'db> ExpressionInference<'db> {
                     None => fluid_creation.recursive_type_normalized(db, env, cycle),
                 };
             }
+            for (link, present) in &mut extra.basedpython_chain_present {
+                *present = match previous.basedpython_chain_present(*link) {
+                    Some(previous_present) => {
+                        present.cycle_normalized(db, env, previous_present, cycle)
+                    }
+                    None => present.recursive_type_normalized(db, env, cycle),
+                };
+            }
             if let Some(fluid_timeline) = extra.fluid_timeline.take() {
                 extra.fluid_timeline = Some(fluid_timeline.cycle_normalized(
                     db,
@@ -2483,6 +2500,16 @@ impl<'db> ExpressionInference<'db> {
     pub(crate) fn expression_type(&self, expression: impl Into<ExpressionNodeKey>) -> Type<'db> {
         self.try_expression_type(expression)
             .unwrap_or_else(Type::unknown)
+    }
+
+    /// the present-receiver type of a basedpython optional-chain link in this region — see
+    /// [`ExpressionInferenceExtra::basedpython_chain_present`]
+    fn basedpython_chain_present(&self, link: ExpressionNodeKey) -> Option<Type<'db>> {
+        self.extra
+            .as_deref()?
+            .basedpython_chain_present
+            .get(&link)
+            .copied()
     }
 
     /// Whether this call expression's type is `Never` only because the call left a type variable

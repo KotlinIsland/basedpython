@@ -977,6 +977,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
 
             self.call_solutions.extend(extra.call_solutions.iter());
+
+            self.basedpython_chain_present
+                .extend(extra.basedpython_chain_present.iter().copied());
         }
     }
 
@@ -1027,6 +1030,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.fluid_adoptions
             .extend(inference.fluid_adoptions.iter());
         self.call_solutions.extend(inference.call_solutions.iter());
+        self.basedpython_chain_present
+            .extend(inference.basedpython_chain_present.iter());
 
         if !matches!(self.region, InferenceRegion::Scope(..)) {
             self.bindings.extend(
@@ -4614,6 +4619,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // (single target, no unpackings). That means it's a valid syntactic form
                     // for a legacy TypeVar creation; check for that.
                     let callable_type = self.infer_callee(&call_expr.func, TypeContext::default());
+                    // basedpython `x = a?.f()`: as in `infer_call_expression`, the call is a link
+                    // of the chain, so it calls the present-receiver callable and the chain's
+                    // `None` rides out to the call's own type
+                    let (callable_type, in_chain) =
+                        self.basedpython_chain_receiver(&call_expr.func, callable_type);
 
                     let ty = if let Some(namedtuple_kind) =
                         NamedTupleKind::from_type(self.db(), callable_type)
@@ -4721,6 +4731,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // be kept symbolic here too — otherwise `a = x.foo()` would name a
                     // different value than the `x.foo()` a `return` names
                     let ty = self.basedpython_symbolic_call(call_expr, callable_type, ty);
+                    let ty = self.basedpython_chain_result(call_expr, ty, in_chain);
 
                     self.store_expression_type(value, ty);
                     ty
@@ -17467,9 +17478,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             deferred_decorator_calls: _,
             discards_dict_key_assignments: _,
 
+            basedpython_chain_present,
+
             // builder only state
             expression_cache: _,
-            basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
             typevar_binding_context: _,
@@ -17492,6 +17504,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             collection_use_constraints,
             fluid_adoptions,
             call_solutions,
+            basedpython_chain_present,
             fluid_creation,
             fluid_timeline,
             string_annotations,
@@ -18266,6 +18279,7 @@ struct FullExpressionCacheEntry<'db> {
     collection_use_constraints: CollectionUseConstraints<'db>,
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
     call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
+    basedpython_chain_present: FxHashMap<ExpressionNodeKey, Type<'db>>,
     fluid_creation: Option<Type<'db>>,
     fluid_timeline: Option<FluidTimeline<'db>>,
     string_annotations: FxHashSet<ExpressionNodeKey>,
@@ -18299,6 +18313,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             && self.collection_use_constraints.is_empty()
             && self.fluid_adoptions.is_empty()
             && self.call_solutions.is_empty()
+            && self.basedpython_chain_present.is_empty()
             && self.fluid_creation.is_none()
             && self.fluid_timeline.is_none()
             && self.string_annotations.is_empty()
@@ -18324,6 +18339,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             || !self.collection_use_constraints.is_empty()
             || !self.fluid_adoptions.is_empty()
             || !self.call_solutions.is_empty()
+            || !self.basedpython_chain_present.is_empty()
             || self.fluid_creation.is_some()
             || self.fluid_timeline.is_some()
             || !self.expected_types.is_empty()
@@ -18353,6 +18369,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
                 unsolved_typevar_calls: FrozenSet::from(self.unsolved_typevar_calls),
                 fluid_adoptions: self.fluid_adoptions,
                 call_solutions: self.call_solutions,
+                basedpython_chain_present: FrozenMap::from(self.basedpython_chain_present),
                 fluid_creation: self.fluid_creation,
                 fluid_timeline: self.fluid_timeline,
                 comparison_truthiness: FrozenMap::from(self.comparison_truthiness),

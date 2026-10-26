@@ -50,6 +50,20 @@ def f(c: C | None) -> None:
     reveal_type(c?.greet())  # revealed: str | None
 ```
 
+## a chain that ends in a call, as a statement or an assignment's value
+
+the call is still a link of the chain where nothing gives it a type context: a statement on its own
+line, or the value assigned to a name nothing declares.
+
+```by
+def f(s: str | None) -> None:
+    s?.upper()  # no diagnostic
+    upper = s?.upper()
+    reveal_type(upper)  # revealed: str | None
+    lower = s?.upper().lower()
+    reveal_type(lower)  # revealed: str | None
+```
+
 ## chain continues through a subscript
 
 ```by
