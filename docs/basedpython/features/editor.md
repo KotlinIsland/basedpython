@@ -1183,8 +1183,11 @@ each of its declarations and how many classes subclass it or members override
 it: what an editor draws above each one as "3 usages" or "2 overrides". the
 declarations are the document's outline at the depth a reader scans a module
 at — its classes and functions, and the methods and properties of those
-classes. a dunder is left out, being called by the language rather than by
-name, and so is an `extension` block, which names a class it does not declare
+classes. a dunder method is there for what overrides it, as a base's `__init__`
+is marked overridden in PyCharm, but its usages are not counted, the language
+calling it rather than its name: it has no `references`, even when they are
+asked for. a module's dunder function is left out, and so is an `extension`
+block, which names a class it does not declare
 
 each declaration comes with its `name`, its `kind` (`class`, `function` or
 `method`), its whole `range` from its first decorator, its `selectionRange` on

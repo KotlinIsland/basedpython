@@ -16,10 +16,11 @@
 //!
 //! the declarations counted are the document's outline ([`crate::document_symbols()`])
 //! at the depth a reader scans a module at: its classes and functions, and the
-//! methods and properties of those classes. a dunder is left out, being called
-//! by the language rather than by name, and so is an `extension` block, which
-//! names a class it does not declare. a nested function or a class inside a
-//! class is not counted
+//! methods and properties of those classes. a dunder method is counted for its
+//! overrides alone, as PyCharm marks `__init__` overridden: its usages are not
+//! counted, since the language calls it rather than its name. a module's dunder
+//! function is left out, and so is an `extension` block, which names a class it
+//! does not declare. a nested function or a class inside a class is not counted
 
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::AnyNodeRef;
@@ -65,7 +66,7 @@ pub struct DeclarationUsages {
     /// its name where it is declared
     pub name_range: TextRange,
     /// how many places use it, the declaration itself not among them. `None`
-    /// when not asked for
+    /// when not asked for, and for a dunder method
     pub references: Option<usize>,
     /// how many classes subclass a class, directly or not, and how many members
     /// of those override a method. `None` when not asked for, and for a function
@@ -103,13 +104,17 @@ pub fn document_usage_counts(
     let mut declarations = declarations;
 
     if kinds.references {
-        let offsets: Vec<_> = declarations
+        // the language calls a dunder, not its name
+        let (offsets, counted): (Vec<_>, Vec<_>) = declarations
             .iter()
-            .map(|declaration| declaration.name_range.start())
-            .collect();
+            .enumerate()
+            .filter(|(_, declaration)| !is_dunder(&declaration.name))
+            .map(|(index, declaration)| (declaration.name_range.start(), index))
+            .unzip();
         let found = find_references_to_each(db, file, &offsets, false);
-        for (declaration, references) in declarations.iter_mut().zip(found) {
-            declaration.references = Some(references.map_or(0, |references| references.len()));
+        for (index, references) in counted.into_iter().zip(found) {
+            declarations[index].references =
+                Some(references.map_or(0, |references| references.len()));
         }
     }
     if kinds.implementations {
@@ -168,7 +173,8 @@ fn counted_declarations(db: &dyn Db, file: ProgramFile<'_>) -> Vec<DeclarationUs
     let mut declarations = Vec::new();
 
     let mut add = |name: &str, kind, full_range, name_range| {
-        if !is_dunder(name) {
+        // a dunder is only counted for its overrides, which a function has none of
+        if kind == DeclarationKind::Method || !is_dunder(name) {
             declarations.push(DeclarationUsages {
                 name: name.to_string(),
                 kind,
@@ -405,14 +411,12 @@ class Circle(Shape):
     }
 
     #[test]
-    fn dunders_nested_functions_and_extensions_are_not_counted() {
+    fn nested_functions_extensions_and_module_dunders_are_not_counted() {
         let test = CursorTest::builder()
             .source(
                 "main.by",
                 "<CURSOR>
 class A:
-    def __init__(self) -> None: ...
-
     def f(self) -> None:
         def inner() -> None: ...
         inner()
@@ -420,13 +424,45 @@ class A:
 extension list:
     def second(self) -> int:
         return 0
+
+def __getattr__(name: str) -> int:
+    return 0
 ",
             )
             .build();
         assert_snapshot!(test.usage_counts(), @"
         class A 2 refs=0 impls=0
-        method f 5 refs=0 impls=0
-        method second 10 refs=0 impls=0
+        method f 3 refs=0 impls=0
+        method second 8 refs=0 impls=0
+        ");
+    }
+
+    /// A dunder method is counted for the methods overriding it, as PyCharm marks a base's
+    /// `__init__` overridden, but not for its usages: the language calls it, not its name.
+    #[test]
+    fn a_dunder_method_is_counted_for_its_overrides_alone() {
+        let test = cursor_test(
+            "<CURSOR>
+class Shape:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+class Circle(Shape):
+    def __init__(self) -> None:
+        super().__init__('circle')
+
+Circle() == Shape('shape')
+",
+        );
+        assert_snapshot!(test.usage_counts(), @"
+        class Shape 2 refs=2 impls=1 <main.Circle /main.py:9>
+        method __init__ 3 impls=1 <main.Circle /main.py:10>
+        method __eq__ 6 impls=0
+        class Circle 9 refs=1 impls=0
+        method __init__ 10 impls=0
         ");
     }
 }
