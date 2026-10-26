@@ -57,3 +57,34 @@ fn input_status_says_whether_enter_runs_the_input() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// a console completes against a document holding the session's source, as `by repl
+/// --session-file` keeps it, followed by the input being typed: what the session defined is
+/// offered, `let` and all, though no file holds it
+#[test]
+fn a_console_completes_against_the_session_s_source() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let session =
+        "let rate = 0.2\ndef taxed(amount: float) -> float:\n    return amount * (1 + rate)\n";
+    let typed = "tax";
+    let uri = lsp_types::Uri::parse("untitled:console-1.by")?;
+    server.send_notification::<lsp_types::DidOpenTextDocumentNotification>(
+        lsp_types::DidOpenTextDocumentParams {
+            text_document: lsp_types::TextDocumentItem {
+                uri: uri.clone(),
+                language_id: lsp_types::LanguageKind::Python,
+                version: 1,
+                text: format!("{session}{typed}"),
+            },
+        },
+    );
+
+    let completions = server.completion_request(&uri, lsp_types::Position::new(3, 3));
+    assert!(
+        completions.iter().any(|item| item.label == "taxed"),
+        "{completions:#?}"
+    );
+    Ok(())
+}
