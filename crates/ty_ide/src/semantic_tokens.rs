@@ -51,6 +51,7 @@ use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use std::ops::Deref;
 use toml_parser::decoder::ScalarKind;
 use toml_parser::parser::{Event, EventKind};
+use ty_module_resolver::{KnownModule, file_to_module};
 use ty_project::script_tag;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
@@ -160,9 +161,10 @@ bitflags! {
         const READONLY = 1 << 1;
         const ASYNC = 1 << 2;
         const DOCUMENTATION = 1 << 3;
-        /// The name is the language's own rather than the project's. Only
-        /// produced for django templates, where it separates a builtin tag or
-        /// filter from one the project registered.
+        /// the name is the language's own rather than the project's: in a
+        /// python or basedpython file, one the `builtins` module defines
+        /// (`print`, `len`, `str`); in a django template, a builtin tag or
+        /// filter rather than one the project registered
         const DEFAULT_LIBRARY = 1 << 4;
         /// The name is bound in the scope of a function, a lambda or a
         /// comprehension: a parameter or a local, as against a module global or
@@ -170,6 +172,17 @@ bitflags! {
         /// highlighting — which only reads well for names that live and die with
         /// one call.
         const FUNCTION_SCOPE = 1 << 5;
+        /// the token is part of a type expression: an annotation — a
+        /// parameter's, a variable's, or what a function returns or raises —
+        /// a type alias's value, a type parameter's bound or default, or an
+        /// argument the checker reads as a type (`cast(list[int], x)`)
+        const ANNOTATION = 1 << 6;
+        /// the name is a dunder, `__name__` or `__init__`: one the language
+        /// gives a meaning of its own
+        const DUNDER = 1 << 7;
+        /// the name of a keyword argument in a call: `scale` in
+        /// `cart.total(scale=2.0)`. its token type is `parameter`
+        const KEYWORD_ARGUMENT = 1 << 8;
     }
 }
 
@@ -191,6 +204,9 @@ impl SemanticTokenModifier {
             "documentation",
             "defaultLibrary",
             "functionScope",
+            "annotation",
+            "dunder",
+            "keywordArgument",
         ]
     }
 }
@@ -776,12 +792,28 @@ impl<'db> SemanticTokenVisitor<'db> {
         &mut self,
         ranged: impl Ranged,
         token_type: SemanticTokenType,
-        modifiers: SemanticTokenModifier,
+        mut modifiers: SemanticTokenModifier,
     ) {
         let range = ranged.range();
 
         if range.is_empty() {
             return;
+        }
+
+        if self.in_type_form {
+            modifiers |= SemanticTokenModifier::ANNOTATION;
+        }
+        if matches!(
+            token_type,
+            SemanticTokenType::Variable
+                | SemanticTokenType::Property
+                | SemanticTokenType::Function
+                | SemanticTokenType::Method
+                | SemanticTokenType::Class
+                | SemanticTokenType::Parameter
+        ) && self.source.get(range.to_std_range()).is_some_and(is_dunder)
+        {
+            modifiers |= SemanticTokenModifier::DUNDER;
         }
 
         // Only emit tokens that intersect with the range filter, if one is specified
@@ -842,7 +874,18 @@ impl<'db> SemanticTokenVisitor<'db> {
         if self.binds_in_function_scope(name, definition) {
             modifiers |= SemanticTokenModifier::FUNCTION_SCOPE;
         }
+        if definition.is_some_and(|definition| self.is_builtin(definition)) {
+            modifiers |= SemanticTokenModifier::DEFAULT_LIBRARY;
+        }
         Some((token_type, modifiers))
+    }
+
+    /// whether `definition` is one of the `builtins` module's, which a name reaches without an
+    /// import
+    fn is_builtin(&self, definition: Definition<'db>) -> bool {
+        let db = self.model.db();
+        file_to_module(db, definition.program_file(db).resolver_file(db))
+            .is_some_and(|module| module.is_known(db, KnownModule::Builtins))
     }
 
     /// Whether `name` is bound in a function's, a lambda's or a comprehension's
@@ -1662,6 +1705,16 @@ impl<'db> SemanticTokenVisitor<'db> {
     }
 }
 
+/// whether `name` is a dunder: `__name__`, `__init__`
+fn is_dunder(name: &str) -> bool {
+    name.len() > 4
+        && name.starts_with("__")
+        && name.ends_with("__")
+        && name[2..name.len() - 2]
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_')
+}
+
 /// The body statements that stand for source text of their own.
 ///
 /// basedpython's `init(...)` shorthand prepends a synthesized
@@ -2409,6 +2462,16 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // based on the position.
                 let argument_forms = call_argument_forms(self.model, call);
                 for (argument, form) in call.arguments.iter_source_order().zip(argument_forms) {
+                    if let ArgOrKeyword::Keyword(ast::Keyword {
+                        arg: Some(name), ..
+                    }) = argument
+                    {
+                        self.add_token(
+                            name.range(),
+                            SemanticTokenType::Parameter,
+                            SemanticTokenModifier::KEYWORD_ARGUMENT,
+                        );
+                    }
                     match form {
                         CallArgumentForm::Type => self.visit_annotation(argument.value()),
                         CallArgumentForm::Unknown | CallArgumentForm::Value => match argument {
@@ -4786,24 +4849,32 @@ x4 = assert_type(value="", type=PathLike[str])
         "cast" @ 67..71: Function
         "x1" @ 73..75: Variable [definition]
         "cast" @ 78..82: Function
+        "typ" @ 83..86: Parameter
         "os" @ 87..89: Namespace
         "PathLike" @ 90..98: Class
         "str" @ 99..102: Class
+        "val" @ 105..108: Parameter
         "\"\"" @ 109..111: String
         "x2" @ 113..115: Variable [definition]
         "cast" @ 118..122: Function
+        "val" @ 123..126: Parameter
         "\"\"" @ 127..129: String
+        "typ" @ 131..134: Parameter
         "PathLike" @ 135..143: Class
         "str" @ 144..147: Class
         "x3" @ 150..152: Variable [definition]
         "assert_type" @ 155..166: Function
+        "type" @ 167..171: Parameter
         "os" @ 172..174: Namespace
         "PathLike" @ 175..183: Class
         "str" @ 184..187: Class
+        "value" @ 190..195: Parameter
         "\"\"" @ 196..198: String
         "x4" @ 200..202: Variable [definition]
         "assert_type" @ 205..216: Function
+        "value" @ 217..222: Parameter
         "\"\"" @ 223..225: String
+        "type" @ 227..231: Parameter
         "PathLike" @ 232..240: Class
         "str" @ 241..244: Class
         "#);
@@ -6388,6 +6459,112 @@ def outer():
                 "count@146",
                 "count@176",
                 "count@190",
+            ]
+        );
+    }
+
+    /// a name the `builtins` module defines is the language's own; one a module the program
+    /// imports is not, even one from the standard library
+    #[test]
+    fn default_library_marks_builtins() {
+        let test = SemanticTokenTest::new(
+            r#"
+import os
+
+def count(items: list[str]) -> int:
+    print(os.sep)
+    return len(items)
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.names_with(&tokens, SemanticTokenModifier::DEFAULT_LIBRARY),
+            ["list@29", "str@34", "int@43", "print@52", "len@77"]
+        );
+    }
+
+    /// every token of a type expression is marked: an annotation, a type alias's value, and an
+    /// argument the checker reads as a type. a default value is not one
+    #[test]
+    fn annotation_marks_type_expressions() {
+        let test = SemanticTokenTest::new(
+            r#"
+from typing import cast
+
+def scale(value: float = 1.0) -> list[float]:
+    total: float = cast(float, value)
+    return [total]
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.names_with(&tokens, SemanticTokenModifier::ANNOTATION),
+            ["float@43", "list@59", "float@64", "float@83", "float@96"]
+        );
+    }
+
+    /// a dunder is marked where it is defined and where it is read; a name that only starts with
+    /// underscores is not one
+    #[test]
+    fn dunder_marks_dunder_names() {
+        let test = SemanticTokenTest::new(
+            r#"
+class Box:
+    def __init__(self) -> None:
+        self.__size = 0
+
+print(__name__)
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.names_with(&tokens, SemanticTokenModifier::DUNDER),
+            ["__init__@20", "__name__@75"]
+        );
+    }
+
+    /// the name a keyword argument is passed by is a `parameter` token marked
+    /// `keywordArgument`, whichever argument it is among, including one the checker reads as a
+    /// type
+    #[test]
+    fn keyword_argument_names() {
+        let test = SemanticTokenTest::new(
+            r#"
+from typing import TypeVar
+
+def f(*args, scale=1, **kwargs): ...
+
+f(1, scale=2, extra=3)
+T = TypeVar("T", bound=int)
+"#,
+        );
+
+        let tokens = test.highlight_file();
+        let source = ruff_db::source::source_text(&test.db, test.file);
+
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| token
+                    .modifiers
+                    .contains(SemanticTokenModifier::KEYWORD_ARGUMENT))
+                .map(|token| format!(
+                    "{}@{} {:?}",
+                    &source[token.range()],
+                    u32::from(token.start()),
+                    token.token_type
+                ))
+                .collect::<Vec<_>>(),
+            [
+                "scale@72 Parameter",
+                "extra@81 Parameter",
+                "bound@107 Parameter"
             ]
         );
     }
@@ -8291,14 +8468,19 @@ x = cast(int, "")
 
         /// The tokens marked `functionScope`, each as its text and start offset.
         fn function_scoped_names(&self, tokens: &SemanticTokens) -> Vec<String> {
+            self.names_with(tokens, SemanticTokenModifier::FUNCTION_SCOPE)
+        }
+
+        /// the tokens marked with `modifier`, each as its text and start offset
+        fn names_with(
+            &self,
+            tokens: &SemanticTokens,
+            modifier: SemanticTokenModifier,
+        ) -> Vec<String> {
             let source = ruff_db::source::source_text(&self.db, self.file);
             tokens
                 .iter()
-                .filter(|token| {
-                    token
-                        .modifiers
-                        .contains(SemanticTokenModifier::FUNCTION_SCOPE)
-                })
+                .filter(|token| token.modifiers.contains(modifier))
                 .map(|token| format!("{}@{}", &source[token.range()], u32::from(token.start())))
                 .collect()
         }

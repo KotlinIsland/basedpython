@@ -452,13 +452,56 @@ are, because their indentation is part of the string
 
 ## semantic tokens
 
-besides the standard modifiers, a token can carry `functionScope`: the name is
-bound in the scope of a function, a lambda or a comprehension — a parameter or a
-local, as against a module global or a class attribute. it is the binding that
-decides, not where the name is written: a global read inside a function is not
-marked, a `nonlocal` name is, and an assignment expression in a comprehension at
-the top of a module binds a global. an editor that colours each local by its name
-("rainbow" highlighting) reads it off this modifier
+the legend `initialize` answers with, in its order — a token's type and
+modifiers are sent as positions in these lists. the names LSP defines are used
+where one fits; the others are basedpython's own
+
+| token type        | what it is                                                                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `namespace`       | a module                                                                                                        |
+| `class`           | a class, or a type alias                                                                                        |
+| `parameter`       | a parameter, and the name a keyword argument is passed by                                                       |
+| `selfParameter`   | a method's `self`                                                                                               |
+| `clsParameter`    | a class method's `cls`                                                                                          |
+| `variable`        | a variable or an attribute                                                                                      |
+| `property`        | a property                                                                                                      |
+| `function`        | a function                                                                                                      |
+| `method`          | a method                                                                                                        |
+| `keyword`         | a keyword spelled like a name (`var`, `let`, `typeof`), and a directive of a format spec or a `strftime` format |
+| `string`          | a string literal                                                                                                |
+| `number`          | a number literal                                                                                                |
+| `decorator`       | a decorator's name                                                                                              |
+| `builtinConstant` | `None`, `True`, `False`                                                                                         |
+| `typeParameter`   | a type parameter                                                                                                |
+| `comment`         | a comment in a django template                                                                                  |
+| `operator`        | punctuation in a django template or in a script's `# /// script` metadata                                       |
+| `regexp`          | a date or time in a script's `# /// script` metadata                                                            |
+
+| modifier          | the token is                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `definition`      | where the name is defined, rather than used                                        |
+| `readonly`        | a name written as a constant, `MAX_SIZE`, or a property with no setter             |
+| `async`           | the name of an `async def` where it is defined                                     |
+| `documentation`   | a docstring (on a `string`)                                                        |
+| `defaultLibrary`  | a name the `builtins` module defines — `print`, `len`, `str` — or a django builtin |
+| `functionScope`   | a name bound in the scope of a function, a lambda or a comprehension               |
+| `annotation`      | part of a type expression                                                          |
+| `dunder`          | a dunder name, `__init__` or `__name__`                                            |
+| `keywordArgument` | the name a keyword argument is passed by, `scale` in `total(scale=2.0)`            |
+
+`functionScope` marks a parameter or a local, as against a module global or a
+class attribute. it is the binding that decides, not where the name is written:
+a global read inside a function is not marked, a `nonlocal` name is, and an
+assignment expression in a comprehension at the top of a module binds a global.
+an editor that colours each local by its name ("rainbow" highlighting) reads it
+off this modifier
+
+`annotation` marks every token of a type expression: a parameter's or a
+variable's annotation, what a function returns or raises, a type alias's value,
+a type parameter's bound or default, and an argument the checker reads as a type,
+as `cast(list[int], x)` does its first. a default value is not one. `dunder`
+marks a dunder wherever it is defined or read; a name that only starts with
+underscores is not one
 
 ## keyword highlighting
 

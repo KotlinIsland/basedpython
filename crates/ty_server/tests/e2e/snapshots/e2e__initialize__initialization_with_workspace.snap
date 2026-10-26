@@ -116,7 +116,10 @@ expression: initialization_result
           "async",
           "documentation",
           "defaultLibrary",
-          "functionScope"
+          "functionScope",
+          "annotation",
+          "dunder",
+          "keywordArgument"
         ]
       },
       "range": true,
