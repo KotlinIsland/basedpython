@@ -464,14 +464,14 @@ def get_a() -> A:
             "range": {
               "start": {
                 "line": 0,
-                "character": 21
+                "character": 16
               },
               "end": {
                 "line": 0,
-                "character": 21
+                "character": 16
               }
             },
-            "newText": ", A"
+            "newText": "A, "
           }
         ],
         "data": {

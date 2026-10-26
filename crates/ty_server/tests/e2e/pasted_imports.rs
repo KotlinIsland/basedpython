@@ -108,7 +108,9 @@ fn a_copy_answers_its_imports_and_a_paste_the_ones_it_is_missing() -> Result<()>
         .collect();
     assert_eq!(
         added,
-        ["import math\n", "from shapes import SCALE\n"],
+        // `math` joins the standard library's imports, above `pathlib`'s, and `shapes`, which is
+        // the project's own, starts a section of its own below them
+        ["import math\n", "\nfrom shapes import SCALE\n"],
         "{pasted:#}"
     );
     Ok(())

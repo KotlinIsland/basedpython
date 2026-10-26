@@ -196,8 +196,9 @@ fn a_new_test_in_a_test_module_that_does_not_import_the_code_comes_with_the_impo
     assert_eq!(
         answer["newTest"]["importEdits"],
         json!([{
-            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
-            "newText": "from shapes.circle import Circle\n",
+            // the project's own import, in a section of its own below the standard library's
+            "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 0 } },
+            "newText": "\nfrom shapes.circle import Circle\n",
         }]),
         "{answer:#}",
     );

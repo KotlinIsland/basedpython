@@ -181,6 +181,33 @@ written through it, and one from a module with a `from ... import` is added to t
 statement. how imports are sorted, grouped and split is not an editor setting: it
 is the project's isort configuration, which `buff` reads and fixes
 
+an import any of these write — a completion's, a quick fix's, a pasted name's, an
+inlay hint's — goes where `buff check --select I --fix` would put it, so adding one
+never leaves the block unsorted. it joins its section of the file's first block of
+imports (future, standard library, third party, first party, local, or the
+sections the configuration defines) in the order isort sorts that section, with a
+blank line around a section the block did not have yet, and a member added to an
+existing `from` import is listed where isort orders the members:
+
+```py
+import json
+import sys
+from collections import OrderedDict
+
+import attr
+```
+
+`math` is imported between `json` and `sys`, `Path` below the `collections`
+import, `defaultdict` as `from collections import OrderedDict, defaultdict`, and
+`attrs` below `attr`. the configuration is `buff`'s own, resolved as `buff`
+resolves it — the closest `ruff.toml`, `.ruff.toml` or `pyproject.toml` with a
+`[tool.ruff]` table, then the user's, then the defaults — so
+`force-sort-within-sections`, `from-first`, `known-first-party`, `section-order`,
+`no-lines-before`, `lines-between-types`, `force-single-line` and the rest apply
+as they do to `buff`. the import has to run before the name it binds is used, so a
+file whose imports all come after that point, or that has none, still gets it at
+the top, below a docstring and any `from __future__` import
+
 ### names inside a string
 
 a name written inside a plain string's braces completes as a name, and taking

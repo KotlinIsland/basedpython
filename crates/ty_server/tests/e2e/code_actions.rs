@@ -512,3 +512,104 @@ def f(user: User | None):
 
     Ok(())
 }
+
+/// The text of `content` with the edits of the code action titled `title` applied.
+fn applied(actions: &[lsp_types::CodeActionResponse], title: &str, content: &str) -> String {
+    let action = actions
+        .iter()
+        .find_map(|action| match action {
+            lsp_types::CodeActionResponse::CodeAction(action) if action.title == title => {
+                Some(action)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no code action `{title}`"));
+    let mut edits: Vec<_> = action
+        .edit
+        .iter()
+        .flat_map(|edit| edit.changes.iter().flatten())
+        .flat_map(|(_, edits)| edits.iter().cloned())
+        .collect();
+    edits
+        .sort_by_key(|edit| std::cmp::Reverse((edit.range.start.line, edit.range.start.character)));
+    let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
+    for edit in edits {
+        let start = edit.range.start;
+        let end = edit.range.end;
+        let head = lines[start.line as usize][..start.character as usize].to_string();
+        let tail = lines[end.line as usize][end.character as usize..].to_string();
+        let replaced = format!("{head}{}{tail}", edit.new_text);
+        lines.splice(
+            start.line as usize..=end.line as usize,
+            replaced.split('\n').map(str::to_string),
+        );
+    }
+    lines.join("\n")
+}
+
+/// An import a quick fix adds goes where buff's isort configuration sorts it: here, with
+/// `force-sort-within-sections`, among the standard library's imports by module whatever their
+/// kind, and after the project's other import of its own package, which buff finds is
+/// first-party because the package is in the project.
+#[test]
+fn an_import_is_added_where_the_project_s_isort_configuration_sorts_it() -> Result<()> {
+    let main = SystemPath::new("main.py");
+    let main_content = "\
+from collections import OrderedDict
+import json
+import sys
+
+from shop import other
+
+Path, helper, OrderedDict, json, sys, other
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new(""), None)?
+        .with_file(
+            "pyproject.toml",
+            "\
+[project]
+name = \"shop\"
+version = \"0\"
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+",
+        )?
+        .with_file("shop/__init__.py", "other = 1\n")?
+        .with_file("shop/util.py", "def helper() -> None: ...\n")?
+        .with_file(main, main_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, main_content, 1);
+    let diagnostics = server.document_diagnostic_request(main, None);
+    let code_action_params = code_actions_at(&server, diagnostics, main, full_range(main_content));
+    let code_actions = server
+        .send_request_await::<CodeActionRequest>(code_action_params)
+        .unwrap_or_default();
+
+    insta::assert_snapshot!(applied(&code_actions, "import pathlib.Path", main_content), @"
+    from collections import OrderedDict
+    import json
+    from pathlib import Path
+    import sys
+
+    from shop import other
+
+    Path, helper, OrderedDict, json, sys, other
+    ");
+    insta::assert_snapshot!(applied(&code_actions, "import shop.util.helper", main_content), @"
+    from collections import OrderedDict
+    import json
+    import sys
+
+    from shop import other
+    from shop.util import helper
+
+    Path, helper, OrderedDict, json, sys, other
+    ");
+
+    Ok(())
+}

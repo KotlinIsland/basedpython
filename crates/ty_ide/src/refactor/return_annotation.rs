@@ -174,7 +174,7 @@ mod tests {
         Add return annotation `-> Circle`
         ---
 
-        from shapes import make, Circle
+        from shapes import Circle, make
 
         def f() -> Circle:
             return make()

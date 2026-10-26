@@ -27,8 +27,9 @@ use ty_python_core::ProgramFile;
 use ty_python_core::program::Program;
 use ty_python_semantic::{CollectedTest, collected_pytest_tests};
 
+use crate::import_order;
 use crate::{CallHierarchyItem, Db, SymbolKind, incoming_calls, outgoing_calls};
-use ty_python_semantic::importer::{ImportRequest, Importer};
+use ty_python_semantic::importer::ImportRequest;
 
 /// a test, or a subject a test exercises
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -506,7 +507,7 @@ fn test_directory(db: &dyn Db, file: ProgramFile<'_>) -> SystemPathBuf {
 fn import_edit(db: &dyn Db, file: ProgramFile<'_>, module: &str, name: &str) -> Option<Edit> {
     let parsed: ParsedModuleRef = parsed_module(db, file.python_file(db)).load(db);
     let source = source_text(db, file.file(db));
-    let importer = Importer::new(db, file, &parsed);
+    let importer = import_order::importer(db, file, &parsed);
     // in scope at the end of the module, which is where a new test goes
     let end = TextSize::of(source.as_str());
     let members = importer.members_in_scope_at(parsed.syntax().into(), end);
@@ -760,7 +761,7 @@ class TestShapes:
             .build();
         assert_snapshot!(test.subject_tests(), @r#"
 
-        new test test_perimeter added in /tests/test_geometry.py importing perimeter from geometry with "from geometry import perimeter\n"
+        new test test_perimeter added in /tests/test_geometry.py importing perimeter from geometry with "/nfrom geometry import perimeter\n"
         "#);
     }
 

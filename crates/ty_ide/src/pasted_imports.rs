@@ -31,7 +31,9 @@ use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::SemanticModel;
 
-use ty_python_semantic::importer::{ImportRequest, Importer};
+use ty_python_semantic::importer::ImportRequest;
+
+use crate::import_order;
 
 /// A name copied code uses, and the import that binds it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -319,7 +321,7 @@ pub fn pasted_imports(
     imports: &[CopiedImport],
 ) -> PastedImports {
     let parsed = parsed_module(db, file.python_file(db)).load(db);
-    let importer = Importer::new(db, file, &parsed);
+    let importer = import_order::importer(db, file, &parsed);
     let node = landing_node(&parsed, range);
     let members = importer.members_in_scope_at(node, range.start());
     let model = SemanticModel::new(db, file);
@@ -327,6 +329,7 @@ pub fn pasted_imports(
         .map(|module| module.name(db).as_str().to_string());
 
     let mut answer = PastedImports::default();
+    let mut actions = Vec::new();
     let mut seen = FxHashSet::default();
     for import in imports {
         if !seen.insert(import.name.as_str())
@@ -344,13 +347,13 @@ pub fn pasted_imports(
         // an import the file can only satisfy by spelling the name another way — as
         // `pathlib.Path` under an `import pathlib` — would leave the pasted name as
         // unresolved as it was
-        if let Some(edit) = action.import()
-            && action.symbol_text() == import.name
-        {
+        if action.import().is_some() && action.symbol_text() == import.name {
             answer.missing.push(import.clone());
-            answer.edits.push(edit.clone());
+            actions.push(action);
         }
     }
+    // placed together, so imports added at one place come out in isort's order
+    answer.edits = importer.combined_edits(&actions);
     answer
 }
 
@@ -625,11 +628,13 @@ mod tests {
         from pathlib import PurePosixPath as P
         import numbers as np
         ---
-        from shapes import SCALE
-        import numbers as np
 
         import math
-        from pathlib import PurePath, Path, PurePosixPath as P
+        import numbers as np
+        from pathlib import Path, PurePath
+        from pathlib import PurePosixPath as P
+
+        from shapes import SCALE
 
         def f():
             return math.pi * SCALE, Path(), P(), np

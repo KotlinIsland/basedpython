@@ -30,6 +30,7 @@ mod goto_implementation;
 mod goto_type_definition;
 mod hints;
 mod hover;
+mod import_order;
 #[cfg(test)]
 mod importer;
 mod injection;

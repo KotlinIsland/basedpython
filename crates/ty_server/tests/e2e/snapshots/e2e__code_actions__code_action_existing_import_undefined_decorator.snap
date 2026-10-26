@@ -34,11 +34,11 @@ expression: code_actions
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 2,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 2,
                 "character": 0
               }
             },
@@ -79,15 +79,15 @@ expression: code_actions
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 2,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 2,
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import deprecated\n"
+            "newText": "\nfrom typing_extensions import deprecated\n"
           }
         ]
       }

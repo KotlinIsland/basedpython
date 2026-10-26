@@ -30,6 +30,7 @@ mod format;
 mod helpers;
 mod normalize;
 mod order;
+pub mod placement;
 pub(crate) mod rules;
 pub mod settings;
 mod sorting;

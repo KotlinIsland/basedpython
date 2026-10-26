@@ -1383,8 +1383,8 @@ class Square(Shape):
             )
             .build();
         assert_snapshot!(test.override_members(&["draw"]), @"
-        import shapes
 
+        import shapes
         from shapes import Shape
 
         def make_config() -> list[int]:
@@ -1414,8 +1414,8 @@ class M(Mapping[str, int]):
             )
             .build();
         assert_snapshot!(test.override_members(&["__iter__"]), @"
-        import typing
 
+        import typing
         from collections.abc import Mapping
         from mylib import Iterator
 

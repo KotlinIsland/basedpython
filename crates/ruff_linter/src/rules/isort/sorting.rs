@@ -53,6 +53,12 @@ impl PartialOrd for NatOrdStr<'_> {
     }
 }
 
+impl NatOrdStr<'_> {
+    pub(crate) fn into_owned(self) -> NatOrdStr<'static> {
+        NatOrdStr(Cow::Owned(self.0.into_owned()))
+    }
+}
+
 impl<'a> From<&'a str> for NatOrdStr<'a> {
     fn from(s: &'a str) -> Self {
         NatOrdStr(Cow::Borrowed(s))
@@ -143,6 +149,21 @@ impl<'a> ModuleKey<'a> {
     }
 }
 
+impl ModuleKey<'_> {
+    /// The key, owning the names it compares.
+    pub(crate) fn into_owned(self) -> ModuleKey<'static> {
+        ModuleKey {
+            force_to_top: self.force_to_top,
+            maybe_length: self.maybe_length,
+            distance: self.distance,
+            maybe_lowercase_name: self.maybe_lowercase_name.map(NatOrdStr::into_owned),
+            module_name: self.module_name.map(NatOrdStr::into_owned),
+            first_alias: self.first_alias.map(MemberKey::into_owned),
+            asname: self.asname.map(NatOrdStr::into_owned),
+        }
+    }
+}
+
 /// A comparable key to capture the desired sorting order for an imported member (e.g., `bar` in
 /// `from foo import bar`).
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq)]
@@ -176,6 +197,20 @@ impl<'a> MemberKey<'a> {
             maybe_lowercase_name,
             module_name,
             asname,
+        }
+    }
+}
+
+impl MemberKey<'_> {
+    /// The key, owning the names it compares.
+    pub(crate) fn into_owned(self) -> MemberKey<'static> {
+        MemberKey {
+            not_star_import: self.not_star_import,
+            member_type: self.member_type,
+            maybe_length: self.maybe_length,
+            maybe_lowercase_name: self.maybe_lowercase_name.map(NatOrdStr::into_owned),
+            module_name: self.module_name.into_owned(),
+            asname: self.asname.map(NatOrdStr::into_owned),
         }
     }
 }

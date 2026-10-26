@@ -5,6 +5,7 @@ use itertools::{Either, Itertools};
 use rustc_hash::FxHashMap;
 use strum_macros::EnumIter;
 
+use crate::import_order;
 use crate::{Db, HasNavigationTargets, NavigationTarget};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
@@ -920,7 +921,7 @@ fn inlay_hints_inner(
 ) -> Vec<InlayHint> {
     let ast = parsed_module(db, file.python_file(db)).load(db);
     let source = source_text(db, file.file(db));
-    let importer = Importer::new(db, file, &ast);
+    let importer = import_order::importer(db, file, &ast);
 
     let mut visitor = InlayHintVisitor::new(db, file, importer, source.as_str(), range, settings);
 
@@ -1546,7 +1547,7 @@ pub(crate) fn annotation_for_type<'db>(
     type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> Option<(String, Vec<InlayHintTextEdit>)> {
     let ast = parsed_module(db, file.python_file(db)).load(db);
-    let importer = Importer::new(db, file, &ast);
+    let importer = import_order::importer(db, file, &ast);
     // a basedpython file writes types in basedpython's own spelling
     with_display_for_file(db, file.file(db), || {
         let details = type_display_details(db, file, ty, false, type_params_in_scope);
@@ -1652,7 +1653,7 @@ pub(crate) fn with_annotation_speller<'db, R>(
     spell: impl FnOnce(&mut AnnotationSpeller<'_, 'db>) -> R,
 ) -> (R, Vec<InlayHintTextEdit>) {
     let ast = parsed_module(db, file.python_file(db)).load(db);
-    let importer = Importer::new(db, file, &ast);
+    let importer = import_order::importer(db, file, &ast);
     let mut speller = AnnotationSpeller {
         db,
         file,
@@ -3198,15 +3199,18 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
 
     /// Builds the text edits from all collected imports.
     fn text_edits(&self) -> Vec<InlayHintTextEdit> {
-        self.imported_members
-            .iter()
-            .filter_map(|member| self.dynamic_imports.get(member))
-            .filter_map(|import_action| {
-                import_action.import().and_then(|edit| {
-                    edit.content().map(|content| InlayHintTextEdit {
-                        range: edit.range(),
-                        new_text: content.to_string(),
-                    })
+        // placed together, so imports added at one place come out in isort's order
+        self.importer
+            .combined_edits(
+                self.imported_members
+                    .iter()
+                    .filter_map(|member| self.dynamic_imports.get(member)),
+            )
+            .into_iter()
+            .filter_map(|edit| {
+                edit.content().map(|content| InlayHintTextEdit {
+                    range: edit.range(),
+                    new_text: content.to_string(),
                 })
             })
             .collect()
@@ -3711,7 +3715,7 @@ mod tests {
           |
         1 |
           - from module import make
-        2 + from module import make, Item
+        2 + from module import Item, make
         3 |
           - def create():
         4 + def create() -> Item:
@@ -10813,7 +10817,7 @@ Source with applied edits:
           |
         1 |
           - from module import make_unknown
-        2 + from module import make_unknown, Unknown
+        2 + from module import Unknown, make_unknown
         3 |
           - def custom_unknown():
         4 + def custom_unknown() -> Unknown:
@@ -11061,9 +11065,8 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + from bar import D
-        2 |
-        3 | import foo
+        2 | import foo
+        3 + from bar import D
         4 |
           - a = foo.C().foo()
         5 + a: foo.B[foo.A[D[int, list[str | foo.A[foo.B[int]]]]]] = foo.C().foo()
@@ -11213,10 +11216,10 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + from bar import D
-        2 |
+        1 |
           - from foo import C
-        3 + from foo import C, B, A
+        2 + from bar import D
+        3 + from foo import A, B, C
         4 |
           - a = C().foo()
         5 + a: B[A[D[int, list[str | A[B[int]]]]]] = C().foo()
@@ -11362,12 +11365,14 @@ Source with applied edits:
 
         assert_snapshot!(edited_sources, @"
         from typing import Literal
-        from module import y, Y
+
+        from module import Y, y
         x: tuple[Y, Literal[1], Y, Literal[1]] = (y, 1, y, 1)
         x = (y, 1, y, 1)
 
         from typing import Literal
-        from module import y, Y
+
+        from module import Y, y
         x = (y, 1, y, 1)
         x: tuple[Y, Literal[1], Y, Literal[1]] = (y, 1, y, 1)
         ");
@@ -11525,9 +11530,9 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + from typing import TypeVar
-        2 + from typing import Any
-        3 |
+        1 |
+        2 + from typing import Any, TypeVar
+        3 +
         4 | from foo import foo
         5 |
           - a = foo()
@@ -11607,9 +11612,9 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + import bar
-        2 + import baz
-        3 |
+        1 |
+        2 + import bar
+        3 + import baz
         4 | from foo import foo
         5 |
           - a = foo()
@@ -11727,9 +11732,9 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + import bar
-        2 + import baz
-        3 |
+        1 |
+        2 + import bar
+        3 + import baz
         4 | from foo import foo
         5 | from bar import B
         6 |

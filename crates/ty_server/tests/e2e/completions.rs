@@ -402,15 +402,15 @@ is_typedd
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import is_typeddict\n"
+            "newText": "\nfrom typing_extensions import is_typeddict\n"
           }
         ],
         "command": {
@@ -472,15 +472,15 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import TypedDict\n"
+            "newText": "\nfrom typing_extensions import TypedDict\n"
           }
         ]
       },
@@ -493,15 +493,15 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
-            "newText": "from _typeshed._type_checker_internals import TypedDictFallback\n"
+            "newText": "\nfrom _typeshed._type_checker_internals import TypedDictFallback\n"
           }
         ]
       },
@@ -514,15 +514,15 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import is_typeddict\n"
+            "newText": "\nfrom typing_extensions import is_typeddict\n"
           }
         ]
       },
@@ -535,11 +535,11 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
@@ -556,11 +556,11 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
@@ -577,15 +577,15 @@ TypedDi<CURSOR>
           {
             "range": {
               "start": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               },
               "end": {
-                "line": 0,
+                "line": 1,
                 "character": 0
               }
             },
-            "newText": "import _typeshed.dbapi\n"
+            "newText": "\nimport _typeshed.dbapi\n"
           }
         ]
       }

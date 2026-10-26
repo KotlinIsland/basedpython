@@ -139,13 +139,14 @@ fn the_members_picked_are_written_with_their_imports_and_the_first_body_selected
         "{answer:#}"
     );
     assert_eq!(edits.len(), 2, "{answer:#}");
-    assert_eq!(edits[1]["newText"], "from pathlib import Path\n");
-    // the `...` of `area`, once the import has moved it down a line
+    // the standard library's section, above the project's own imports
+    assert_eq!(edits[1]["newText"], "from pathlib import Path\n\n");
+    // the `...` of `area`, once the import has moved it down two lines
     assert_eq!(
         answer["selection"],
         serde_json::json!({
-            "start": { "line": 7, "character": 8 },
-            "end": { "line": 7, "character": 11 },
+            "start": { "line": 8, "character": 8 },
+            "end": { "line": 8, "character": 11 },
         }),
     );
 

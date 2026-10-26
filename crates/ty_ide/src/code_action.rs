@@ -1161,8 +1161,9 @@ mod tests {
           |  ^^^^^^^^^^
         help: This is a preferred code action
           |
-        1 + from warnings import deprecated
-        2 |
+        2 | import warnings
+        3 + from warnings import deprecated
+        4 |
           |
 
         info[code-action]: import typing_extensions.deprecated
@@ -1172,8 +1173,10 @@ mod tests {
           |  ^^^^^^^^^^
         help: This is a preferred code action
           |
-        1 + from typing_extensions import deprecated
-        2 |
+        3 |
+        4 + from typing_extensions import deprecated
+        5 +
+        6 | @deprecated("do not use")
           |
 
         info[code-action]: qualify warnings.deprecated
@@ -1280,8 +1283,9 @@ mod tests {
         help: This is a preferred code action
         help: This is the only import that resolves the name
           |
-        1 + from importlib.abc import ExecutionLoader
-        2 |
+        2 | import importlib
+        3 + from importlib.abc import ExecutionLoader
+        4 | ExecutionLoader
           |
 
         info[code-action]: Ignore 'unresolved-reference' for this line
@@ -1326,8 +1330,9 @@ mod tests {
         help: This is a preferred code action
         help: This is the only import that resolves the name
           |
-        1 + from importlib.abc import ExecutionLoader
-        2 |
+        2 | import importlib.abc
+        3 + from importlib.abc import ExecutionLoader
+        4 | ExecutionLoader
           |
 
         info[code-action]: qualify importlib.abc.ExecutionLoader

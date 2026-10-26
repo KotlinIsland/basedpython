@@ -44,6 +44,7 @@ use crate::common_aliases;
 use crate::django_template::django_string_completions;
 use crate::docstring::Docstring;
 use crate::goto::Definitions;
+use crate::import_order;
 use crate::symbols::QueryPattern;
 use crate::{Db, all_symbols, signature_help};
 use ruff_db::files::File;
@@ -155,7 +156,7 @@ pub fn completion<'db>(
                     &mut completions,
                 );
                 if settings.auto_import {
-                    let importer = Importer::new(db, program_file, &parsed);
+                    let importer = import_order::importer(db, program_file, &parsed);
                     let members = importer.members_in_scope_at(expr.into(), expr.start());
                     add_aliased_module_completions(
                         db,
@@ -251,7 +252,7 @@ pub fn completion<'db>(
                 // an import is only ever offered for something the user has begun to name: a
                 // query that matches everything would drag in every symbol of every module
                 if settings.auto_import && !completions.query.will_match_everything() {
-                    let importer = Importer::new(db, program_file, &parsed);
+                    let importer = import_order::importer(db, program_file, &parsed);
                     let members = importer.members_in_scope_at(scoped.node, scoped.node.start());
                     add_alias_completions(
                         db,
@@ -2931,7 +2932,7 @@ pub(crate) fn unresolved_fixes<'db>(
     let query = UserQuery::exactly(symbol);
     let ctx = CollectionContext::none();
 
-    let importer = Importer::new(db, file, parsed);
+    let importer = import_order::importer(db, file, parsed);
     let members = importer.members_in_scope_at(node, node.start());
 
     // Request imports we could add to put the symbol in scope
@@ -15436,9 +15437,11 @@ TypedDi<CURSOR>
             @"
         TypedDict :: , TypedDict
         is_typeddict() :: , is_typeddict
-        TypedDict :: from typing_extensions import TypedDict
+        TypedDict :: 
+        from typing_extensions import TypedDict
 
-        is_typeddict() :: from typing_extensions import is_typeddict
+        is_typeddict() :: 
+        from typing_extensions import is_typeddict
         ",
         );
     }

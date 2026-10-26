@@ -4,6 +4,7 @@
 mod tests {
     use insta::assert_snapshot;
 
+    use crate::import_order;
     use crate::tests::{CursorTest, cursor_test};
     use ruff_python_ast::find_node::covering_node;
     use ruff_text_size::{Ranged, TextRange};
@@ -57,7 +58,7 @@ mod tests {
         }
 
         fn importer(&self) -> Importer<'_> {
-            Importer::new(
+            import_order::importer(
                 &self.db,
                 ProgramFile::new(
                     &self.db,
@@ -67,6 +68,171 @@ mod tests {
                 &self.cursor.parsed,
             )
         }
+    }
+
+    /// A new import goes where buff's isort would sort it: into its section of the block, in
+    /// order among the section's imports, rather than at the top of the block.
+    #[test]
+    fn sorted_into_its_section() {
+        let source = r#"
+"""Module docstring."""
+
+from __future__ import annotations
+
+import json
+import sys
+from collections import OrderedDict
+
+import attr
+
+<CURSOR>
+"#;
+        let test = cursor_test(source);
+        assert_snapshot!(test.module("math"), @r#"
+        """Module docstring."""
+
+        from __future__ import annotations
+
+        import json
+        import math
+        import sys
+        from collections import OrderedDict
+
+        import attr
+
+        math
+        "#);
+        assert_snapshot!(test.import_from("pathlib", "Path"), @r#"
+        """Module docstring."""
+
+        from __future__ import annotations
+
+        import json
+        import sys
+        from collections import OrderedDict
+        from pathlib import Path
+
+        import attr
+
+        Path
+        "#);
+        assert_snapshot!(test.module("attrs"), @r#"
+        """Module docstring."""
+
+        from __future__ import annotations
+
+        import json
+        import sys
+        from collections import OrderedDict
+
+        import attr
+        import attrs
+
+        attrs
+        "#);
+    }
+
+    /// A member added to a `from` import is listed where isort orders it: constants, then
+    /// classes, then everything else, each alphabetically.
+    #[test]
+    fn member_sorted_among_members() {
+        let test = cursor_test(
+            "\
+from collections import OrderedDict, deque
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import("collections", "Counter"), @"
+        from collections import Counter, OrderedDict, deque
+        Counter
+        ");
+        assert_snapshot!(test.import("collections", "defaultdict"), @"
+        from collections import OrderedDict, defaultdict, deque
+        defaultdict
+        ");
+        assert_snapshot!(test.import("collections", "namedtuple"), @"
+        from collections import OrderedDict, deque, namedtuple
+        namedtuple
+        ");
+    }
+
+    /// One per line in an import written one per line.
+    #[test]
+    fn member_sorted_among_members_one_per_line() {
+        let test = cursor_test(
+            "\
+from collections import (
+    OrderedDict,
+    deque,
+)
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import("collections", "defaultdict"), @"
+        from collections import (
+            OrderedDict,
+            defaultdict,
+            deque,
+        )
+        defaultdict
+        ");
+    }
+
+    /// An import of a section the block has none of yet is set apart by a blank line on each
+    /// side, as isort separates sections.
+    #[test]
+    fn new_section_is_set_apart() {
+        let test = cursor_test(
+            "\
+import json
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("attrs"), @"
+        import json
+
+        import attrs
+
+        attrs
+        ");
+
+        let test = cursor_test(
+            "\
+import attr
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("abc"), @"
+        import abc
+
+        import attr
+
+        abc
+        ");
+    }
+
+    /// Comments above an import stay with it, as isort keeps them.
+    #[test]
+    fn placed_above_the_comments_of_the_import_after() {
+        let test = cursor_test(
+            "\
+import json
+# the system
+import sys
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("os"), @"
+        import json
+        import os
+        # the system
+        import sys
+
+        os
+        ");
     }
 
     #[test]
@@ -340,7 +506,7 @@ from collections import (
             .build();
         assert_snapshot!(
             test.import("package.foo", "Bar"), @"
-        from ...foo import Foo, Bar
+        from ...foo import Bar, Foo
         Bar
         ");
     }
@@ -548,6 +714,7 @@ from __future__ import annotations
         assert_snapshot!(
             test.import("typing", "TypeVar"), @"
         from __future__ import annotations
+
         import typing
 
         typing.TypeVar
@@ -569,6 +736,7 @@ from __future__ import annotations
 
         "This is a module level docstring"
         from __future__ import annotations
+
         import typing
 
         typing.TypeVar
@@ -587,8 +755,9 @@ lazy from __future__ import annotations
         );
         assert_snapshot!(
             test.import("typing", "TypeVar"), @"
-        import typing
         lazy from __future__ import annotations
+
+        import typing
 
         typing.TypeVar
         ");
@@ -766,6 +935,7 @@ import defaultdict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         import defaultdict
 
         (collections.defaultdict)
@@ -773,6 +943,7 @@ import defaultdict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
         import defaultdict
 
         (collections.defaultdict)
@@ -792,6 +963,7 @@ from foo import collections
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         from collections import defaultdict
+
         from foo import collections
 
         (defaultdict)
@@ -799,6 +971,7 @@ from foo import collections
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
         from foo import collections
 
         (defaultdict)
@@ -818,6 +991,7 @@ from othermodule import defaultdict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         from othermodule import defaultdict
 
         (collections.defaultdict)
@@ -825,6 +999,7 @@ from othermodule import defaultdict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
         from othermodule import defaultdict
 
         (collections.defaultdict)
@@ -844,6 +1019,7 @@ import defaultdict as ddict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         import defaultdict as ddict
 
         (collections.defaultdict)
@@ -851,6 +1027,7 @@ import defaultdict as ddict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
         import defaultdict as ddict
 
         (defaultdict)
@@ -870,6 +1047,7 @@ from othermodule import something as defaultdict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         from othermodule import something as defaultdict
 
         (collections.defaultdict)
@@ -877,6 +1055,7 @@ from othermodule import something as defaultdict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
         from othermodule import something as defaultdict
 
         (collections.defaultdict)
@@ -896,6 +1075,7 @@ import defaultdict as ddict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         import defaultdict as ddict
 
         (collections.defaultdict)
@@ -903,6 +1083,7 @@ import defaultdict as ddict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
         import defaultdict as ddict
 
         (defaultdict)
@@ -922,6 +1103,7 @@ from foo import defaultdict as ddict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         from foo import defaultdict as ddict
 
         (collections.defaultdict)
@@ -929,6 +1111,7 @@ from foo import defaultdict as ddict
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
         from foo import defaultdict as ddict
 
         (defaultdict)
@@ -962,9 +1145,9 @@ import numpy as np
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
-        from collections import defaultdict
         import json
         import re
+        from collections import defaultdict
 
         from whenever import ZonedDateTime
         import numpy as np
@@ -993,10 +1176,10 @@ import numpy as np
 
         assert_snapshot!(
             test.import("foo", "Bar"), @"
-        import foo
         import json
         import re
 
+        import foo
         from whenever import ZonedDateTime
         import numpy as np
 
@@ -1004,10 +1187,10 @@ import numpy as np
         ");
         assert_snapshot!(
             test.import_from("foo", "Bar"), @"
-        from foo import Bar
         import json
         import re
 
+        from foo import Bar
         from whenever import ZonedDateTime
         import numpy as np
 
