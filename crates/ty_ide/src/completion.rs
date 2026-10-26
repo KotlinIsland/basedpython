@@ -354,16 +354,25 @@ pub fn smart_completion<'db>(
     )
 }
 
-/// `completions`, each saying what it replaces: `typed` for one that does not say already.
+/// `completions`, each saying what it replaces: `typed` for one that does not say already
 ///
-/// A client that is not told works the range out from its own idea of the word before the
+/// a client that is not told works the range out from its own idea of the word before the
 /// cursor, which is not python's: inside an f-string's `{car` it is the whole string token, and
-/// every name is filtered out against `f"{car`.
+/// every name is filtered out against `f"{car`
+///
+/// what was typed is matched against the name, so a completion whose label is more than its
+/// name says so in its filter text: a client matches the typed text against the filter text, or
+/// the label when there is none, and `walktre` is not how `inspect.walktree` starts
 fn replacing(completions: Vec<Completion<'_>>, typed: TextRange) -> Vec<Completion<'_>> {
     completions
         .into_iter()
         .map(|mut completion| {
-            completion.replace.get_or_insert(typed);
+            if completion.replace.is_none() {
+                completion.replace = Some(typed);
+                if completion.filter.is_none() && completion.label() != completion.name.as_str() {
+                    completion.filter = Some(completion.name.clone());
+                }
+            }
             completion
         })
         .collect()
@@ -591,7 +600,7 @@ pub struct Completion<'db> {
     ///
     /// [`completion`] answers every completion with one: what was typed of
     /// the word before the cursor, or more where the completion stands for
-    /// more, as a django template path or a namespaced url name does.
+    /// more, as a django template path or a namespaced url name does
     pub replace: Option<TextRange>,
     /// The text the client should match the user's typing against, when
     /// [`Self::label`] is not it.

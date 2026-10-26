@@ -60,7 +60,10 @@ the name before the cursor, `car` in `f"{car`, all of a string literal before
 the cursor, `slow-mo` in `"slow-mo`, and more where a completion stands for more,
 as a postfix template does for the expression it rewrites. so an editor never
 works out the range from its own idea of a word, which inside an f-string is the
-whole string token, against which nothing would match
+whole string token, against which nothing would match. what is typed is matched
+against the name, so a completion labelled with more than its name carries the
+name as its `filterText`: `inspect.walktree`, which `completions.importStyle`
+`module` writes, matches `walktre`
 
 ### smart completion
 

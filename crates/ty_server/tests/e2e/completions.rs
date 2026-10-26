@@ -476,6 +476,7 @@ is_typedd
         "label": "typing.is_typeddict",
         "kind": 3,
         "sortText": "0",
+        "filterText": "is_typeddict",
         "insertText": "typing.is_typeddict($0)",
         "insertTextFormat": 2,
         "textEdit": {
@@ -572,6 +573,7 @@ TypedDi<CURSOR>
         "label": "typing.TypedDict",
         "kind": 6,
         "sortText": "0",
+        "filterText": "TypedDict",
         "insertText": "typing.TypedDict",
         "textEdit": {
           "range": {
@@ -591,6 +593,7 @@ TypedDi<CURSOR>
         "label": "typing.is_typeddict",
         "kind": 3,
         "sortText": "1",
+        "filterText": "is_typeddict",
         "insertText": "typing.is_typeddict()",
         "textEdit": {
           "range": {
@@ -1147,6 +1150,7 @@ re.match('', '', fla<CURSOR>
         "kind": 6,
         "detail": "FlagsType",
         "sortText": "0",
+        "filterText": "flags",
         "insertText": "flags=",
         "textEdit": {
           "range": {
