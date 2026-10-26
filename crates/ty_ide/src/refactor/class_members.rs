@@ -81,6 +81,9 @@ pub struct ClassMember {
     pub kind: MemberKind,
     /// The range of its name in its first statement.
     pub name_range: TextRange,
+    /// How it reads in a list of members: a method or property as its name and its parameters
+    /// as its first statement writes them, `fetch(self, key: str)`, an attribute as its name.
+    pub detail: String,
 }
 
 /// A class of the project, where its name is.
@@ -114,6 +117,7 @@ pub fn movable_members(
 ) -> Option<MovableMembers> {
     let class = ClassSite::at(db, file, offset)?;
     let def = class.def()?;
+    let source = source_text(db, class.file_id);
     let mut members: Vec<ClassMember> = Vec::new();
     for statement in &def.body {
         let Some((name, kind)) = member_of(statement) else {
@@ -132,6 +136,7 @@ pub fn movable_members(
             name: name.to_string(),
             kind,
             name_range: member_name_range(statement)?,
+            detail: member_detail(source.as_str(), statement),
         });
     }
     Some(MovableMembers {
@@ -964,6 +969,45 @@ fn member_of(statement: &Stmt) -> Option<(&Name, MemberKind)> {
     }
 }
 
+/// See [`ClassMember::detail`]. Each parameter is written as the source writes it, but on one
+/// line, with the `/` and `*` that separate the kinds.
+fn member_detail(source: &str, statement: &Stmt) -> String {
+    let Stmt::FunctionDef(function) = statement else {
+        return member_of(statement).map_or_else(String::new, |(name, _)| name.to_string());
+    };
+    let written = |range: TextRange| {
+        source[range]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let variadic = |star: &str, parameter: &ast::Parameter| {
+        let text = written(parameter.range());
+        if text.starts_with('*') {
+            text
+        } else {
+            format!("{star}{text}")
+        }
+    };
+    let parameters = &function.parameters;
+    let mut parts: Vec<String> = Vec::new();
+    parts.extend(parameters.posonlyargs.iter().map(|p| written(p.range())));
+    if !parameters.posonlyargs.is_empty() {
+        parts.push("/".to_string());
+    }
+    parts.extend(parameters.args.iter().map(|p| written(p.range())));
+    match &parameters.vararg {
+        Some(vararg) => parts.push(variadic("*", vararg)),
+        None if !parameters.kwonlyargs.is_empty() => parts.push("*".to_string()),
+        None => {}
+    }
+    parts.extend(parameters.kwonlyargs.iter().map(|p| written(p.range())));
+    if let Some(kwarg) = &parameters.kwarg {
+        parts.push(variadic("**", kwarg));
+    }
+    format!("{}({})", function.name, parts.join(", "))
+}
+
 fn member_kind(statement: &Stmt) -> MemberKind {
     let Stmt::FunctionDef(function) = statement else {
         return MemberKind::Attribute;
@@ -1638,7 +1682,7 @@ class GrandChild(Child):
                 movable
                     .members
                     .iter()
-                    .map(|member| format!("{} ({:?})", member.name, member.kind))
+                    .map(|member| format!("{} ({:?})", member.detail, member.kind))
                     .collect::<Vec<_>>()
                     .join(", "),
                 movable
@@ -1662,9 +1706,39 @@ class GrandChild(Child):
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
         assert_snapshot!(test.movable(), @"
         cls.shapes.Child
-        members: LIMIT (Attribute), __init__ (Method), area (Method), plain (Method), helper (Method)
+        members: LIMIT (Attribute), __init__(self, x) (Method), area(self) (Method), plain(self) (Method), helper(self) (Method)
         superclasses: cls.shapes.Base
         subclasses: cls.shapes.GrandChild
+        ");
+    }
+
+    /// A method reads as its parameters, on one line whatever lines they are written on.
+    #[test]
+    fn a_member_reads_as_its_name_and_parameters() {
+        let test = CursorTestBuilder::default()
+            .source(
+                "main.py",
+                r#"class <CURSOR>Store:
+    SIZE: int = 3
+
+    def fetch(self, key: str, /, *args,
+              default=None, **options):
+        return key
+
+    def only(self, *, strict: bool = True):
+        return strict
+
+    @property
+    def size(self):
+        return self.SIZE
+"#,
+            )
+            .build();
+        assert_snapshot!(test.movable(), @"
+        main.Store
+        members: SIZE (Attribute), fetch(self, key: str, /, *args, default=None, **options) (Method), only(self, *, strict: bool = True) (Method), size(self) (Property)
+        superclasses: 
+        subclasses:
         ");
     }
 

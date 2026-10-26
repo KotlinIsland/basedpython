@@ -271,11 +271,13 @@ fn a_class_lists_its_members_and_where_they_could_go() -> Result<()> {
                 {
                     "name": "SIDES",
                     "kind": "attribute",
+                    "detail": "SIDES",
                     "range": { "start": { "line": 5, "character": 4 }, "end": { "line": 5, "character": 9 } },
                 },
                 {
                     "name": "describe",
                     "kind": "method",
+                    "detail": "describe(self)",
                     "range": { "start": { "line": 7, "character": 8 }, "end": { "line": 7, "character": 16 } },
                 },
             ],

@@ -801,8 +801,10 @@ it once nothing above has the name
 
 `by/prepareMoveMembers` takes `textDocument` and `position` (anywhere in a class)
 and answers `{class, members, superclasses, subclasses}`: the class and the classes
-of the project above it, nearest first, and below it, each `{name, qualifiedName, uri, range}` with `range` its name; and its members, each `{name, kind, range}`,
-`kind` one of `method`, `classmethod`, `staticmethod`, `property` and `attribute`;
+of the project above it, nearest first, and below it, each `{name, qualifiedName, uri, range}` with `range` its name; and its members, each `{name, kind, detail, range}`,
+`kind` one of `method`, `classmethod`, `staticmethod`, `property` and `attribute`,
+`detail` how the member reads in a list — a method or property as its name and its
+parameters as written, on one line, `fetch(self, key: str)`, an attribute as its name;
 `null` outside a class. `by/pullMembersUp` takes the same position, `members`, the
 names to move, and `target`, a superclass's `qualifiedName`; `by/pushMembersDown`
 takes the position and `members`. both answer as `by/moveSymbol` does,

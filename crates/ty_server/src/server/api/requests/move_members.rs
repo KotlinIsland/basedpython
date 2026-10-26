@@ -69,6 +69,9 @@ pub(crate) struct MemberItem {
     name: String,
     /// `method`, `classmethod`, `staticmethod`, `property` or `attribute`
     kind: String,
+    /// how it reads in a list: a method or property as its name and parameters as written,
+    /// `fetch(self, key: str)`, an attribute as its name
+    detail: String,
     /// its name, in its first statement
     range: Range,
 }
@@ -134,6 +137,7 @@ impl BackgroundDocumentRequestHandler for PrepareMoveMembersRequestHandler {
                         MemberKind::Attribute => "attribute",
                     }
                     .to_string(),
+                    detail: member.detail,
                     range,
                 })
             })
