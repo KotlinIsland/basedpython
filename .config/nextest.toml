@@ -32,40 +32,19 @@ slow-timeout =  { period = "1s", terminate-after = 60 }
 # Show slow jobs in the final summary
 final-status-level = "slow"
 
-# The divergence harness runs its blocks in parallel, but on a 2-core CI runner
-# it still spends up to a minute or two spawning ~200 transpile/python subprocess
-# pairs (plus a possible one-off uv python download), so exempt it from the
-# aggressive 60s deadlock cutoff that would otherwise kill it mid-run.
+# The divergence harness transpiles and runs every checker-clean `by` block in the
+# mdtests, and checks each with its unused imports removed. A block costs a
+# `by transpile`, a `by check --fix` and a python run, and the transpile and the
+# check each build a database and infer what the block needs of the builtins from
+# scratch: that, not starting the processes, is the cost, and it grows with every
+# basedpython feature that adds mdtest blocks.
 #
-# The budget grows with every basedpython feature that adds mdtest blocks — it was
-# already at 152s of the previous 180s ceiling — so the ceiling is deliberately
-# well clear of the current cost rather than just above it. `type def` blocks are
-# the most expensive kind, because transpiling one evaluates its type functions,
-# and each evaluation spawns an interpreter.
-#
-# It had drifted back to "just above it": 279.6s on main and 284.0s after the
-# 2026-08-13 upstream merge, against a 360s ceiling. Runner speed varies by more
-# than the 21% of headroom that left, and the same commit timed out at 360s on two
-# runs out of three while passing at 284s on the third. 10 minutes puts the cost
-# back under half the ceiling and still catches a deadlock.
-#
-# And it drifted back again, the same way. On windows the harness measured 561.1s
-# on main against the 600s ceiling — 6.5% of headroom — and basedpython-ui's
-# mdtests, which took the runnable corpus from 1086 blocks to 1137 (+4.7%), were
-# enough to exceed it. The cost is a transpile/python subprocess pair per block,
-# and windows spawns processes far more slowly than linux, so windows is where the
-# ceiling binds first. 20 minutes puts the cost back under half, as before.
-#
-# The harness already parallelises internally over a work-stealing pool, so this
-# is not a serialisation problem: it is that the corpus only ever grows while a CI
-# runner has two cores. Cutting the per-block cost is the lever, and the harness
-# now takes the cheapest one — a block naming a module the interpreter does not
-# have is dropped before it is transpiled rather than after, which measured 46.3s
-# to 40.4s (12.7%) locally. That more than pays for the blocks added here, but the
-# ceiling is raised anyway: 561.1s of 600s was already too close before any of
-# them. The next lever, if this drifts a fourth time, is calling the transpiler
-# in-process instead of spawning `by` per block, which would remove half the
-# process spawns outright.
+# The corpus is spread over eight shards by `shard_of` in
+# `crates/ty/tests/mdtest_divergence.rs`, each a test of its own, so the limit holds
+# one shard rather than the whole corpus. Even so a shard is minutes of work on a
+# two-core runner, and windows spawns processes far more slowly than linux, so the
+# shards are exempt from the 60s deadlock cutoff. If a shard approaches this limit,
+# the lever is more shards, not a higher limit.
 [[profile.ci.overrides]]
 filter = 'test(clean_mdtest_blocks_run)'
 slow-timeout = { period = "60s", terminate-after = 20 }

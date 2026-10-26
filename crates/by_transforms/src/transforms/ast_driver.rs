@@ -3239,9 +3239,68 @@ mod subsumed_lowerings {
         check(&type_test_target_cases(), PythonVersion::PY312);
     }
 
+    /// the passes [`type_expression_cases`] has cases for. each pass's cases are a test of their
+    /// own, which runs beside the others rather than after them
+    const TYPE_EXPRESSION_PASSES: &[&str] = &[
+        "TupleLiteralTypePass",
+        "CallableSyntaxPass",
+        "AnonNamedTuplePass",
+        "ProtocolTypePass",
+        "TypedDictLiteralPass",
+        "CheckedCastPass",
+    ];
+
+    fn check_type_expressions_of(pass: &str) {
+        let cases: Vec<Case> = type_expression_cases()
+            .into_iter()
+            .filter(|case| case.pass == pass)
+            .collect();
+        assert!(!cases.is_empty(), "no type expression case is for `{pass}`");
+        check(&cases, PythonVersion::PY310);
+    }
+
     #[test]
-    fn a_type_expression_a_pass_moves_is_written_lowered() {
-        check(&type_expression_cases(), PythonVersion::PY310);
+    fn a_type_expression_a_tuple_literal_type_moves_is_written_lowered() {
+        check_type_expressions_of("TupleLiteralTypePass");
+    }
+
+    #[test]
+    fn a_type_expression_a_callable_moves_is_written_lowered() {
+        check_type_expressions_of("CallableSyntaxPass");
+    }
+
+    #[test]
+    fn a_type_expression_an_anonymous_named_tuple_moves_is_written_lowered() {
+        check_type_expressions_of("AnonNamedTuplePass");
+    }
+
+    #[test]
+    fn a_type_expression_a_protocol_moves_is_written_lowered() {
+        check_type_expressions_of("ProtocolTypePass");
+    }
+
+    #[test]
+    fn a_type_expression_a_typed_dict_literal_moves_is_written_lowered() {
+        check_type_expressions_of("TypedDictLiteralPass");
+    }
+
+    #[test]
+    fn a_type_expression_a_checked_cast_moves_is_written_lowered() {
+        check_type_expressions_of("CheckedCastPass");
+    }
+
+    /// a case for a pass with no test of its own would never run
+    #[test]
+    fn every_type_expression_pass_has_a_test() {
+        let mut passes: Vec<&str> = type_expression_cases()
+            .iter()
+            .map(|case| case.pass)
+            .collect();
+        passes.sort_unstable();
+        passes.dedup();
+        let mut tested = TYPE_EXPRESSION_PASSES.to_vec();
+        tested.sort_unstable();
+        assert_eq!(passes, tested);
     }
 
     #[test]
