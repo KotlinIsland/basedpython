@@ -33,7 +33,7 @@ use lsp_types::{LspRequestMethod, MessageDirection, Range, Request, TextDocument
 use ty_ide::{DeclarationKind, UsageCountKinds, document_usage_counts};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
-use crate::document::ToRangeExt;
+use crate::document::{ToLink, ToRangeExt};
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -102,6 +102,31 @@ pub(crate) struct DeclarationUsages {
     /// method with implementations counted and found
     #[serde(rename = "abstract")]
     is_abstract: bool,
+    /// what `implementations` counts, in the order `textDocument/implementation`
+    /// answers them, so that a client can name them without asking. there when
+    /// `implementations` is
+    #[serde(skip_serializing_if = "Option::is_none")]
+    implementors: Option<Vec<Implementor>>,
+}
+
+/// a subclass of a class, or a member overriding a method
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Implementor {
+    /// the subclass, or the class whose member overrides the method: `Circle`.
+    /// absent for an implementation in no class
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class_name: Option<String>,
+    /// the dotted name of that class, `shapes.base.Circle`. absent for a class
+    /// local to a function, or in a file no module is imported from
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qualified_name: Option<String>,
+    /// the file the subclass or the overriding member is declared in
+    uri: Uri,
+    /// the whole subclass or member, its decorators included
+    range: Range,
+    /// its name, which is where to go
+    selection_range: Range,
 }
 
 pub(crate) struct DocumentUsageCountsRequestHandler;
@@ -166,6 +191,24 @@ impl BackgroundDocumentRequestHandler for DocumentUsageCountsRequestHandler {
                             DeclarationKind::Function => Kind::Function,
                             DeclarationKind::Method => Kind::Method,
                         },
+                        implementors: declaration.implementations.map(|_| {
+                            declaration
+                                .implementors
+                                .iter()
+                                .filter_map(|implementor| {
+                                    let link = implementor.target.to_link(db, None, encoding)?;
+                                    let class = implementor.class.as_ref();
+                                    Some(Implementor {
+                                        class_name: class.map(|class| class.name.clone()),
+                                        qualified_name: class
+                                            .and_then(|class| class.qualified_name.clone()),
+                                        uri: link.target_uri,
+                                        range: link.target_range,
+                                        selection_range: link.target_selection_range,
+                                    })
+                                })
+                                .collect()
+                        }),
                         references: declaration.references,
                         implementations: declaration.implementations,
                         is_abstract: declaration.is_abstract,

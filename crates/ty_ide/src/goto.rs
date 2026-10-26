@@ -279,6 +279,37 @@ fn is_declared_by_object(model: &SemanticModel<'_>, definition: Definition<'_>) 
         == object
 }
 
+/// where an editor goes for `definition`: the name it declares, within the whole of it
+pub(crate) fn navigation_target(
+    db: &dyn ty_python_semantic::Db,
+    definition: &ResolvedDefinition<'_>,
+) -> NavigationTarget {
+    match definition {
+        ResolvedDefinition::Definition(definition) => {
+            let module = ruff_db::parsed::parsed_module(db, definition.python_file(db)).load(db);
+
+            let focus_range = definition.focus_range(db, &module);
+            let full_range = definition.full_range(db, &module);
+
+            NavigationTarget::create(
+                db,
+                focus_range.file(),
+                focus_range.range(),
+                full_range.range(),
+            )
+        }
+        ResolvedDefinition::Module(file) => {
+            NavigationTarget::new(file.file(db), TextRange::default())
+        }
+        ResolvedDefinition::FileWithRange(file_range) => NavigationTarget::create(
+            db,
+            file_range.file(),
+            file_range.range(),
+            file_range.range(),
+        ),
+    }
+}
+
 /// The resolved definitions for a `GotoTarget`
 #[derive(Debug)]
 pub(crate) struct Definitions<'db>(Vec<ResolvedDefinition<'db>>);
@@ -461,32 +492,8 @@ impl<'db> Definitions<'db> {
         db: &'db dyn ty_python_semantic::Db,
     ) -> crate::NavigationTargets {
         self.0
-            .into_iter()
-            .map(|definition| match definition {
-                ResolvedDefinition::Definition(definition) => {
-                    let module =
-                        ruff_db::parsed::parsed_module(db, definition.python_file(db)).load(db);
-
-                    let focus_range = definition.focus_range(db, &module);
-                    let full_range = definition.full_range(db, &module);
-
-                    NavigationTarget::create(
-                        db,
-                        focus_range.file(),
-                        focus_range.range(),
-                        full_range.range(),
-                    )
-                }
-                ResolvedDefinition::Module(file) => {
-                    NavigationTarget::new(file.file(db), TextRange::default())
-                }
-                ResolvedDefinition::FileWithRange(file_range) => NavigationTarget::create(
-                    db,
-                    file_range.file(),
-                    file_range.range(),
-                    file_range.range(),
-                ),
-            })
+            .iter()
+            .map(|definition| navigation_target(db, definition))
             .collect()
     }
 

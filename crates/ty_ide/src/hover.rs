@@ -335,7 +335,7 @@ struct DecoratedFunctionHover<'db> {
 }
 
 /// `None` for a `def` without decorators, whose type is the function it writes, and for a use of
-/// a property, which reads the property's value rather than naming the `def`.
+/// a property, which reads the property's value rather than naming the `def`
 fn decorated_function_hover<'db>(
     db: &'db dyn Db,
     goto_target: &GotoTarget<'_>,
@@ -631,9 +631,9 @@ impl<'a, 'db> IntoIterator for &'a Hover<'db> {
 
 #[derive(Debug, Clone)]
 pub enum HoverContent<'db> {
-    /// What the hovered name declares: its kind, and its qualified name when it has one.
+    /// what the hovered name declares: its kind, and its qualified name when it has one
     Declaration(Declaration),
-    /// A decorated `def`: its decorators, as written, over the function it writes.
+    /// a decorated `def`: its decorators, as written, over the function it writes
     DecoratedFunction {
         decorators: Vec<String>,
         function: Type<'db>,

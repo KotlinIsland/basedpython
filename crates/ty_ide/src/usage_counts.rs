@@ -29,10 +29,11 @@ use ruff_text_size::TextRange;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::types::ide_support::{class_member_definitions, overridden_members};
 
+use crate::declaration::ClassName;
 use crate::find_references::find_references_to_each;
 use crate::goto_implementation::implementations_at_each;
 use crate::symbols::symbols_for_file;
-use crate::{Db, SymbolKind};
+use crate::{Db, NavigationTarget, SymbolKind};
 
 /// which counts to work out: each is a search of the workspace
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -72,6 +73,20 @@ pub struct DeclarationUsages {
     /// whether a method is abstract, an `@abstractmethod` or a protocol member
     /// with no body, so that what overrides it implements it
     pub is_abstract: bool,
+    /// what `implementations` counts, in the order `textDocument/implementation`
+    /// answers them: each subclass of a class, or each member overriding a
+    /// method, with the class it is in. empty when not asked for
+    pub implementors: Vec<Implementor>,
+}
+
+/// a subclass of a counted class, or a member overriding a counted method
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Implementor {
+    /// the subclass, or the class whose member overrides the method. `None` for
+    /// one in no class
+    pub class: Option<ClassName>,
+    /// the subclass or the overriding member, where a click on it goes
+    pub target: NavigationTarget,
 }
 
 /// the declarations of `file` with the counts `kinds` asks for, in source order
@@ -108,16 +123,20 @@ pub fn document_usage_counts(
         let found = implementations_at_each(db, file, &offsets);
         for (index, implementations) in counted.into_iter().zip(found) {
             let declaration = &mut declarations[index];
-            declaration.implementations = Some(implementations.map_or(0, |found| {
-                found
-                    .iter()
-                    .filter(|target| {
-                        // the declaration is its own first implementation
-                        target.file() != source_file
-                            || target.focus_range() != declaration.name_range
-                    })
-                    .count()
-            }));
+            declaration.implementors = implementations
+                .unwrap_or_default()
+                .into_iter()
+                // the declaration is its own first implementation
+                .filter(|implementation| {
+                    implementation.target.file() != source_file
+                        || implementation.target.focus_range() != declaration.name_range
+                })
+                .map(|implementation| Implementor {
+                    class: implementation.class,
+                    target: implementation.target,
+                })
+                .collect();
+            declaration.implementations = Some(declaration.implementors.len());
         }
     }
 
@@ -158,6 +177,7 @@ fn counted_declarations(db: &dyn Db, file: ProgramFile<'_>) -> Vec<DeclarationUs
                 references: None,
                 implementations: None,
                 is_abstract: false,
+                implementors: Vec::new(),
             });
         }
     };
@@ -220,7 +240,8 @@ mod tests {
     impl CursorTest {
         /// one line per declaration of the cursor's file: its kind, its name,
         /// the line its name is on, then `refs=` and `impls=` with each count
-        /// asked for, and `(abstract)` for an abstract method
+        /// asked for, `<class file:line>` for each implementor, and
+        /// `(abstract)` for an abstract method
         fn usage_counts(&self) -> String {
             let file = self.cursor.file;
             let source = source_text(&self.db, file);
@@ -254,6 +275,21 @@ mod tests {
                     }
                     if let Some(implementations) = declaration.implementations {
                         let _ = write!(line, " impls={implementations}");
+                    }
+                    for implementor in &declaration.implementors {
+                        let file = implementor.target.file();
+                        let target_source = source_text(&self.db, file);
+                        let _ = write!(
+                            line,
+                            " <{} {}:{}>",
+                            implementor.class.as_ref().map_or("?", |class| class
+                                .qualified_name
+                                .as_deref()
+                                .unwrap_or(&class.name)),
+                            file.path(&self.db).as_str(),
+                            LineIndex::from_source_text(&target_source)
+                                .line_index(implementor.target.focus_range().start())
+                        );
                     }
                     if declaration.is_abstract {
                         line.push_str(" (abstract)");
@@ -294,11 +330,11 @@ make(Puppy())
 ",
         );
         assert_snapshot!(test.usage_counts(), @"
-        class Animal 4 refs=2 impls=2
-        method speak 6 refs=1 impls=2 (abstract)
+        class Animal 4 refs=2 impls=2 <main.Dog /main.py:11> <main.Puppy /main.py:15>
+        method speak 6 refs=1 impls=2 <main.Dog /main.py:12> <main.Puppy /main.py:16> (abstract)
         method name 8 refs=1 impls=0
-        class Dog 11 refs=2 impls=1
-        method speak 12 refs=0 impls=1
+        class Dog 11 refs=2 impls=1 <main.Puppy /main.py:15>
+        method speak 12 refs=0 impls=1 <main.Puppy /main.py:16>
         class Puppy 15 refs=1 impls=0
         method speak 16 refs=0 impls=0
         function make 19 refs=2
@@ -332,8 +368,8 @@ print(Shape().area(), Square().area())
             )
             .build();
         assert_snapshot!(test.usage_counts(), @"
-        class Shape 2 refs=2 impls=1
-        method area 3 refs=1 impls=1
+        class Shape 2 refs=2 impls=1 <main.Square /main.py:4>
+        method area 3 refs=1 impls=1 <main.Square /main.py:5>
         function unused 6 refs=0
         ");
     }
@@ -361,8 +397,8 @@ class Circle(Shape):
         );
         assert_snapshot!(test.usage_counts(), @"
         function logged 2 refs=1
-        class Shape 7 refs=1 impls=1
-        method area 8 refs=0 impls=1
+        class Shape 7 refs=1 impls=1 <main.Circle /main.py:11>
+        method area 8 refs=0 impls=1 <main.Circle /main.py:13>
         class Circle 11 refs=0 impls=0
         method area 13 refs=0 impls=0
         ");

@@ -55,7 +55,8 @@
 //!   customize what happens when an attribute is read, assigned, or deleted (descriptors) are not
 //!   interpreted as properties.
 
-use crate::goto::{Definitions, GotoTarget, find_goto_target};
+use crate::declaration::{ClassName, declaring_class};
+use crate::goto::{Definitions, GotoTarget, find_goto_target, navigation_target};
 use crate::{Db, NavigationTarget, NavigationTargets, RangedValue};
 use rayon::prelude::*;
 use ruff_db::files::{File, FileRange};
@@ -123,8 +124,18 @@ pub fn goto_implementation(
     })
 }
 
+/// an implementation [`implementations_at_each`] finds, and the class it is or is declared in
+#[derive(Debug, Clone)]
+pub(crate) struct Implementation {
+    pub(crate) target: NavigationTarget,
+    /// the subclass that is the implementation, or the class whose member overrides. `None` for
+    /// an implementation that is neither
+    pub(crate) class: Option<ClassName>,
+}
+
 /// What [`goto_implementation`] answers at each of `offsets` in `file`, found with one pass over
-/// the project's files for all of them rather than one pass each.
+/// the project's files for all of them rather than one pass each, with the class each
+/// implementation is or is declared in
 ///
 /// Each file is scanned once, for every target in turn; the same scan of the same files as
 /// [`goto_implementation`] makes for each target, so each finds the same implementations, in the
@@ -133,7 +144,7 @@ pub(crate) fn implementations_at_each(
     db: &dyn Db,
     file: ProgramFile<'_>,
     offsets: &[TextSize],
-) -> Vec<Option<NavigationTargets>> {
+) -> Vec<Option<Vec<Implementation>>> {
     let module = parsed_module(db, file.python_file(db)).load(db);
     let model = SemanticModel::new(db, file);
     let finders: Vec<_> = offsets
@@ -167,32 +178,38 @@ pub(crate) fn implementations_at_each(
                 .enumerate()
                 .filter_map(|(index, finder)| {
                     let definitions = finder.as_ref()?.implementations_for_file(db, file)?;
-                    let targets = definitions_to_implementation_targets(db, definitions);
-                    (!targets.is_empty()).then_some((index, targets))
+                    let found = definitions_to_implementations(db, definitions);
+                    (!found.is_empty()).then_some((index, found))
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
-    let mut implementation_targets: Vec<Option<Vec<NavigationTarget>>> = finders
+    let mut implementations: Vec<Option<Vec<Implementation>>> = finders
         .into_iter()
         .map(|finder| {
-            finder.map(|finder| {
-                definitions_to_implementation_targets(db, finder.into_initial_definitions())
-            })
+            finder
+                .map(|finder| definitions_to_implementations(db, finder.into_initial_definitions()))
         })
         .collect();
-    for (index, targets) in batches.into_iter().flatten() {
-        if let Some(found) = &mut implementation_targets[index] {
-            found.extend(targets);
+    for (index, found) in batches.into_iter().flatten() {
+        if let Some(implementations) = &mut implementations[index] {
+            implementations.extend(found);
         }
     }
-    implementation_targets
+    implementations
         .into_iter()
-        .map(|targets| {
-            targets
-                .filter(|targets| !targets.is_empty())
-                .map(|targets| targets.into_iter().collect())
+        .map(|found| {
+            let mut found = found?;
+            // as `NavigationTargets` holds them: each target once, by file and then by offset
+            found.sort_by_key(|implementation| {
+                (
+                    implementation.target.file(),
+                    implementation.target.focus_range().start(),
+                )
+            });
+            found.dedup_by(|a, b| a.target == b.target);
+            (!found.is_empty()).then_some(found)
         })
         .collect()
 }
@@ -254,6 +271,23 @@ fn definitions_to_implementation_targets(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// [`definitions_to_implementation_targets`], with the class each is or is declared in
+fn definitions_to_implementations(
+    db: &dyn Db,
+    definitions: Vec<ResolvedDefinition>,
+) -> Vec<Implementation> {
+    let Some(definitions) = Definitions::new(definitions).map_stubs_for_implementation(db) else {
+        return Vec::new();
+    };
+    definitions
+        .iter()
+        .map(|definition| Implementation {
+            target: navigation_target(db, definition),
+            class: declaring_class(db, definition),
+        })
+        .collect()
 }
 
 #[cfg(test)]

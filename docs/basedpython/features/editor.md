@@ -1200,6 +1200,29 @@ sends that request from the name. a method with implementations is marked
 `abstract` when it is an `@abstractmethod` or a protocol member with no body,
 so that what overrides it implements it. a count not named is not worked out
 
+with `implementations` comes `implementors`, the places it counts, in the
+order `textDocument/implementation` answers them, so that an editor can say
+"is overridden in Circle, Square" without asking. each is a subclass of the
+class, or a member overriding the method, with the `uri`, `range` and
+`selectionRange` it is declared at and the class it is in: `className`, the
+subclass itself or the class whose member overrides, and `qualifiedName`, that
+class's dotted name, `shapes.base.Circle`, absent for a class local to a
+function
+
+```json
+{
+  "name": "area", "kind": "method", "implementations": 1, "abstract": true,
+  "implementors": [
+    {
+      "className": "Circle", "qualifiedName": "shapes.base.Circle",
+      "uri": "file:///src/shapes/base.by",
+      "range": { "start": { "line": 32, "character": 4 }, "end": { "line": 34, "character": 41 } },
+      "selectionRange": { "start": { "line": 33, "character": 8 }, "end": { "line": 33, "character": 12 } }
+    }
+  ]
+}
+```
+
 each count is a search of the workspace, made for all the declarations of the
 document in one pass: each file is read once, and searched for each declaration
 whose name it holds. the searches run one at a time, on a thread of their own,

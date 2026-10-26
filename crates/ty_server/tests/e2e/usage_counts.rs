@@ -221,15 +221,86 @@ fn a_count_is_the_number_of_places_the_request_it_stands_for_goes_to() -> Result
                 None => Vec::new(),
             };
         // less the declaration itself, which is the first of its own implementations
-        let others = implementations
-            .iter()
+        let others: Vec<_> = implementations
+            .into_iter()
             .filter(|(target, start)| *target != uri || *start != at.position)
-            .count();
+            .collect();
         assert_eq!(
             declaration["implementations"].as_u64(),
-            Some(others as u64),
+            Some(others.len() as u64),
             "{declaration:#}"
         );
+        // and the implementors are those places, in that order
+        let implementors: Vec<_> = declaration["implementors"]
+            .as_array()
+            .expect("implementors with implementations")
+            .iter()
+            .map(|implementor| {
+                (
+                    serde_json::from_value::<lsp_types::Uri>(implementor["uri"].clone())
+                        .expect("a uri"),
+                    serde_json::from_value::<Position>(
+                        implementor["selectionRange"]["start"].clone(),
+                    )
+                    .expect("a position"),
+                )
+            })
+            .collect();
+        assert_eq!(implementors, others, "{declaration:#}");
+    }
+    Ok(())
+}
+
+/// each subclass of a class, and each member overriding a method, is named by its class, so that
+/// a client can say which classes they are without asking where each count goes
+#[test]
+fn implementors_are_named_by_their_class() -> Result<()> {
+    let mut server = server()?;
+
+    let declarations = ask(&mut server, &["implementations"]);
+    let implementors: Vec<_> = declarations
+        .iter()
+        .map(|declaration| {
+            (
+                declaration["name"].as_str().unwrap_or_default().to_string(),
+                declaration.get("implementors").map(|implementors| {
+                    implementors
+                        .as_array()
+                        .expect("a list")
+                        .iter()
+                        .map(|implementor| {
+                            format!(
+                                "{} {} {}:{}",
+                                implementor["className"].as_str().unwrap_or_default(),
+                                implementor["qualifiedName"].as_str().unwrap_or_default(),
+                                implementor["selectionRange"]["start"]["line"],
+                                implementor["range"]["start"]["line"],
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            )
+        })
+        .collect();
+    assert_eq!(
+        implementors,
+        [
+            (
+                "Shape".to_string(),
+                Some(vec!["Square main.Square 2:2".to_string()])
+            ),
+            (
+                "area".to_string(),
+                Some(vec!["Square main.Square 3:3".to_string()])
+            ),
+            ("describe".to_string(), Some(vec![])),
+            ("total".to_string(), None),
+        ]
+    );
+
+    // asked for references only, no implementors
+    for declaration in ask(&mut server, &["references"]) {
+        assert_eq!(declaration.get("implementors"), None, "{declaration:#}");
     }
     Ok(())
 }

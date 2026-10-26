@@ -1,5 +1,5 @@
-//! What a declaration is: its kind, its name, and the dotted name it is reached by from outside
-//! its module.
+//! what a declaration is: its kind, its name, and the dotted name it is reached by from outside
+//! its module
 //!
 //! ```py
 //! # shapes/base.py
@@ -11,9 +11,9 @@
 //! ```
 //!
 //! `Circle` is the class `shapes.base.Circle`, `area` the method `shapes.base.Circle.area`, and
-//! `radius` the attribute `shapes.base.Circle.radius`, although it is assigned in `__init__`. A
+//! `radius` the attribute `shapes.base.Circle.radius`, although it is assigned in `__init__`. a
 //! name local to a function, a parameter among them, has no qualified name, and nor does a type
-//! parameter: nothing outside the function or the generic reaches it.
+//! parameter: nothing outside the function or the generic reaches it
 
 use ruff_db::files::FileRange;
 use ruff_db::parsed::parsed_module;
@@ -29,18 +29,18 @@ use ty_python_semantic::{HasDefinition, ImportAliasResolution, ResolvedDefinitio
 use crate::goto::{Definitions, GotoTarget, find_goto_target};
 use crate::{Db, NavigationTarget, RangedValue};
 
-/// What kind of thing a declaration declares.
+/// what kind of thing a declaration declares
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclaredKind {
     Module,
     Class,
     Function,
-    /// A `def` in a class body.
+    /// a `def` in a class body
     Method,
-    /// A `def` in a class body that its decorators make a property.
+    /// a `def` in a class body that its decorators make a property
     Property,
-    /// A name a class body binds that is not a `def` or a class, or an attribute a method assigns
-    /// on `self`.
+    /// a name a class body binds that is not a `def` or a class, or an attribute a method assigns
+    /// on `self`
     Attribute,
     Variable,
     Parameter,
@@ -49,7 +49,7 @@ pub enum DeclaredKind {
 }
 
 impl DeclaredKind {
-    /// The kind as a reader names it.
+    /// the kind as a reader names it
     pub const fn as_str(self) -> &'static str {
         match self {
             DeclaredKind::Module => "module",
@@ -66,15 +66,15 @@ impl DeclaredKind {
     }
 }
 
-/// A declaration, described.
+/// a declaration, described
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declaration {
     pub kind: DeclaredKind,
-    /// The declared name.
+    /// the declared name
     pub name: String,
-    /// The module's dotted name, then each class the declaration is made in, then the name:
+    /// the module's dotted name, then each class the declaration is made in, then the name:
     /// `shapes.base.Circle.area`. `None` for a name local to a function, and for a declaration
-    /// in a file no module is imported from.
+    /// in a file no module is imported from
     pub qualified_name: Option<String>,
 }
 
@@ -141,8 +141,8 @@ pub(crate) fn single_declaration(db: &dyn Db, declared: &Definitions<'_>) -> Opt
         .then_some(first)
 }
 
-/// What `resolved` declares. `None` for what is not a declaration of a name: an import that was
-/// not followed to what it imports, or a range in a file that is not a definition.
+/// what `resolved` declares. `None` for what is not a declaration of a name: an import that was
+/// not followed to what it imports, or a range in a file that is not a definition
 pub(crate) fn declaration(db: &dyn Db, resolved: &ResolvedDefinition<'_>) -> Option<Declaration> {
     match resolved {
         ResolvedDefinition::Module(file) => {
@@ -227,8 +227,55 @@ fn definition_declaration(db: &dyn Db, definition: Definition<'_>) -> Option<Dec
     })
 }
 
-/// The names of the classes `scope` is nested in, outermost first, `scope` itself included when
-/// it is a class's. `None` when a function encloses it, which makes what it declares local.
+/// a class, by its name and by the dotted name it is reached by
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassName {
+    pub name: String,
+    /// `shapes.base.Circle`. `None` for a class local to a function, and for one in a file no
+    /// module is imported from
+    pub qualified_name: Option<String>,
+}
+
+/// the class `resolved` declares, or the class it is a member of: `Circle` for the class
+/// `Circle`, for its method `area` and for the `radius` its `__init__` assigns on `self` alike.
+/// `None` for anything else, such as a module's function
+pub(crate) fn declaring_class(db: &dyn Db, resolved: &ResolvedDefinition<'_>) -> Option<ClassName> {
+    let ResolvedDefinition::Definition(definition) = resolved else {
+        return None;
+    };
+    let definition = *definition;
+    if matches!(definition.kind(db), DefinitionKind::Class(_)) {
+        let declaration = definition_declaration(db, definition)?;
+        return Some(ClassName {
+            name: declaration.name,
+            qualified_name: declaration.qualified_name,
+        });
+    }
+    let file = definition.program_file(db);
+    let index = semantic_index(db, file);
+    let scope = definition.file_scope(db);
+    if let PlaceExprRef::Member(member) = index.place_table(scope).place(definition.place(db)) {
+        member.as_instance_attribute()?;
+        let class = index.class_definition_of_method(scope)?;
+        return declaring_class(db, &ResolvedDefinition::Definition(class));
+    }
+    if index.scope(scope).kind() != ScopeKind::Class {
+        return None;
+    }
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let name = scope.to_scope_id(db, file).name(db, &module).to_string();
+    let qualified_name = containers(db, file, scope).and_then(|containers| {
+        let module = module_name(db, file)?;
+        Some(format!("{module}.{}", containers.join(".")))
+    });
+    Some(ClassName {
+        name,
+        qualified_name,
+    })
+}
+
+/// the names of the classes `scope` is nested in, outermost first, `scope` itself included when
+/// it is a class's. `None` when a function encloses it, which makes what it declares local
 fn containers(db: &dyn Db, file: ProgramFile<'_>, scope: FileScopeId) -> Option<Vec<String>> {
     let index = semantic_index(db, file);
     let module = parsed_module(db, file.python_file(db)).load(db);
@@ -252,7 +299,7 @@ fn containers(db: &dyn Db, file: ProgramFile<'_>, scope: FileScopeId) -> Option<
     Some(containers)
 }
 
-/// The dotted name `file` is imported by.
+/// the dotted name `file` is imported by
 fn module_name(db: &dyn Db, file: ProgramFile<'_>) -> Option<String> {
     file_to_module(db, file.resolver_file(db)).map(|module| module.name(db).to_string())
 }

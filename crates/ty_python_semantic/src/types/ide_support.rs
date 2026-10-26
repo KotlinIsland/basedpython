@@ -5592,7 +5592,7 @@ cast(*args)
     }
 }
 
-/// basedpython: a `def` as its source writes it and as its decorators leave it.
+/// basedpython: a `def` as its source writes it and as its decorators leave it
 #[derive(Debug, Clone, Copy)]
 pub struct DecoratedFunction<'db> {
     /// the function the `def` makes, before any decorator applies to it

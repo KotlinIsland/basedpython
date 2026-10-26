@@ -72,7 +72,7 @@ pub use completion::{
     CompletionInsertTextFormat, CompletionKind, CompletionSettings, completion,
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
-pub use declaration::{Declaration, DeclarationAt, DeclaredKind, declaration_at};
+pub use declaration::{ClassName, Declaration, DeclarationAt, DeclaredKind, declaration_at};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
     PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover, TemplateInlayHint,
@@ -139,7 +139,7 @@ pub use type_hierarchy::{
 };
 pub use unwrap::{UnwrapOption, unwrap_options};
 pub use usage_counts::{
-    DeclarationKind, DeclarationUsages, UsageCountKinds, document_usage_counts,
+    DeclarationKind, DeclarationUsages, Implementor, UsageCountKinds, document_usage_counts,
 };
 pub use workspace_symbols::{WorkspaceSymbolInfo, workspace_symbols};
 
