@@ -49,6 +49,8 @@ features that apply to a project rather than to a file
     into scope
 - [the project server](project-server.md) — `by check` answered out of the
     language server's warm state
+- [the repl](repl.md) — an interactive session in basedpython, checked as one
+    module
 
 </div>
 

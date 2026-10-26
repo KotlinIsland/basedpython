@@ -95,6 +95,7 @@ features = [
     { "linting" = "features/linter.md" },
     { "unused imports" = "features/unused-imports.md" },
     { "the project server" = "features/project-server.md" },
+    { "the repl" = "features/repl.md" },
   ] },
   { "standard library" = [
     { "typeshed improvements" = "features/typeshed.md" },
