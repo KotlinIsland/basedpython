@@ -2,8 +2,12 @@
 source: crates/ty_ide/src/hover.rs
 expression: test.hover()
 ---
+variable main.idx
+---------------------------------------------
 int
 ---------------------------------------------
+variable `main.idx`
+---
 ```python
 int
 ```

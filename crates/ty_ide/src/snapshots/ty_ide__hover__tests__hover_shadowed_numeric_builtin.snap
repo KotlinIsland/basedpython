@@ -2,8 +2,12 @@
 source: crates/ty_ide/src/hover.rs
 expression: test.hover()
 ---
+parameter x
+---------------------------------------------
 int | builtins.float | main.float
 ---------------------------------------------
+parameter `x`
+---
 ```python
 int | builtins.float | main.float
 ```

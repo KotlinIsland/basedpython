@@ -1,4 +1,5 @@
 use crate::annotation_expression::is_in_annotation_expression;
+use crate::declaration::{Declaration, DeclaredKind, declaration};
 use crate::docstring::{Docstring, DocstringFragment};
 use crate::goto::{
     Definitions, GotoTarget, docstring_for_call_definition, find_goto_target, find_goto_target_impl,
@@ -15,14 +16,19 @@ use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use std::fmt::{self, Display, Formatter};
 use ty_python_core::ProgramFile;
-use ty_python_semantic::types::ide_support::{resolved_call_signature, typed_dict_key_hover};
+use ty_python_core::definition::DefinitionKind;
+use ty_python_semantic::types::ide_support::{
+    decorated_function, resolved_call_signature, typed_dict_key_hover,
+};
 use ty_python_semantic::types::{
     BoundTypeVarInstance, KnownInstanceType, SpecialFormType, Type, TypeVarVariance,
 };
 use ty_python_semantic::{DisplaySettings, ProgramEnvironment};
 
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
-use ty_python_semantic::{HasType, SemanticModel, TypeQualifiers, with_display_for_file};
+use ty_python_semantic::{
+    HasDefinition, HasType, SemanticModel, TypeQualifiers, with_display_for_file,
+};
 
 pub fn hover<'db>(
     db: &'db dyn Db,
@@ -107,7 +113,37 @@ fn hover_inner<'db>(
 
     let mut alias_docstring: Option<Docstring> = None;
 
-    let docs = if keyword_argument.is_some() || typed_dict_key.is_some() {
+    // what the hovered name declares, read off the name's own definitions rather than off what a
+    // call of it runs: `Circle` in `Circle(3)` is the class, whose `__init__` the call runs
+    let declared = match &goto_target {
+        GotoTarget::Expression(_) | GotoTarget::Call { .. } => goto_target.expression_definitions(
+            &model,
+            ty_python_semantic::ImportAliasResolution::ResolveAliases,
+        ),
+        // the `def` itself, which a decorator that returns a function of its own would otherwise
+        // stand in for
+        GotoTarget::FunctionDef(function) => Some(Definitions::new(vec![
+            ty_python_semantic::ResolvedDefinition::Definition(function.definition(&model)),
+        ])),
+        _ => goto_target.definitions(
+            &model,
+            ty_python_semantic::ImportAliasResolution::ResolveAliases,
+        ),
+    };
+    let declaration = declared
+        .as_ref()
+        .and_then(|declared| single_declaration(db, declared));
+    let decorated = if keyword_argument.is_some() || typed_dict_key.is_some() {
+        None
+    } else {
+        declared.as_ref().and_then(|declared| {
+            decorated_function_hover(db, &goto_target, declared, declaration.as_ref())
+        })
+    };
+
+    let docs = if let Some((_, docstring)) = &decorated {
+        docstring.clone().map(HoverContent::Docstring)
+    } else if keyword_argument.is_some() || typed_dict_key.is_some() {
         None
     } else if let GotoTarget::Call { call, .. } = goto_target {
         resolved_call_signature(&model, call)
@@ -136,8 +172,16 @@ fn hover_inner<'db>(
     };
 
     let mut contents = Vec::new();
+    if keyword_argument.is_none()
+        && typed_dict_key.is_none()
+        && let Some(declaration) = declaration
+    {
+        contents.push(HoverContent::Declaration(declaration));
+    }
     if let Some(keyword_argument) = keyword_argument {
         contents.extend(keyword_argument);
+    } else if let Some((function, _)) = decorated {
+        contents.push(function);
     } else if let Some(signature) = goto_target.call_signature(&model) {
         contents.push(HoverContent::Signature(signature));
     } else if let Some(typed_dict_key) = typed_dict_key {
@@ -289,6 +333,67 @@ fn annotation_operator(
     } else {
         None
     }
+}
+
+/// The one declaration `declared` makes, when its definitions all declare the same name the same
+/// way: the bindings of a variable assigned twice are one variable.
+fn single_declaration(db: &dyn Db, declared: &Definitions<'_>) -> Option<Declaration> {
+    let mut declarations = declared.iter().map(|resolved| declaration(db, resolved));
+    let first = declarations.next()??;
+    declarations
+        .all(|other| other.as_ref() == Some(&first))
+        .then_some(first)
+}
+
+/// A decorated `def` as its source writes it, its decorators over its own signature, and its own
+/// docstring: what the name's type would show instead is whatever its decorators return, a
+/// `wrapper(*args, **kwargs)` or a `_lru_cache_wrapper[...]`, documented as the wrapper is.
+///
+/// `None` for a `def` without decorators, whose type is the function it writes, and for a use of
+/// a property, which reads the property's value rather than naming the `def`.
+fn decorated_function_hover<'db>(
+    db: &'db dyn Db,
+    goto_target: &GotoTarget<'_>,
+    declared: &Definitions<'db>,
+    declaration: Option<&Declaration>,
+) -> Option<(HoverContent<'db>, Option<Docstring>)> {
+    let mut definitions = declared.iter();
+    let (Some(ty_python_semantic::ResolvedDefinition::Definition(definition)), None) =
+        (definitions.next(), definitions.next())
+    else {
+        return None;
+    };
+    let DefinitionKind::Function(function) = definition.kind(db) else {
+        return None;
+    };
+    if !matches!(goto_target, GotoTarget::FunctionDef(_))
+        && declaration.is_some_and(|declaration| declaration.kind == DeclaredKind::Property)
+    {
+        return None;
+    }
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let source = source_text(db, definition.file(db));
+    let decorators: Vec<String> = function
+        .node(&module)
+        .decorator_list
+        .iter()
+        .map(|decorator| format!("@{}", &source[decorator.expression.range()]))
+        .collect();
+    if decorators.is_empty() {
+        return None;
+    }
+    let function = decorated_function(db, *definition)?.undecorated;
+    let docstring = Definitions::new(vec![ty_python_semantic::ResolvedDefinition::Definition(
+        *definition,
+    )])
+    .docstring(db);
+    Some((
+        HoverContent::DecoratedFunction {
+            decorators,
+            function,
+        },
+        docstring,
+    ))
 }
 
 fn keyword_argument_hover_contents<'db>(
@@ -540,6 +645,13 @@ impl<'a, 'db> IntoIterator for &'a Hover<'db> {
 
 #[derive(Debug, Clone)]
 pub enum HoverContent<'db> {
+    /// What the hovered name declares: its kind, and its qualified name when it has one.
+    Declaration(Declaration),
+    /// A decorated `def`: its decorators, as written, over the function it writes.
+    DecoratedFunction {
+        decorators: Vec<String>,
+        function: Type<'db>,
+    },
     Signature(String),
     Parameter(String),
     Type {
@@ -628,6 +740,27 @@ fn create_qualifier_suffix(qualifiers: TypeQualifiers) -> String {
 impl fmt::Display for DisplayHoverContent<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.content {
+            HoverContent::Declaration(declaration) => {
+                let name = declaration
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(&declaration.name);
+                let kind = declaration.kind.as_str();
+                match self.kind {
+                    MarkupKind::PlainText => write!(f, "{kind} {name}"),
+                    MarkupKind::Markdown => write!(f, "{kind} `{name}`"),
+                }
+            }
+            HoverContent::DecoratedFunction {
+                decorators,
+                function,
+            } => {
+                let (signature, _) = self.ty_string_and_syntax(function);
+                let mut written = decorators.join("\n");
+                written.push('\n');
+                written.push_str(&signature);
+                self.kind.fenced_code_block(written, "python").fmt(f)
+            }
             HoverContent::Signature(signature) => {
                 self.kind.fenced_code_block(&signature, "python").fmt(f)
             }
@@ -932,8 +1065,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        variable main.width
+        ---------------------------------------------
         Literal[12]
         ---------------------------------------------
+        variable `main.width`
+        ---
         ```python
         Literal[12]
         ```
@@ -964,6 +1101,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.a
+        ---------------------------------------------
         Literal[10]
         ---------------------------------------------
         This is the docs for this value
@@ -971,6 +1110,8 @@ mod tests {
         Wow these are good docs!
 
         ---------------------------------------------
+        variable `main.a`
+        ---
         ```python
         Literal[10]
         ```
@@ -1014,7 +1155,12 @@ mod tests {
         let code = "name\n```\n![image](https://example.invalid/)\n```";
         assert_eq!(
             rendered,
-            Some((code.to_string(), format!("````python\n{code}\n````")))
+            Some((
+                format!(
+                    "variable main.value\n---------------------------------------------\n{code}"
+                ),
+                format!("variable `main.value`\n---\n````python\n{code}\n````")
+            ))
         );
     }
 
@@ -1036,6 +1182,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.my_func
+        ---------------------------------------------
         def my_func(
             a,
             b
@@ -1048,6 +1196,8 @@ mod tests {
             b: coming for `a`'s title
 
         ---------------------------------------------
+        function `main.my_func`
+        ---
         ```python
         def my_func(
             a,
@@ -1091,6 +1241,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.my_func
+        ---------------------------------------------
         def my_func(
             a,
             b
@@ -1103,6 +1255,8 @@ mod tests {
             b: coming for `a`'s title
 
         ---------------------------------------------
+        function `main.my_func`
+        ---
         ```python
         def my_func(
             a,
@@ -1147,6 +1301,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        function main.documented
+        ---------------------------------------------
         def documented(value) -> value
         ---------------------------------------------
         Return a value.
@@ -1155,6 +1311,8 @@ mod tests {
         :rtype: str
 
         ---------------------------------------------
+        function `main.documented`
+        ---
         ```python
         def documented(value) -> value
         ```
@@ -1210,6 +1368,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.MyClass
+        ---------------------------------------------
         <class 'MyClass'>
         ---------------------------------------------
         This is such a great class!!
@@ -1219,6 +1379,8 @@ mod tests {
         Everyone loves my class!!
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```xml
         <class 'MyClass'>
         ```
@@ -1269,6 +1431,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.MyClass
+        ---------------------------------------------
         <class 'MyClass'>
         ---------------------------------------------
         This is such a great class!!
@@ -1278,6 +1442,8 @@ mod tests {
         Everyone loves my class!!
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```xml
         <class 'MyClass'>
         ```
@@ -1330,11 +1496,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass(val)
         ---------------------------------------------
         initializes MyClass (perfectly)
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass(val)
         ```
@@ -1383,11 +1553,15 @@ mod tests {
             .build();
 
         assert_snapshot!(test.hover(), @"
+        class mymod.MyClass
+        ---------------------------------------------
         class MyClass(val)
         ---------------------------------------------
         initializes MyClass (perfectly)
 
         ---------------------------------------------
+        class `mymod.MyClass`
+        ---
         ```python
         class MyClass(val)
         ```
@@ -1435,6 +1609,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass(val)
         ---------------------------------------------
         This is such a great class!!
@@ -1444,6 +1620,8 @@ mod tests {
         Everyone loves my class!!
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass(val)
         ```
@@ -1479,11 +1657,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass(
             a: int,
             b: str
         )
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass(
             a: int,
@@ -1521,6 +1703,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass(
             a: int,
             b: str
@@ -1529,6 +1713,8 @@ mod tests {
         MyClass docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass(
             a: int,
@@ -1561,8 +1747,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass()
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass()
         ```
@@ -1592,11 +1782,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         class MyClass(
             a: int,
             b: str
         )
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         class MyClass(
             a: int,
@@ -1638,12 +1832,16 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Shape
+        ---------------------------------------------
         class Shape(val: str)
         class Shape(val: int)
         ---------------------------------------------
         Shape docs
 
         ---------------------------------------------
+        class `main.Shape`
+        ---
         ```python
         class Shape(val: str)
         class Shape(val: int)
@@ -1685,11 +1883,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.Shape
+        ---------------------------------------------
         class Shape(val: str)
         ---------------------------------------------
         Shape docs
 
         ---------------------------------------------
+        class `main.Shape`
+        ---
         ```python
         class Shape(val: str)
         ```
@@ -1726,6 +1928,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.S
+        ---------------------------------------------
         class S(
             a: int,
             b: str
@@ -1735,6 +1939,8 @@ mod tests {
         init docs
 
         ---------------------------------------------
+        class `main.S`
+        ---
         ```python
         class S(
             a: int,
@@ -1775,11 +1981,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.S
+        ---------------------------------------------
         class S(a: int)
         ---------------------------------------------
         new docs
 
         ---------------------------------------------
+        class `main.S`
+        ---
         ```python
         class S(a: int)
         ```
@@ -1812,8 +2022,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Handler
+        ---------------------------------------------
         class Handler(callback: (int, str, /) -> bool)
         ---------------------------------------------
+        class `main.Handler`
+        ---
         ```python
         class Handler(callback: (int, str, /) -> bool)
         ```
@@ -1844,8 +2058,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Color
+        ---------------------------------------------
         class Color(value: object)
         ---------------------------------------------
+        class `main.Color`
+        ---
         ```python
         class Color(value: object)
         ```
@@ -1876,12 +2094,16 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.Movie
+        ---------------------------------------------
         class Movie(
             *,
             title: str,
             year: int
         )
         ---------------------------------------------
+        class `main.Movie`
+        ---
         ```python
         class Movie(
             *,
@@ -1917,6 +2139,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Movie
+        ---------------------------------------------
         class Movie(
             map: Movie,
             /,
@@ -1925,6 +2149,8 @@ mod tests {
             year: int = ...
         )
         ---------------------------------------------
+        class `main.Movie`
+        ---
         ```python
         class Movie(
             map: Movie,
@@ -1961,6 +2187,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.Movie
+        ---------------------------------------------
         class Movie(
             map: Movie,
             /,
@@ -1969,6 +2197,8 @@ mod tests {
             year: int = ...
         )
         ---------------------------------------------
+        class `main.Movie`
+        ---
         ```python
         class Movie(
             map: Movie,
@@ -2005,12 +2235,16 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.Movie
+        ---------------------------------------------
         class Movie(
             *,
             title: str,
             year: int = ...
         )
         ---------------------------------------------
+        class `main.Movie`
+        ---
         ```python
         class Movie(
             *,
@@ -2045,12 +2279,16 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Movie
+        ---------------------------------------------
         class Movie(
             *,
             title: str = ...,
             year: int = ...
         )
         ---------------------------------------------
+        class `main.Movie`
+        ---
         ```python
         class Movie(
             *,
@@ -2102,6 +2340,8 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        method main.MyClass.my_method
+        ---------------------------------------------
         bound method MyClass.my_method(
             a,
             b
@@ -2114,6 +2354,8 @@ mod tests {
             b: coming for `a`'s title
 
         ---------------------------------------------
+        method `main.MyClass.my_method`
+        ---
         ```python
         bound method MyClass.my_method(
             a,
@@ -2162,11 +2404,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        method main.MyTestClass.foo
+        ---------------------------------------------
         def foo(x: int) -> int
         ---------------------------------------------
         Sample docstring
 
         ---------------------------------------------
+        method `main.MyTestClass.foo`
+        ---
         ```python
         def foo(x: int) -> int
         ```
@@ -2194,6 +2440,8 @@ mod tests {
         );
 
         assert_snapshot!(string.hover(), @r#"
+        method builtins.str.removesuffix
+        ---------------------------------------------
         bound method str.removesuffix(suffix: str, /) -> str
         ---------------------------------------------
         Return a str with the given suffix string removed if present.
@@ -2203,6 +2451,8 @@ mod tests {
         the original string.
 
         ---------------------------------------------
+        method `builtins.str.removesuffix`
+        ---
         ```python
         bound method str.removesuffix(suffix: str, /) -> str
         ```
@@ -2233,6 +2483,8 @@ mod tests {
         );
 
         assert_snapshot!(literal_string.hover(), @r#"
+        method builtins.str.removesuffix
+        ---------------------------------------------
         def removesuffix(suffix: LiteralString, /) -> LiteralString
         ---------------------------------------------
         Return a str with the given suffix string removed if present.
@@ -2242,6 +2494,8 @@ mod tests {
         the original string.
 
         ---------------------------------------------
+        method `builtins.str.removesuffix`
+        ---
         ```python
         def removesuffix(suffix: LiteralString, /) -> LiteralString
         ```
@@ -2286,11 +2540,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         def test() -> str
         ---------------------------------------------
         A second overload
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         def test() -> str
         ```
@@ -2325,13 +2583,19 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        Literal[42]
+        function main.foo
+        ---------------------------------------------
+        @decorator
+        def foo()
         ---------------------------------------------
         Foo documentation
 
         ---------------------------------------------
+        function `main.foo`
+        ---
         ```python
-        Literal[42]
+        @decorator
+        def foo()
         ```
         ---
         Foo documentation
@@ -2373,11 +2637,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         def test()
         ---------------------------------------------
         Implementation docstring
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         def test()
         ```
@@ -2429,11 +2697,15 @@ mod tests {
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         def test()
         ---------------------------------------------
         Version 3.10+ implementation
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         def test()
         ```
@@ -2481,11 +2753,15 @@ mod tests {
         // definition, which is the first definition with a docstring found
         // by the fallback path.
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         Unrelated docstring
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
@@ -2532,11 +2808,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         The int overload
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
@@ -2584,11 +2864,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.test
+        ---------------------------------------------
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         The real implementation
 
         ---------------------------------------------
+        function `main.test`
+        ---
         ```python
         (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
@@ -2627,8 +2911,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         int
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         int
         ```
@@ -2655,11 +2943,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.foo
+        ---------------------------------------------
         def foo(
             a,
             b
         )
         ---------------------------------------------
+        function `main.foo`
+        ---
         ```python
         def foo(
             a,
@@ -3005,8 +3297,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.value
+        ---------------------------------------------
         Literal[123]
         ---------------------------------------------
+        variable `main.value`
+        ---
         ```python
         Literal[123]
         ```
@@ -3037,8 +3333,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter ab
+        ---------------------------------------------
         int
         ---------------------------------------------
+        parameter `ab`
+        ---
         ```python
         int
         ```
@@ -3077,8 +3377,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.a
+        ---------------------------------------------
         (def foo(a, b) -> Literal[0]) | (def bar(a, b) -> Literal[1])
         ---------------------------------------------
+        variable `main.a`
+        ---
         ```python
         (def foo(a, b) -> Literal[0]) | (def bar(a, b) -> Literal[1])
         ```
@@ -3105,11 +3409,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3139,11 +3447,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3211,11 +3523,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3272,11 +3588,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3332,8 +3652,12 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        variable main.ab
+        ---------------------------------------------
         Unknown
         ---------------------------------------------
+        variable `main.ab`
+        ---
         ```python
         Unknown
         ```
@@ -3387,11 +3711,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3421,11 +3749,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3455,11 +3787,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3489,11 +3825,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3523,11 +3863,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3586,11 +3930,15 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
+        class main.MyClass
+        ---------------------------------------------
         MyClass
         ---------------------------------------------
         some docs
 
         ---------------------------------------------
+        class `main.MyClass`
+        ---
         ```python
         MyClass
         ```
@@ -3643,11 +3991,15 @@ def ab(a: str): ...
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(a: int)
         ---------------------------------------------
         the int overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(a: int)
         ```
@@ -3688,11 +4040,15 @@ def bar() -> None:
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function a.bar
+        ---------------------------------------------
         def bar()
         ---------------------------------------------
         Implementation docstring
 
         ---------------------------------------------
+        function `a.bar`
+        ---
         ```python
         def bar()
         ```
@@ -3745,11 +4101,15 @@ def ab(a: str):
             .build();
 
         assert_snapshot!(test.hover(), @r#"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(a: str)
         ---------------------------------------------
         the str overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(a: str)
         ```
@@ -3802,6 +4162,8 @@ def ab(a: int):
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(
             a: int,
             b: int
@@ -3810,6 +4172,8 @@ def ab(a: int):
         the two arg overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(
             a: int,
@@ -3865,11 +4229,15 @@ def ab(a: int):
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(a: int)
         ---------------------------------------------
         the one arg overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(a: int)
         ```
@@ -3926,6 +4294,8 @@ def ab(a: int, *, c: int):
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(
             a: int,
             *,
@@ -3935,6 +4305,8 @@ def ab(a: int, *, c: int):
         b overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(
             a: int,
@@ -3995,6 +4367,8 @@ def ab(a: int, *, c: int):
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function mymodule.ab
+        ---------------------------------------------
         def ab(
             a: int,
             *,
@@ -4004,6 +4378,8 @@ def ab(a: int, *, c: int):
         c overload
 
         ---------------------------------------------
+        function `mymodule.ab`
+        ---
         ```python
         def ab(
             a: int,
@@ -4051,6 +4427,8 @@ def ab(a: int, *, c: int):
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.foo
+        ---------------------------------------------
         def foo(
             a: int,
             b
@@ -4063,6 +4441,8 @@ def ab(a: int, *, c: int):
         The first overload
 
         ---------------------------------------------
+        function `main.foo`
+        ---
         ```python
         def foo(
             a: int,
@@ -4112,12 +4492,16 @@ def ab(a: int, *, c: int):
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.foo
+        ---------------------------------------------
         def foo(a: int) -> Literal[0]
         def foo(a: str) -> Literal[1]
         ---------------------------------------------
         The first overload
 
         ---------------------------------------------
+        function `main.foo`
+        ---
         ```python
         def foo(a: int) -> Literal[0]
         def foo(a: str) -> Literal[1]
@@ -4159,6 +4543,8 @@ def ab(a: int, *, c: int):
         .unwrap();
 
         assert_snapshot!(test.hover(), @"
+        module lib
+        ---------------------------------------------
         <module 'lib'>
         ---------------------------------------------
         The cool lib_py module!
@@ -4166,6 +4552,8 @@ def ab(a: int, *, c: int):
         Wow this module rocks.
 
         ---------------------------------------------
+        module `lib`
+        ---
         ```xml
         <module 'lib'>
         ```
@@ -4203,8 +4591,12 @@ def outer():
 
         // Should find the variable declaration in the outer scope, not the nonlocal statement
         assert_snapshot!(test.hover(), @r#"
+        variable x
+        ---------------------------------------------
         Literal["modified"]
         ---------------------------------------------
+        variable `x`
+        ---
         ```python
         Literal["modified"]
         ```
@@ -4236,7 +4628,20 @@ def outer():
         );
 
         // Should find the variable declaration in the outer scope, not the nonlocal statement
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @"
+        variable xy
+        ---------------------------------------------
+        variable `xy`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:6:18
+          |
+        6 |         nonlocal xy
+          |                  ^-
+          |                  ||
+          |                  |Cursor offset
+          |                  source
+        ");
     }
 
     #[test]
@@ -4254,8 +4659,12 @@ def function():
 
         // Should find the global variable declaration, not the global statement
         assert_snapshot!(test.hover(), @r#"
+        variable main.global_var
+        ---------------------------------------------
         Literal["modified"]
         ---------------------------------------------
+        variable `main.global_var`
+        ---
         ```python
         Literal["modified"]
         ```
@@ -4285,7 +4694,20 @@ def function():
         );
 
         // Should find the global variable declaration, not the global statement
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @"
+        variable main.global_var
+        ---------------------------------------------
+        variable `main.global_var`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:5:12
+          |
+        5 |     global global_var
+          |            ^^^^^^^-^^
+          |            |      |
+          |            |      Cursor offset
+          |            source
+        ");
     }
 
     #[test]
@@ -4299,7 +4721,20 @@ def function():
             "#,
         );
 
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @r#"
+        variable ab
+        ---------------------------------------------
+        variable `ab`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:22
+          |
+        4 |         case ["get", ab]:
+          |                      ^-
+          |                      ||
+          |                      |Cursor offset
+          |                      source
+        "#);
     }
 
     #[test]
@@ -4314,8 +4749,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable ab
+        ---------------------------------------------
         str
         ---------------------------------------------
+        variable `ab`
+        ---
         ```python
         str
         ```
@@ -4342,7 +4781,20 @@ def function():
             "#,
         );
 
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @r#"
+        variable ab
+        ---------------------------------------------
+        variable `ab`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:23
+          |
+        4 |         case ["get", *ab]:
+          |                       ^-
+          |                       ||
+          |                       |Cursor offset
+          |                       source
+        "#);
     }
 
     #[test]
@@ -4357,8 +4809,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable ab
+        ---------------------------------------------
         list[str]
         ---------------------------------------------
+        variable `ab`
+        ---
         ```python
         list[str]
         ```
@@ -4385,7 +4841,20 @@ def function():
             "#,
         );
 
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @r#"
+        variable ab
+        ---------------------------------------------
+        variable `ab`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:37
+          |
+        4 |         case ["get", ("a" | "b") as ab]:
+          |                                     ^-
+          |                                     ||
+          |                                     |Cursor offset
+          |                                     source
+        "#);
     }
 
     #[test]
@@ -4400,8 +4869,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @r#"
+        variable ab
+        ---------------------------------------------
         Literal["a", "b"]
         ---------------------------------------------
+        variable `ab`
+        ---
         ```python
         Literal["a", "b"]
         ```
@@ -4434,7 +4907,20 @@ def function():
             "#,
         );
 
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @"
+        variable ab
+        ---------------------------------------------
+        variable `ab`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+          --> main.py:10:30
+           |
+        10 |         case Click(x, button=ab):
+           |                              ^-
+           |                              ||
+           |                              |Cursor offset
+           |                              source
+        ");
     }
 
     #[test]
@@ -4455,8 +4941,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable ab
+        ---------------------------------------------
         str
         ---------------------------------------------
+        variable `ab`
+        ---
         ```python
         str
         ```
@@ -4490,8 +4980,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        class main.Click
+        ---------------------------------------------
         <class 'Click'>
         ---------------------------------------------
+        class `main.Click`
+        ---
         ```xml
         <class 'Click'>
         ```
@@ -4536,8 +5030,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
         AB (invariant)
         ---------------------------------------------
+        type parameter `AB`
+        ---
         ```python
         AB (invariant)
         ```
@@ -4562,8 +5060,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
         AB (invariant)
         ---------------------------------------------
+        type parameter `AB`
+        ---
         ```python
         AB (invariant)
         ```
@@ -4589,8 +5091,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
         AB (contravariant)
         ---------------------------------------------
+        type parameter `AB`
+        ---
         ```python
         AB (contravariant)
         ```
@@ -4618,8 +5124,12 @@ def function():
         // TODO: This should just be `**AB@Alias2 (<variance>)`
         // https://github.com/astral-sh/ty/issues/1581
         assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
         (**AB) -> tuple[Unknown]
         ---------------------------------------------
+        type parameter `AB`
+        ---
         ```python
         (**AB) -> tuple[Unknown]
         ```
@@ -4643,7 +5153,20 @@ def function():
             "#,
         );
 
-        assert_snapshot!(test.hover(), @"Hover provided no content");
+        assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
+        type parameter `AB`
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:2:14
+          |
+        2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
+          |              ^-
+          |              ||
+          |              |Cursor offset
+          |              source
+        ");
     }
 
     #[test]
@@ -4655,8 +5178,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter AB
+        ---------------------------------------------
         AB (covariant)
         ---------------------------------------------
+        type parameter `AB`
+        ---
         ```python
         AB (covariant)
         ```
@@ -4696,6 +5223,8 @@ def function():
         .unwrap();
 
         assert_snapshot!(test.hover(), @"
+        module lib
+        ---------------------------------------------
         <module 'lib'>
         ---------------------------------------------
         The cool lib_py module!
@@ -4703,6 +5232,8 @@ def function():
         Wow this module rocks.
 
         ---------------------------------------------
+        module `lib`
+        ---
         ```xml
         <module 'lib'>
         ```
@@ -4722,6 +5253,99 @@ def function():
         ");
     }
 
+    /// a decorated method is shown as its `def` writes it, not as the wrapper its decorator
+    /// returns, and with its own docstring rather than the wrapper's
+    #[test]
+    fn hover_decorated_method_call() {
+        let test = hover_test(
+            r#"
+            def logged(func):
+                def wrapper(*args, **kwargs):
+                    """Call the function."""
+                    return func(*args, **kwargs)
+                return wrapper
+
+            class Circle:
+                @logged
+                def area(self, scale: int) -> float:
+                    """The area of the circle."""
+                    return 1.0
+
+            Circle().ar<CURSOR>ea(2)
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        method main.Circle.area
+        ---------------------------------------------
+        @logged
+        def area(
+            self,
+            scale: int
+        ) -> int | float
+        ---------------------------------------------
+        The area of the circle.
+
+        ---------------------------------------------
+        method `main.Circle.area`
+        ---
+        ```python
+        @logged
+        def area(
+            self,
+            scale: int
+        ) -> int | float
+        ```
+        ---
+        The area of the circle.
+        ---------------------------------------------
+        info[hover]: Hovered content is
+          --> main.py:14:10
+           |
+        14 | Circle().area(2)
+           |          ^^-^
+           |          | |
+           |          | Cursor offset
+           |          source
+        ");
+    }
+
+    /// a property's `def` is shown with its decorator, and its kind says it is a property
+    #[test]
+    fn hover_property_def() {
+        let test = hover_test(
+            r#"
+            class Circle:
+                @property
+                def diam<CURSOR>eter(self) -> float:
+                    return 2.0
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        property main.Circle.diameter
+        ---------------------------------------------
+        @property
+        def diameter(self) -> int | float
+        ---------------------------------------------
+        property `main.Circle.diameter`
+        ---
+        ```python
+        @property
+        def diameter(self) -> int | float
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:9
+          |
+        4 |     def diameter(self) -> float:
+          |         ^^^^-^^^
+          |         |   |
+          |         |   Cursor offset
+          |         source
+        ");
+    }
+
     #[test]
     fn hover_callable_special_forms() {
         let test = hover_test(
@@ -4734,7 +5358,7 @@ def function():
 
         let hover = test.hover();
         assert!(
-            hover.starts_with("<special-form 'collections.abc.Callable'>"),
+            hover.contains("\n<special-form 'collections.abc.Callable'>"),
             "{hover}"
         );
 
@@ -4748,7 +5372,7 @@ def function():
 
         let hover = test.hover();
         assert!(
-            hover.starts_with("<special-form 'typing.Callable'>"),
+            hover.contains("\n<special-form 'typing.Callable'>"),
             "{hover}"
         );
     }
@@ -4762,8 +5386,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (invariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (invariant)
         ```
@@ -4788,8 +5416,12 @@ def function():
 
         // TODO: Should this be constravariant instead?
         assert_snapshot!(test.hover(), @"
+        type parameter P
+        ---------------------------------------------
         P (covariant)
         ---------------------------------------------
+        type parameter `P`
+        ---
         ```python
         P (covariant)
         ```
@@ -4813,8 +5445,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter Ts
+        ---------------------------------------------
         Ts (covariant)
         ---------------------------------------------
+        type parameter `Ts`
+        ---
         ```python
         Ts (covariant)
         ```
@@ -4839,8 +5475,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable a
+        ---------------------------------------------
         T
         ---------------------------------------------
+        variable `a`
+        ---
         ```python
         T
         ```
@@ -4864,8 +5504,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter t
+        ---------------------------------------------
         T
         ---------------------------------------------
+        parameter `t`
+        ---
         ```python
         T
         ```
@@ -4889,8 +5533,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T
         ```
@@ -4918,8 +5566,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter t
+        ---------------------------------------------
         T
         ---------------------------------------------
+        parameter `t`
+        ---
         ```python
         T
         ```
@@ -4948,8 +5600,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable a
+        ---------------------------------------------
         T
         ---------------------------------------------
+        variable `a`
+        ---
         ```python
         T
         ```
@@ -4975,8 +5631,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable a
+        ---------------------------------------------
         tuple[T@f, T]
         ---------------------------------------------
+        variable `a`
+        ---
         ```python
         tuple[T@f, T]
         ```
@@ -5001,8 +5661,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable a
+        ---------------------------------------------
         P.args
         ---------------------------------------------
+        variable `a`
+        ---
         ```python
         P.args
         ```
@@ -5030,6 +5694,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.value
+        ---------------------------------------------
         Literal[1]
         ---------------------------------------------
         This is the docs for this value
@@ -5037,6 +5703,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        variable `main.value`
+        ---
         ```python
         Literal[1]
         ```
@@ -5077,6 +5745,8 @@ def function():
         // of the `value` symbol here in read-context is `1`. This comment mainly exists to
         // signal that it might be okay to revisit this in the future and reveal 3 instead.
         assert_snapshot!(test.hover(), @"
+        variable main.value
+        ---------------------------------------------
         Literal[1]
         ---------------------------------------------
         This is the docs for this value
@@ -5084,6 +5754,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        variable `main.value`
+        ---
         ```python
         Literal[1]
         ```
@@ -5122,6 +5794,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.C.attr
+        ---------------------------------------------
         Literal[2]
         ---------------------------------------------
         This is the docs for this value
@@ -5129,6 +5803,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.C.attr`
+        ---
         ```python
         Literal[2]
         ```
@@ -5169,6 +5845,8 @@ def function():
         // See the comment in the `hover_augmented_assignment` test above. The same
         // reasoning applies here.
         assert_snapshot!(test.hover(), @"
+        attribute main.C.attr
+        ---------------------------------------------
         int
         ---------------------------------------------
         This is the docs for this value
@@ -5176,6 +5854,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.C.attr`
+        ---
         ```python
         int
         ```
@@ -5208,6 +5888,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         int
         ---------------------------------------------
         This is the docs for this value
@@ -5215,6 +5897,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         int
         ```
@@ -5247,6 +5931,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         Literal[1]
         ---------------------------------------------
         This is the docs for this value
@@ -5254,6 +5940,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         Literal[1]
         ```
@@ -5289,6 +5977,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         int
         ---------------------------------------------
         This is the docs for this value
@@ -5296,6 +5986,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         int
         ```
@@ -5329,6 +6021,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         int
         ---------------------------------------------
         This is the docs for this value
@@ -5336,6 +6030,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         int
         ```
@@ -5372,6 +6068,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         int
         ---------------------------------------------
         This is the docs for this value
@@ -5379,6 +6077,8 @@ def function():
         Wow these are good docs!
 
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         int
         ```
@@ -5410,8 +6110,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.a
+        ---------------------------------------------
         str (Final)
         ---------------------------------------------
+        attribute `main.Foo.a`
+        ---
         ```python
         str (Final)
         ```
@@ -5437,8 +6141,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.x
+        ---------------------------------------------
         Literal[1] (Final)
         ---------------------------------------------
+        variable `main.x`
+        ---
         ```python
         Literal[1] (Final)
         ```
@@ -5465,8 +6173,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.x
+        ---------------------------------------------
         Literal[1] (Final)
         ---------------------------------------------
+        variable `main.x`
+        ---
         ```python
         Literal[1] (Final)
         ```
@@ -5496,8 +6208,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        attribute main.Foo.x
+        ---------------------------------------------
         int (ClassVar)
         ---------------------------------------------
+        attribute `main.Foo.x`
+        ---
         ```python
         int (ClassVar)
         ```
@@ -5527,8 +6243,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.x
+        ---------------------------------------------
         int (Final)
         ---------------------------------------------
+        variable `main.x`
+        ---
         ```python
         int (Final)
         ```
@@ -5560,8 +6280,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter a
+        ---------------------------------------------
         str
         ---------------------------------------------
+        parameter `a`
+        ---
         ```python
         str
         ```
@@ -5822,12 +6546,16 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab(
             x: int,
             y: (int, int, /) -> Any,
             z: list[int]
         ) -> int
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab(
             x: int,
@@ -5859,8 +6587,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.ab
+        ---------------------------------------------
         tuple[Any, int, (int, int, /) -> Any]
         ---------------------------------------------
+        variable `main.ab`
+        ---
         ```python
         tuple[Any, int, (int, int, /) -> Any]
         ```
@@ -5888,8 +6620,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.ab
+        ---------------------------------------------
         ((int, int, /) -> Any) | None
         ---------------------------------------------
+        variable `main.ab`
+        ---
         ```python
         ((int, int, /) -> Any) | None
         ```
@@ -5928,11 +6664,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -5963,12 +6703,16 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.urlparse
+        ---------------------------------------------
         def urlparse()
         ---------------------------------------------
         Parse a URL into components:
         <scheme>://<netloc>/<path>;<params>?<query>#<fragment>
 
         ---------------------------------------------
+        function `main.urlparse`
+        ---
         ```python
         def urlparse()
         ```
@@ -5998,8 +6742,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6027,11 +6775,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6061,11 +6813,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6096,11 +6852,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6132,11 +6892,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6169,11 +6933,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        function main.ab
+        ---------------------------------------------
         def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
+        function `main.ab`
+        ---
         ```python
         def ab()
         ```
@@ -6202,8 +6970,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.ab
+        ---------------------------------------------
         Literal[1]
         ---------------------------------------------
+        variable `main.ab`
+        ---
         ```python
         Literal[1]
         ```
@@ -6230,8 +7002,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (covariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (covariant)
         ```
@@ -6254,8 +7030,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (covariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (covariant)
         ```
@@ -6278,8 +7058,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (contravariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (contravariant)
         ```
@@ -6302,8 +7086,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (contravariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (contravariant)
         ```
@@ -6329,8 +7117,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (contravariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (contravariant)
         ```
@@ -6353,8 +7145,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter U
+        ---------------------------------------------
         U
         ---------------------------------------------
+        type parameter `U`
+        ---
         ```python
         U
         ```
@@ -6379,8 +7175,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T
         ```
@@ -6402,8 +7202,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T
         ```
@@ -6425,8 +7229,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T
         ```
@@ -6448,8 +7256,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T
         ```
@@ -6473,8 +7285,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (invariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (invariant)
         ```
@@ -6495,8 +7311,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (invariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (invariant)
         ```
@@ -6517,8 +7337,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (covariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (covariant)
         ```
@@ -6539,8 +7363,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type parameter T
+        ---------------------------------------------
         T (covariant)
         ---------------------------------------------
+        type parameter `T`
+        ---
         ```python
         T (covariant)
         ```
@@ -6564,8 +7392,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type alias main.Box
+        ---------------------------------------------
         type Box = int | None
         ---------------------------------------------
+        type alias `main.Box`
+        ---
         ```python
         type Box = int | None
         ```
@@ -6590,8 +7422,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.Tree
+        ---------------------------------------------
         Tree = int | list[Tree]
         ---------------------------------------------
+        variable `main.Tree`
+        ---
         ```python
         Tree = int | list[Tree]
         ```
@@ -6618,8 +7454,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter value
+        ---------------------------------------------
         Tree = int | list[Tree]
         ---------------------------------------------
+        parameter `value`
+        ---
         ```python
         Tree = int | list[Tree]
         ```
@@ -6648,8 +7488,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter value
+        ---------------------------------------------
         Tree = T | list[Tree[T]]
         ---------------------------------------------
+        parameter `value`
+        ---
         ```python
         Tree = T | list[Tree[T]]
         ```
@@ -6678,8 +7522,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter value
+        ---------------------------------------------
         Tree = T | list[Tree[list[T]]]
         ---------------------------------------------
+        parameter `value`
+        ---
         ```python
         Tree = T | list[Tree[list[T]]]
         ```
@@ -6708,11 +7556,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter value
+        ---------------------------------------------
         Tree = Link[Tree]
         ---------------------------------------------
         A linked value.
 
         ---------------------------------------------
+        parameter `value`
+        ---
         ```python
         Tree = Link[Tree]
         ```
@@ -6739,6 +7591,8 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        type alias main.Wrapper
+        ---------------------------------------------
         type Wrapper[T] = list[T]
         ---------------------------------------------
         Built-in mutable sequence.
@@ -6747,6 +7601,8 @@ def function():
         The argument must be an iterable if specified.
 
         ---------------------------------------------
+        type alias `main.Wrapper`
+        ---
         ```python
         type Wrapper[T] = list[T]
         ```
@@ -6804,8 +7660,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.T
+        ---------------------------------------------
         TypeVar
         ---------------------------------------------
+        variable `main.T`
+        ---
         ```python
         TypeVar
         ```
@@ -6831,8 +7691,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.T
+        ---------------------------------------------
         T@covariant
         ---------------------------------------------
+        variable `main.T`
+        ---
         ```python
         T@covariant
         ```
@@ -6858,8 +7722,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.T
+        ---------------------------------------------
         TypeVar
         ---------------------------------------------
+        variable `main.T`
+        ---
         ```python
         TypeVar
         ```
@@ -6885,8 +7753,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.T
+        ---------------------------------------------
         T@contravariant
         ---------------------------------------------
+        variable `main.T`
+        ---
         ```python
         T@contravariant
         ```
@@ -6913,8 +7785,12 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.T
+        ---------------------------------------------
         T (contravariant)
         ---------------------------------------------
+        variable `main.T`
+        ---
         ```python
         T (contravariant)
         ```
@@ -6938,11 +7814,15 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
+        method builtins.int.__add__
+        ---------------------------------------------
         bound method int.__add__(value: int, /) -> int
         ---------------------------------------------
         Return self+value.
 
         ---------------------------------------------
+        method `builtins.int.__add__`
+        ---
         ```python
         bound method int.__add__(value: int, /) -> int
         ```
@@ -7174,9 +8054,13 @@ Alias: TypeAlias = "int <CURSOR>& str"
         // TODO: We should only show the matching overload here.
         // https://github.com/astral-sh/ty/issues/73
         assert_snapshot!(test.hover(), @"
+        method main.Test.__add__
+        ---------------------------------------------
         def __add__(other: Test, /) -> Test
         def __add__(other: Other, /) -> Test
         ---------------------------------------------
+        method `main.Test.__add__`
+        ---
         ```python
         def __add__(other: Test, /) -> Test
         def __add__(other: Other, /) -> Test
@@ -7325,6 +8209,8 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        variable typing.Final
+        ---------------------------------------------
         <special-form 'typing.Final'>
         ---------------------------------------------
         Special typing construct to indicate final names to type checkers.
@@ -7345,6 +8231,8 @@ Alias: TypeAlias = "int <CURSOR>& str"
         There is no runtime checking of these properties.
 
         ---------------------------------------------
+        variable `typing.Final`
+        ---
         ```xml
         <special-form 'typing.Final'>
         ```
@@ -7385,8 +8273,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        variable main.x
+        ---------------------------------------------
         Literal[1] (Final)
         ---------------------------------------------
+        variable `main.x`
+        ---
         ```python
         Literal[1] (Final)
         ```
@@ -7461,8 +8353,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter x
+        ---------------------------------------------
         int
         ---------------------------------------------
+        parameter `x`
+        ---
         ```python
         int
         ```
@@ -7484,8 +8380,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        parameter x
+        ---------------------------------------------
         int
         ---------------------------------------------
+        parameter `x`
+        ---
         ```python
         int
         ```
@@ -7510,8 +8410,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        variable _
+        ---------------------------------------------
         list[int]
         ---------------------------------------------
+        variable `_`
+        ---
         ```python
         list[int]
         ```
@@ -7533,8 +8437,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
         );
 
         assert_snapshot!(test.hover(), @"
+        variable _
+        ---------------------------------------------
         list[int]
         ---------------------------------------------
+        variable `_`
+        ---
         ```python
         list[int]
         ```
@@ -7610,8 +8518,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
 
         // The module is correct
         assert_snapshot!(test.hover(), @"
+        module mypackage.subpkg
+        ---------------------------------------------
         <module 'mypackage.subpkg'>
         ---------------------------------------------
+        module `mypackage.subpkg`
+        ---
         ```xml
         <module 'mypackage.subpkg'>
         ```
@@ -7688,8 +8600,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
 
         // The submodule is correct
         assert_snapshot!(test.hover(), @"
+        module mypackage.subpkg.submod
+        ---------------------------------------------
         <module 'mypackage.subpkg.submod'>
         ---------------------------------------------
+        module `mypackage.subpkg.submod`
+        ---
         ```xml
         <module 'mypackage.subpkg.submod'>
         ```
@@ -7726,8 +8642,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
 
         // The module is correct
         assert_snapshot!(test.hover(), @"
+        module mypackage.subpkg
+        ---------------------------------------------
         <module 'mypackage.subpkg'>
         ---------------------------------------------
+        module `mypackage.subpkg`
+        ---
         ```xml
         <module 'mypackage.subpkg'>
         ```
@@ -7764,8 +8684,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
 
         // int is correct
         assert_snapshot!(test.hover(), @"
+        variable mypackage.subpkg.subpkg
+        ---------------------------------------------
         int
         ---------------------------------------------
+        variable `mypackage.subpkg.subpkg`
+        ---
         ```python
         int
         ```
@@ -7802,8 +8726,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
 
         // int is correct
         assert_snapshot!(test.hover(), @"
+        variable mypackage.subpkg.subpkg
+        ---------------------------------------------
         int
         ---------------------------------------------
+        variable `mypackage.subpkg.subpkg`
+        ---
         ```python
         int
         ```
@@ -7846,8 +8774,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
             .build();
 
         assert_snapshot!(test.hover(), @"
+        variable mymod.a
+        ---------------------------------------------
         Literal[10]
         ---------------------------------------------
+        variable `mymod.a`
+        ---
         ```python
         Literal[10]
         ```
@@ -7876,8 +8808,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
             .build();
 
         assert_snapshot!(test.hover(), @"
+        variable main.a
+        ---------------------------------------------
         1
         ---------------------------------------------
+        variable `main.a`
+        ---
         ```python
         1
         ```
@@ -7911,8 +8847,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
             .build();
 
         assert_snapshot!(test.hover(), @"
+        function main.f
+        ---------------------------------------------
         def f(x: 1)
         ---------------------------------------------
+        function `main.f`
+        ---
         ```python
         def f(x: 1)
         ```
@@ -7942,8 +8882,12 @@ Alias: TypeAlias = "int <CURSOR>& str"
             .build();
 
         assert_snapshot!(test.hover(), @"
+        type parameter Kwargs
+        ---------------------------------------------
         KeywordPack
         ---------------------------------------------
+        type parameter `Kwargs`
+        ---
         ```python
         KeywordPack
         ```
@@ -8018,11 +8962,15 @@ class CoolType(str):
         );
 
         assert_snapshot!(test.hover(), @"
+        type alias main.U
+        ---------------------------------------------
         type U = MyType
         ---------------------------------------------
         Awesome docs
 
         ---------------------------------------------
+        type alias `main.U`
+        ---
         ```python
         type U = MyType
         ```
@@ -8053,11 +9001,15 @@ type U<CURSOR> = MyType
         );
 
         assert_snapshot!(test.hover(), @"
+        type alias main.U
+        ---------------------------------------------
         type U = MyType
         ---------------------------------------------
         Awesome docs
 
         ---------------------------------------------
+        type alias `main.U`
+        ---
         ```python
         type U = MyType
         ```
@@ -8101,11 +9053,15 @@ type U<CURSOR> = MyType
             .build();
 
         assert_snapshot!(test.hover(), @"
+        type alias library.Alias
+        ---------------------------------------------
         type Alias = Target
         ---------------------------------------------
         Target implementation docs.
 
         ---------------------------------------------
+        type alias `library.Alias`
+        ---
         ```python
         type Alias = Target
         ```
@@ -8150,11 +9106,15 @@ type U<CURSOR> = MyType
             .build();
 
         assert_snapshot!(test.hover(), @"
+        type alias library.Alias
+        ---------------------------------------------
         type Alias = Target
         ---------------------------------------------
         Target implementation docs.
 
         ---------------------------------------------
+        type alias `library.Alias`
+        ---
         ```python
         type Alias = Target
         ```
@@ -8191,6 +9151,8 @@ type U<CURSOR> = MyType
             .build();
 
         assert_snapshot!(test.hover(), @"
+        variable library.Copy
+        ---------------------------------------------
         type Alias = Target
         ---------------------------------------------
         Copy Docs
@@ -8199,6 +9161,8 @@ type U<CURSOR> = MyType
         Target Docs
 
         ---------------------------------------------
+        variable `library.Copy`
+        ---
         ```python
         type Alias = Target
         ```

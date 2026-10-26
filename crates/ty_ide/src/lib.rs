@@ -13,6 +13,7 @@ mod common_aliases;
 mod complete_statement;
 mod completion;
 mod data_flow;
+mod declaration;
 mod django_template;
 mod doc_highlights;
 mod docstring;
@@ -67,6 +68,7 @@ pub use completion::{
     CompletionKind, CompletionSettings, completion,
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
+pub use declaration::{Declaration, DeclaredKind};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
     PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover, TemplateInlayHint,

@@ -584,6 +584,29 @@ the caret goes in the document as the edits leave it:
 like the other document requests it takes `textHash`, and it is `null` when
 language services are off
 
+## hover
+
+a hover opens with what the name is: its kind and the dotted name it is
+reached by from outside its module, `method shapes.base.Circle.area`. the kinds
+are `module`, `class`, `function`, `method`, `property`, `attribute` (a name a
+class body binds, or one a method assigns on `self`), `variable`, `parameter`,
+`type parameter` and `type alias`. a name local to a function has only its own
+name, and so does a parameter or a type parameter
+
+a decorated `def` is shown as its source writes it, its decorators over its own
+signature and with its own docstring:
+
+```by
+@functools.cache
+def discount(self, x: int) -> int
+```
+
+and the docstring is the def's, not that of the type its decorators bind the name
+to. when that type is not the def's own function, which for a decorator returning
+a wrapper of its own is `def wrapper(*args, **kwargs)`, it is shown first, before
+the def as written. that holds wherever the name is hovered, a call of it included,
+except a use of a property, which reads the property's value
+
 ## extend selection
 
 `textDocument/selectionRange` grows a selection the way a reader reads the

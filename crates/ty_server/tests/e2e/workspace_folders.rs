@@ -675,7 +675,12 @@ extra-paths = ["../shared"]
         .wait_until_workspaces_are_initialized();
 
     server.open_text_document(path, source, 1);
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"web\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable project_value.value\n---------------------------------------------\nLiteral[\"web\"]",
+    );
 
     // Adding api's search path moves the shared file from web's database to api's.
     let config = SystemPath::new("api/ty.toml");
@@ -684,7 +689,12 @@ extra-paths = ["../shared"]
         uri: server.file_uri(config),
         kind: lsp_types::FileChangeType::Changed,
     }]);
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"api\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable project_value.value\n---------------------------------------------\nLiteral[\"api\"]",
+    );
 
     server.change_text_document(
         path,
@@ -705,7 +715,7 @@ value
         &mut server,
         path,
         Position::new(1, 0),
-        "Literal[\"edited\"]",
+        "variable library.value\n---------------------------------------------\nLiteral[\"edited\"]",
     );
 
     // The old database must also see the edit when importing the shared file.
@@ -714,7 +724,7 @@ value
         &mut server,
         importer,
         Position::new(0, 20),
-        "Literal[\"edited\"]",
+        "variable library.value\n---------------------------------------------\nLiteral[\"edited\"]",
     );
 
     Ok(())
@@ -784,7 +794,7 @@ extra-paths = ["imports"]
         &mut server,
         path,
         Position::new(1, 0),
-        "Literal[\"library\"]",
+        "variable project_value.value\n---------------------------------------------\nLiteral[\"library\"]",
     );
 
     Ok(())
@@ -825,7 +835,12 @@ extra-paths = ["../shared"]
         .wait_until_workspaces_are_initialized();
 
     server.open_text_document(path, source, 1);
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"tools\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable project_value.value\n---------------------------------------------\nLiteral[\"tools\"]",
+    );
 
     Ok(())
 }

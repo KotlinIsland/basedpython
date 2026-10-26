@@ -74,7 +74,7 @@ python-platform = "linux"
     {
       "contents": {
         "kind": "plaintext",
-        "value": "Literal[\"win32\"]"
+        "value": "variable sys.platform\n---------------------------------------------\nLiteral[\"win32\"]"
       },
       "range": {
         "start": {
@@ -125,7 +125,7 @@ python-platform = "linux"
     {
       "contents": {
         "kind": "plaintext",
-        "value": "Literal[\"win32\"]"
+        "value": "variable sys.platform\n---------------------------------------------\nLiteral[\"win32\"]"
       },
       "range": {
         "start": {
@@ -198,7 +198,7 @@ python-version = "3.12"
     {
       "contents": {
         "kind": "plaintext",
-        "value": "Literal[12]"
+        "value": "variable shared.value\n---------------------------------------------\nLiteral[12]"
       },
       "range": {
         "start": {
@@ -218,7 +218,7 @@ python-version = "3.12"
     {
       "contents": {
         "kind": "plaintext",
-        "value": "Literal[13]"
+        "value": "variable shared.value\n---------------------------------------------\nLiteral[13]"
       },
       "range": {
         "start": {

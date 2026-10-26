@@ -109,10 +109,20 @@ value
         .wait_until_workspaces_are_initialized();
 
     let position = Position::new(5, 0);
-    assert_hover(&mut server, path, position, "Literal[\"workspace\"]");
+    assert_hover(
+        &mut server,
+        path,
+        position,
+        "variable dependency.value\n---------------------------------------------\nLiteral[\"workspace\"]",
+    );
 
     server.open_text_document(path, source, 1);
-    assert_hover(&mut server, path, position, "Literal[\"script\"]");
+    assert_hover(
+        &mut server,
+        path,
+        position,
+        "variable dependency.value\n---------------------------------------------\nLiteral[\"script\"]",
+    );
 
     Ok(())
 }
@@ -133,7 +143,12 @@ value
         ])?
         .build()
         .wait_until_workspaces_are_initialized();
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"disk\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable library.value\n---------------------------------------------\nLiteral[\"disk\"]",
+    );
 
     // Opening the file must replace the cached disk contents with unsaved editor contents.
     let unsaved = "\
@@ -145,11 +160,16 @@ value
         &mut server,
         path,
         Position::new(1, 0),
-        "Literal[\"unsaved\"]",
+        "variable library.value\n---------------------------------------------\nLiteral[\"unsaved\"]",
     );
     // Closing without saving must restore the disk contents.
     server.close_text_document(path);
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"disk\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable library.value\n---------------------------------------------\nLiteral[\"disk\"]",
+    );
 
     // While the file is closed, filesystem notifications must refresh the cached contents.
     let edited = "\
@@ -162,14 +182,19 @@ value
         &mut server,
         path,
         Position::new(1, 0),
-        "Literal[\"edited\"]",
+        "variable library.value\n---------------------------------------------\nLiteral[\"edited\"]",
     );
     std::fs::remove_file(server.file_path(path))?;
     server.did_change_watched_file(path, FileChangeType::Deleted);
     assert!(server.hover_request(path, Position::new(1, 0)).is_none());
     server.write_file(path, source)?;
     server.did_change_watched_file(path, FileChangeType::Created);
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"disk\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable library.value\n---------------------------------------------\nLiteral[\"disk\"]",
+    );
 
     Ok(())
 }
@@ -193,7 +218,12 @@ value
         .wait_until_workspaces_are_initialized();
 
     // Neither project contains the file; the first workspace by path supplies its environment.
-    assert_hover(&mut server, path, Position::new(1, 0), "Literal[\"a\"]");
+    assert_hover(
+        &mut server,
+        path,
+        Position::new(1, 0),
+        "variable project_value.value\n---------------------------------------------\nLiteral[\"a\"]",
+    );
 
     Ok(())
 }

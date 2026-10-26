@@ -1,0 +1,192 @@
+//! What a declaration is: its kind, its name, and the dotted name it is reached by from outside
+//! its module.
+//!
+//! ```py
+//! # shapes/base.py
+//! class Circle:
+//!     def __init__(self, radius: float) -> None:
+//!         self.radius = radius
+//!
+//!     def area(self) -> float: ...
+//! ```
+//!
+//! `Circle` is the class `shapes.base.Circle`, `area` the method `shapes.base.Circle.area`, and
+//! `radius` the attribute `shapes.base.Circle.radius`, although it is assigned in `__init__`. A
+//! name local to a function, a parameter among them, has no qualified name, and nor does a type
+//! parameter: nothing outside the function or the generic reaches it.
+
+use ruff_db::parsed::parsed_module;
+use ty_module_resolver::file_to_module;
+use ty_python_core::definition::{Definition, DefinitionKind};
+use ty_python_core::place::PlaceExprRef;
+use ty_python_core::scope::{FileScopeId, ScopeKind};
+use ty_python_core::{ProgramFile, semantic_index};
+use ty_python_semantic::ResolvedDefinition;
+use ty_python_semantic::types::ide_support::decorated_function;
+
+use crate::Db;
+
+/// What kind of thing a declaration declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredKind {
+    Module,
+    Class,
+    Function,
+    /// A `def` in a class body.
+    Method,
+    /// A `def` in a class body that its decorators make a property.
+    Property,
+    /// A name a class body binds that is not a `def` or a class, or an attribute a method assigns
+    /// on `self`.
+    Attribute,
+    Variable,
+    Parameter,
+    TypeParameter,
+    TypeAlias,
+}
+
+impl DeclaredKind {
+    /// The kind as a reader names it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DeclaredKind::Module => "module",
+            DeclaredKind::Class => "class",
+            DeclaredKind::Function => "function",
+            DeclaredKind::Method => "method",
+            DeclaredKind::Property => "property",
+            DeclaredKind::Attribute => "attribute",
+            DeclaredKind::Variable => "variable",
+            DeclaredKind::Parameter => "parameter",
+            DeclaredKind::TypeParameter => "type parameter",
+            DeclaredKind::TypeAlias => "type alias",
+        }
+    }
+}
+
+/// A declaration, described.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    pub kind: DeclaredKind,
+    /// The declared name.
+    pub name: String,
+    /// The module's dotted name, then each class the declaration is made in, then the name:
+    /// `shapes.base.Circle.area`. `None` for a name local to a function, and for a declaration
+    /// in a file no module is imported from.
+    pub qualified_name: Option<String>,
+}
+
+/// What `resolved` declares. `None` for what is not a declaration of a name: an import that was
+/// not followed to what it imports, or a range in a file that is not a definition.
+pub(crate) fn declaration(db: &dyn Db, resolved: &ResolvedDefinition<'_>) -> Option<Declaration> {
+    match resolved {
+        ResolvedDefinition::Module(file) => {
+            let qualified_name = module_name(db, *file)?;
+            Some(Declaration {
+                kind: DeclaredKind::Module,
+                name: qualified_name
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&qualified_name)
+                    .to_string(),
+                qualified_name: Some(qualified_name),
+            })
+        }
+        ResolvedDefinition::Definition(definition) => definition_declaration(db, *definition),
+        ResolvedDefinition::FileWithRange(_) => None,
+    }
+}
+
+fn definition_declaration(db: &dyn Db, definition: Definition<'_>) -> Option<Declaration> {
+    let file = definition.program_file(db);
+    let index = semantic_index(db, file);
+    let scope = definition.file_scope(db);
+    let places = index.place_table(scope);
+    let (name, on_self) = match places.place(definition.place(db)) {
+        PlaceExprRef::Symbol(symbol) => (symbol.name().to_string(), false),
+        // `self.radius = radius` in a method declares the class's attribute; an assignment to
+        // any other object's attribute declares nothing of this scope's
+        PlaceExprRef::Member(member) => (member.as_instance_attribute()?.to_string(), true),
+    };
+    let in_class = on_self || index.scope(scope).kind() == ScopeKind::Class;
+
+    let kind = match definition.kind(db) {
+        DefinitionKind::Import(_)
+        | DefinitionKind::ImportFrom(_)
+        | DefinitionKind::ImportFromSubmodule(_)
+        | DefinitionKind::StarImport(_) => return None,
+        DefinitionKind::Class(_) => DeclaredKind::Class,
+        DefinitionKind::Function(_) if !in_class => DeclaredKind::Function,
+        DefinitionKind::Function(_) => {
+            if decorated_function(db, definition).is_some_and(|function| function.is_property()) {
+                DeclaredKind::Property
+            } else {
+                DeclaredKind::Method
+            }
+        }
+        DefinitionKind::TypeAlias(_) => DeclaredKind::TypeAlias,
+        DefinitionKind::Parameter(_) | DefinitionKind::LambdaParameter(_) => {
+            DeclaredKind::Parameter
+        }
+        DefinitionKind::TypeVar(_)
+        | DefinitionKind::ParamSpec(_)
+        | DefinitionKind::TypeVarTuple(_) => DeclaredKind::TypeParameter,
+        _ if in_class => DeclaredKind::Attribute,
+        _ => DeclaredKind::Variable,
+    };
+
+    // the scope the declared name lives in: a class's, for an attribute a method assigns
+    let owner = if on_self {
+        let class = index.class_definition_of_method(scope)?;
+        Some((class.file_scope(db), class.name(db)?))
+    } else {
+        None
+    };
+    // a parameter, or a type parameter, is reached only through what it parameterizes
+    let qualified_name = if matches!(kind, DeclaredKind::Parameter | DeclaredKind::TypeParameter) {
+        None
+    } else {
+        let (start, owner_name) = owner.map_or((scope, None), |(scope, name)| (scope, Some(name)));
+        containers(db, file, start).and_then(|mut containers| {
+            containers.extend(owner_name);
+            containers.push(name.clone());
+            let module = module_name(db, file)?;
+            Some(format!("{module}.{}", containers.join(".")))
+        })
+    };
+
+    Some(Declaration {
+        kind,
+        name,
+        qualified_name,
+    })
+}
+
+/// The names of the classes `scope` is nested in, outermost first, `scope` itself included when
+/// it is a class's. `None` when a function encloses it, which makes what it declares local.
+fn containers(db: &dyn Db, file: ProgramFile<'_>, scope: FileScopeId) -> Option<Vec<String>> {
+    let index = semantic_index(db, file);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let mut containers = Vec::new();
+    for (id, ancestor) in index.ancestor_scopes(scope) {
+        match ancestor.kind() {
+            ScopeKind::Module => break,
+            ScopeKind::Class => {
+                containers.push(id.to_scope_id(db, file).name(db, &module).to_string());
+            }
+            // the scope of a generic class's or function's type parameters sits between it and
+            // what encloses it, and adds no name
+            ScopeKind::TypeParams => {}
+            ScopeKind::Function
+            | ScopeKind::Lambda
+            | ScopeKind::Comprehension
+            | ScopeKind::TypeAlias => return None,
+        }
+    }
+    containers.reverse();
+    Some(containers)
+}
+
+/// The dotted name `file` is imported by.
+fn module_name(db: &dyn Db, file: ProgramFile<'_>) -> Option<String> {
+    file_to_module(db, file.resolver_file(db)).map(|module| module.name(db).to_string())
+}

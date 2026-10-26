@@ -5,7 +5,7 @@ expression: hover
 {
   "contents": {
     "kind": "plaintext",
-    "value": "Literal[1]"
+    "value": "variable x\n---------------------------------------------\nLiteral[1]"
   },
   "range": {
     "start": {

@@ -2,8 +2,12 @@
 source: crates/ty_ide/src/hover.rs
 expression: test.hover()
 ---
+function main.choose
+---------------------------------------------
 def choose(value: int | builtins.float | main.float)
 ---------------------------------------------
+function `main.choose`
+---
 ```python
 def choose(value: int | builtins.float | main.float)
 ```

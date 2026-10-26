@@ -5039,3 +5039,32 @@ cast(*args)
         Ok(())
     }
 }
+
+/// basedpython: a `def` as its source writes it and as its decorators leave it.
+#[derive(Debug, Clone, Copy)]
+pub struct DecoratedFunction<'db> {
+    /// the function the `def` makes, before any decorator applies to it
+    pub undecorated: Type<'db>,
+    /// what the decorators bind the name to, which is the function itself when there are none
+    pub decorated: Type<'db>,
+}
+
+impl DecoratedFunction<'_> {
+    /// whether the decorators bind the name to a property
+    pub fn is_property(&self) -> bool {
+        matches!(self.decorated, Type::PropertyInstance(_))
+    }
+}
+
+/// basedpython: what the `def` `definition` makes, before and after its decorators. `None` for
+/// a definition that is not a `def`
+pub fn decorated_function<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Option<DecoratedFunction<'db>> {
+    let function = infer_definition_types(db, definition).function_type(definition)?;
+    Some(DecoratedFunction {
+        undecorated: Type::FunctionLiteral(function),
+        decorated: binding_type(db, definition),
+    })
+}

@@ -176,7 +176,7 @@ fn invalid_python_environment_preserves_valid_configuration() -> Result<()> {
     {
       "contents": {
         "kind": "plaintext",
-        "value": "Literal[\"win32\"]"
+        "value": "variable sys.platform\n---------------------------------------------\nLiteral[\"win32\"]"
       },
       "range": {
         "start": {
