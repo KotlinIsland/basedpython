@@ -33,6 +33,7 @@ mod hover;
 mod import_order;
 #[cfg(test)]
 mod importer;
+mod inherited_members;
 mod injection;
 mod inlay_hints;
 mod markup;
@@ -95,6 +96,7 @@ pub use goto::{goto_declaration, goto_definition, goto_type_definition};
 pub use goto_implementation::goto_implementation;
 pub use hints::{Hint, HintKind, hints};
 pub use hover::hover;
+pub use inherited_members::{ClassInheritedMembers, InheritedMember, document_inherited_members};
 pub use injection::{Injection, InjectionOrigin, Injections, injections};
 pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,

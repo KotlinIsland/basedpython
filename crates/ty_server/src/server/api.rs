@@ -91,6 +91,12 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::DocumentInheritedMembersRequestHandler::METHOD => {
+            background_document_request_task::<requests::DocumentInheritedMembersRequestHandler>(
+                req,
+                BackgroundSchedule::Worker,
+            )
+        }
         requests::DocumentHighlightRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentHighlightRequestHandler,
         >(

@@ -52,6 +52,7 @@ mod folding_range;
 mod goto_definition;
 mod hover;
 mod implementation;
+mod inherited_members;
 mod initialize;
 mod injections;
 mod inlay_hints;

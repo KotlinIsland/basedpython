@@ -2510,6 +2510,39 @@ pub fn type_hierarchy_supertypes<'db>(
     supertypes
 }
 
+/// the classes the class `ty` names inherits from, in its method resolution order: its bases
+/// and theirs as python looks a member up through them, `object` last. the class itself is not
+/// among them, and neither is a base that is no class, such as one of `Unknown` type
+///
+/// when the type given doesn't correspond to a class literal, then this always
+/// returns an empty sequence
+pub fn type_hierarchy_mro<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Vec<TypeHierarchyClass<'db>> {
+    extract_class_literal(db, env, ty).map_or_else(Vec::new, |class| class_mro(db, class))
+}
+
+/// [`type_hierarchy_mro`] of the class a `class` statement makes, as it is written rather than
+/// as its decorators return it
+pub fn class_definition_mro<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Vec<TypeHierarchyClass<'db>> {
+    original_class_type(db, definition).map_or_else(Vec::new, |class| class_mro(db, class))
+}
+
+fn class_mro<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> Vec<TypeHierarchyClass<'db>> {
+    class
+        .default_specialization(db)
+        .iter_mro(db)
+        .skip(1)
+        .filter_map(ClassBase::into_class)
+        .map(|class| class_literal_to_hierarchy_info(db, class.class_literal(db)))
+        .collect()
+}
+
 /// Get the direct subtypes of the class given in `modules`.
 ///
 /// When the type given doesn't correspond to a class literal, then this always

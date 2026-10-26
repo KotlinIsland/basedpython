@@ -62,11 +62,11 @@ pub use types::extensions::{
 };
 pub use types::ide_support::{
     ImplementationsFinder, ImportAliasResolution, OverridableMember, ResolvedDefinition,
-    TypeHierarchyClass, class_bases, definitions_for_attribute, definitions_for_bin_op,
-    definitions_for_case_name, definitions_for_context_sensitive_name,
+    TypeHierarchyClass, class_bases, class_definition_mro, definitions_for_attribute,
+    definitions_for_bin_op, definitions_for_case_name, definitions_for_context_sensitive_name,
     definitions_for_django_lookup_root, definitions_for_imported_symbol, definitions_for_name,
     definitions_for_unary_op, instance_member_names, is_within_classes, map_stub_definition,
-    type_hierarchy_prepare, type_hierarchy_subtypes, type_hierarchy_supertypes,
+    type_hierarchy_mro, type_hierarchy_prepare, type_hierarchy_subtypes, type_hierarchy_supertypes,
 };
 pub use types::implicit_names::implicit_names;
 pub use types::reified_infer::{

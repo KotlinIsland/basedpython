@@ -403,6 +403,40 @@ from the syntax tree rather than copied from the source: a function's
 parameters and return annotation, `(self, radius: float) -> None`, and a class's
 bases, `(Shape)`
 
+### inherited members
+
+a structure view that shows a class's inherited members asks
+`by/documentInheritedMembers` with the document, once for all its classes. the
+answer is every class of the outline, nested ones too, in source order, each by
+the `selectionRange` of its name and with the `members` it inherits: what each
+class of its method resolution order declares, as that class's outline has it,
+attributes a method assigns on `self` among them, from the first class to
+declare the name, and none the class declares itself. `object`'s are there,
+last. each member is a document symbol of its superclass's file, with its
+`name`, `kind`, `detail`, `range` and `selectionRange`, the `uri` of that file,
+and the superclass as `containerName` and its module as `containerModule`:
+
+```json
+[
+  {
+    "selectionRange": { "start": { "line": 27, "character": 6 }, "end": { "line": 27, "character": 12 } },
+    "members": [
+      {
+        "name": "describe", "kind": 6, "detail": "(self) -> str",
+        "containerName": "Shape", "containerModule": "shapes.base",
+        "uri": "file:///src/shapes/base.by",
+        "range": { "start": { "line": 23, "character": 4 }, "end": { "line": 24, "character": 57 } },
+        "selectionRange": { "start": { "line": 23, "character": 8 }, "end": { "line": 23, "character": 16 } }
+      }
+    ]
+  }
+]
+```
+
+the answer depends on every file the classes inherit from, and the server
+announces no change to it: a client asks again after any document of the
+workspace changes. it is `null` for a notebook and a template
+
 ## workspace symbols
 
 `workspace/symbol` gives each python symbol the module and the classes it is
