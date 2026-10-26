@@ -125,3 +125,44 @@ fn no_name_answers_null() -> Result<()> {
     assert_eq!(ask(&mut server, 1, 0), None);
     Ok(())
 }
+
+/// `by/typeDeclaration`: a type name in, the class it names out, as `by/declaration` describes one
+enum TypeDeclaration {}
+
+impl Request for TypeDeclaration {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/typeDeclaration");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+#[test]
+fn a_type_name_is_answered_with_the_class_it_names() -> Result<()> {
+    let base = SystemPath::new("project/shapes/base.by");
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/shapes/__init__.by"), "")?
+        .with_file(base, BASE)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let found = server.send_request_await::<TypeDeclaration>(
+        serde_json::json!({ "typeName": "shapes.base.Circle" }),
+    );
+    assert_eq!(
+        found,
+        Some(serde_json::json!({
+            "kind": "class",
+            "name": "Circle",
+            "qualifiedName": "shapes.base.Circle",
+            "uri": server.file_uri(base),
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 26}},
+            "selectionRange": {"start": {"line": 0, "character": 6}, "end": {"line": 0, "character": 12}},
+        }))
+    );
+    let local = server.send_request_await::<TypeDeclaration>(
+        serde_json::json!({ "typeName": "shapes.base.make.<locals>.Local" }),
+    );
+    assert_eq!(local, None);
+    Ok(())
+}

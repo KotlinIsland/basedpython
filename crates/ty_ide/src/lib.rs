@@ -57,6 +57,7 @@ mod symbols;
 mod syntax_outline;
 mod test_links;
 mod type_hierarchy;
+mod type_name;
 mod unwrap;
 mod usage_counts;
 mod usage_kinds;
@@ -143,6 +144,7 @@ pub use type_hierarchy::{
     TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_mro, type_hierarchy_subtypes,
     type_hierarchy_supertypes,
 };
+pub use type_name::type_declaration;
 pub use unwrap::{UnwrapOption, unwrap_options};
 pub use usage_counts::{
     DeclarationKind, DeclarationUsages, Implementor, UsageCountKinds, document_usage_counts,

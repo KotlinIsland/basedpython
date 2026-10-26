@@ -1805,6 +1805,23 @@ between:
     bind — a global it only reads, an attribute it never assigns — is a value
     nothing in that scope can vouch for
 
+### a value's type
+
+a debugger names a value's type by its module and qualified name,
+`type(value).__module__` and `__qualname__`: `shapes.base.Circle`, or
+`shapes.base.Shape.Meta` for a class nested in another. `by/typeDeclaration`
+takes `{"typeName": "shapes.base.Circle"}` and answers the class that names, as
+`by/declaration` describes a declaration — `kind` (always `class`), `name`, its
+`qualifiedName`, and `uri`, `range` and `selectionRange` — for an editor's *jump
+to type source*. the name is resolved as an import of it would be: its first part
+as a module of the project's environment, and each part after it as a member of
+what came before, through submodules and re-exports, so `shapes.Circle`, where
+`shapes/__init__` re-exports it, answers `shapes.base.Circle`. a class with a
+source is answered at its source, and one with only a stub, as `builtins.list`,
+at its stub. the answer is `null` for a name that reaches anything other than a
+class, or nothing, as `make.<locals>.Local` does. a session of several projects
+is answered from the first whose environment resolves it
+
 ## the expression under the cursor
 
 a debugger's value tooltip, and *Evaluate Expression* or *Quick Evaluate* with

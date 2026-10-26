@@ -163,6 +163,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::EndpointsHandler::METHOD => {
             background_request_task::<requests::EndpointsHandler>(req, BackgroundSchedule::Worker)
         }
+        // The class a debugger names a value's type by, which is in no document it has open.
+        requests::TypeDeclarationHandler::METHOD => background_request_task::<
+            requests::TypeDeclarationHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::TranspileRequestHandler::METHOD => background_document_request_task::<
             requests::TranspileRequestHandler,
         >(req, BackgroundSchedule::Worker),

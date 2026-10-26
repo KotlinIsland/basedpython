@@ -451,7 +451,7 @@ impl<'db> Definitions<'db> {
     }
 
     /// Map definitions from stub files to corresponding source implementations.
-    fn map_stubs(self, db: &'db dyn ty_python_semantic::Db) -> Definitions<'db> {
+    pub(crate) fn map_stubs(self, db: &'db dyn ty_python_semantic::Db) -> Definitions<'db> {
         let resolved = StubMapper::new(db).map_definitions(self.0);
         Self::new(resolved)
     }
