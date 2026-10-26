@@ -1,0 +1,71 @@
+---
+source: crates/ty_server/tests/e2e/folding_range.rs
+expression: ranges
+---
+[
+  {
+    "startLine": 0,
+    "startCharacter": 0,
+    "endLine": 3,
+    "endCharacter": 3,
+    "kind": "comment"
+  },
+  {
+    "startLine": 4,
+    "startCharacter": 0,
+    "endLine": 5,
+    "endCharacter": 10,
+    "kind": "imports"
+  },
+  {
+    "startLine": 12,
+    "startCharacter": 37,
+    "endLine": 17,
+    "endCharacter": 21
+  },
+  {
+    "startLine": 13,
+    "startCharacter": 4,
+    "endLine": 16,
+    "endCharacter": 7,
+    "kind": "comment"
+  },
+  {
+    "startLine": 20,
+    "startCharacter": 12,
+    "endLine": 22,
+    "endCharacter": 18
+  },
+  {
+    "startLine": 21,
+    "startCharacter": 28,
+    "endLine": 22,
+    "endCharacter": 18
+  },
+  {
+    "startLine": 27,
+    "startCharacter": 7,
+    "endLine": 29,
+    "endCharacter": 3
+  },
+  {
+    "startLine": 31,
+    "startCharacter": 11,
+    "endLine": 34,
+    "endCharacter": 0
+  },
+  {
+    "startLine": 8,
+    "startCharacter": 0,
+    "endLine": 9,
+    "endCharacter": 10,
+    "kind": "comment"
+  },
+  {
+    "startLine": 7,
+    "startCharacter": 0,
+    "endLine": 25,
+    "endCharacter": 11,
+    "kind": "region"
+  }
+]

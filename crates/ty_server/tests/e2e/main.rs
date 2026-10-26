@@ -1647,6 +1647,38 @@ impl TestServerBuilder {
         self
     }
 
+    /// set what the client says it does with folding ranges: whether it folds whole lines only,
+    /// whether it shows `collapsedText`, and the folding range kinds it lists as supported
+    pub(crate) fn with_folding_range_capabilities(
+        mut self,
+        line_folding_only: bool,
+        collapsed_text: bool,
+        kinds: &[&'static str],
+    ) -> Self {
+        self.client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .folding_range = Some(lsp_types::FoldingRangeClientCapabilities {
+            line_folding_only: Some(line_folding_only),
+            folding_range: Some(lsp_types::ClientFoldingRangeOptions::new(Some(
+                collapsed_text,
+            ))),
+            folding_range_kind: Some(lsp_types::ClientFoldingRangeKindOptions::new(Some(
+                kinds
+                    .iter()
+                    .map(|kind| match *kind {
+                        "comment" => lsp_types::FoldingRangeKind::Comment,
+                        "imports" => lsp_types::FoldingRangeKind::Imports,
+                        "region" => lsp_types::FoldingRangeKind::Region,
+                        custom => lsp_types::FoldingRangeKind::Custom(custom.into()),
+                    })
+                    .collect(),
+            ))),
+            ..Default::default()
+        });
+        self
+    }
+
     /// Set the hover content format preference for the client
     pub(crate) fn with_hover_content_format(mut self, formats: Vec<lsp_types::MarkupKind>) -> Self {
         self.client_capabilities

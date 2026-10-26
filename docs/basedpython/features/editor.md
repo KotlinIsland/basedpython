@@ -332,6 +332,34 @@ a [property](properties.md) is one member in the source, so it is one entry in
 the outline — not the getter, backing field and setter it lowers into. enum
 variants and an extension's methods appear under their declarations
 
+## folding
+
+`textDocument/foldingRange` gives every range a kind saying what it folds, so
+that an editor can fold some kinds from the start, and the text to show in its
+place when that says more than an ellipsis. the kinds LSP defines go to every
+client; the others are basedpython's own, and go to a client that lists them in
+`textDocument.foldingRange.foldingRangeKind.valueSet`
+
+| kind         | folds                                                                     | folded to                    |
+| ------------ | ------------------------------------------------------------------------- | ---------------------------- |
+| `imports`    | a run of imports                                                          | `import ...`                 |
+| `region`     | `# region <name>` through its `# endregion`                               | the name                     |
+| `comment`    | a run of comments on lines of their own                                   |                              |
+| `docstring`  | a module's, class's or function's docstring                               | `"""Its first line..."""`    |
+| `function`   | a function's body, and its signature when that spans lines                |                              |
+| `class`      | a class's body                                                            |                              |
+| `string`     | any other string literal spanning lines                                   | `"""..."""`, with its prefix |
+| `collection` | the inside of a list, tuple, set or dict display, or of a comprehension   |                              |
+| `annotation` | a parameter's or variable's annotation, or what a `def` returns or raises |                              |
+
+a client that does not list a kind of basedpython's own is told a docstring is a
+`comment`, and is told no kind for the others. an annotation is the one range
+that can lie on a single line: it is sent only to a client that lists the
+`annotation` kind and does not set `lineFoldingOnly`, and not when it begins on the
+line a block fold starts on, where it would put a second fold on that line. the text to fold to is sent
+to a client that sets `foldingRange.collapsedText`. other blocks — an `if`, a
+loop, a `with`, a `try` — and the arguments of a call fold with no kind
+
 ## refactorings
 
 the server offers refactorings as code actions. each is worked out from what the

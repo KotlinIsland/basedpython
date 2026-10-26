@@ -5,6 +5,7 @@ use lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams, Uri};
 use ty_ide::{django_template_folding_ranges, folding_ranges};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
+use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{ToRangeExt, cell_range};
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
@@ -59,26 +60,41 @@ impl BackgroundDocumentRequestHandler for FoldingRangeRequestHandler {
             folding_ranges(db, db.program_file(file).python_file(db), cell_range)
         };
 
+        let capabilities = snapshot.resolved_client_capabilities();
         let results: Vec<_> = ranges
             .into_iter()
             .filter_map(|folding_range| {
                 let lsp_range = folding_range
                     .range
                     .to_lsp_range(db, file, snapshot.encoding())?;
+                let range = lsp_range.local_range();
 
-                let kind = folding_range.kind.map(|k| match k {
-                    ty_ide::FoldingRangeKind::Comment => FoldingRangeKind::Comment,
-                    ty_ide::FoldingRangeKind::Imports => FoldingRangeKind::Imports,
-                    ty_ide::FoldingRangeKind::Region => FoldingRangeKind::Region,
-                });
+                // a range on one line folds part of that line, which a client that folds whole
+                // lines cannot do, and which a client that does not know what the range is (an
+                // annotation is the only such range) has no reason to want
+                if range.start.line == range.end.line
+                    && (capabilities.folds_whole_lines_only()
+                        || !folding_range
+                            .kind
+                            .is_some_and(|kind| capabilities.supports_folding_range_kind(kind)))
+                {
+                    return None;
+                }
+
+                let kind = folding_range
+                    .kind
+                    .and_then(|kind| lsp_kind(kind, capabilities));
+                let collapsed_text = folding_range
+                    .collapsed_text
+                    .filter(|_| capabilities.supports_folding_range_collapsed_text());
 
                 Some(FoldingRange {
-                    start_line: lsp_range.local_range().start.line,
-                    start_character: Some(lsp_range.local_range().start.character),
-                    end_line: lsp_range.local_range().end.line,
-                    end_character: Some(lsp_range.local_range().end.character),
+                    start_line: range.start.line,
+                    start_character: Some(range.start.character),
+                    end_line: range.end.line,
+                    end_character: Some(range.end.character),
                     kind,
-                    collapsed_text: None,
+                    collapsed_text,
                 })
             })
             .collect();
@@ -88,6 +104,31 @@ impl BackgroundDocumentRequestHandler for FoldingRangeRequestHandler {
         } else {
             Ok(Some(results))
         }
+    }
+}
+
+/// the kind a client is told a range is
+///
+/// the kinds LSP defines go to every client. basedpython's own go to a client that listed them
+/// in `textDocument.foldingRange.foldingRangeKind.valueSet`; any other client is told a docstring
+/// is a comment, as LSP has no kind closer to it, and is told nothing of the others
+fn lsp_kind(
+    kind: ty_ide::FoldingRangeKind,
+    capabilities: ResolvedClientCapabilities,
+) -> Option<FoldingRangeKind> {
+    match kind {
+        ty_ide::FoldingRangeKind::Comment => Some(FoldingRangeKind::Comment),
+        ty_ide::FoldingRangeKind::Imports => Some(FoldingRangeKind::Imports),
+        ty_ide::FoldingRangeKind::Region => Some(FoldingRangeKind::Region),
+        custom if capabilities.supports_folding_range_kind(custom) => custom
+            .as_lsp_custom()
+            .map(|name| FoldingRangeKind::Custom(name.into())),
+        ty_ide::FoldingRangeKind::Docstring => Some(FoldingRangeKind::Comment),
+        ty_ide::FoldingRangeKind::Function
+        | ty_ide::FoldingRangeKind::Class
+        | ty_ide::FoldingRangeKind::String
+        | ty_ide::FoldingRangeKind::Collection
+        | ty_ide::FoldingRangeKind::Annotation => None,
     }
 }
 

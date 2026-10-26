@@ -15,7 +15,7 @@ bitflags::bitflags! {
     ///
     /// This tracks various capabilities that the client supports.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub(crate) struct ResolvedClientCapabilities: u32 {
+    pub(crate) struct ResolvedClientCapabilities: u64 {
         const WORKSPACE_DIAGNOSTIC_REFRESH = 1 << 0;
         const INLAY_HINT_REFRESH = 1 << 1;
         const PULL_DIAGNOSTICS = 1 << 2;
@@ -42,6 +42,14 @@ bitflags::bitflags! {
         const LANGUAGE_INJECTION = 1 << 23;
         const SEMANTIC_TOKENS_REFRESH = 1 << 24;
         const CODE_ACTION_EDIT_RESOLVE = 1 << 25;
+        const FOLDING_RANGE_LINE_FOLDING_ONLY = 1 << 26;
+        const FOLDING_RANGE_COLLAPSED_TEXT = 1 << 27;
+        const FOLDING_RANGE_KIND_DOCSTRING = 1 << 28;
+        const FOLDING_RANGE_KIND_FUNCTION = 1 << 29;
+        const FOLDING_RANGE_KIND_CLASS = 1 << 30;
+        const FOLDING_RANGE_KIND_STRING = 1 << 31;
+        const FOLDING_RANGE_KIND_COLLECTION = 1 << 32;
+        const FOLDING_RANGE_KIND_ANNOTATION = 1 << 33;
     }
 }
 
@@ -244,6 +252,44 @@ impl ResolvedClientCapabilities {
     /// were dropped.
     pub(crate) const fn supports_language_injection(self) -> bool {
         self.contains(Self::LANGUAGE_INJECTION)
+    }
+
+    /// returns `true` if the client folds whole lines only, as
+    /// `textDocument.foldingRange.lineFoldingOnly` says
+    pub(crate) const fn folds_whole_lines_only(self) -> bool {
+        self.contains(Self::FOLDING_RANGE_LINE_FOLDING_ONLY)
+    }
+
+    /// returns `true` if the client shows a folding range's `collapsedText`
+    pub(crate) const fn supports_folding_range_collapsed_text(self) -> bool {
+        self.contains(Self::FOLDING_RANGE_COLLAPSED_TEXT)
+    }
+
+    /// returns `true` if the client listed `kind` among the folding range kinds it supports
+    ///
+    /// only basedpython's own kinds are asked about: the kinds LSP defines are sent to every
+    /// client, which the specification requires to handle a kind it does not know
+    pub(crate) const fn supports_folding_range_kind(self, kind: ty_ide::FoldingRangeKind) -> bool {
+        match Self::folding_range_kind_flag(kind) {
+            Some(flag) => self.contains(flag),
+            None => true,
+        }
+    }
+
+    /// the flag a client that lists basedpython's own folding range `kind` is given. `None` for
+    /// a kind LSP defines, which no client lists
+    const fn folding_range_kind_flag(kind: ty_ide::FoldingRangeKind) -> Option<Self> {
+        match kind {
+            ty_ide::FoldingRangeKind::Comment
+            | ty_ide::FoldingRangeKind::Imports
+            | ty_ide::FoldingRangeKind::Region => None,
+            ty_ide::FoldingRangeKind::Docstring => Some(Self::FOLDING_RANGE_KIND_DOCSTRING),
+            ty_ide::FoldingRangeKind::Function => Some(Self::FOLDING_RANGE_KIND_FUNCTION),
+            ty_ide::FoldingRangeKind::Class => Some(Self::FOLDING_RANGE_KIND_CLASS),
+            ty_ide::FoldingRangeKind::String => Some(Self::FOLDING_RANGE_KIND_STRING),
+            ty_ide::FoldingRangeKind::Collection => Some(Self::FOLDING_RANGE_KIND_COLLECTION),
+            ty_ide::FoldingRangeKind::Annotation => Some(Self::FOLDING_RANGE_KIND_ANNOTATION),
+        }
     }
 
     pub(super) fn new(client_capabilities: &ClientCapabilities) -> Self {
@@ -481,6 +527,41 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::COMPLETION_ITEM_SNIPPET_SUPPORT;
+        }
+
+        let folding_range =
+            text_document.and_then(|text_document| text_document.folding_range.as_ref());
+        if folding_range
+            .and_then(|folding_range| folding_range.line_folding_only)
+            .unwrap_or_default()
+        {
+            flags |= Self::FOLDING_RANGE_LINE_FOLDING_ONLY;
+        }
+        if folding_range
+            .and_then(|folding_range| folding_range.folding_range.as_ref()?.collapsed_text)
+            .unwrap_or_default()
+        {
+            flags |= Self::FOLDING_RANGE_COLLAPSED_TEXT;
+        }
+        let folding_range_kinds = folding_range
+            .and_then(|folding_range| {
+                folding_range
+                    .folding_range_kind
+                    .as_ref()?
+                    .value_set
+                    .as_ref()
+            })
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for kind in ty_ide::FoldingRangeKind::CUSTOM {
+            if let Some(name) = kind.as_lsp_custom()
+                && let Some(flag) = Self::folding_range_kind_flag(kind)
+                && folding_range_kinds.iter().any(
+                    |listed| matches!(listed, types::FoldingRangeKind::Custom(listed) if listed == name),
+                )
+            {
+                flags |= flag;
+            }
         }
 
         flags
