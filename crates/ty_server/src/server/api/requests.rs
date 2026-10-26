@@ -117,7 +117,8 @@ pub(super) use injections::InjectionsRequestHandler;
 pub(super) use inlay_hints::InlayHintRequestHandler;
 pub(super) use module_name::ModuleNameHandler;
 pub(super) use move_members::{
-    PrepareMoveMembersRequestHandler, PullMembersUpRequestHandler, PushMembersDownRequestHandler,
+    ExtractSuperclassRequestHandler, PrepareMoveMembersRequestHandler, PullMembersUpRequestHandler,
+    PushMembersDownRequestHandler,
 };
 pub(super) use move_symbol::{MoveSymbolRequestHandler, PrepareMoveSymbolRequestHandler};
 pub(super) use on_type_formatting::OnTypeFormattingRequestHandler;

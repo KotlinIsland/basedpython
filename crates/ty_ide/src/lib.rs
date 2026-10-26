@@ -111,8 +111,8 @@ pub use override_members::{
 pub use pasted_imports::{CopiedCode, CopiedImport, PastedImports, copied_imports, pasted_imports};
 pub use refactor::{
     ClassMember, HierarchyClass, MemberKind, MovableKind, MovableMembers, MovableSymbol, Refactor,
-    RefactorKind, RefactorOffer, SymbolMove, movable_members, movable_symbol, move_symbol,
-    pull_members_up, push_members_down, refactor, refactors,
+    RefactorKind, RefactorOffer, SymbolMove, extract_superclass, movable_members, movable_symbol,
+    move_symbol, pull_members_up, push_members_down, refactor, refactors,
 };
 pub use refactor::{
     FunctionSignature, NewParameter, ParameterKind, SignatureParameter, change_signature,

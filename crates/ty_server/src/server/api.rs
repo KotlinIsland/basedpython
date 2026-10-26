@@ -273,6 +273,11 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::ExtractSuperclassRequestHandler::METHOD => background_document_request_task::<
+            requests::ExtractSuperclassRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),

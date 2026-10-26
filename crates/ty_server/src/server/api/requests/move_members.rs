@@ -8,7 +8,10 @@ use lsp_types::{
     LspRequestMethod, MessageDirection, Position, Range, Request, TextDocumentIdentifier, Uri,
 };
 use ruff_db::files::FileRange;
-use ty_ide::{HierarchyClass, MemberKind, movable_members, pull_members_up, push_members_down};
+use ty_ide::{
+    HierarchyClass, MemberKind, extract_superclass, movable_members, pull_members_up,
+    push_members_down,
+};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use super::move_symbol::MoveSymbolAnswer;
@@ -285,5 +288,64 @@ impl BackgroundDocumentRequestHandler for PushMembersDownRequestHandler {
 
 impl RetriableRequestHandler for PushMembersDownRequestHandler {
     /// the user is waiting on the move they asked for
+    const RETRY_ON_CANCELLATION: bool = true;
+}
+
+pub(crate) enum ExtractSuperclassRequest {}
+
+impl Request for ExtractSuperclassRequest {
+    type Params = ExtractSuperclassParams;
+    type Result = Option<MoveSymbolAnswer>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/extractSuperclass");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+/// the class, the names of the members the new class takes, and the new class's name
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ExtractSuperclassParams {
+    text_document: TextDocumentIdentifier,
+    position: Position,
+    members: Vec<String>,
+    name: String,
+}
+
+pub(crate) struct ExtractSuperclassRequestHandler;
+
+impl RequestHandler for ExtractSuperclassRequestHandler {
+    type RequestType = ExtractSuperclassRequest;
+}
+
+impl BackgroundDocumentRequestHandler for ExtractSuperclassRequestHandler {
+    fn document_uri(params: &ExtractSuperclassParams) -> Cow<'_, Uri> {
+        Cow::Borrowed(&params.text_document.uri)
+    }
+
+    /// `null` when language services are off and for a notebook or a template
+    fn run_with_snapshot(
+        db: &ProjectDatabase,
+        snapshot: &DocumentSnapshot,
+        _client: &Client,
+        params: ExtractSuperclassParams,
+    ) -> crate::server::Result<Option<MoveSymbolAnswer>> {
+        let Some((file, offset)) = position(db, snapshot, params.position) else {
+            return Ok(None);
+        };
+        Ok(Some(MoveSymbolAnswer::of(
+            db,
+            snapshot,
+            extract_superclass(
+                db,
+                db.program_file(file),
+                offset,
+                &params.members,
+                &params.name,
+            ),
+        )))
+    }
+}
+
+impl RetriableRequestHandler for ExtractSuperclassRequestHandler {
+    /// the user is waiting on the refactoring they asked for
     const RETRY_ON_CANCELLATION: bool = true;
 }

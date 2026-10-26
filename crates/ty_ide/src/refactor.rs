@@ -47,8 +47,8 @@ pub use change_signature::{
     function_signature,
 };
 pub use class_members::{
-    ClassMember, HierarchyClass, MemberKind, MovableMembers, movable_members, pull_members_up,
-    push_members_down,
+    ClassMember, HierarchyClass, MemberKind, MovableMembers, extract_superclass, movable_members,
+    pull_members_up, push_members_down,
 };
 pub use move_symbol::{MovableKind, MovableSymbol, SymbolMove, movable_symbol, move_symbol};
 

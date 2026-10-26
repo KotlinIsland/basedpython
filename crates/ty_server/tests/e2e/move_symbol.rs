@@ -326,3 +326,46 @@ fn a_pull_up_answers_its_edit_and_a_push_down_with_nowhere_to_go_is_refused() ->
     );
     Ok(())
 }
+
+/// `by/extractSuperclass`, in json throughout
+enum ExtractSuperclass {}
+
+impl Request for ExtractSuperclass {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/extractSuperclass");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+#[test]
+fn an_extracted_superclass_takes_the_class_s_bases_and_becomes_its_base() -> Result<()> {
+    let mut server = shapes_server()?;
+    let uri = server.file_uri(SystemPath::new("src/shapes.py"));
+    let answer = server
+        .send_request_await::<ExtractSuperclass>(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 4, "character": 7 },
+            "members": ["SIDES"],
+            "name": "Polygon",
+        }))
+        .expect("an answer");
+    assert_eq!(
+        answer["edit"]["changes"][uri.as_str()],
+        json!([
+            {
+                "range": { "start": { "line": 5, "character": 0 }, "end": { "line": 7, "character": 0 } },
+                "newText": "",
+            },
+            {
+                "range": { "start": { "line": 4, "character": 12 }, "end": { "line": 4, "character": 19 } },
+                "newText": "(Polygon)",
+            },
+            {
+                "range": { "start": { "line": 4, "character": 0 }, "end": { "line": 4, "character": 0 } },
+                "newText": "class Polygon(Shape):\n    SIDES = 4\n\n\n",
+            },
+        ]),
+        "{answer:#}"
+    );
+    Ok(())
+}

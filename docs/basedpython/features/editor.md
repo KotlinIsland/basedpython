@@ -680,6 +680,42 @@ names to move, and `target`, a superclass's `qualifiedName`; `by/pushMembersDown
 takes the position and `members`. both answer as `by/moveSymbol` does,
 `{edit, warnings}` or `{refused, warnings}`
 
+### extracting a superclass
+
+`by/extractSuperclass` makes a new class, directly above a class in its module,
+that takes the class's bases and the members named, and makes the new class the
+class's one base:
+
+```py
+class Square(Shape):
+    SIDES = 4
+
+    def area(self): ...
+```
+
+with `SIDES` extracted into `Polygon`, becomes
+
+```py
+class Polygon(Shape):
+    SIDES = 4
+
+
+class Square(Polygon):
+    def area(self): ...
+```
+
+the new class sits right after the class in its method resolution order, so a moved
+member is found where it was found and `super()` in a moved method starts where it
+started. it is refused, with the reason, for a member that reads an attribute of
+`self` the new class would not have (one the class's own methods assign, or a member
+left behind), a name-mangled member, a method that reads `__class__`, which would
+be the new class, an attribute of a decorated class (a data
+class's field, say), a generic class, a class whose base python treats specially —
+`Protocol`, `NamedTuple`, `TypedDict`, `Generic`, an enum — and a name the module
+binds already. it takes `textDocument`, `position` (anywhere in the class),
+`members`, the names to move, as `by/prepareMoveMembers` lists them, and `name`,
+and answers as `by/moveSymbol` does
+
 ### changing a signature
 
 `by/changeSignature` gives a function a new parameter list — parameters added,

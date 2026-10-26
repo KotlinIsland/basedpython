@@ -535,6 +535,208 @@ pub fn push_members_down(
     Ok(moved)
 }
 
+/// makes a new class `name`, directly above the class around `offset` in its module, that takes
+/// the class's bases and its members `names`, and makes it the class's one base. the class's
+/// method resolution order is what it was with the new class inserted right after it, so every
+/// member is found where it was found, and `super()` in a moved method starts where it started.
+/// `Err` says why it cannot be extracted.
+pub fn extract_superclass(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+    names: &[String],
+    name: &str,
+) -> Result<SymbolMove, String> {
+    let class =
+        ClassSite::at(db, file, offset).ok_or_else(|| "there is no class here".to_string())?;
+    let def = class
+        .def()
+        .ok_or_else(|| "there is no class here".to_string())?;
+    if !ruff_python_stdlib::identifiers::is_identifier(name)
+        || ruff_python_stdlib::keyword::is_keyword(name)
+    {
+        return Err(format!("`{name}` is not a name a class can have"));
+    }
+    if def.type_params.is_some() {
+        return Err(format!(
+            "{} is generic, and its type parameters would have to be shared",
+            class.name
+        ));
+    }
+    if all_classes(&class.parsed)
+        .iter()
+        .any(|other| other.name.as_str() == name)
+        || module_binds(&class, db, name)
+    {
+        return Err(format!(
+            "{} has a `{name}` already",
+            class.module(db).unwrap_or_default()
+        ));
+    }
+    let env = ProgramEnvironment::from_file(class.file);
+    let bases = class_bases(db, &env, class.ty);
+    // a base that is a special form rather than a class — `Protocol`, `NamedTuple`, `TypedDict`,
+    // `Generic[T]` — or an enum makes a subclass something other than what the base itself is,
+    // so the class would stop being what it is once it subclassed the new class instead
+    let written_bases = def
+        .arguments
+        .as_ref()
+        .map_or(0, |arguments| arguments.args.len());
+    if bases.len() != written_bases
+        || bases.iter().any(|base| {
+            instance_member_names(db, &env, *base).contains(&Name::new_static("_member_map_"))
+        })
+    {
+        return Err(format!(
+            "{} has a base whose subclasses python treats specially, which {name} would take \
+             in its place",
+            class.name
+        ));
+    }
+    // what the new class has: everything the class's bases give it, and what moves into it
+    let inherited: FxHashSet<Name> = bases
+        .into_iter()
+        .flat_map(|base| instance_member_names(db, &env, base))
+        .collect();
+    let extracted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
+    let source = source_text(db, class.file.file(db));
+    let source = source.as_str();
+
+    let mut texts: Vec<(usize, MemberKind, String)> = Vec::new();
+    let mut removed: Vec<usize> = Vec::new();
+    for member in names {
+        refuse_mangled(member)?;
+        let statements = member_statements(def, member);
+        if statements.is_empty() {
+            return Err(format!("{} has no member `{member}`", class.name));
+        }
+        for &index in &statements {
+            let statement = &def.body[index];
+            if !def.decorator_list.is_empty() && member_kind(statement) == MemberKind::Attribute {
+                return Err(format!(
+                    "`{member}` is an attribute of a decorated class, which its decorator may                      read as a field"
+                ));
+            }
+            for (attribute, range) in receiver_attributes(statement) {
+                if extracted.contains(attribute.as_str()) || inherited.contains(&attribute) {
+                    continue;
+                }
+                refuse_mangled(&attribute)?;
+                let is_member = def
+                    .body
+                    .iter()
+                    .any(|statement| binds(statement, &attribute));
+                return Err(format!(
+                    "`{member}` uses `{}` on line {}, which {name} would not have{}",
+                    &source[range],
+                    line_number(source, range.start()),
+                    if is_member { "; extract it too" } else { "" }
+                ));
+            }
+            for (sibling, _) in class_scope_reads(def, statement) {
+                if !extracted.contains(sibling.as_str()) && !inherited.contains(&sibling) {
+                    return Err(format!(
+                        "`{member}` reads {}'s `{sibling}`, which {name} would not have; \
+                         extract it too",
+                        class.name
+                    ));
+                }
+            }
+            texts.push((
+                index,
+                member_kind(statement),
+                member_text(source, &def.body, index, false),
+            ));
+            removed.push(index);
+        }
+    }
+    texts.sort_by_key(|(index, _, _)| *index);
+
+    let file_id = class.file.file(db);
+    let line_ending = Stylist::from_tokens(class.parsed.tokens(), source)
+        .line_ending()
+        .as_str()
+        .to_string();
+    let mut moved = SymbolMove::default();
+    moved
+        .edits
+        .extend(remove_members(file_id, source, def, &removed));
+
+    // the class takes the new one as its only base, which takes its bases
+    let base_text = def
+        .arguments
+        .as_ref()
+        .map(|arguments| {
+            let text = &source[arguments.range()];
+            text[1..text.len() - 1].trim().to_string()
+        })
+        .filter(|bases| !bases.is_empty());
+    let new_bases = format!("({name})");
+    moved.edits.push(FileEdit {
+        file: file_id,
+        edit: match &def.arguments {
+            Some(arguments) => Edit::range_replacement(new_bases, arguments.range()),
+            None => Edit::insertion(new_bases, def.name.end()),
+        },
+    });
+
+    // the new class, above the class and the comments and decorators that go with it
+    let class_indent = {
+        let start = source.line_start(def.start());
+        source[TextRange::new(start, def.start())].to_string()
+    };
+    let body_indent = format!("{class_indent}    ");
+    let from_indent = body_indentation(source, def);
+    let mut text = format!(
+        "{class_indent}class {name}{}:{line_ending}",
+        base_text
+            .map(|bases| format!("({bases})"))
+            .unwrap_or_default()
+    );
+    let mut previous: Option<MemberKind> = None;
+    for (_, kind, member) in &texts {
+        if previous.is_some_and(|previous| {
+            previous != MemberKind::Attribute || *kind != MemberKind::Attribute
+        }) {
+            text.push_str(&line_ending);
+        }
+        text.push_str(&reindent(member, &from_indent, &body_indent));
+        previous = Some(*kind);
+    }
+    if texts.is_empty() {
+        text.push_str(&body_indent);
+        text.push_str("pass");
+        text.push_str(&line_ending);
+    }
+    let blank_lines = if class_indent.is_empty() { 2 } else { 1 };
+    text.push_str(&line_ending.repeat(blank_lines));
+    let mut start = source.line_start(def.start());
+    while start > TextSize::default() {
+        let previous = source.line_start(start - TextSize::from(1));
+        if !source[TextRange::new(previous, start)]
+            .trim_start()
+            .starts_with('#')
+        {
+            break;
+        }
+        start = previous;
+    }
+    moved.edits.push(FileEdit {
+        file: file_id,
+        edit: Edit::insertion(text, start),
+    });
+    Ok(moved)
+}
+
+/// whether the module of `class` binds `name` at its top level
+fn module_binds(class: &ClassSite<'_>, db: &dyn Db, name: &str) -> bool {
+    let index = ty_python_core::semantic_index(db, class.file);
+    let globals = index.place_table(ty_python_core::scope::FileScopeId::global());
+    globals
+        .symbol_id(name)
+        .is_some_and(|symbol| globals.symbol(symbol).is_bound())
+}
+
 /// A class of the project, parsed.
 struct ClassSite<'db> {
     file: ProgramFile<'db>,
@@ -1346,7 +1548,7 @@ fn attribute_receiver_type<'db>(
 mod tests {
     use insta::assert_snapshot;
 
-    use super::{movable_members, pull_members_up, push_members_down};
+    use super::{extract_superclass, movable_members, pull_members_up, push_members_down};
     use crate::refactor::move_symbol::tests::rendered;
     use crate::tests::{CursorTest, CursorTestBuilder};
 
@@ -1720,5 +1922,78 @@ class <CURSOR>Leaf(Mid):
             )
             .build();
         assert_snapshot!(test.pull_up(&["describe"], "main.Base"), @"refused: Leaf would inherit Mid's `describe` rather than its own");
+    }
+    impl CursorTest {
+        fn extract(&self, names: &[&str], name: &str) -> String {
+            let names: Vec<String> = names.iter().map(ToString::to_string).collect();
+            let moved = salsa::attach(&self.db, || {
+                extract_superclass(
+                    &self.db,
+                    self.program_file(self.cursor.file),
+                    self.cursor.offset,
+                    &names,
+                    name,
+                )
+            });
+            rendered(&self.db, moved)
+        }
+    }
+
+    /// the new class takes the class's bases and sits right after it in its MRO, so what the
+    /// moved members find is what they found
+    #[test]
+    fn extracting_a_superclass_inserts_it_between_the_class_and_its_bases() {
+        let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
+        assert_snapshot!(test.extract(&["plain", "LIMIT"], "Shape"), @"
+        --- /cls/shapes.py
+        class Base:
+            def keep(self):
+                return 1
+
+
+        class Shape(Base):
+            LIMIT = 3
+
+            def plain(self):
+                return 2
+
+
+        class Child(Shape):
+            def __init__(self, x):
+                self.x = x
+
+            def area(self):
+                return self.x * self.LIMIT
+
+            def helper(self):
+                return self.plain() + 1
+
+
+        class Other(Base):
+            pass
+
+
+        class GrandChild(Child):
+            def area(self):
+                return 0
+        ");
+    }
+
+    #[test]
+    fn extracting_what_reads_an_attribute_left_behind_is_refused() {
+        let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
+        assert_snapshot!(test.extract(&["area"], "Shape"), @"refused: `area` uses `self.x` on line 13, which Shape would not have");
+        assert_snapshot!(test.extract(&["plain"], "Base"), @"refused: cls.shapes has a `Base` already");
+    }
+
+    #[test]
+    fn a_class_with_a_special_base_is_refused() {
+        let test = CursorTestBuilder::default()
+            .source(
+                "main.py",
+                "from typing import NamedTuple\n\n\nclass <CURSOR>Point(NamedTuple):\n    x: int\n    y: int\n",
+            )
+            .build();
+        assert_snapshot!(test.extract(&["x"], "Base"), @"refused: Point has a base whose subclasses python treats specially, which Base would take in its place");
     }
 }
