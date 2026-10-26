@@ -1627,6 +1627,27 @@ fn displayed_parameters_for_signature<'db>(
     }
 }
 
+/// whether `ty` is called with no arguments at all: it is callable, and none of the ways it can be
+/// called has a parameter left once a bound method's receiver is bound
+///
+/// `Cart().total` with `def total(self) -> int` is, so a completion that writes the call can put
+/// the caret after `()` rather than inside it. a function with only optional parameters is not:
+/// what goes between the parentheses is still up to the caller
+pub fn takes_no_arguments<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    ty.try_upcast_to_callable(db, env).is_some_and(|callables| {
+        callables.into_iter().all(|callable| {
+            callable
+                .signatures(db)
+                .iter()
+                .all(|signature| signature.parameters().len() == 0)
+        })
+    })
+}
+
 /// Extract signature details from a function call expression.
 /// This function analyzes the callable being invoked and returns zero or more
 /// `CallSignatureDetails` objects, each representing one possible signature

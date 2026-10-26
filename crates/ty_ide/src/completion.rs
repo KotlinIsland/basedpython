@@ -30,6 +30,7 @@ use ty_python_semantic::importer::{ImportRequest, Importer, MembersInScope};
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::types::ide_support::{
     context_sensitive_members, extension_members, is_awaitable, overridable_members,
+    takes_no_arguments,
 };
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
@@ -734,7 +735,12 @@ impl<'db> CompletionBuilder<'db> {
             && collection_context.should_complete_callable_parentheses(kind)
         {
             let label = self.insert.unwrap_or_else(|| self.name.clone());
-            if collection_context.capabilities.snippets {
+            // a call that takes nothing has nothing to type between its parentheses, so the
+            // caret goes after them, and there is no signature to show
+            let takes_no_arguments = self.ty.is_some_and(|ty| {
+                takes_no_arguments(db, &ProgramEnvironment::from_file(program_file), ty)
+            });
+            if collection_context.capabilities.snippets && !takes_no_arguments {
                 let insert = compact_str::format_compact!("{label}($0)");
                 (
                     Some(label),
@@ -14685,7 +14691,7 @@ def foo():
     fn complete_function_parentheses() {
         let builder = completion_test_builder(
             "\
-def callable():
+def callable(x):
     pass
 
 call<CURSOR>
@@ -14699,6 +14705,56 @@ call<CURSOR>
                 .snippets_support(true)
                 .build()
                 .snapshot(),
+            @"callable($0)",
+        );
+    }
+
+    /// a call that takes nothing has nothing to type between its parentheses, so the caret goes
+    /// after them. one whose parameters are all optional still leaves the caret inside: what goes
+    /// there is up to the caller
+    #[test]
+    fn complete_function_parentheses_without_arguments() {
+        let snapshot = |source: &str| {
+            completion_test_builder(source)
+                .skip_auto_import()
+                .skip_builtins()
+                .complete_function_parentheses()
+                .snippets_support(true)
+                .build()
+                .snapshot()
+        };
+        assert_snapshot!(
+            snapshot(
+                "\
+def callable():
+    pass
+
+call<CURSOR>
+"
+            ),
+            @"callable()",
+        );
+        assert_snapshot!(
+            snapshot(
+                "\
+class Cart:
+    def total(self) -> int:
+        return 0
+
+Cart().tot<CURSOR>
+"
+            ),
+            @"total()",
+        );
+        assert_snapshot!(
+            snapshot(
+                "\
+def callable(x=1):
+    pass
+
+call<CURSOR>
+"
+            ),
             @"callable($0)",
         );
     }

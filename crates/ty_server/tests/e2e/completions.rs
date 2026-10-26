@@ -122,7 +122,7 @@ fn complete_function_parentheses_enabled_by_default() -> Result<()> {
     let workspace_root = SystemPath::new("src");
     let foo = SystemPath::new("src/foo.py");
     let foo_content = "\
-def complete_parentheses() -> None: ...
+def complete_parentheses(x: int) -> None: ...
 
 complete_parenth
 ";
@@ -143,7 +143,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses()",
+        "detail": "def complete_parentheses(x: int)",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
         "insertTextFormat": 2
@@ -159,7 +159,7 @@ fn complete_function_parentheses() -> Result<()> {
     let workspace_root = SystemPath::new("src");
     let foo = SystemPath::new("src/foo.py");
     let foo_content = "\
-def complete_parentheses() -> None: ...
+def complete_parentheses(x: int) -> None: ...
 
 complete_parenth
 ";
@@ -183,7 +183,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses()",
+        "detail": "def complete_parentheses(x: int)",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
         "insertTextFormat": 2,
@@ -201,12 +201,90 @@ complete_parenth
 /// Tests that the signature-help command is omitted when the client has not
 /// advertised support for it (for example, editors that would surface an
 /// "unsupported command" error).
+/// a function that takes no arguments is written whole, `()` included, with the caret after it:
+/// there is nothing to type between the parentheses and no signature to show
+#[test]
+fn complete_function_parentheses_without_arguments() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+def complete_parentheses() -> None: ...
+
+complete_parenth
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .enable_completion_snippets(true)
+        .with_trigger_parameter_hints_command()
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let completions = server.completion_request(&server.file_uri(foo), Position::new(2, 16));
+    insta::assert_json_snapshot!(completions, @r#"
+    [
+      {
+        "label": "complete_parentheses",
+        "kind": 3,
+        "detail": "def complete_parentheses()",
+        "sortText": "0",
+        "insertText": "complete_parentheses()"
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
+/// `completions.completeFunctionParentheses: false` in the initialization options turns the
+/// parentheses off, for a client whose user does not want them
+#[test]
+fn complete_function_parentheses_disabled() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+def complete_parentheses(x: int) -> None: ...
+
+complete_parenth
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(
+            &ClientOptions::default().with_complete_function_parentheses(false),
+        )
+        .enable_completion_snippets(true)
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let completions = server.completion_request(&server.file_uri(foo), Position::new(2, 16));
+    insta::assert_json_snapshot!(completions, @r#"
+    [
+      {
+        "label": "complete_parentheses",
+        "kind": 3,
+        "detail": "def complete_parentheses(x: int)",
+        "sortText": "0"
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
 #[test]
 fn complete_function_parentheses_without_command_support() -> Result<()> {
     let workspace_root = SystemPath::new("src");
     let foo = SystemPath::new("src/foo.py");
     let foo_content = "\
-def complete_parentheses() -> None: ...
+def complete_parentheses(x: int) -> None: ...
 
 complete_parenth
 ";
@@ -229,7 +307,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses()",
+        "detail": "def complete_parentheses(x: int)",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
         "insertTextFormat": 2

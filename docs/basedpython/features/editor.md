@@ -191,9 +191,13 @@ block in scope declares on the receiver, alongside the type's own
 ### callables
 
 accepting a completion for anything callable writes its parentheses and leaves
-the caret between them, ready for the first argument. set
-`ty.completions.completeFunctionParentheses` to `false` to insert the bare name
-instead
+the caret between them, ready for the first argument — or after them, when the
+callable takes no arguments at all, as `cart.total()` does for
+`def total(self) -> int`. one whose parameters are all optional still leaves the
+caret inside. set `ty.completions.completeFunctionParentheses` to `false` (or
+`completions.completeFunctionParentheses` in the initialization options, for a
+client that does not answer `workspace/configuration` with it) to insert the
+bare name instead
 
 ## inlay hints
 
