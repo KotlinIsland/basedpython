@@ -1694,3 +1694,65 @@ pick('slow-mo')
     );
     Ok(())
 }
+
+/// `by/smartCompletion` as a client sends it, in json throughout
+enum SmartCompletion {}
+
+impl lsp_types::Request for SmartCompletion {
+    type Params = serde_json::Value;
+    type Result = Option<lsp_types::CompletionList>;
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("by/smartCompletion");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
+}
+
+/// smart completion answers, in the form `textDocument/completion` answers, only what fits the
+/// type the position expects, and `null` where it expects none
+#[test]
+fn smart_completion_answers_what_fits_the_expected_type() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+class Shape: ...
+class Label: ...
+
+def draw(shape: Shape) -> None: ...
+
+shape = Shape()
+label = Label()
+draw()
+x = 
+";
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(foo, foo_content, 1);
+    let uri = server.file_uri(foo);
+    let ask = |server: &mut crate::TestServer, position: Position| {
+        server.send_request_await::<SmartCompletion>(serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": position,
+        }))
+    };
+
+    let in_argument = ask(&mut server, Position::new(7, 5)).expect("an argument expects a type");
+    let labels: Vec<_> = in_argument
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Shape", "shape"]);
+    assert!(
+        in_argument
+            .items
+            .iter()
+            .all(|item| item.text_edit.is_some())
+    );
+
+    assert_eq!(ask(&mut server, Position::new(8, 4)), None);
+    Ok(())
+}

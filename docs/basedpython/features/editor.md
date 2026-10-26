@@ -62,6 +62,22 @@ as a postfix template does for the expression it rewrites. so an editor never
 works out the range from its own idea of a word, which inside an f-string is the
 whole string token, against which nothing would match
 
+### smart completion
+
+an editor's smart, type-matching completion asks `by/smartCompletion`, which
+takes what `textDocument/completion` takes and answers a completion list of the
+same items, kept to those that fit the type the position expects: an argument
+expects its parameter's type, a `return` what its function declares it returns,
+the value of a declared assignment the declared type, and a `case` pattern the
+subject's. a value fits when its type is assignable to the expected one, and a
+class or a function when calling it makes such a value, so on `draw(` for a
+`draw(shape: Shape)` the list is the variables holding a `Shape`, `Shape` and
+its subclasses, and the functions returning one. a completion of type `Any` or
+`Unknown`, a function that never returns and a keyword argument's name fit
+nothing for certain, and nothing is imported. of nested positions the innermost
+decides: in `x: int = len(` it is `len`'s parameter. the answer is `null` where
+the position expects no type the source states, or `Any`
+
 ### the entry point
 
 at module level, `main` completes to the whole [entry point](main-function.md)

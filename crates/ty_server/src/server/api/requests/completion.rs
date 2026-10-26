@@ -90,136 +90,149 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
             return Ok(None);
         }
 
-        // Safety: we just checked that completions is not empty.
-        let max_index_len = OneIndexed::new(completions.len()).unwrap().digits().get();
-        // the type shown beside a suggestion is spelled in the syntax of the
-        // file being completed: `1`, not `Literal[1]`, in a basedpython file
-        let items: Vec<CompletionItem> = with_display_for_file(db, file, || {
-            completions
-                .into_iter()
-                .enumerate()
-                .map(|(i, comp)| {
-                    let kind = comp.kind.map(ty_kind_to_lsp_kind);
-                    // a format spec clause has no type to show, so it carries its
-                    // own few words instead
-                    let type_display = comp
-                        .ty
-                        .map(|ty| ty.display(db, &env).to_string())
-                        .or_else(|| comp.detail.as_ref().map(ToString::to_string));
-                    let to_text_edit = |edit: &Edit| {
-                        let range = edit
-                            .range()
-                            .to_lsp_range(db, file, snapshot.encoding())?
-                            .local_range();
-                        Some(TextEdit {
-                            range,
-                            new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
-                        })
-                    };
-                    let import_edit = comp.import.as_ref().and_then(to_text_edit);
-                    // an import is not the only edit a completion can need: a
-                    // name completed inside a plain string also brings the `f`
-                    // that makes the string an f-string
-                    let additional_text_edits: Vec<TextEdit> = import_edit
-                        .iter()
-                        .cloned()
-                        .chain(comp.additional_edit.as_ref().and_then(to_text_edit))
-                        .collect();
-
-                    let label = comp.label().to_string();
-                    // what accepting it writes, which the label shown for it may say more than
-                    let new_text = comp
-                        .insert
-                        .as_ref()
-                        .map_or_else(|| label.clone(), ToString::to_string);
-                    let import_suffix = comp.module_name.and_then(|name| {
-                        import_edit.is_some().then(|| format!(" (import {name})"))
-                    });
-                    let (label, label_details) = if snapshot
-                        .resolved_client_capabilities()
-                        .supports_completion_item_label_details()
-                    {
-                        let label_details = CompletionItemLabelDetails {
-                            detail: import_suffix,
-                            description: type_display.clone(),
-                        };
-                        (label, Some(label_details))
-                    } else {
-                        let label = import_suffix
-                            .map(|suffix| format!("{label}{suffix}"))
-                            .unwrap_or(label);
-                        (label, None)
-                    };
-
-                    let documentation = comp.documentation.map(|docstring| {
-                        let (kind, value) = if snapshot
-                            .resolved_client_capabilities()
-                            .prefers_markdown_in_completion()
-                        {
-                            (
-                                lsp_types::MarkupKind::Markdown,
-                                docstring.render(MarkupKind::Markdown),
-                            )
-                        } else {
-                            (
-                                lsp_types::MarkupKind::PlainText,
-                                docstring.render(MarkupKind::PlainText),
-                            )
-                        };
-
-                        Documentation::MarkupContent(lsp_types::MarkupContent { kind, value })
-                    });
-                    let insert_text = comp.insert.map(String::from);
-                    let insert_text_format = match comp.insert_text_format {
-                        CompletionInsertTextFormat::PlainText => None,
-                        CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
-                    };
-                    // every completion says what it replaces: the client's own idea of the
-                    // word before the cursor is not python's, and inside an f-string's
-                    // `{car` it is the whole string token, against which nothing matches
-                    let text_edit = comp.replace.and_then(|replace| {
-                        let range = replace
-                            .to_lsp_range(db, file, snapshot.encoding())?
-                            .local_range();
-                        Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
-                            range,
-                            new_text,
-                        }))
-                    });
-
-                    CompletionItem {
-                        label,
-                        kind,
-                        sort_text: Some(format!("{i:-max_index_len$}")),
-                        detail: type_display,
-                        label_details,
-                        insert_text,
-                        insert_text_format,
-                        filter_text: comp.filter.map(String::from),
-                        text_edit,
-                        additional_text_edits: (!additional_text_edits.is_empty())
-                            .then_some(additional_text_edits),
-                        documentation,
-                        command: comp
-                            .command
-                            .and_then(|command| to_lsp_command(command, client_capabilities)),
-                        ..Default::default()
-                    }
-                })
-                .collect()
-        });
-        let len = items.len();
-        let response = CompletionResponse::CompletionList(CompletionList {
-            is_incomplete: true,
-            items,
-            item_defaults: None,
-            apply_kind: None,
-        });
+        let list = completion_list(db, snapshot, file, &env, completions);
+        let len = list.items.len();
+        let response = CompletionResponse::CompletionList(list);
         tracing::debug!(
             "Completions request returned {len} suggestions in {elapsed:?}",
             elapsed = Instant::now().duration_since(start)
         );
         Ok(Some(response))
+    }
+}
+
+/// `completions`, as a client reads them: each with what it replaces, its type spelled as the
+/// file's language spells it, and the imports it brings
+pub(super) fn completion_list<'db>(
+    db: &'db ProjectDatabase,
+    snapshot: &DocumentSnapshot,
+    file: ruff_db::files::File,
+    env: &ProgramEnvironment<'db>,
+    completions: Vec<ty_ide::Completion<'db>>,
+) -> CompletionList {
+    let client_capabilities = snapshot.resolved_client_capabilities();
+    let max_index_len = OneIndexed::new(completions.len()).map_or(1, |len| len.digits().get());
+    // the type shown beside a suggestion is spelled in the syntax of the
+    // file being completed: `1`, not `Literal[1]`, in a basedpython file
+    let items: Vec<CompletionItem> = with_display_for_file(db, file, || {
+        completions
+            .into_iter()
+            .enumerate()
+            .map(|(i, comp)| {
+                let kind = comp.kind.map(ty_kind_to_lsp_kind);
+                // a format spec clause has no type to show, so it carries its
+                // own few words instead
+                let type_display = comp
+                    .ty
+                    .map(|ty| ty.display(db, env).to_string())
+                    .or_else(|| comp.detail.as_ref().map(ToString::to_string));
+                let to_text_edit = |edit: &Edit| {
+                    let range = edit
+                        .range()
+                        .to_lsp_range(db, file, snapshot.encoding())?
+                        .local_range();
+                    Some(TextEdit {
+                        range,
+                        new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
+                    })
+                };
+                let import_edit = comp.import.as_ref().and_then(to_text_edit);
+                // an import is not the only edit a completion can need: a
+                // name completed inside a plain string also brings the `f`
+                // that makes the string an f-string
+                let additional_text_edits: Vec<TextEdit> = import_edit
+                    .iter()
+                    .cloned()
+                    .chain(comp.additional_edit.as_ref().and_then(to_text_edit))
+                    .collect();
+
+                let label = comp.label().to_string();
+                // what accepting it writes, which the label shown for it may say more than
+                let new_text = comp
+                    .insert
+                    .as_ref()
+                    .map_or_else(|| label.clone(), ToString::to_string);
+                let import_suffix = comp
+                    .module_name
+                    .and_then(|name| import_edit.is_some().then(|| format!(" (import {name})")));
+                let (label, label_details) = if snapshot
+                    .resolved_client_capabilities()
+                    .supports_completion_item_label_details()
+                {
+                    let label_details = CompletionItemLabelDetails {
+                        detail: import_suffix,
+                        description: type_display.clone(),
+                    };
+                    (label, Some(label_details))
+                } else {
+                    let label = import_suffix
+                        .map(|suffix| format!("{label}{suffix}"))
+                        .unwrap_or(label);
+                    (label, None)
+                };
+
+                let documentation = comp.documentation.map(|docstring| {
+                    let (kind, value) = if snapshot
+                        .resolved_client_capabilities()
+                        .prefers_markdown_in_completion()
+                    {
+                        (
+                            lsp_types::MarkupKind::Markdown,
+                            docstring.render(MarkupKind::Markdown),
+                        )
+                    } else {
+                        (
+                            lsp_types::MarkupKind::PlainText,
+                            docstring.render(MarkupKind::PlainText),
+                        )
+                    };
+
+                    Documentation::MarkupContent(lsp_types::MarkupContent { kind, value })
+                });
+                let insert_text = comp.insert.map(String::from);
+                let insert_text_format = match comp.insert_text_format {
+                    CompletionInsertTextFormat::PlainText => None,
+                    CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
+                };
+                // every completion says what it replaces: the client's own idea of the
+                // word before the cursor is not python's, and inside an f-string's
+                // `{car` it is the whole string token, against which nothing matches
+                let text_edit = comp.replace.and_then(|replace| {
+                    let range = replace
+                        .to_lsp_range(db, file, snapshot.encoding())?
+                        .local_range();
+                    Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
+                        range,
+                        new_text,
+                    }))
+                });
+
+                CompletionItem {
+                    label,
+                    kind,
+                    sort_text: Some(format!("{i:-max_index_len$}")),
+                    detail: type_display,
+                    label_details,
+                    insert_text,
+                    insert_text_format,
+                    filter_text: comp.filter.map(String::from),
+                    text_edit,
+                    additional_text_edits: (!additional_text_edits.is_empty())
+                        .then_some(additional_text_edits),
+                    documentation,
+                    command: comp
+                        .command
+                        .and_then(|command| to_lsp_command(command, client_capabilities)),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    });
+    CompletionList {
+        is_incomplete: true,
+        items,
+        item_defaults: None,
+        apply_kind: None,
     }
 }
 

@@ -4829,7 +4829,96 @@ pub fn is_awaitable<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Typ
     ty.try_await(db, env).is_ok()
 }
 
-/// A use a value can be put to, as a postfix template written after it puts it to one.
+/// the type a `return` in `function`'s body is checked against: what the function declares it
+/// returns, the return type of the generator a generator function returns, and not the coroutine
+/// an `async def`'s call returns. `None` for a function that declares no return type, and for a
+/// basedpython `-> asserts x`, which declares a guard rather than a type
+pub fn expected_return_type<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+) -> Option<Type<'db>> {
+    if function.returns.is_none() || function.is_asserts_return {
+        return None;
+    }
+    let db = model.db();
+    let env = model.program_environment();
+    let index = semantic_index(db, model.program_file());
+    let definition = function.definition(model);
+    let function_type = infer_definition_types(db, definition).function_type(definition)?;
+    let return_ty = crate::types::function::same_module_uncached_raw_signature(
+        db,
+        function_type,
+        ReturnCallableTypeVarScope::Lexical,
+    )
+    .return_ty;
+    let body = index.try_node_scope(NodeWithScopeRef::Function(function))?;
+    Some(if body.is_generator_function(index) {
+        return_ty
+            .generator_return_type(db, &env)
+            .unwrap_or(return_ty)
+    } else {
+        return_ty
+    })
+}
+
+/// the type an annotated assignment declares its target, `Shape` in `x: Shape = make()`, whatever
+/// value it is given. `None` where the annotation declares no type of a value, as the target of
+/// `items[0]: int` has none
+pub fn declared_assignment_type<'db>(
+    model: &SemanticModel<'db>,
+    assignment: &ast::StmtAnnAssign,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let index = semantic_index(db, model.program_file());
+    let definition = index.try_definition(assignment)?;
+    match infer_definition_types(db, definition).inferred_declaration(definition) {
+        crate::types::infer::InferredDeclaration::Declared(declared) => Some(declared.inner_type()),
+        crate::types::infer::InferredDeclaration::Rejected => None,
+    }
+}
+
+/// whether `ty` is assignable to `expected` for a reason its type says: not because either is,
+/// or holds, `Any` or `Unknown`, which every type is assignable to and from, nor because `ty` is
+/// `Never`, which is assignable to every type and is never a value
+///
+/// that is assignability whatever the gradual parts stand for: the widest type `ty` can stand for
+/// is assignable to the narrowest `expected` can, so `list[Any]` is not known to be a `list[int]`
+pub fn is_known_assignable_to<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    expected: Type<'db>,
+) -> bool {
+    !ty.is_never()
+        && ty.top_materialization(db, env).is_assignable_to(
+            db,
+            env,
+            expected.bottom_materialization(db, env),
+        )
+}
+
+/// whether calling `callable`, with whatever arguments it takes, gives a value
+/// [`is_known_assignable_to`] `expected`: an instance of a class, or what a function declares it
+/// returns. `false` for what cannot be called
+pub fn call_result_assignable_to<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    callable: Type<'db>,
+    expected: Type<'db>,
+) -> bool {
+    let Some(callables) = callable.try_upcast_to_callable(db, env) else {
+        return false;
+    };
+    (&callables).into_iter().any(|callable| {
+        callable
+            .signatures(db)
+            .overloads
+            .iter()
+            .any(|signature| is_known_assignable_to(db, env, signature.return_ty, expected))
+    })
+}
+
+/// a use a value can be put to, as a postfix template written after it puts it to one
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueUse {
     /// looping over it
@@ -4842,8 +4931,8 @@ pub enum ValueUse {
     TestForNone,
 }
 
-/// Whether a value of type `ty` can be put to `use_`. A type ty cannot read, `Unknown` among
-/// them, can be put to any.
+/// whether a value of type `ty` can be put to `use_`. a type ty cannot read, `Unknown` among
+/// them, can be put to any
 pub fn value_supports<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -5411,6 +5500,81 @@ def f(declared: int, text: str, flag: bool, subclass: Number, either: int | str)
                 "not declared: Some([Bool])",
                 "declared < 1: Some([Bool])",
                 "final_int < 1: Some([Bool])",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_type_is_known_assignable_only_when_no_gradual_part_admits_it() -> anyhow::Result<()> {
+        // each pair of expression statements is a type and the type it is to be assigned to
+        let pairs = describe_statement_types(
+            r#"
+from typing import Any, Callable, Never
+
+def f(
+    ints: list[int],
+    anys: list[Any],
+    number: int,
+    either: int | Any,
+    boolean: bool,
+    callback: Callable[[Any], int],
+    int_callback: Callable[[int], int],
+    gradual: Any,
+    never: Never,
+):
+    ints
+    ints
+    anys
+    ints
+    ints
+    anys
+    boolean
+    number
+    number
+    either
+    either
+    number
+    int_callback
+    callback
+    callback
+    int_callback
+    gradual
+    number
+    number
+    gradual
+    never
+    number
+"#,
+            |db, env, types, _| {
+                types
+                    .chunks(2)
+                    .map(|pair| match pair {
+                        [ty, expected] => format!(
+                            "{} to {}: {}",
+                            ty.display(db, env),
+                            expected.display(db, env),
+                            super::is_known_assignable_to(db, env, *ty, *expected)
+                        ),
+                        _ => "an odd statement out".to_string(),
+                    })
+                    .collect()
+            },
+        )?;
+        assert_eq!(
+            pairs,
+            [
+                "list[int] to list[int]: true",
+                "list[Any] to list[int]: false",
+                "list[int] to list[Any]: false",
+                "bool to int: true",
+                "int to int | Any: true",
+                "int | Any to int: false",
+                "(int, /) -> int to (Any, /) -> int: false",
+                "(Any, /) -> int to (int, /) -> int: false",
+                "Any to int: false",
+                "int to Any: false",
+                "Never to int: false",
             ]
         );
         Ok(())

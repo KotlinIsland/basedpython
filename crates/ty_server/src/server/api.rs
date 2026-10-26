@@ -91,6 +91,12 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::SmartCompletionRequestHandler::METHOD => {
+            background_document_request_task::<requests::SmartCompletionRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::MroRequestHandler::METHOD => background_document_request_task::<
             requests::MroRequestHandler,
         >(req, BackgroundSchedule::Worker),

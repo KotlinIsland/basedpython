@@ -29,8 +29,9 @@ use ty_python_semantic::dependencies::{self, ImportStanding};
 use ty_python_semantic::importer::{ImportRequest, Importer, MembersInScope};
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::types::ide_support::{
-    ValueUse, context_sensitive_members, extension_members, is_awaitable, overridable_members,
-    takes_no_arguments, value_supports,
+    ValueUse, call_result_assignable_to, context_sensitive_members, declared_assignment_type,
+    expected_return_type, extension_members, is_awaitable, is_known_assignable_to,
+    overridable_members, takes_no_arguments, value_supports,
 };
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
@@ -297,6 +298,60 @@ pub fn completion<'db>(
     }
 
     replacing(completions.into_completions(), context.cursor.range)
+}
+
+/// the completions at `offset` that fit the type the position expects: what an editor's smart,
+/// type-matching completion offers
+///
+/// the positions read are an argument, which expects its parameter's type; a `return`, which
+/// expects what its function declares it returns; the value of a declared assignment, which
+/// expects the declared type; and a `case` pattern, which expects the subject's. of the
+/// completions [`completion`] answers there, the ones kept are a value whose type is assignable
+/// to the expected one, and a function or class whose call gives such a value: on `x: Shape = `
+/// the variables holding a `Shape`, and `Circle` and `make_shape`. a completion whose type is
+/// `Any` or `Unknown`, or not known at all, fits nothing for certain, and is left out. nothing is
+/// imported, since smart completion offers what is already at hand
+///
+/// `None` where the position expects no type the source states, or one that is `Any` or
+/// `Unknown`
+pub fn smart_completion<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    settings: &CompletionSettings,
+    capabilities: CompletionCapabilities,
+    file: ProgramFile<'db>,
+    offset: TextSize,
+) -> Option<Vec<Completion<'db>>> {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+    let source = source_text(db, file.file(db));
+    let context = Context::new(db, file, &parsed, &source, offset)?;
+    let model = SemanticModel::new(db, file);
+    let expected = context.cursor.smart_expected_type(db, file, &model)?;
+    if matches!(expected, Type::Dynamic(_)) {
+        return None;
+    }
+    let settings = CompletionSettings {
+        auto_import: false,
+        ..settings.clone()
+    };
+    Some(
+        completion(db, env, &settings, capabilities, file, offset)
+            .into_iter()
+            // a keyword argument's name, which is what writes `name=`, is no value
+            .filter(|completion| {
+                !completion
+                    .insert
+                    .as_deref()
+                    .is_some_and(|insert| insert.ends_with('='))
+            })
+            .filter(|completion| {
+                completion.ty.is_some_and(|ty| {
+                    is_known_assignable_to(db, env, ty, expected)
+                        || call_result_assignable_to(db, env, ty, expected)
+                })
+            })
+            .collect(),
+    )
 }
 
 /// `completions`, each saying what it replaces: `typed` for one that does not say already.
@@ -2044,6 +2099,67 @@ impl<'m> ContextCursor<'m> {
         self.expected_type_at(model, token.range())
     }
 
+    /// the type the position under the cursor expects a value of, for smart
+    /// completion: an argument's parameter type, a `return`'s declared return
+    /// type, and what [`Self::expected_type`] reads. the innermost position the
+    /// cursor is in decides: in `x: int = f(<CURSOR>)` it is `f`'s parameter
+    fn smart_expected_type<'db>(
+        &self,
+        db: &'db dyn Db,
+        file: ProgramFile<'db>,
+        model: &SemanticModel<'db>,
+    ) -> Option<Type<'db>> {
+        // a position that has only been opened holds no node the cursor falls in, `return `
+        // ends before it, so it is asked again from the token that opened it
+        let preceding = match self.typed {
+            Some(_) => &self.tokens_before[..self.tokens_before.len().saturating_sub(1)],
+            None => self.tokens_before,
+        };
+        let opener = preceding
+            .iter()
+            .rev()
+            .find(|token| !token.kind().is_trivia())
+            .map(Ranged::range);
+        for probe in std::iter::once(self.range).chain(opener) {
+            for node in self.covering_node(probe).ancestors() {
+                match node {
+                    ast::AnyNodeRef::ExprCall(call)
+                        if call.arguments.start() < self.offset
+                            && call.arguments.range().contains_inclusive(self.offset) =>
+                    {
+                        let help = signature_help::signature_help(db, file, self.offset)?;
+                        let signature = help.signatures.get(help.active_signature?)?;
+                        let parameter = signature.parameters.get(signature.active_parameter?)?;
+                        return Some(parameter.ty);
+                    }
+                    ast::AnyNodeRef::StmtReturn(_) => {
+                        let function = self.covering_node(probe).ancestors().find_map(
+                            |node| match node {
+                                ast::AnyNodeRef::StmtFunctionDef(function) => Some(Some(function)),
+                                ast::AnyNodeRef::ExprLambda(_)
+                                | ast::AnyNodeRef::StmtClassDef(_) => Some(None),
+                                _ => None,
+                            },
+                        )??;
+                        return expected_return_type(model, function);
+                    }
+                    // the declared type, whatever the value typed so far makes of the target
+                    ast::AnyNodeRef::StmtAnnAssign(assignment) => {
+                        return (probe.start() >= assignment.annotation.end())
+                            .then(|| declared_assignment_type(model, assignment))
+                            .flatten();
+                    }
+                    ast::AnyNodeRef::StmtMatch(_) => {
+                        return self.expected_type_at(model, probe);
+                    }
+                    _ if node.is_statement() => break,
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
     /// The expected type at `probe`, which is either the cursor or the token
     /// that opened the position it sits in.
     fn expected_type_at<'db>(
@@ -3556,10 +3672,10 @@ fn add_main_completion(
 /// A postfix template: written after an expression's `.`, selecting one
 /// rewrites the whole `expr.name` rather than reading as attribute access.
 ///
-/// The set is PyCharm's python one, under its names, less `cast` and `main`,
+/// the set is PyCharm's python one, under its names, less `cast` and `main`,
 /// with basedpython's `let` and `var` and python's `match`, `type` and `repr`
 /// besides. basedpython's `.await` is not one of these — it is real syntax, and
-/// so completes as an ordinary word.
+/// so completes as an ordinary word
 #[derive(Clone, Copy)]
 enum Postfix {
     Print,
@@ -3699,8 +3815,8 @@ impl Postfix {
         matches!(self, Postfix::Let | Postfix::Var)
     }
 
-    /// What the rewrite puts the expression to, which a template is not offered
-    /// for an expression known not to support.
+    /// what the rewrite puts the expression to, which a template is not offered
+    /// for an expression known not to support
     const fn needs(self) -> Option<ValueUse> {
         match self {
             Postfix::For
@@ -14213,9 +14329,109 @@ if foo:
         );
     }
 
-    /// A template is offered only for an expression it can be used on, when the expression's
+    /// what smart completion offers at the cursor of `source`, by name in the order offered, or
+    /// `none` where the position expects no type
+    fn smart(source: &str) -> String {
+        let test = CursorTest::builder().source("main.py", source).build();
+        let file = test.program_file(test.cursor.file);
+        let env = ty_python_semantic::ProgramEnvironment::from_file(file);
+        match super::smart_completion(
+            &test.db,
+            &env,
+            &CompletionSettings::default(),
+            CompletionCapabilities::default(),
+            file,
+            test.cursor.offset,
+        ) {
+            None => "none".to_string(),
+            Some(completions) => completions
+                .iter()
+                .map(|completion| completion.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    const SHAPES: &str = "\
+class Shape: ...
+class Circle(Shape): ...
+class Label: ...
+
+def make_shape() -> Shape:
+    return Circle()
+
+def draw(shape: Shape, label: Label) -> None: ...
+
+circle = Circle()
+label = Label()
+count = 3
+";
+
+    /// smart completion keeps what fits the type the position expects: a value of it, and a
+    /// class or function whose call makes one
+    #[test]
+    fn smart_completion_offers_what_fits_an_argument() {
+        assert_eq!(
+            smart(&format!("{SHAPES}draw(<CURSOR>)")),
+            "Circle Shape circle make_shape"
+        );
+        // the second argument expects a label
+        assert_eq!(
+            smart(&format!("{SHAPES}draw(circle, <CURSOR>)")),
+            "Label label"
+        );
+        assert_eq!(
+            smart(&format!("{SHAPES}draw(label=<CURSOR>)")),
+            "Label label"
+        );
+    }
+
+    #[test]
+    fn smart_completion_offers_what_fits_a_declaration_or_a_return() {
+        // the name being declared is among the names of its scope, as any completion has it
+        assert_eq!(
+            smart(&format!("{SHAPES}x: Shape = <CURSOR>")),
+            "Circle Shape circle make_shape x"
+        );
+        // `f` returns a label too, called again
+        assert_eq!(
+            smart(&format!("{SHAPES}def f() -> Label:\n    return <CURSOR>")),
+            "Label f label"
+        );
+        // what is typed narrows it further, as it does any completion
+        assert_eq!(
+            smart(&format!("{SHAPES}x: Shape = ci<CURSOR>")),
+            "Circle circle"
+        );
+    }
+
+    /// the innermost position decides: an argument of a call in a declared value expects the
+    /// parameter's type, not the declaration's
+    #[test]
+    fn smart_completion_reads_the_innermost_position() {
+        assert_eq!(
+            smart(&format!("{SHAPES}x: int = len(<CURSOR>)")),
+            smart(&format!("{SHAPES}len(<CURSOR>)"))
+        );
+        assert_ne!(smart(&format!("{SHAPES}x: int = len(<CURSOR>)")), "count");
+    }
+
+    #[test]
+    fn smart_completion_has_nothing_to_go_on_without_an_expected_type() {
+        assert_eq!(smart(&format!("{SHAPES}x = <CURSOR>")), "none");
+        assert_eq!(
+            smart(&format!("{SHAPES}def f():\n    return <CURSOR>")),
+            "none"
+        );
+        assert_eq!(
+            smart(&format!("{SHAPES}def g(x): ...\ng(<CURSOR>)")),
+            "none"
+        );
+    }
+
+    /// a template is offered only for an expression it can be used on, when the expression's
     /// type says: a loop for what can be iterated, `len` for what has a length, `with` for a
-    /// context manager, and a test for `None` for what may be `None`.
+    /// context manager, and a test for `None` for what may be `None`
     #[test]
     fn postfix_templates_follow_the_expression_type() {
         let offered = |source: &str| {

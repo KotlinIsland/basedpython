@@ -71,7 +71,7 @@ pub use code_action::{FileEdit, QuickFix, code_actions};
 pub use complete_statement::{CompletedStatement, StatementEdit, complete_statement};
 pub use completion::{
     AutoImportStyle, Completion, CompletionCapabilities, CompletionCommand,
-    CompletionInsertTextFormat, CompletionKind, CompletionSettings, completion,
+    CompletionInsertTextFormat, CompletionKind, CompletionSettings, completion, smart_completion,
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use declaration::{ClassName, Declaration, DeclarationAt, DeclaredKind, declaration_at};
