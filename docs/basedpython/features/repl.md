@@ -45,8 +45,10 @@ file. what this means in practice:
     far*, and an expression whose value is discarded is the value the repl prints
 - an input that raised is part of the session: the statements before the one that raised
     have run, and what they bound is bound, as in python's repl
-- a name declared with a type cannot be declared again with another, since one module cannot
-    do that. a name assigned without a declaration can be assigned anything
+- a name can be assigned again, declared again with another type, and a function or a class
+    defined again, as they can further down a module. a `let` cannot, since it is final
+- the session's module is the project's own code, so a `sealed` class declared in one input
+    can be subclassed in a later one
 
 what runs is the python written for the input: the module made of the session and the input
 is transpiled as a whole, and the statements transpiled from the input's lines run, after

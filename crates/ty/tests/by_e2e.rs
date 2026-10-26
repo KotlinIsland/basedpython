@@ -2037,6 +2037,23 @@ fn repl_takes_a_framed_input_whole_and_hands_input_lines_to_the_program() {
     assert_eq!(stdout, "2\n'basedpython'\n", "{stderr}");
 }
 
+/// the session's module is the project's own code, so a `sealed` class declared in it can be
+/// subclassed in a later input, as in any module of the project
+#[test]
+fn repl_s_module_is_first_party() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_module(dir.path());
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "\x1b[200~sealed class Shape:\n    pass\n\x1b[201~\n\
+         \x1b[200~class Circle(Shape):\n    pass\n\x1b[201~\n\
+         type(Circle()).__name__\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "'Circle'\n", "{stderr}");
+}
+
 /// `--session-file` holds the inputs that ran, and not one the checker refused, for an
 /// editor's console to complete against
 #[test]

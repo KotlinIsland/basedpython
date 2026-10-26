@@ -456,6 +456,17 @@ impl ProjectMetadata {
         self.override_options = Some(Box::new(options));
     }
 
+    /// adds highest-precedence options for this project over any previous overrides, which
+    /// still apply where `options` leave a setting unset
+    pub fn apply_override_options(&mut self, options: Options) {
+        if let Some(existing) = self.override_options.as_mut() {
+            let previous = std::mem::replace(existing.as_mut(), options);
+            existing.combine_with(previous);
+        } else {
+            self.override_options = Some(Box::new(options));
+        }
+    }
+
     pub(crate) fn uv_workspace(&self) -> &UvWorkspace {
         &self.uv_workspace
     }

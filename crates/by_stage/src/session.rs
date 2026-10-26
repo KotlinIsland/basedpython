@@ -158,8 +158,11 @@ pub struct InputLines {
 }
 
 impl InputLines {
+    /// whether `line` of the module is the input's. the input is the end of the module, so a
+    /// line past its last is the input's too: the transpiler writes what follows a statement,
+    /// such as a sealed class's list of its subclasses, against the line after it
     fn contains(self, line: u32) -> bool {
-        line >= self.first && line - self.first < self.count
+        line >= self.first
     }
 }
 

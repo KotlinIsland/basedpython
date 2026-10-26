@@ -172,9 +172,10 @@ fn accept(
 
 /// The session as this process holds it: the module, the db that checks it, and what each
 /// input that ran was.
-struct Repl<'a> {
+struct Repl {
     db: ProjectDatabase,
-    rebuilder: &'a Rebuilder,
+    /// the project, with the module's directory one of its first-party roots
+    rebuilder: Rebuilder,
     /// what the module is transpiled for: the project's run configuration, as a session
     config: Config,
     session: Session,
@@ -206,17 +207,21 @@ struct Pending {
     selection: by_stage::session::Selection,
 }
 
-impl<'a> Repl<'a> {
+impl Repl {
     fn new(
-        rebuilder: &'a Rebuilder,
+        rebuilder: &Rebuilder,
         config: Config,
         session_file: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let mut db = rebuilder.project_database();
         let module_dir = tempfile::TempDir::new().context("failed to create temp directory")?;
-        // named for what it is in a message that cannot help naming it
-        let module_path = module_dir.path().join("session.by");
+        // a module name nothing a project imports is called, since the directory is searched
+        // for first-party modules after the project's own roots
+        let module_path = module_dir.path().join("__by_session__.by");
         fs::write(&module_path, "")?;
+        let directory = SystemPath::from_std_path(module_dir.path())
+            .with_context(|| format!("non-utf8 path: {}", module_dir.path().display()))?;
+        let rebuilder = rebuilder.with_first_party_root(directory);
+        let mut db = rebuilder.project_database();
         let system_path = SystemPath::from_std_path(&module_path)
             .with_context(|| format!("non-utf8 path: {}", module_path.display()))?;
         let module = system_path_to_file(&db, system_path)

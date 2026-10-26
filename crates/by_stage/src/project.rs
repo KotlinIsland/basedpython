@@ -101,6 +101,38 @@ impl Rebuilder {
         Box::new(self.project_database())
     }
 
+    /// the same project with `extra` one of its first-party roots too, searched after its own
+    ///
+    /// a `by repl` session's module lives outside the project, and the checker reads a module
+    /// as the project's own code only from a first-party root: a `sealed` class declared in a
+    /// session can be subclassed in the session, as in any module of the project, only once the
+    /// session's module is first-party
+    #[must_use]
+    pub fn with_first_party_root(&self, extra: &SystemPath) -> Self {
+        let db = self.project_database();
+        let mut roots: Vec<RelativePathBuf> = db
+            .project()
+            .program(&db)
+            .search_paths(&db)
+            .first_party_roots()
+            .map(RelativePathBuf::cli)
+            .collect();
+        roots.push(RelativePathBuf::cli(extra));
+        let mut metadata = self.metadata.clone();
+        metadata.apply_override_options(Options {
+            environment: Some(EnvironmentOptions {
+                root: Some(roots),
+                ..EnvironmentOptions::default()
+            }),
+            ..Options::default()
+        });
+        Self {
+            metadata,
+            root: self.root.clone(),
+            included: self.included.clone(),
+        }
+    }
+
     /// The project's db built again, and not frozen: what a caller holds that goes on
     /// changing an input after the build, as a `by repl` session changes its module with
     /// every input.
