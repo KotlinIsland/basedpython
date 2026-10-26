@@ -584,6 +584,19 @@ the caret goes in the document as the edits leave it:
 like the other document requests it takes `textHash`, and it is `null` when
 language services are off
 
+## extend selection
+
+`textDocument/selectionRange` grows a selection the way a reader reads the
+code, not only node by node. on `"a"` in `xs = ["a", "b"]` the ranges are the
+string's text, the string, `"a",` with its comma and the space after it, `"a", "b"` without the
+brackets, the list, the assignment, and then the assignment's whole line. a
+last element takes the comma before it, `, "b"`. a statement is offered as the
+whole lines it is written on, indentation and newline included, when it shares
+them with nothing but a comment, and the statements of a body are offered
+together without their header, so a selection inside a method grows to the
+method's body, then to the method with its decorators as whole lines, then to
+the class
+
 ## go to declaration
 
 `textDocument/definition` and `textDocument/declaration` on the name of a
