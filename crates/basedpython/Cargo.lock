@@ -3886,6 +3886,7 @@ dependencies = [
  "ruff_python_trivia",
  "ruff_source_file",
  "ruff_text_size",
+ "ruff_unicode_names2",
  "rustc-hash",
  "salsa",
  "serde",

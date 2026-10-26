@@ -341,9 +341,13 @@ re.compile(r"\x4")  # error: [invalid-regex] "incomplete escape \x4 at position 
 re.compile(rb"\u0041")  # error: [invalid-regex] "bad escape \u at position 0"
 re.compile(r"(a)\2")  # error: [invalid-regex] "invalid group reference 2 at position 4"
 re.compile(r"(a\1)")  # error: [invalid-regex] "cannot refer to an open group at position 2"
+# error: [invalid-regex] "cannot refer to an open group at position 10"
+re.compile(r"(?P<a>(?P=a))")
 
 re.compile(r"\A\d\w+[\b\s]\u0041\N{EM DASH}\x41\0(a)\1\Z")  # no diagnostic
 ```
+
+## an escape a newer python knows
 
 `\z` is an anchor from python 3.14, and a bad escape before it.
 
@@ -356,6 +360,62 @@ python-version = "3.13"
 import re
 
 re.compile(r"a\z")  # error: [invalid-regex] "bad escape \z at position 1"
+```
+
+## character names
+
+`\N{...}` names a character, looked up the way `unicodedata.lookup` looks it up in the python
+version checked against: case-insensitively, among the characters' names and their aliases. A name
+that python's unicode database does not have is an error, and so is a named sequence, which stands
+for several characters rather than one.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+import re
+
+re.compile(r"\N{em dash}\N{BYTE ORDER MARK}\N{LINE FEED}")  # no diagnostic
+
+re.compile(r"a\N{EM  DASH}")  # error: [invalid-regex] "undefined character name 'EM  DASH' at position 1"
+# error: [invalid-regex] "undefined character name 'LATIN CAPITAL LETTER A WITH MACRON AND GRAVE' at position 0"
+re.compile(r"\N{LATIN CAPITAL LETTER A WITH MACRON AND GRAVE}")
+```
+
+A character is named from the python whose unicode version assigns it: `ALIEN MONSTER OPEN JAWS` is
+new in unicode 16.0, which python 3.14 ships, so python 3.13 does not know the name.
+
+```py
+import re
+
+# error: [invalid-regex] "undefined character name 'ALIEN MONSTER OPEN JAWS' at position 0"
+re.compile(r"\N{ALIEN MONSTER OPEN JAWS}")
+```
+
+An alias is known from the python whose unicode version adds it, which can be long after the
+character it is for was named: `BAMUM LETTER PHASE-B NGGOM` is an alias from unicode 17.0, which
+python 3.15 ships.
+
+```py
+import re
+
+# error: [invalid-regex] "undefined character name 'BAMUM LETTER PHASE-B NGGOM' at position 0"
+re.compile(r"\N{BAMUM LETTER PHASE-B NGGOM}")
+```
+
+## a character name a newer python knows
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```py
+import re
+
+re.compile(r"\N{ALIEN MONSTER OPEN JAWS}")  # no diagnostic
 ```
 
 ## an invalid pattern's error points at the character it is about
@@ -380,20 +440,20 @@ error[invalid-regex]: missing ), unterminated subpattern at position 2
 
 the position is a character of the pattern the program holds, which is not always one character of
 the literal: an escape writes one character in several, and the error is about all of them. here
-`\x28` writes the parenthesis left open, after a tab written as `\t`.
+`\N{LEFT PARENTHESIS}` writes the parenthesis left open, after a tab written as `\t`.
 
 ```py
 import re
 
-re.compile("\t\x28")  # snapshot
+re.compile("\t\N{LEFT PARENTHESIS}")  # snapshot
 ```
 
 ```snapshot
 error[invalid-regex]: missing ), unterminated subpattern at position 1
  --> src/mdtest_snippet.py:6:15
   |
-6 | re.compile("\t/x28")  # snapshot
-  |               ^^^^
+6 | re.compile("\t\N{LEFT PARENTHESIS}")  # snapshot
+  |               ^^^^^^^^^^^^^^^^^^^^
 ```
 
 literals written next to each other are one pattern, so the error is in whichever of them wrote the

@@ -10,6 +10,7 @@
 //! (see [`Type::regex_instance`]), so they survive assignment, narrowing and a
 //! round trip through `re.compile`
 
+mod character_names;
 mod parse;
 mod source;
 

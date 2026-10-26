@@ -14,7 +14,11 @@ use std::ops::Range;
 
 use ruff_python_ast::PythonVersion;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::str::TripleQuotes;
+use ruff_python_literal::escape::UnicodeEscape;
 use rustc_hash::FxHashMap;
+
+use super::character_names::{ALIASED_SINCE, NAMED_SINCE};
 
 /// the characters `sre_parse` treats as ignorable whitespace under `re.VERBOSE`
 const VERBOSE_WHITESPACE: [char; 6] = [' ', '\t', '\n', '\r', '\x0b', '\x0c'];
@@ -436,7 +440,7 @@ impl Parser {
                     Err(self.bad_escape(start))
                 }
             }
-            'N' if text && self.dialect.version >= PythonVersion::PY38 => self.named_escape(),
+            'N' if text && self.dialect.version >= PythonVersion::PY38 => self.named_escape(start),
             '0'..='7' if in_class => {
                 self.eat_octal_digits(2);
                 self.octal_in_range(start)
@@ -480,10 +484,10 @@ impl Parser {
         }
     }
 
-    /// the `{NAME}` of a `\N{NAME}`, whose name is not looked up: python's
-    /// unicode database is not ours, so a name it lacks is a missed error rather
-    /// than a valid pattern reported as invalid
-    fn named_escape(&mut self) -> Result<(), Failure> {
+    /// the `{NAME}` of a `\N{NAME}` escape starting at `start`, whose name has to
+    /// be one the python version's unicode database has for a single character —
+    /// see [`character_name_resolves`]
+    fn named_escape(&mut self, start: usize) -> Result<(), Failure> {
         if !self.eat('{') {
             return Err(Failure::Invalid(RegexError::new("missing {", self.pos)));
         }
@@ -510,7 +514,18 @@ impl Parser {
                     )));
                 }
                 Some('}') => {
+                    let text = self.text(name..self.pos);
                     self.pos += 1;
+                    if character_name_resolves(&text, self.dialect.version) == Some(false) {
+                        return Err(Failure::Invalid(RegexError::spanning(
+                            format_args!(
+                                "undefined character name {}",
+                                UnicodeEscape::new_repr(&text).str_repr(TripleQuotes::No)
+                            ),
+                            start,
+                            start..self.pos,
+                        )));
+                    }
                     return Ok(());
                 }
                 Some(_) => self.pos += 1,
@@ -569,23 +584,35 @@ impl Parser {
                 start + 1..self.pos,
             )));
         }
+        self.check_backreference(group, start, start..self.pos)
+    }
+
+    /// what python checks of a backreference to `group`, by number or by name, whose text
+    /// is `span`: that the group is closed, which python reports at `start`, and that it
+    /// was not opened in the lookbehind the backreference is in
+    fn check_backreference(
+        &self,
+        group: u32,
+        start: usize,
+        span: Range<usize>,
+    ) -> Result<(), Failure> {
         if !self
             .closed
-            .get(group as usize - 1)
+            .get((group as usize).saturating_sub(1))
             .copied()
             .unwrap_or_default()
         {
             return Err(Failure::Invalid(RegexError::spanning(
                 "cannot refer to an open group",
                 start,
-                start..self.pos,
+                span,
             )));
         }
         if self.lookbehind_groups.is_some_and(|first| group >= first) {
             return Err(Failure::Invalid(RegexError::spanning(
                 "cannot refer to group defined in the same lookbehind subpattern",
                 self.pos,
-                start..self.pos,
+                span,
             )));
         }
         Ok(())
@@ -766,13 +793,14 @@ impl Parser {
                 let name = Self::validate_group_name(&name, start)?;
                 // python resolves a backreference against the groups opened so
                 // far, so a forward reference is an error there too
-                if !self.names.contains_key(&name) {
+                let Some(&group) = self.names.get(&name) else {
                     return Err(Failure::Invalid(RegexError::spanning(
                         format_args!("unknown group name '{name}'"),
                         start,
                         name_span(&name, start),
                     )));
-                }
+                };
+                self.check_backreference(group, start, name_span(&name, start))?;
                 Ok(Some(Node::Atom))
             }
             Some(char) => Err(Failure::Invalid(RegexError::new(
@@ -951,6 +979,59 @@ struct BracedQuantifier {
 }
 
 /// the characters of a group's name that starts at `start`
+/// the newest python whose unicode database `unicode_names2` has every name of:
+/// the crate's tables are unicode 17.0's, which python 3.15 ships
+const NAMES_KNOWN_THROUGH: PythonVersion = PythonVersion::PY315;
+
+/// whether `re` on `version` resolves `name`, the name in a `\N{...}`, to one
+/// character, or `None` where we cannot tell
+///
+/// python looks the name up in the `unicodedata` of its own version, case
+/// insensitively, among the characters' names and their aliases. a named
+/// sequence resolves to several characters, which `re` refuses as it refuses a
+/// name that resolves to nothing. names and aliases are never changed or
+/// withdrawn, so a name python resolves is one `unicode_names2` resolves, through
+/// the newest python whose unicode its tables hold, and the version decides only
+/// whether the alias exists yet, which [`ALIASED_SINCE`] says, or else whether the
+/// character the name is for has a name yet, which [`NAMED_SINCE`] says
+fn character_name_resolves(name: &str, version: PythonVersion) -> Option<bool> {
+    if version > NAMES_KNOWN_THROUGH {
+        return None;
+    }
+    // names derived from the code point by a rule, which pythons do not all
+    // implement alike: 3.8 names `CJK UNIFIED IDEOGRAPH-2EBE1`, which no unicode
+    // assigns, only 3.13 and later resolve one written in lowercase or a
+    // `TANGUT IDEOGRAPH-17000`, and only 3.12 and earlier one whose code point is
+    // written with a leading zero
+    let upper = name.to_ascii_uppercase();
+    if upper.starts_with("CJK UNIFIED IDEOGRAPH-") || upper.starts_with("TANGUT IDEOGRAPH-") {
+        return None;
+    }
+    if let Ok(index) = ALIASED_SINCE.binary_search_by(|&(alias, _)| alias.cmp(upper.as_str()))
+        && let Some(&(_, minor)) = ALIASED_SINCE.get(index)
+    {
+        return Some(version.minor >= minor);
+    }
+    let Some(character) = unicode_names2::character(name) else {
+        return Some(false);
+    };
+    let code = u32::from(character);
+    let named_since = NAMED_SINCE
+        .binary_search_by(|&(first, last, _)| {
+            if last < code {
+                std::cmp::Ordering::Less
+            } else if first > code {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .ok()
+        .and_then(|index| NAMED_SINCE.get(index))
+        .map(|&(_, _, minor)| minor);
+    Some(named_since.is_none_or(|minor| version.minor >= minor))
+}
+
 fn name_span(name: &str, start: usize) -> Range<usize> {
     start..start + name.chars().count()
 }
@@ -1009,7 +1090,7 @@ fn collect_certainty(node: &Node, certain: bool, out: &mut [bool]) {
 mod tests {
     use ruff_python_ast::PythonVersion;
 
-    use super::{Dialect, ParsedGroup, PatternAnalysis, analyze};
+    use super::{Dialect, NAMES_KNOWN_THROUGH, ParsedGroup, PatternAnalysis, analyze};
 
     const STR: Dialect = Dialect {
         version: PythonVersion::PY313,
@@ -1113,6 +1194,24 @@ mod tests {
             shape("(?P<a>x)(?P<a>y)"),
             "invalid: redefinition of group name 'a' as group 2; was group 1 at position 12"
         );
+    }
+
+    /// a backreference by name is checked as one by number is
+    #[test]
+    fn named_backreferences() {
+        assert_eq!(
+            shape("(?P<a>(?P=a))"),
+            "invalid: cannot refer to an open group at position 10"
+        );
+        assert_eq!(
+            shape("(?P<b>(?P<a>x)(?P=b))"),
+            "invalid: cannot refer to an open group at position 18"
+        );
+        assert_eq!(
+            shape("(?<=(?P<a>x)(?P=a))"),
+            "invalid: cannot refer to group defined in the same lookbehind subpattern at position 18"
+        );
+        assert_eq!(shape("(?P<a>x)(?<=(?P=a))"), "a");
     }
 
     #[test]
@@ -1402,6 +1501,103 @@ mod tests {
             shape(r"\N{ab"),
             "invalid: missing }, unterminated name at position 3"
         );
+    }
+
+    /// a `\N{...}` name is looked up as `unicodedata.lookup` looks it up: in any
+    /// case, among the names and their aliases, and for one character
+    #[test]
+    fn character_names() {
+        assert_eq!(shape(r"\N{em dash}\N{BYTE ORDER MARK}\N{LINE FEED}"), "");
+        assert_eq!(
+            shape(r"a\N{EM  DASH}(b)"),
+            "invalid: undefined character name 'EM  DASH' at position 1"
+        );
+        // a named sequence stands for several characters
+        assert_eq!(
+            shape(r"\N{LATIN CAPITAL LETTER A WITH MACRON AND GRAVE}"),
+            "invalid: undefined character name 'LATIN CAPITAL LETTER A WITH MACRON AND GRAVE' \
+             at position 0"
+        );
+        // the name is quoted as python's `repr` quotes it
+        assert_eq!(
+            shape(r"\N{O'CLOCK}"),
+            r#"invalid: undefined character name "O'CLOCK" at position 0"#
+        );
+        // names derived from the code point, which pythons do not all derive alike,
+        // are left to python
+        assert_eq!(shape(r"\N{CJK UNIFIED IDEOGRAPH-2EBE1}"), "");
+        assert_eq!(shape(r"\N{TANGUT IDEOGRAPH-FFFFF}"), "");
+    }
+
+    /// a name exists from the python whose unicode assigns its character, and past
+    /// the unicode `unicode_names2` holds, a name is not looked up at all
+    #[test]
+    fn character_names_by_version() {
+        let version = |minor| Dialect {
+            version: PythonVersion { major: 3, minor },
+            ..STR
+        };
+        // unicode 14.0, python 3.11
+        let arabic = r"\N{ARABIC POUND MARK ABOVE}";
+        assert_eq!(
+            shape_in(arabic, false, version(10)),
+            "invalid: undefined character name 'ARABIC POUND MARK ABOVE' at position 0"
+        );
+        assert_eq!(shape_in(arabic, false, version(11)), "");
+        // unicode 16.0, python 3.14
+        let alien = r"\N{ALIEN MONSTER OPEN JAWS}";
+        assert_eq!(
+            shape_in(alien, false, version(13)),
+            "invalid: undefined character name 'ALIEN MONSTER OPEN JAWS' at position 0"
+        );
+        assert_eq!(shape_in(alien, false, version(14)), "");
+        // unicode 17.0, python 3.15
+        let bell = r"\N{ALARM BELL SYMBOL}";
+        assert_eq!(
+            shape_in(bell, false, version(14)),
+            "invalid: undefined character name 'ALARM BELL SYMBOL' at position 0"
+        );
+        assert_eq!(shape_in(bell, false, version(15)), "");
+        assert_eq!(shape_in(r"\N{NO SUCH NAME}", false, version(16)), "");
+    }
+
+    /// an alias exists from the python whose unicode adds it, which can be long after the
+    /// character it is for was first named
+    #[test]
+    fn character_aliases_by_version() {
+        let version = |minor| Dialect {
+            version: PythonVersion { major: 3, minor },
+            ..STR
+        };
+        // `END OF MEDIUM`, named in every python, is aliased `EM` from python 3.12
+        assert_eq!(
+            shape_in(r"\N{em}", false, version(11)),
+            "invalid: undefined character name 'em' at position 0"
+        );
+        assert_eq!(shape_in(r"\N{em}", false, version(12)), "");
+        let bamum = r"\N{BAMUM LETTER PHASE-B NGGOM}";
+        assert_eq!(
+            shape_in(bamum, false, version(14)),
+            "invalid: undefined character name 'BAMUM LETTER PHASE-B NGGOM' at position 0"
+        );
+        assert_eq!(shape_in(bamum, false, version(15)), "");
+        // an alias every python resolves
+        assert_eq!(shape_in(r"\N{BYTE ORDER MARK}", false, version(8)), "");
+    }
+
+    /// `NAMES_KNOWN_THROUGH` is the python whose unicode `unicode_names2` holds:
+    /// the tables are built from the unicode 17.0 data vendored beside the crate,
+    /// and know a name 17.0 assigned. when the data moves to a newer unicode,
+    /// `NAMES_KNOWN_THROUGH` moves to the python that ships it
+    #[test]
+    fn unicode_names2_holds_the_unicode_of_names_known_through() {
+        let aliases = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ruff_unicode_names2/data/NameAliases.txt"
+        ));
+        assert_eq!(aliases.lines().next(), Some("# NameAliases-17.0.0.txt"));
+        assert_eq!(NAMES_KNOWN_THROUGH, PythonVersion::PY315);
+        assert!(unicode_names2::character("ALARM BELL SYMBOL").is_some());
     }
 
     /// `\z` is an anchor from python 3.14, and a bad escape before it

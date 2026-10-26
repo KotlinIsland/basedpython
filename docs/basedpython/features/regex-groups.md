@@ -124,8 +124,23 @@ escapes are read by `re`'s own rules for the python version checked against: an
 ASCII letter or digit after a backslash that is no escape, `\q`, is a bad escape
 rather than the letter, a `bytes` pattern has no `\u`, `\U` or `\N`, `\z` is an
 anchor only from 3.14, and a backreference has to name a group already closed.
-each is reported at the whole escape. the name in a `\N{...}` is not looked up,
-so a name python's unicode database lacks goes unreported
+each is reported at the whole escape.
+
+the name in a `\N{...}` is looked up as `unicodedata.lookup` looks it up in the
+python version checked against — in any case, among the characters' names and
+their aliases — so a name that python's unicode database does not have yet, or a
+named sequence, which stands for several characters, is reported too:
+
+```py
+re.compile(r"\N{EM  DASH}")  # error: undefined character name 'EM  DASH' at position 0
+```
+
+a character is named from the python that ships the unicode version assigning it,
+which is read off each python's own `unicodedata`. two kinds of name are left to
+python: one derived from the code point, `CJK UNIFIED IDEOGRAPH-4E00` or
+`TANGUT IDEOGRAPH-17000`, which pythons derive differently, and any name checked
+against a python newer than 3.15, whose unicode is newer than the table the names
+are read from
 
 a construct the pattern reader does not model produces neither a refinement nor
 a diagnostic: a pattern reported invalid when `re.compile` would have accepted it
