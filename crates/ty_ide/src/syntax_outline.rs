@@ -67,6 +67,9 @@ pub struct OutlineStatement {
     pub parameters: Vec<TextRange>,
     /// for a `def` a class body makes, what its first parameter is passed
     pub method: Option<MethodKind>,
+    /// For a simple statement, the expression Enter may break across lines by wrapping it in
+    /// parentheses; see [`wrappable`].
+    pub wrap: Option<TextRange>,
 }
 
 /// One clause of a compound statement: `if`, `elif`, `else`, `case`, the `def` of a function.
@@ -83,6 +86,9 @@ pub struct OutlineClause {
     pub range: TextRange,
     /// The statements of the suite.
     pub body: Vec<OutlineStatement>,
+    /// The expression of the header Enter may break across lines by wrapping it in parentheses;
+    /// see [`wrappable`].
+    pub wrap: Option<TextRange>,
 }
 
 /// A basedpython modifier keyword, as the parser read it.
@@ -267,6 +273,9 @@ impl OutlineBuilder<'_> {
             name: Self::name(stmt),
             parameters: Self::parameters(stmt),
             method,
+            wrap: statement_expression(stmt)
+                .filter(|expr| wrappable(expr))
+                .map(Ranged::range),
         }
     }
 
@@ -279,15 +288,23 @@ impl OutlineBuilder<'_> {
             Stmt::FunctionDef(_) => false,
             _ => in_class,
         };
+        let headers = header_expressions(stmt);
         self.clause_heads(stmt)
             .into_iter()
             .map(|head| {
                 let body = self.statements(head.body, body_in_class);
+                let header_end = head.colon.map_or(head.range.end(), TextRange::start);
+                let header = TextRange::new(head.range.start(), header_end.max(head.range.start()));
                 OutlineClause {
                     keyword: head.keyword,
                     colon: head.colon,
                     range: head.range,
                     body,
+                    wrap: headers
+                        .iter()
+                        .find(|expr| header.contains_range(expr.range()))
+                        .filter(|expr| wrappable(expr))
+                        .map(|expr| Ranged::range(*expr)),
                 }
             })
             .collect()
@@ -618,6 +635,82 @@ impl OutlineBuilder<'_> {
 }
 
 /// One clause of a compound statement, as [`OutlineBuilder::clause_heads`] finds it.
+/// The one expression of a simple statement that Enter could break: an assignment's value, a
+/// `return`'s, an expression statement, a `raise` without `from`, an `assert` without a message
+/// and a `type` alias's value. A statement with two expressions, such as `raise E from cause`,
+/// has none, since one pair of parentheses cannot hold both.
+fn statement_expression(stmt: &Stmt) -> Option<&Expr> {
+    match stmt {
+        Stmt::Expr(stmt) => Some(&stmt.value),
+        Stmt::Return(stmt) => stmt.value.as_deref(),
+        Stmt::Assign(stmt) if stmt.decorator_list.is_empty() => Some(&stmt.value),
+        Stmt::AugAssign(stmt) => Some(&stmt.value),
+        Stmt::AnnAssign(stmt) if stmt.decorator_list.is_empty() && !stmt.is_context => {
+            stmt.value.as_deref()
+        }
+        Stmt::Raise(stmt) if stmt.cause.is_none() => stmt.exc.as_deref(),
+        Stmt::Assert(stmt) if stmt.msg.is_none() => Some(&stmt.test),
+        Stmt::TypeAlias(stmt) => Some(&stmt.value),
+        _ => None,
+    }
+}
+
+/// The expressions clause headers of `stmt` hold that Enter could break: the condition of an
+/// `if`, an `elif` and a `while`, the iterable of a `for` and the subject of a `match`.
+fn header_expressions(stmt: &Stmt) -> Vec<&Expr> {
+    match stmt {
+        Stmt::If(stmt) if stmt.pattern.is_none() => std::iter::once(&*stmt.test)
+            .chain(
+                stmt.elif_else_clauses
+                    .iter()
+                    .filter_map(|clause| clause.test.as_ref()),
+            )
+            .collect(),
+        Stmt::While(stmt) => vec![&*stmt.test],
+        Stmt::For(stmt) => vec![&*stmt.iter],
+        Stmt::Match(stmt) => vec![&*stmt.subject],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `expr` means the same wrapped in parentheses, so that Enter inside it can break it
+/// over lines by wrapping it rather than with a backslash.
+///
+/// Every python expression in these positions does — `x = (a + b)`, `if (a and b):`,
+/// `return (1, 2)`. What does not is basedpython's: a statement used as an expression, a type
+/// written in a form only an annotation reads, and a tuple whose parentheses are its syntax,
+/// such as an anonymous named tuple, all of which are left alone, along with a starred
+/// expression on its own.
+fn wrappable(expr: &Expr) -> bool {
+    struct Unwrappable(bool);
+    impl<'a> SourceOrderVisitor<'a> for Unwrappable {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            match expr {
+                Expr::Statement(_)
+                | Expr::CallableType(_)
+                | Expr::ProtocolType(_)
+                | Expr::ProtocolMethod(_)
+                | Expr::IpyEscapeCommand(_) => self.0 = true,
+                Expr::Tuple(tuple)
+                    if tuple.is_anon_named_tuple
+                        || tuple.is_anon_named_tuple_value
+                        || tuple.callable_shape.is_some()
+                        || tuple.is_parameter_shape =>
+                {
+                    self.0 = true;
+                }
+                _ => walk_expr(self, expr),
+            }
+        }
+    }
+    if expr.is_starred_expr() {
+        return false;
+    }
+    let mut unwrappable = Unwrappable(false);
+    unwrappable.visit_expr(expr);
+    !unwrappable.0
+}
+
 pub(crate) struct ClauseHead<'s> {
     /// The clause keyword; `None` on a trailing lambda's clause.
     pub(crate) keyword: Option<TextRange>,
@@ -1650,6 +1743,104 @@ def free(): ...
         outer: instance
         inner: not a method
         free: not a method
+        ");
+    }
+
+    fn wraps(source: &str) -> String {
+        let test = test("main.by", source);
+        let file = test.program_file(test.cursor.file).python_file(&test.db);
+        let outline = syntax_outline(&test.db, file);
+        let text = test.cursor.source.as_str();
+        let mut out = Vec::new();
+        each_statement(
+            &outline.statements,
+            text,
+            &|statement, text| {
+                let mut said: Vec<String> = statement
+                    .clauses
+                    .iter()
+                    .filter_map(|clause| clause.wrap)
+                    .map(|wrap| format!("header `{}`", &text[wrap.to_std_range()]))
+                    .collect();
+                said.extend(
+                    statement
+                        .wrap
+                        .map(|wrap| format!("`{}`", &text[wrap.to_std_range()])),
+                );
+                let first_line = text[statement.range.to_std_range()]
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim();
+                if said.is_empty() {
+                    said.push("nothing".to_string());
+                }
+                Some(format!("{first_line} -> {}", said.join(", ")))
+            },
+            &mut out,
+        );
+        out.join("\n")
+    }
+
+    #[test]
+    fn the_expression_enter_may_wrap_in_parentheses() {
+        insta::assert_snapshot!(wraps(
+            "
+total = price * count + tax
+total += 1
+return total > limit
+print(total)
+raise Missing(name)
+raise Missing(name) from error
+assert total and limit
+assert total, 'message'
+if total and limit:
+    pass
+elif total or limit:
+    pass
+while total < limit:
+    pass
+for item in items + extra:
+    pass
+match command.split():
+    case _:
+        pass
+import os
+"
+        ), @"
+        total = price * count + tax -> `price * count + tax`
+        total += 1 -> `1`
+        return total > limit -> `total > limit`
+        print(total) -> `print(total)`
+        raise Missing(name) -> `Missing(name)`
+        raise Missing(name) from error -> nothing
+        assert total and limit -> `total and limit`
+        assert total, 'message' -> nothing
+        if total and limit: -> header `total and limit`, header `total or limit`
+        pass -> nothing
+        pass -> nothing
+        while total < limit: -> header `total < limit`
+        pass -> nothing
+        for item in items + extra: -> header `items + extra`
+        pass -> nothing
+        match command.split(): -> header `command.split()`
+        pass -> nothing
+        import os -> nothing
+        ");
+    }
+
+    /// basedpython writes some expressions whose parentheses are their syntax, or that are
+    /// statements, and wrapping them would read as something else
+    #[test]
+    fn basedpython_s_own_forms_are_not_wrapped() {
+        insta::assert_snapshot!(wraps(
+            "
+point = (name='ada', age=36)
+handler: (int) -> str = render
+"
+        ), @"
+        point = (name='ada', age=36) -> nothing
+        handler: (int) -> str = render -> `render`
         ");
     }
 }

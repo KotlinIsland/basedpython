@@ -1174,7 +1174,21 @@ character of the fragment. the outline also carries the name each `def` and
 from `@staticmethod` and `@classmethod`, `static def` and `class def`, and the
 methods python makes so by name, `__new__` static (it is handed its class
 explicitly, as its first argument) and `__init_subclass__` and `__class_getitem__`
-class methods; a plain function has none. and it carries the elements of every
+class methods; a plain function has none.
+
+a line broken inside an expression needs the expression in brackets, or a
+backslash, to go on parsing. `wrap` names the expression Enter may break by
+wrapping it in parentheses: on a simple statement, its one expression — an
+assignment's value (`=`, an augmented one or an annotated one), a `return`'s, an
+expression statement, a `raise` with no `from`, an `assert` with no message, a
+`type` alias's value; on a clause, its header's — the condition of `if`, `elif`
+and `while`, the iterable of `for`, the subject of `match`. each of these means the
+same in parentheses, so an editor breaking a line inside one, outside any bracket
+already there, writes `(` before the range and `)` after it. a statement with two
+expressions (`raise E from cause`, `assert x, message`) has none, and nor does an
+expression whose parentheses are syntax or that is not one in python's sense — a
+basedpython anonymous named tuple, a callable or protocol type, a statement used as
+an expression, a starred expression. and it carries the elements of every
 comma-separated list of two or more — what an editor moves an argument among, or
 tracks a declaration being renamed by
 

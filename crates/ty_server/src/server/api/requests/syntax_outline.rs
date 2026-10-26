@@ -97,6 +97,9 @@ pub(crate) struct Statement {
     /// is passed
     #[serde(default, skip_serializing_if = "Option::is_none")]
     method: Option<String>,
+    /// On a simple statement: the expression Enter may break by wrapping it in parentheses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wrap: Option<Range>,
 }
 
 /// One clause of a compound statement.
@@ -117,6 +120,9 @@ pub(crate) struct Clause {
     /// The suite's statements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     body: Vec<Statement>,
+    /// The header's expression Enter may break by wrapping it in parentheses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wrap: Option<Range>,
 }
 
 /// A basedpython modifier keyword.
@@ -256,6 +262,7 @@ impl Converter<'_> {
                                 colon: clause.colon.and_then(|range| self.range(range)),
                                 range: self.range(clause.range)?,
                                 body: self.statements(&clause.body),
+                                wrap: clause.wrap.and_then(|range| self.range(range)),
                             })
                         })
                         .collect(),
@@ -283,6 +290,7 @@ impl Converter<'_> {
                         .filter_map(|range| self.range(*range))
                         .collect(),
                     method: statement.method.map(|kind| kind.as_str().to_string()),
+                    wrap: statement.wrap.and_then(|range| self.range(range)),
                 })
             })
             .collect()
