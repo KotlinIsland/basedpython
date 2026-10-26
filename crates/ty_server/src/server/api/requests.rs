@@ -35,6 +35,7 @@ mod document_inherited_members;
 mod document_super_members;
 mod document_symbols;
 mod document_usage_counts;
+mod endpoints;
 mod entry_point;
 mod evaluatable_expression;
 mod execute_command;
@@ -108,6 +109,7 @@ pub(super) use document_inherited_members::DocumentInheritedMembersRequestHandle
 pub(super) use document_super_members::DocumentSuperMembersRequestHandler;
 pub(super) use document_symbols::DocumentSymbolRequestHandler;
 pub(super) use document_usage_counts::DocumentUsageCountsRequestHandler;
+pub(super) use endpoints::EndpointsHandler;
 pub(super) use entry_point::EntryPointHandler;
 pub(super) use evaluatable_expression::EvaluatableExpressionRequestHandler;
 pub(super) use execute_command::ExecuteCommand;

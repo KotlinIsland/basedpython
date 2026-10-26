@@ -159,6 +159,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::RunModulesHandler::METHOD => {
             background_request_task::<requests::RunModulesHandler>(req, BackgroundSchedule::Worker)
         }
+        // every route the project serves, which an endpoints view lists off its own schedule
+        requests::EndpointsHandler::METHOD => {
+            background_request_task::<requests::EndpointsHandler>(req, BackgroundSchedule::Worker)
+        }
         requests::TranspileRequestHandler::METHOD => background_document_request_task::<
             requests::TranspileRequestHandler,
         >(req, BackgroundSchedule::Worker),

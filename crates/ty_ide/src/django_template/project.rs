@@ -1091,7 +1091,7 @@ fn walk_urls(db: &dyn Db, project: Project) -> Option<UrlWalk<'_>> {
 /// it is a dotted module name like any other, so an installed package may be the
 /// one that holds it.
 #[salsa::tracked]
-fn root_urlconf(db: &dyn Db, project: Project) -> Option<File> {
+pub(crate) fn root_urlconf(db: &dyn Db, project: Project) -> Option<File> {
     let importing = (*settings_file(db, project))?;
     let root = django_settings(db, project).root_urlconf.as_ref()?;
 

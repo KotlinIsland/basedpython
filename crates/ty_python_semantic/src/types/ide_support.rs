@@ -2984,6 +2984,15 @@ pub fn folds_to_a_literal(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
     )
 }
 
+/// the string `expr` evaluates to, where ty knows it exactly: a string literal, or a name or an
+/// expression whose type is one
+pub fn string_literal_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> Option<String> {
+    match expr.inferred_type(model)?.as_literal_value_kind()? {
+        LiteralValueTypeKind::String(literal) => Some(literal.value(model.db()).to_string()),
+        _ => None,
+    }
+}
+
 /// One of the builtin types whose operators are python's own: none of them runs code of the
 /// program's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3124,6 +3133,14 @@ pub fn is_re_pattern_parameter<'db>(
 /// in the module's namespace and runs nothing.
 pub fn is_module_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
     matches!(expr.inferred_type(model), Some(Type::ModuleLiteral(_)))
+}
+
+/// the file of the module `expr` evaluates to: `blog.urls` after `import blog.urls`
+pub fn module_value_file(model: &SemanticModel<'_>, expr: &ast::Expr) -> Option<File> {
+    match expr.inferred_type(model)? {
+        Type::ModuleLiteral(module) => module.module(model.db()).file(model.db()),
+        _ => None,
+    }
 }
 
 pub fn inferred_raises<'db>(

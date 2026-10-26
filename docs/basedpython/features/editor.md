@@ -1471,6 +1471,66 @@ every `locationHint` is `file://` and the absolute path of the project file, wit
 `:` and the 1-based line of the `def` or `class` for a test or a class. any other
 value of `BY_TEST_REPORTER` is refused as a usage error
 
+## endpoints
+
+`by/endpoints` answers an editor's endpoints view: every HTTP route the project
+serves, from FastAPI and from django. it takes `{}` and answers a list, from every
+project in the session, ordered by path and then by method, each
+
+```json
+{
+  "framework": "fastapi",
+  "methods": ["GET"],
+  "path": "/v1/items/{item_id}",
+  "handler": {
+    "name": "app.items.read_item",
+    "uri": "file:///project/app/items.by",
+    "range": {"start": {"line": 6, "character": 0}, "end": {"line": 8, "character": 22}},
+    "selectionRange": {"start": {"line": 7, "character": 4}, "end": {"line": 7, "character": 13}}
+  },
+  "declaration": {
+    "uri": "file:///project/app/items.by",
+    "range": {"start": {"line": 6, "character": 1}, "end": {"line": 6, "character": 25}}
+  },
+  "application": {
+    "name": "app.main.app",
+    "uri": "file:///project/app/main.by",
+    "range": {"start": {"line": 4, "character": 0}, "end": {"line": 4, "character": 15}},
+    "selectionRange": {"start": {"line": 4, "character": 0}, "end": {"line": 4, "character": 3}}
+  }
+}
+```
+
+`framework` is `fastapi` or `django`. `methods` are upper case, and empty for a
+route that serves every method, as each of django's does. `path` is the whole
+path, every prefix the route is mounted under included, with its parameters as
+the route writes them, `{item_id}` or `<int:pk>`; a `re_path()` pattern is
+joined to its prefixes with each part's `^` and `$` anchors dropped. `handler` is
+the function, or for a django view built by `as_view()` the class, with its
+qualified name, its whole declaration as `range` and its name as
+`selectionRange`; `declaration` is where the route is declared, the decorator
+without its `@`, the `add_api_route(...)` or the `path(...)`; `application` is the
+FastAPI application that serves it, or the urlconf module django starts at, and
+is absent for a route on a router no application includes. a route served under
+two applications, or mounted twice, is listed once for each path.
+
+every part is read through what the code means. a FastAPI route is a decorator,
+or an `add_api_route` call, that resolves to a method of `fastapi.FastAPI` or
+`fastapi.APIRouter`, `get` to `trace` for that method and `api_route` for its
+`methods=` (GET without it), however the application or router is named or
+imported; a router's routes are mounted by an `include_router` handed the same
+router, under the include's `prefix` and the router's own `APIRouter(prefix=)`,
+through any number of routers between it and an application. a django route is
+an entry of a urlconf module's `urlpatterns` that calls `django.urls.path` or
+`re_path`, read from the module `ROOT_URLCONF` names, or, in a project whose
+settings name none, from every module with `urlpatterns` that no other includes;
+an `include()` is followed to the module a string names, a module object, a list
+of patterns, or the patterns of a `(patterns, app_name)` pair. a path, a prefix
+or a method that is not a string ty knows exactly — a literal, or a constant
+holding one — leaves its route out rather than listing it at a path it may not
+have, and so does a FastAPI router built somewhere other than where it is
+assigned, and a route whose handler, declaration or application cannot be opened
+
 ## override and implement members
 
 an editor's *override methods* and *implement methods* ask twice: once for what

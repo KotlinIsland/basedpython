@@ -38,6 +38,7 @@ pub use code_lens::{DjangoCodeLens, DjangoLensAction, DjangoLensTarget};
 pub use completion::{TemplateCompletion, TemplateEdit};
 pub use hover::{DisplayTemplateHover, TemplateHover};
 pub use inlay_hints::{TemplateInlayHint, TemplateInlayHintKind};
+pub(crate) use project::root_urlconf as django_root_urlconf;
 pub(crate) use python::{
     string_completions as django_string_completions, string_definition as django_string_definition,
 };

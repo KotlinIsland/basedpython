@@ -19,6 +19,7 @@ mod doc_highlights;
 mod docstring;
 mod docstring_stub;
 mod document_symbols;
+mod endpoints;
 mod evaluatable_expression;
 mod expression_types;
 mod find_references;
@@ -88,6 +89,7 @@ pub use django_template::{
 pub use doc_highlights::document_highlights;
 pub use docstring_stub::{DocstringFormat, DocstringStub, docstring_stub};
 pub use document_symbols::{document_symbols, symbol_detail};
+pub use endpoints::{Endpoint, EndpointTarget, Framework, endpoints};
 pub use evaluatable_expression::evaluatable_expression;
 pub use expression_types::{ExpressionType, expression_types};
 pub use find_references::find_references;
