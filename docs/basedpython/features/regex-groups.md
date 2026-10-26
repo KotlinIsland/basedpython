@@ -113,6 +113,13 @@ if m := re.match("(a)(b)", text):
 
 the group check also covers `m[3]`, `m.start(3)`, `m.end(3)` and `m.span(3)`.
 
+an invalid pattern written where it is passed is reported at the character python
+names the position of, not the whole literal: the `(` left open, the `)` that
+closes nothing. a character written as an escape, `\x28`, is reported as the whole
+escape, a pattern written as adjacent literals at the literal that has the
+character, and an error about a construct as a whole, `{2,1}` or a group's
+redefined name, at all of it. a pattern passed by name is reported at the name.
+
 a construct the pattern reader does not model produces neither a refinement nor
 a diagnostic: a pattern reported invalid when `re.compile` would have accepted it
 is much worse than one left alone.

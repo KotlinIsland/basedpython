@@ -12418,11 +12418,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     (regex::RegexGroups::from_parsed(db, &parsed), any_str)
                 }
                 regex::PatternAnalysis::Invalid(error) => {
-                    let anchor = call_expression
-                        .arguments
-                        .find_argument_value("pattern", 0)
-                        .map_or(AnyNodeRef::from(call_expression), AnyNodeRef::from);
-                    if let Some(builder) = self.context.report_lint(&INVALID_REGEX, anchor) {
+                    let pattern = call_expression.arguments.find_argument_value("pattern", 0);
+                    // the characters the error is about, where the pattern is a literal
+                    // here, and otherwise what was passed as the pattern
+                    let range = pattern
+                        .and_then(|pattern| {
+                            regex::pattern_range(
+                                pattern,
+                                &source_text(db, self.file()),
+                                &text,
+                                error.span(),
+                            )
+                        })
+                        .or_else(|| pattern.map(Ranged::range))
+                        .unwrap_or_else(|| call_expression.range());
+                    if let Some(builder) = self.context.report_lint(&INVALID_REGEX, range) {
                         builder.into_diagnostic(error.message());
                     }
                     overload.set_return_type(Type::unknown());

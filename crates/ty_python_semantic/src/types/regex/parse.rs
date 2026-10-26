@@ -10,6 +10,8 @@
 //! error: reporting a valid pattern as invalid is much worse than declining to
 //! refine it
 
+use std::ops::Range;
+
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashMap;
 
@@ -38,17 +40,32 @@ pub(crate) struct ParsedGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegexError {
     message: String,
+    /// the characters of the pattern the error is about: the one at the position
+    /// python names, or the whole of a construct that is wrong as a whole, a
+    /// `{2,1}` or a group's name
+    span: Range<usize>,
 }
 
 impl RegexError {
     fn new(message: impl std::fmt::Display, position: usize) -> Self {
+        Self::spanning(message, position, position..position + 1)
+    }
+
+    fn spanning(message: impl std::fmt::Display, position: usize, span: Range<usize>) -> Self {
         Self {
             message: format!("{message} at position {position}"),
+            span,
         }
     }
 
     pub(crate) fn message(&self) -> &str {
         &self.message
+    }
+
+    /// the characters of the pattern the error is about, which end past the
+    /// pattern for an error at its end, as `unexpected end of pattern` is
+    pub(crate) fn span(&self) -> Range<usize> {
+        self.span.clone()
     }
 }
 
@@ -271,9 +288,10 @@ impl Parser {
                 };
                 self.pos += quantifier.length;
                 if quantifier.min > quantifier.max {
-                    return Err(Failure::Invalid(RegexError::new(
+                    return Err(Failure::Invalid(RegexError::spanning(
                         "min repeat greater than max repeat",
                         open + 1,
+                        open..self.pos,
                     )));
                 }
                 quantifier.min == 0
@@ -536,9 +554,10 @@ impl Parser {
                 // python resolves a backreference against the groups opened so
                 // far, so a forward reference is an error there too
                 if !self.names.contains_key(&name) {
-                    return Err(Failure::Invalid(RegexError::new(
+                    return Err(Failure::Invalid(RegexError::spanning(
                         format_args!("unknown group name '{name}'"),
                         start,
+                        name_span(&name, start),
                     )));
                 }
                 Ok(Some(Node::Atom))
@@ -589,9 +608,10 @@ impl Parser {
             )));
         }
         if !is_identifier(name) {
-            return Err(Failure::Invalid(RegexError::new(
+            return Err(Failure::Invalid(RegexError::spanning(
                 format_args!("bad character in group name '{name}'"),
                 start,
+                name_span(name, start),
             )));
         }
         Ok(Name::new(name))
@@ -695,11 +715,12 @@ impl Parser {
         if let Some(name) = &name
             && let Some(previous) = self.names.insert(name.clone(), index)
         {
-            return Err(Failure::Invalid(RegexError::new(
+            return Err(Failure::Invalid(RegexError::spanning(
                 format_args!(
                     "redefinition of group name '{name}' as group {index}; was group {previous}"
                 ),
                 start,
+                name_span(name, start),
             )));
         }
         self.group_names.push(name);
@@ -713,6 +734,11 @@ struct BracedQuantifier {
     length: usize,
     min: u32,
     max: u32,
+}
+
+/// the characters of a group's name that starts at `start`
+fn name_span(name: &str, start: usize) -> Range<usize> {
+    start..start + name.chars().count()
 }
 
 fn uncertain_if(node: Node, uncertain: bool) -> Node {

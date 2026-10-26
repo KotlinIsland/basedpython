@@ -11,6 +11,7 @@
 //! round trip through `re.compile`
 
 mod parse;
+mod source;
 
 use std::fmt;
 
@@ -27,6 +28,7 @@ use crate::types::{
 };
 
 pub(crate) use parse::{PatternAnalysis, analyze};
+pub(crate) use source::pattern_range;
 
 /// one capture group of a statically-known pattern
 #[derive(Debug, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]

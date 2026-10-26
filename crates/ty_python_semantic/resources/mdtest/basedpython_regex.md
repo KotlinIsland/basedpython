@@ -326,6 +326,98 @@ re.findall("(", "")  # error: [invalid-regex] "missing ), unterminated subpatter
 re.sub("(", "", "")  # error: [invalid-regex] "missing ), unterminated subpattern at position 0"
 ```
 
+## an invalid pattern's error points at the character it is about
+
+python names the position in the pattern where it gave up, which is the character the error is
+about: the parenthesis left open, the one that closes nothing, the quantifier with nothing to
+repeat.
+
+```py
+import re
+
+re.compile("ab(c")  # snapshot
+```
+
+```snapshot
+error[invalid-regex]: missing ), unterminated subpattern at position 2
+ --> src/mdtest_snippet.py:3:15
+  |
+3 | re.compile("ab(c")  # snapshot
+  |               ^
+```
+
+the position is a character of the pattern the program holds, which is not always one character of
+the literal: an escape writes one character in several, and the error is about all of them. here
+`\x28` writes the parenthesis left open, after a tab written as `\t`.
+
+```py
+import re
+
+re.compile("\t\x28")  # snapshot
+```
+
+```snapshot
+error[invalid-regex]: missing ), unterminated subpattern at position 1
+ --> src/mdtest_snippet.py:6:15
+  |
+6 | re.compile("\t/x28")  # snapshot
+  |               ^^^^
+```
+
+literals written next to each other are one pattern, so the error is in whichever of them wrote the
+character.
+
+```py
+import re
+
+re.compile(
+    r"\d+"
+    "x{2,1}"  # snapshot
+)
+```
+
+```snapshot
+error[invalid-regex]: min repeat greater than max repeat at position 5
+  --> src/mdtest_snippet.py:11:7
+   |
+11 |     "x{2,1}"  # snapshot
+   |       ^^^^^
+```
+
+an error about a construct as a whole, a repeat whose minimum is above its maximum or a group's
+name, is about all of it.
+
+```py
+import re
+
+re.compile("(?P<name>a)(?P<name>b)")  # snapshot
+```
+
+```snapshot
+error[invalid-regex]: redefinition of group name 'name' as group 2; was group 1 at position 15
+  --> src/mdtest_snippet.py:15:28
+   |
+15 | re.compile("(?P<name>a)(?P<name>b)")  # snapshot
+   |                            ^^^^
+```
+
+a pattern that is not written where it is passed is pointed at as what was passed.
+
+```py
+import re
+
+pattern = "a("
+re.compile(pattern)  # snapshot
+```
+
+```snapshot
+error[invalid-regex]: missing ), unterminated subpattern at position 1
+  --> src/mdtest_snippet.py:19:12
+   |
+19 | re.compile(pattern)  # snapshot
+   |            ^^^^^^^
+```
+
 ## a group the pattern has not got
 
 ```py
