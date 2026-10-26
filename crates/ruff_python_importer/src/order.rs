@@ -55,8 +55,8 @@ pub trait ImportOrdering {
     /// is configured
     fn section_heading(&self, position: &Self::Position) -> Option<&str>;
 
-    /// Whether `comment`, a whole comment line, is a heading the sorter writes above a section.
-    /// The sorter rewrites the headings directly above the first import of a block.
+    /// whether `comment`, a whole comment line, is a heading the sorter writes above a section.
+    /// the sorter rewrites the headings directly above the first import of a block
     fn is_heading(&self, comment: &str) -> bool;
 
     /// how the sorter orders two members of one `from` import, each a name and its alias
@@ -66,8 +66,8 @@ pub trait ImportOrdering {
     /// `from` import of its own rather than among the members of an existing one
     fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool;
 
-    /// How many blank lines the sorter writes between the last import of a block and the
-    /// statement after it, a function or class definition or another statement.
+    /// how many blank lines the sorter writes between the last import of a block and the
+    /// statement after it, a function or class definition or another statement
     fn blank_lines_after_block(&self, before_definition: bool) -> usize;
 
     /// `source`, a run of import statements, as the sorter writes them in `stylist`'s style,

@@ -108,7 +108,7 @@ pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
-pub use merge::{ConflictLines, MergeTexts, resolve_file_merge_conflicts, resolve_merge_conflicts};
+pub use merge::{ConflictLines, MergeTexts, resolve_file_merge_conflicts};
 pub use method_kind::MethodKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,

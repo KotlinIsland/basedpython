@@ -5,7 +5,7 @@
 //! leaves every other line alone. to leave the block as `I001` would write it, the statement
 //! has to land in its section, in the order isort sorts that section, separated from its
 //! neighbours by the blank lines isort puts there. [`ImportOrder`] answers those questions
-//! with the same keys, sections and settings [`super::format_imports`] sorts with, so the two
+//! with the same keys, sections and settings `format_imports` sorts with, so the two
 //! cannot disagree
 
 use std::cell::RefCell;
@@ -47,12 +47,12 @@ pub struct ImportPosition<'a> {
 
 impl ImportPosition<'_> {
     /// the index of the statement's section in the configured section order
-    pub fn section(&self) -> usize {
+    fn section(&self) -> usize {
         self.section
     }
 
     /// the position, owning the names it compares
-    pub fn into_owned(self) -> ImportPosition<'static> {
+    fn into_owned(self) -> ImportPosition<'static> {
         ImportPosition {
             section: self.section,
             group: self.group,
@@ -62,8 +62,8 @@ impl ImportPosition<'_> {
     }
 }
 
-/// The ordering isort applies to the imports of one file, looking modules up in `files` to tell
-/// whether they are first-party.
+/// the ordering isort applies to the imports of one file, looking modules up in `files` to tell
+/// whether they are first-party
 pub struct ImportOrder<F> {
     settings: Arc<LinterSettings>,
     package: Option<PathBuf>,
@@ -76,7 +76,7 @@ pub struct ImportOrder<F> {
 
 impl<F: PackageFiles> ImportOrder<F> {
     /// the ordering for a file in `package` (as `detect_package_root` finds it), under the
-    /// project's linter `settings` and the Python version it targets.
+    /// project's linter `settings` and the Python version it targets
     pub fn new(
         settings: Arc<LinterSettings>,
         package: Option<PathBuf>,
@@ -96,7 +96,7 @@ impl<F: PackageFiles> ImportOrder<F> {
         &self.settings.isort
     }
 
-    /// The index of the section `module_name` sorts in, in the configured section order.
+    /// the index of the section `module_name` sorts in, in the configured section order
     fn section_index(&self, module_name: String, is_relative: bool) -> usize {
         if let Some(section) = self.sections.borrow().get(&module_name) {
             return *section;
@@ -124,7 +124,7 @@ impl<F: PackageFiles> ImportOrder<F> {
     }
 
     /// where `import` sorts
-    pub fn position<'b>(&self, import: &SortedImport<'b>) -> ImportPosition<'b> {
+    fn position<'b>(&self, import: &SortedImport<'b>) -> ImportPosition<'b> {
         let settings = self.isort();
         let (module_name, is_relative) = match import {
             SortedImport::Straight { name, .. } => ((*name).to_string(), false),
@@ -175,7 +175,7 @@ impl<F: PackageFiles> ImportOrder<F> {
 
     /// how many blank lines isort writes between a statement at `before` and the statement at
     /// `after` that follows it
-    pub fn blank_lines_between(&self, before: &ImportPosition, after: &ImportPosition) -> usize {
+    fn blank_lines_between(&self, before: &ImportPosition, after: &ImportPosition) -> usize {
         let settings = self.isort();
         if before.section != after.section {
             // `format_import_block` separates two sections with a blank line unless every
@@ -206,15 +206,15 @@ impl<F: PackageFiles> ImportOrder<F> {
 
     /// the comment isort writes above the first import of the section at `position`, if one is
     /// configured
-    pub fn section_heading(&self, position: &ImportPosition) -> Option<&str> {
+    fn section_heading(&self, position: &ImportPosition) -> Option<&str> {
         let settings = self.isort();
         let section = settings.section_order.get(position.section)?;
         settings.import_headings.get(section).map(String::as_str)
     }
 
-    /// Whether `comment` is the heading isort writes above a section, which it takes into the
-    /// block when it is directly above the block's first import.
-    pub fn is_heading(&self, comment: &str) -> bool {
+    /// whether `comment` is the heading isort writes above a section, which it takes into the
+    /// block when it is directly above the block's first import
+    fn is_heading(&self, comment: &str) -> bool {
         self.isort()
             .import_headings
             .values()
@@ -222,7 +222,7 @@ impl<F: PackageFiles> ImportOrder<F> {
     }
 
     /// how isort orders two members of one `from` import
-    pub fn compare_members(&self, a: (&str, Option<&str>), b: (&str, Option<&str>)) -> Ordering {
+    fn compare_members(&self, a: (&str, Option<&str>), b: (&str, Option<&str>)) -> Ordering {
         let settings = self.isort();
         MemberKey::from_member(a.0, a.1, settings).cmp(&MemberKey::from_member(b.0, b.1, settings))
     }
@@ -230,16 +230,16 @@ impl<F: PackageFiles> ImportOrder<F> {
     /// whether isort writes `member` (imported `as asname`, if given) from `module` in a `from`
     /// import of its own rather than among the members of an existing one, under
     /// `force-single-line` or, for an aliased member, without `combine-as-imports`
-    pub fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool {
+    fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool {
         let settings = self.isort();
         (settings.force_single_line
             && module.is_none_or(|module| !settings.single_line_exclusions.contains(module)))
             || (asname.is_some() && !settings.combine_as_imports)
     }
 
-    /// How many blank lines isort writes between the last import of a block and the statement
-    /// after it, as `format_imports` writes them after a block in a source file.
-    pub fn blank_lines_after_block(&self, before_definition: bool) -> usize {
+    /// how many blank lines isort writes between the last import of a block and the statement
+    /// after it, as `format_imports` writes them after a block in a source file
+    fn blank_lines_after_block(&self, before_definition: bool) -> usize {
         match usize::try_from(self.isort().lines_after_imports) {
             Ok(lines) => lines,
             Err(_) if before_definition => 2,
@@ -248,8 +248,8 @@ impl<F: PackageFiles> ImportOrder<F> {
     }
 
     /// `source`, a run of import statements, as isort writes them in `stylist`'s style, without
-    /// the headings of their sections; see [`sort_import_statements`].
-    pub fn write_statements(&self, source: &str, stylist: &Stylist) -> Option<String> {
+    /// the headings of their sections; see [`sort_import_statements`]
+    fn write_statements(&self, source: &str, stylist: &Stylist) -> Option<String> {
         let written = write_import_statements(
             source,
             &self.settings,
@@ -313,7 +313,7 @@ impl<F: PackageFiles> ImportOrdering for ImportOrder<F> {
 /// writes an import block with the same settings: one block, deduplicated, `from` imports of one
 /// module combined, in sections, each wrapped to the line length. `None` for source with
 /// anything other than import statements in it, or a comment, which isort keeps beside the import
-/// it is on and this cannot place.
+/// it is on and this cannot place
 pub fn sort_import_statements(
     source: &str,
     settings: &LinterSettings,

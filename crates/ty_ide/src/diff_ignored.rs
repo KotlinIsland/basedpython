@@ -1,12 +1,12 @@
-//! The parts of a file a diff may ignore when asked to ignore imports and formatting.
+//! the parts of a file a diff may ignore when asked to ignore imports and formatting
 //!
-//! Imports are every import statement, wherever it is. Formatting is the text python's tokenizer
+//! imports are every import statement, wherever it is. formatting is the text python's tokenizer
 //! discards without its being significant: whitespace between two tokens of a logical line, the
 //! line breaks and indentation of a line continued inside brackets or after a backslash, and blank
-//! lines. The indentation a logical line starts with is not formatting, since it says which block
+//! lines. the indentation a logical line starts with is not formatting, since it says which block
 //! the line is in, and nor is anything inside an f-string or a t-string, where `f"{x = }"` prints
-//! the spaces around its `=`. Two versions that differ only in what is ignored here tokenize to
-//! the same tokens.
+//! the spaces around its `=`. two versions that differ only in what is ignored here tokenize to
+//! the same tokens
 
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::token::TokenKind;
@@ -14,12 +14,12 @@ use ruff_python_ast::{PySourceType, Stmt};
 use ruff_python_parser::parse_unchecked_source;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-/// What a diff ignoring imports and formatting ignores in one text.
+/// what a diff ignoring imports and formatting ignores in one text
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffIgnoredRanges {
-    /// Each import statement.
+    /// each import statement
     pub imports: Vec<TextRange>,
-    /// Each run of text that is only formatting, in order.
+    /// each run of text that is only formatting, in order
     pub formatting: Vec<TextRange>,
 }
 
@@ -101,7 +101,7 @@ mod tests {
 
     use super::diff_ignored_ranges;
 
-    /// `text` with what is ignored as formatting written as `~`, and imports as `I`.
+    /// `text` with what is ignored as formatting written as `~`, and imports as `I`
     fn marked(text: &str) -> String {
         let ignored = diff_ignored_ranges(text, PySourceType::BasedPython);
         let mut out: Vec<char> = text.chars().collect();

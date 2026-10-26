@@ -5,7 +5,10 @@
 //! workspace edit of a move, and the reason a move is refused
 
 use anyhow::Result;
-use lsp_types::{LspRequestMethod, MessageDirection, Request};
+use lsp_types::{
+    CreateFilesParams, DidCreateFilesNotification, FileCreate, LspRequestMethod, MessageDirection,
+    Request,
+};
 use ruff_db::system::SystemPath;
 use ruff_source_file::LineEnding;
 use serde_json::json;
@@ -370,6 +373,44 @@ fn an_extracted_superclass_takes_the_class_s_bases_and_becomes_its_base() -> Res
                 "newText": "class Polygon(Shape):\n    SIDES = 4\n\n\n",
             },
         ]),
+        "{answer:#}"
+    );
+    Ok(())
+}
+
+/// a module the client has just made is a target once the client reports it with
+/// `workspace/didCreateFiles`, even where the server had found nothing at its path before
+#[test]
+fn a_module_the_client_created_is_a_target_once_it_says_so() -> Result<()> {
+    let mut server = server()?;
+    let main = server.file_uri(SystemPath::new("src/main.py"));
+    let fresh = SystemPath::new("src/shapes/fresh.py");
+    let move_to_fresh = |server: &mut TestServer| {
+        server
+            .send_request_await::<MoveSymbol>(json!({
+                "textDocument": { "uri": main },
+                "position": { "line": 2, "character": 7 },
+                "target": server.file_uri(fresh),
+            }))
+            .expect("an answer")
+    };
+    assert_eq!(
+        move_to_fresh(&mut server)["refused"],
+        json!("the target is not a file that exists")
+    );
+
+    server.write_file(fresh, "")?;
+    server.send_notification::<DidCreateFilesNotification>(CreateFilesParams {
+        files: vec![FileCreate {
+            uri: server.file_uri(fresh),
+        }],
+    });
+    let answer = move_to_fresh(&mut server);
+    assert!(answer.get("refused").is_none(), "{answer:#}");
+    assert!(
+        answer["edit"]["changes"]
+            .get(server.file_uri(fresh).as_str())
+            .is_some(),
         "{answer:#}"
     );
     Ok(())

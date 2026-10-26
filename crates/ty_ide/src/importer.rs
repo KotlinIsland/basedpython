@@ -85,10 +85,10 @@ mod tests {
             source
         }
 
-        /// The file with everything `requests` import added at once, as
+        /// the file with everything `requests` import added at once, as
         /// [`Importer::combined_edits`] adds them, with each request's symbol written on a line
-        /// of its own at the cursor. A file buff accepts the imports of with the symbols written
-        /// in still has imports it accepts once they are added.
+        /// of its own at the cursor. a file buff accepts the imports of with the symbols written
+        /// in still has imports it accepts once they are added
         fn add_all(&self, requests: &[ImportRequest<'_>]) -> String {
             let (with_symbols, source) = self.add_all_with(&self.importer(), requests);
             if self.unsorted_imports(&with_symbols) == 0 {
@@ -101,8 +101,8 @@ mod tests {
             source
         }
 
-        /// The file with the symbols `requests` are referred to by written at the cursor, and
-        /// the file with `importer`'s imports of them added too.
+        /// the file with the symbols `requests` are referred to by written at the cursor, and
+        /// the file with `importer`'s imports of them added too
         fn add_all_with(
             &self,
             importer: &Importer<'_>,
@@ -131,7 +131,7 @@ mod tests {
             (with_symbols, source)
         }
 
-        /// How many `I001` diagnostics buff's isort check reports for `source` as the contents
+        /// how many `I001` diagnostics buff's isort check reports for `source` as the contents
         /// of the cursor's file, with the configuration buff reads for it. buff sorts each cell
         /// of a notebook on its own, so of a notebook only the cursor's cell is checked, which
         /// is where an import is added
@@ -449,8 +449,8 @@ import sys
         ");
     }
 
-    /// A test whose project configures buff with `ruff_toml`, a `ruff.toml`, and whose file is
-    /// `main`.
+    /// a test whose project configures buff with `ruff_toml`, a `ruff.toml`, and whose file is
+    /// `main`
     fn configured_test(ruff_toml: &str, main: &str) -> CursorTest {
         CursorTest::builder()
             .source("ruff.toml", ruff_toml)
@@ -464,9 +464,9 @@ standard-library = "Standard Library"
 third-party = "Third Party"
 "#;
 
-    /// A statement of a section before the block's first goes above the heading of that first
+    /// a statement of a section before the block's first goes above the heading of that first
     /// section, under a heading of its own: isort takes the headings directly above a block's
-    /// first import into the block and writes them again.
+    /// first import into the block and writes them again
     #[test]
     fn heading_of_a_new_first_section() {
         let test = configured_test(
@@ -489,7 +489,7 @@ import attr
         ");
     }
 
-    /// A statement that joins the block's first section goes under its heading.
+    /// a statement that joins the block's first section goes under its heading
     #[test]
     fn heading_of_the_first_section_stays_first() {
         let test = configured_test(
@@ -516,7 +516,7 @@ import attr
         ");
     }
 
-    /// A new section after the others is written with its heading.
+    /// a new section after the others is written with its heading
     #[test]
     fn heading_of_a_new_last_section() {
         let test = configured_test(
@@ -539,8 +539,8 @@ import os
         ");
     }
 
-    /// Two members added from a module the file doesn't import yet are one `from` import, with
-    /// no import block to join.
+    /// two members added from a module the file doesn't import yet are one `from` import, with
+    /// no import block to join
     #[test]
     fn members_combined_without_an_import_block() {
         let test = cursor_test(
@@ -561,7 +561,7 @@ x = 1
         ");
     }
 
-    /// And without an order to follow, as for a file buff has no configuration for.
+    /// and without an order to follow, as for a file buff has no configuration for
     #[test]
     fn members_combined_without_an_order() {
         let test = cursor_test(
@@ -594,7 +594,7 @@ x = 1
         ");
     }
 
-    /// A member that makes an import too long for its line wraps it, as isort writes it.
+    /// a member that makes an import too long for its line wraps it, as isort writes it
     #[test]
     fn member_wraps_an_import_past_the_line_length() {
         let test = configured_test(
@@ -614,7 +614,7 @@ from collections import OrderedDict, deque
         ");
     }
 
-    /// A new statement too long for its line is written wrapped.
+    /// a new statement too long for its line is written wrapped
     #[test]
     fn new_statement_wrapped_to_the_line_length() {
         let test = configured_test(
@@ -640,7 +640,7 @@ import os
         ");
     }
 
-    /// Between two imports of one line, a statement is written on that line, in order.
+    /// between two imports of one line, a statement is written on that line, in order
     #[test]
     fn between_imports_of_one_line() {
         let test = cursor_test(
@@ -657,7 +657,7 @@ import os; import sys
         ");
     }
 
-    /// Under `force-single-line`, a member is imported by a `from` import of its own.
+    /// under `force-single-line`, a member is imported by a `from` import of its own
     #[test]
     fn force_single_line() {
         let test = configured_test(
@@ -674,8 +674,8 @@ from collections import OrderedDict
         ");
     }
 
-    /// Without `combine-as-imports`, an aliased member is imported by a `from` import of its
-    /// own.
+    /// without `combine-as-imports`, an aliased member is imported by a `from` import of its
+    /// own
     #[test]
     fn aliased_member_alone_without_combine_as_imports() {
         let test = cursor_test(
@@ -691,7 +691,7 @@ from pathlib import Path
         ");
     }
 
-    /// With it, an aliased member joins the others.
+    /// with it, an aliased member joins the others
     #[test]
     fn aliased_member_joins_with_combine_as_imports() {
         let test = configured_test(
@@ -707,7 +707,7 @@ from pathlib import Path
         ");
     }
 
-    /// A section listed in `no-lines-before` follows the section before it without a blank line.
+    /// a section listed in `no-lines-before` follows the section before it without a blank line
     #[test]
     fn no_lines_before() {
         let test = configured_test(
@@ -726,7 +726,7 @@ import os
         ");
     }
 
-    /// `lines-between-types` sets the `from` imports of a section apart from its plain ones.
+    /// `lines-between-types` sets the `from` imports of a section apart from its plain ones
     #[test]
     fn lines_between_types() {
         let test = configured_test(
@@ -746,7 +746,7 @@ import os
         ");
     }
 
-    /// `from-first` puts a section's `from` imports before its plain ones.
+    /// `from-first` puts a section's `from` imports before its plain ones
     #[test]
     fn from_first() {
         let test = configured_test(
@@ -765,7 +765,7 @@ import os
         ");
     }
 
-    /// An eager import goes before a section's lazy ones, and a lazy one after its eager ones.
+    /// an eager import goes before a section's lazy ones, and a lazy one after its eager ones
     #[test]
     fn eager_before_lazy() {
         let test = cursor_test(
@@ -785,7 +785,7 @@ lazy import json
         ");
     }
 
-    /// Statements added at once that go in different places of the block are each placed.
+    /// statements added at once that go in different places of the block are each placed
     #[test]
     fn several_places_at_once() {
         let test = cursor_test(

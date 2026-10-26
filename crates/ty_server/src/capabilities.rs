@@ -723,6 +723,7 @@ pub(crate) fn server_capabilities(
             }),
             file_operations: Some(lsp_types::FileOperationOptions {
                 will_rename: Some(will_rename_registration()),
+                did_create: Some(did_create_registration()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -746,6 +747,19 @@ pub(crate) fn server_capabilities(
 /// name. So every folder rename is asked about, and the ones that turn out not to be packages cost
 /// one request that answers with no edits.
 fn will_rename_registration() -> lsp_types::FileOperationRegistrationOptions {
+    module_and_package_filters()
+}
+
+/// which creations the client should report once they are on disk: the same modules and packages
+/// a rename is asked about, since what a request may name next is a module the client just made —
+/// the module a definition is moved into. the server's own watcher reports a creation too, but
+/// only some time after it, and a request the client sends in between is answered from a file
+/// system on which the module is not there yet
+fn did_create_registration() -> lsp_types::FileOperationRegistrationOptions {
+    module_and_package_filters()
+}
+
+fn module_and_package_filters() -> lsp_types::FileOperationRegistrationOptions {
     fn filter(
         glob: &str,
         kind: lsp_types::FileOperationPatternKind,

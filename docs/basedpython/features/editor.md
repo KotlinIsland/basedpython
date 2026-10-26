@@ -742,11 +742,18 @@ definition's name, in a reference to one, or anywhere else in a top-level
 definition, its body included, which is then the one moved — and answers `{name, kind, module, uri, range}`: the name, `function`, `class` or `variable`, the dotted name of the module
 it is defined in, and its name's range in the file `uri`, which need not be the
 document asked about; `null` where there is nothing to move. `by/moveSymbol` takes
-the same and `target`, the URI of an existing `.py` or `.by` file of the project
-(an editor creates a new module before asking), and answers `{edit, warnings}`, a
+the same and `target`, the URI of an existing `.py` or `.by` file of the project,
+and answers `{edit, warnings}`, a
 `WorkspaceEdit` of `changes` to every file the move changes and the references it
 left as they were, each with its file and line, or `{refused, warnings}`, the reason
 nothing is moved. two edits at one position of a file apply in the order listed
+
+an editor moving into a new module creates it first and reports it with the
+protocol's `workspace/didCreateFiles`, which the server registers for every
+`.py`, `.pyi`, `.by` and `.byi` file and every folder, before it asks: the server
+answers from the file system as it last read it, so without the notification a
+module made where it had found nothing is refused as a file that does not exist.
+`workspace/didChangeWatchedFiles` reporting it `Created` does the same
 
 ### pulling members up and pushing them down
 

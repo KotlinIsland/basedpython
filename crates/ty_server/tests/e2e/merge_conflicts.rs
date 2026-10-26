@@ -1,4 +1,4 @@
-//! `by/resolveMergeConflicts` and `by/diffIgnoredRanges` over the wire: texts in, no document.
+//! `by/resolveMergeConflicts` and `by/diffIgnoredRanges` over the wire: texts in, no document
 
 use anyhow::Result;
 use lsp_server::ErrorCode;

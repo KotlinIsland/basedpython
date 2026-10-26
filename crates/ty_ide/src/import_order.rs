@@ -7,18 +7,18 @@
 //! defaults with the `target-version` the closest `requires-python` implies. this resolves it
 //! with the same `ruff_workspace` code, so the two agree on sections, known modules and order
 //!
-//! The configuration files are read through the database's [`System`], as everything else the
+//! the configuration files are read through the database's [`System`], as everything else the
 //! project reads is, but not tracked by it: they need not be in a directory the server watches,
-//! as the user's own configuration is not. A resolved configuration is cached instead with the
+//! as the user's own configuration is not. a resolved configuration is cached instead with the
 //! revision of every file resolving it looked at, including the ones it found missing, and used
 //! again only while each is unchanged, so an edit to a configuration file, to a file it
 //! `extend`s, or a configuration file created closer to the file is seen by the next import
 //! added
 //!
-//! Whether a module is the project's own is decided, as buff decides it, by looking for it in
-//! the configured `src` directories. That lookup goes through the database's files, which keep
+//! whether a module is the project's own is decided, as buff decides it, by looking for it in
+//! the configured `src` directories. that lookup goes through the database's files, which keep
 //! what they found until the server reports a change, so a completion offering hundreds of
-//! imports doesn't look at the file system for each.
+//! imports doesn't look at the file system for each
 
 use std::cell::RefCell;
 use std::io;
@@ -57,8 +57,8 @@ pub(crate) fn importer<'a>(
     Importer::new(db, file, parsed).sorted_by(move || order(db, file))
 }
 
-/// The order buff's isort configuration sorts the imports of `file` in, or `None` for a file
-/// that is not on disk. A notebook's cells are each sorted in this order on their own
+/// the order buff's isort configuration sorts the imports of `file` in, or `None` for a file
+/// that is not on disk. a notebook's cells are each sorted in this order on their own
 fn order<'a>(db: &'a dyn Db, file: ProgramFile<'a>) -> Option<ImportOrder<ProjectFiles<'a>>> {
     let path = file.file(db).path(db).as_system_path()?.as_std_path();
     let files = ProjectFiles(db);
@@ -109,7 +109,7 @@ impl<'a> IsortConfig<'a> {
         Self::new(system, &SystemFiles(system), directory, None, project_root)
     }
 
-    /// The configuration of a file in `directory`, its package found in `files`.
+    /// the configuration of a file in `directory`, its package found in `files`
     fn new(
         system: &'a dyn System,
         files: &dyn PackageFiles,
@@ -140,7 +140,7 @@ impl<'a> IsortConfig<'a> {
     }
 
     /// `source`, a run of import statements, as buff's `I001` fix sorts and writes them, or
-    /// `None` for source with anything else in it, a comment among them.
+    /// `None` for source with anything else in it, a comment among them
     pub(crate) fn sort(&self, source: &str, source_type: PySourceType) -> Option<String> {
         sort_import_statements_in(
             source,
@@ -153,8 +153,8 @@ impl<'a> IsortConfig<'a> {
     }
 }
 
-/// The files of the database, which remember what they found at a path until the server reports
-/// a change to it.
+/// the files of the database, which remember what they found at a path until the server reports
+/// a change to it
 pub(crate) struct ProjectFiles<'db>(&'db dyn Db);
 
 impl PackageFiles for ProjectFiles<'_> {
@@ -173,7 +173,7 @@ impl PackageFiles for ProjectFiles<'_> {
     }
 }
 
-/// The files of a [`System`], looked at each time they are asked about.
+/// the files of a [`System`], looked at each time they are asked about
 struct SystemFiles<'a>(&'a dyn System);
 
 impl PackageFiles for SystemFiles<'_> {
@@ -186,8 +186,8 @@ impl PackageFiles for SystemFiles<'_> {
     }
 }
 
-/// The configuration files of a [`System`], recording the revision of every file looked at:
-/// `None` for one that is missing.
+/// the configuration files of a [`System`], recording the revision of every file looked at:
+/// `None` for one that is missing
 struct RecordedFiles<'a> {
     system: &'a dyn System,
     revisions: RefCell<Vec<(PathBuf, Option<FileRevision>)>>,
@@ -235,7 +235,7 @@ impl ConfigurationFiles for RecordedFiles<'_> {
     }
 }
 
-/// The revision of the file at `path`, or `None` when there is none.
+/// the revision of the file at `path`, or `None` when there is none
 fn file_revision(system: &dyn System, path: &Path) -> Option<FileRevision> {
     let metadata = system
         .path_metadata(SystemPath::from_std_path(path)?)
@@ -243,8 +243,8 @@ fn file_revision(system: &dyn System, path: &Path) -> Option<FileRevision> {
     metadata.file_type().is_file().then(|| metadata.revision())
 }
 
-/// Sets the target version the closest `requires-python` implies, which takes precedence over
-/// the user's own configuration, as buff gives it.
+/// sets the target version the closest `requires-python` implies, which takes precedence over
+/// the user's own configuration, as buff gives it
 struct FallbackTargetVersion(Option<ruff_linter::settings::types::PythonVersion>);
 
 impl ConfigurationTransformer for FallbackTargetVersion {
@@ -264,21 +264,21 @@ impl ConfigurationTransformer for Unchanged {
     }
 }
 
-/// The settings resolved for a directory, and the revision of every file resolving them looked
-/// at.
+/// the settings resolved for a directory, and the revision of every file resolving them looked
+/// at
 struct Resolved {
     revisions: Vec<(PathBuf, Option<FileRevision>)>,
     settings: Arc<LinterSettings>,
 }
 
-/// The resolved settings, by the directory, project root and user configuration directory they
-/// were resolved for.
+/// the resolved settings, by the directory, project root and user configuration directory they
+/// were resolved for
 static RESOLVED: LazyLock<Mutex<FxHashMap<ResolvedKey, Resolved>>> = LazyLock::new(Mutex::default);
 
 type ResolvedKey = (PathBuf, PathBuf, Option<SystemPathBuf>);
 
-/// The linter settings buff reads for a file in `directory`, from the cache while no file
-/// resolving them looked at has changed.
+/// the linter settings buff reads for a file in `directory`, from the cache while no file
+/// resolving them looked at has changed
 fn settings_for(system: &dyn System, directory: &Path, project_root: &Path) -> Arc<LinterSettings> {
     let user_config_directory = system.user_config_directory();
     let key = (
@@ -322,9 +322,9 @@ fn settings_for(system: &dyn System, directory: &Path, project_root: &Path) -> A
     settings
 }
 
-/// The linter settings buff reads for a file in `directory`, from the configuration files of
-/// `files`. A configuration file that can't be read or is invalid is passed over for the next,
-/// as buff falls back on the next configuration too.
+/// the linter settings buff reads for a file in `directory`, from the configuration files of
+/// `files`. a configuration file that can't be read or is invalid is passed over for the next,
+/// as buff falls back on the next configuration too
 fn resolve(
     files: &RecordedFiles,
     directory: &Path,
@@ -374,7 +374,7 @@ mod tests {
 
     use super::IsortConfig;
 
-    /// The line length buff reads for `/project/main.py` of `system`.
+    /// the line length buff reads for `/project/main.py` of `system`
     fn line_length(system: &TestSystem) -> usize {
         IsortConfig::for_file(system, Path::new("/project/main.py"), Path::new("/project"))
             .settings
@@ -392,7 +392,7 @@ mod tests {
         system
     }
 
-    /// A configuration file `extend`s another: an edit to the other is seen.
+    /// a configuration file `extend`s another: an edit to the other is seen
     #[test]
     fn edit_to_an_extended_file_is_seen() {
         let system = system(&[
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(line_length(&system), 50);
     }
 
-    /// A configuration file created where none was found is read.
+    /// a configuration file created where none was found is read
     #[test]
     fn configuration_created_later_is_read() {
         let system = system(&[("/project/main.py", "")]);
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(line_length(&system), 40);
     }
 
-    /// The user's own configuration is read from the system's configuration directory.
+    /// the user's own configuration is read from the system's configuration directory
     #[test]
     fn user_configuration_from_the_system() {
         let system = system(&[
@@ -435,7 +435,7 @@ mod tests {
     }
 
     /// `src` globs are matched against the system's files: a module in a matched directory is
-    /// the project's own.
+    /// the project's own
     #[test]
     fn src_globs_match_the_systems_files() {
         let system = system(&[

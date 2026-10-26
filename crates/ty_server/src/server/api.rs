@@ -163,7 +163,7 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::EndpointsHandler::METHOD => {
             background_request_task::<requests::EndpointsHandler>(req, BackgroundSchedule::Worker)
         }
-        // A merge's and a diff's texts, which are versions no document holds.
+        // a merge's and a diff's texts, which are versions no document holds
         requests::ResolveMergeConflictsHandler::METHOD => background_request_task::<
             requests::ResolveMergeConflictsHandler,
         >(req, BackgroundSchedule::Worker),
@@ -469,6 +469,9 @@ pub(super) fn notification(notif: server::Notification) -> Task {
         }
         notifications::DidChangeWatchedFiles::METHOD => {
             sync_notification_task::<notifications::DidChangeWatchedFiles>(notif)
+        }
+        notifications::DidCreateFiles::METHOD => {
+            sync_notification_task::<notifications::DidCreateFiles>(notif)
         }
         notifications::DidChangeWorkspaceFoldersHandler::METHOD => {
             sync_notification_task::<notifications::DidChangeWorkspaceFoldersHandler>(notif)

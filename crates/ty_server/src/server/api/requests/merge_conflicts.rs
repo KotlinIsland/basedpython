@@ -1,11 +1,11 @@
 //! `by/resolveMergeConflicts` and `by/diffIgnoredRanges`: what an editor's merge and diff tools
-//! ask a language about the texts they compare.
+//! ask a language about the texts they compare
 //!
-//! Both take texts rather than documents: a merge's base, ours and theirs, and a diff's two sides,
-//! are versions no file on disk holds. A `uri`, where one is given, names the file the texts are
+//! both take texts rather than documents: a merge's base, ours and theirs, and a diff's two sides,
+//! are versions no file on disk holds. a `uri`, where one is given, names the file the texts are
 //! versions of, which says how they are parsed and which isort configuration sorts their imports.
-//! See [`ty_ide::resolve_merge_conflicts`] and [`ty_ide::diff_ignored_ranges`] for what is
-//! answered.
+//! see [`ty_ide::resolve_file_merge_conflicts`] and [`ty_ide::diff_ignored_ranges`] for what is
+//! answered
 
 use lsp_types::{LspRequestMethod, MessageDirection, Range, Request, Uri};
 use ruff_db::system::SystemPathBuf;
@@ -41,7 +41,7 @@ pub(crate) struct ResolveMergeConflictsParams {
     uri: Option<Uri>,
 }
 
-/// The lines a conflict spans in each version.
+/// the lines a conflict spans in each version
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Conflict {
@@ -83,8 +83,8 @@ impl RequestHandler for ResolveMergeConflictsHandler {
 }
 
 impl BackgroundRequestHandler for ResolveMergeConflictsHandler {
-    /// The text each conflict resolves to, or `null` for one that is not resolved: all `null`
-    /// without a project to read the configuration of.
+    /// the text each conflict resolves to, or `null` for one that is not resolved: all `null`
+    /// without a project to read the configuration of
     fn run(
         snapshot: &SessionSnapshot,
         _client: &Client,
@@ -154,9 +154,9 @@ pub(crate) struct DiffIgnoredRangesParams {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiffIgnoredRanges {
-    /// Each import statement.
+    /// each import statement
     imports: Vec<Range>,
-    /// Each run of text that is only formatting.
+    /// each run of text that is only formatting
     formatting: Vec<Range>,
 }
 

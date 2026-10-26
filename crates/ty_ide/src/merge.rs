@@ -75,7 +75,7 @@ pub struct MergeTexts<'a> {
 ///
 /// `sort_imports` writes a run of import statements as the project's isort configuration sorts
 /// them, and answers `None` for anything else
-pub fn resolve_merge_conflicts(
+pub(crate) fn resolve_merge_conflicts(
     texts: MergeTexts<'_>,
     conflicts: &[ConflictLines],
     source_type: PySourceType,
@@ -101,7 +101,7 @@ pub fn resolve_merge_conflicts(
         .collect()
 }
 
-/// [`resolve_merge_conflicts`] for the file at `path` in `db`'s project, whose extension says
+/// `resolve_merge_conflicts` for the file at `path` in `db`'s project, whose extension says
 /// how it is parsed, and whose imports are sorted with the isort configuration buff reads for it:
 /// a project file's, or with no `path` the project root directory's
 pub fn resolve_file_merge_conflicts(
@@ -1588,8 +1588,8 @@ mod tests {
 
     use super::{ConflictLines, MergeTexts, resolve_merge_conflicts};
 
-    /// The file a merge left with git's diff3 conflict markers in it, each conflict replaced by
-    /// what resolves it, or left as git wrote it where nothing does.
+    /// the file a merge left with git's diff3 conflict markers in it, each conflict replaced by
+    /// what resolves it, or left as git wrote it where nothing does
     fn resolved(conflicted: &str) -> String {
         let (mut base, mut ours, mut theirs) = (String::new(), String::new(), String::new());
         let mut conflicts = Vec::new();

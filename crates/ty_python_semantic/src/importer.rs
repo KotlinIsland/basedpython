@@ -472,7 +472,7 @@ impl<'a> Importer<'a> {
     /// statements of one section are sorted among each other and separated as the sorter
     /// separates them, two members added to one `from` import are sorted, and two members added
     /// from a module the file doesn't import yet are listed by one new `from` import, with or
-    /// without a sorter's order to follow.
+    /// without a sorter's order to follow
     pub fn combined_edits<'b>(
         &self,
         actions: impl IntoIterator<Item = &'b ImportAction>,
@@ -531,9 +531,9 @@ impl<'a> Importer<'a> {
         Some(start..end)
     }
 
-    /// The edits that make the additions in `placements`: where the file's import sorter would
+    /// the edits that make the additions in `placements`: where the file's import sorter would
     /// make them, or without an order to follow, statements at the top of the file and members
-    /// after an import's last.
+    /// after an import's last
     fn placed_edits(&self, placements: &[Placement]) -> Vec<Edit> {
         if let Some(sorting) = &self.sorting
             && let Some(edits) = sorting.placed_edits(self, placements)
@@ -590,7 +590,7 @@ impl<'a> Importer<'a> {
     /// import statements the module's body starts its imports with, or in a notebook the body
     /// of `at`'s cell, which the sorter sorts on its own, and where `order` sorts each of them,
     /// worked out once into `blocks`. `None` when it starts at or after `at`, where the imports
-    /// have to be available.
+    /// have to be available
     fn import_block<'b, O: ImportOrdering>(
         &self,
         order: &O,
@@ -650,7 +650,7 @@ impl<'a> Importer<'a> {
         Some(edits)
     }
 
-    /// `statement` as `order`'s sorter writes it, wrapped to its line length.
+    /// `statement` as `order`'s sorter writes it, wrapped to its line length
     fn written<O: ImportOrdering>(&self, order: &O, statement: &NewStatement) -> String {
         let line_ending = self.stylist.line_ending().as_str();
         let text = statement.text();
@@ -667,8 +667,8 @@ impl<'a> Importer<'a> {
 
     /// the edits adding `statements` to the file's import block, each in its section, sorted
     /// among the section's imports and each other, with the blank lines and section headings
-    /// the sorter writes around them. Without an import block before `at`, the statements are
-    /// one of their own, where a statement goes without an order.
+    /// the sorter writes around them. without an import block before `at`, the statements are
+    /// one of their own, where a statement goes without an order
     fn placed_statements<O: ImportOrdering>(
         &self,
         order: &O,
@@ -759,7 +759,7 @@ impl<'a> Importer<'a> {
                 None => positions.len().checked_sub(1),
             };
 
-            // Between two imports of one line, as in `import os; import sys`, the statements
+            // between two imports of one line, as in `import os; import sys`, the statements
             // can only be written on that line
             if let (Some(before), Some(after)) = (before, after)
                 && !source
@@ -774,11 +774,11 @@ impl<'a> Importer<'a> {
                 continue;
             }
 
-            // The sorter takes the headings directly above the block's first import into the
+            // the sorter takes the headings directly above the block's first import into the
             // block and writes them again, and moves the other comments directly above an import
-            // with it. So the lines between the imports the statements go between, which are
+            // with it. so the lines between the imports the statements go between, which are
             // regenerated with them, run from the line after the import before them to the
-            // headings and blank lines above the import after them.
+            // headings and blank lines above the import after them
             let start = before.map_or_else(
                 || {
                     let mut start = source.line_start(block[0].start());
@@ -836,7 +836,7 @@ impl<'a> Importer<'a> {
     /// `added`, sorted, written as the sorter writes them after the import at `previous` and
     /// before the import at `next`: each preceded by the blank lines the sorter separates it
     /// from the statement before with, and by its section's heading when it starts the section,
-    /// and followed by the blank lines and heading the sorter writes above `next`.
+    /// and followed by the blank lines and heading the sorter writes above `next`
     fn separated<'p, O: ImportOrdering>(
         &self,
         order: &O,
@@ -874,9 +874,9 @@ impl<'a> Importer<'a> {
     }
 
     /// the edits listing `added`, sorted, among the members of the existing `from` import
-    /// `from`, each where `order` sorts it. When the import was written as the sorter writes it
+    /// `from`, each where `order` sorts it. when the import was written as the sorter writes it
     /// and the sorter would write it differently with the members added, as it wraps an import
-    /// that no longer fits on its line, the import is written again as the sorter writes it.
+    /// that no longer fits on its line, the import is written again as the sorter writes it
     fn placed_members<O: ImportOrdering>(
         &self,
         order: &O,
@@ -1350,11 +1350,11 @@ impl Placement {
     }
 }
 
-/// A member of a `from` import, and the name it is imported as.
+/// a member of a `from` import, and the name it is imported as
 type Member<'a> = (&'a str, Option<&'a str>);
 
-/// The statements added before the import of the block at the index, or after the block's last
-/// import for `None`, each with where it sorts.
+/// the statements added before the import of the block at the index, or after the block's last
+/// import for `None`, each with where it sorts
 type StatementSlot<'s, P> = (Option<usize>, Vec<(P, &'s NewStatement<'s>)>);
 
 /// `member`, or `member as asname`, as a `from` import lists it
@@ -1365,8 +1365,8 @@ fn imported_member((member, asname): Member) -> String {
     }
 }
 
-/// The edit that changes `old`, the text at `start`, to `new`, touching only what differs.
-/// `None` when nothing does.
+/// the edit that changes `old`, the text at `start`, to `new`, touching only what differs.
+/// `None` when nothing does
 fn minimal_edit(old: &str, new: &str, start: TextSize) -> Option<Edit> {
     let prefix = old
         .char_indices()
@@ -1397,11 +1397,11 @@ fn minimal_edit(old: &str, new: &str, start: TextSize) -> Option<Edit> {
     })
 }
 
-/// The statements and members `placements` add, combined: two members a sorter lists together
+/// the statements and members `placements` add, combined: two members a sorter lists together
 /// that a module the file doesn't import yet adds are one statement listing both, and the
-/// members added to one existing `from` import, by its start, are listed together. Each
+/// members added to one existing `from` import, by its start, are listed together. each
 /// statement's and import's members are sorted by `compare_members`, and `imports_member_alone`
-/// says which member the sorter writes in a `from` import of its own.
+/// says which member the sorter writes in a `from` import of its own
 fn combined<'p>(
     placements: &'p [Placement],
     order: &impl MemberOrder,
@@ -1474,7 +1474,7 @@ fn combined<'p>(
     (statements, members)
 }
 
-/// How a sorter lists the members of a `from` import, as [`combined`] needs to know it.
+/// how a sorter lists the members of a `from` import, as [`combined`] needs to know it
 trait MemberOrder {
     fn compare_members(&self, a: Member, b: Member) -> std::cmp::Ordering;
 
@@ -1491,7 +1491,7 @@ impl<O: ImportOrdering> MemberOrder for O {
     }
 }
 
-/// No sorter: members are listed in the order they are added, all in one `from` import.
+/// no sorter: members are listed in the order they are added, all in one `from` import
 struct Unordered;
 
 impl MemberOrder for Unordered {
