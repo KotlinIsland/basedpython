@@ -20,7 +20,7 @@ use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, ScopeKind};
 use ty_python_core::{SemanticIndex, semantic_index};
 use ty_python_semantic::SemanticModel;
 
-use super::evaluation::{NotOnce, Placement, is_pure, placement_in_statement};
+use super::evaluation::{NotOnce, Placement, is_stable_value, placement_in_statement};
 use super::flow::{
     bindings_of_symbol, reaching_definitions, rebound_from_nested_scope, resolving_scope,
 };
@@ -152,7 +152,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         }
     }
 
-    let pure = is_pure(value);
+    let pure = is_stable_value(&context.model, value);
     if pure {
         check_pure_value_is_stable(context, index, scope, &assignment, &reads, &in_suite)
             .map_err(|reason| refuse(&reason))?;
@@ -646,6 +646,9 @@ fn needs_parentheses(
         Expr::StringLiteral(string) => !string.value.is_implicit_concatenated(),
         Expr::BytesLiteral(bytes) => !bytes.value.is_implicit_concatenated(),
         Expr::FString(fstring) => !fstring.value.is_implicit_concatenated(),
+        // `2.real` reads as a float literal and a name, so a number keeps its own parentheses
+        // only before an attribute
+        Expr::NumberLiteral(_) => !matches!(parent, AnyNodeRef::ExprAttribute(_)),
         _ => false,
     };
     if atomic {
@@ -771,6 +774,59 @@ mod tests {
         def f(a):
             print(a)
             return a + a
+        ");
+    }
+
+    /// adding a string to a string runs nothing of the program's and makes the same value
+    /// wherever it is evaluated, so it is inlined into both reads
+    #[test]
+    fn value_over_builtin_scalars_inlines_into_every_read() {
+        assert_snapshot!(inline(
+            "
+            def f(name: str, count: int):
+                greeting<CURSOR> = 'hello ' + name
+                print(greeting * count)
+                return greeting
+            ",
+        ), @"
+        Inline variable `greeting`
+        ---
+
+        def f(name: str, count: int):
+            print(('hello ' + name) * count)
+            return 'hello ' + name
+        ");
+    }
+
+    /// a module's attribute can be assigned between the assignment and a read
+    #[test]
+    fn value_reading_a_module_attribute_is_not_inlined_into_every_read() {
+        assert_snapshot!(inline(
+            "
+            import math
+
+            def f():
+                tau<CURSOR> = math.pi * 2
+                print(tau)
+                return tau
+            ",
+        ), @"refused: Inline variable `tau` (its value would be evaluated once for each read, and evaluating it may have effects)");
+    }
+
+    #[test]
+    fn a_number_needs_no_parentheses_as_an_operand() {
+        assert_snapshot!(inline(
+            "
+            def f(total: int):
+                scale<CURSOR> = 2
+                return scale * total, scale.bit_length()
+            ",
+        ), @"
+        Inline variable `scale`
+        ---
+
+        def f(total: int):
+            return 2 * total, (2).bit_length()
         ");
     }
 

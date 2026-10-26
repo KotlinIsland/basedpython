@@ -433,8 +433,14 @@ one that asks while the caret moves is only offered what applies
 | put on separate lines   | `refactor.rewrite.splitList`        | a list not yet one element a line |
 | put on one line         | `refactor.rewrite.joinList`         | a list spread over several lines  |
 
+inlining is offered on the variable's assignment and on any of its reads alike, and
+replaces every read either way
+
 moving an expression can change when it runs, so that is what most refusals are
-about. a value with an effect is only inlined into a single read in the very next
+about. a value made of names and literals, and of python's own operators over
+builtin numbers and strings — `'hello ' + name` of a `str` — is the same value
+wherever it is evaluated, and is inlined into every read. any other value is only
+inlined into a single read in the very next
 statement, with nothing that could observe the move evaluated before it; an
 expression is only extracted above its statement when it runs exactly once each
 time the statement does — not in a loop condition, a conditional branch, a lambda

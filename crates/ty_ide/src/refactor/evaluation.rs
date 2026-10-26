@@ -6,6 +6,7 @@
 //! its statement runs, and when nothing evaluated before it could observe the
 //! move. This module answers both, following python's evaluation order.
 
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal, walk_node};
 use ruff_python_ast::{self as ast, AnyNodeRef, CmpOp, Expr, Operator, Stmt, UnaryOp};
 use ruff_text_size::Ranged;
 use ty_python_semantic::SemanticModel;
@@ -152,6 +153,32 @@ pub(crate) fn is_effect_free(model: &SemanticModel<'_>, expr: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// whether `expr` is effect free and evaluates to the same value wherever it is
+/// evaluated, as long as the names it reads are not rebound: [`is_effect_free`] without
+/// reading an attribute, since a module's attribute can be assigned between the two
+/// places — the value of `config.debug` is not the value of the names it reads
+pub(crate) fn is_stable_value(model: &SemanticModel<'_>, expr: &Expr) -> bool {
+    struct Attributes(bool);
+    impl<'a> SourceOrderVisitor<'a> for Attributes {
+        fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
+            if node.is_expr_attribute() {
+                self.0 = true;
+            }
+            if self.0 {
+                TraversalSignal::Skip
+            } else {
+                TraversalSignal::Traverse
+            }
+        }
+    }
+    if !is_effect_free(model, expr) {
+        return false;
+    }
+    let mut attributes = Attributes(false);
+    walk_node(&mut attributes, AnyNodeRef::from(expr));
+    !attributes.0
 }
 
 /// Whether the operation `expr` performs on its operands — not the evaluation of the
