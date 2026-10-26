@@ -423,7 +423,7 @@ impl WorkspaceSettingsIndex {
         if workspace_uri.scheme() != "file" {
             tracing::info!("Ignoring non-file workspace URI: {workspace_uri}");
             client.show_warning_message(format_args!(
-                "Ruff does not support non-file workspaces; Ignoring {workspace_uri}"
+                "buff does not support non-file workspaces; Ignoring {workspace_uri}"
             ));
             return Ok(());
         }

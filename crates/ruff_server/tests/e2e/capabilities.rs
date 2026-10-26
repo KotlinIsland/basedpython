@@ -5,6 +5,22 @@ use lsp_types::{DocumentFormattingRequest, DocumentRangeFormattingRequest, Regis
 
 use crate::TestServerBuilder;
 
+/// the server names itself as buff, the name it shows in everything else
+#[test]
+fn server_is_named_buff() -> Result<()> {
+    let server = TestServerBuilder::new()?.build();
+    let server_info = server
+        .initialization_result()
+        .expect("Server should return initialization capabilities")
+        .server_info
+        .as_ref()
+        .expect("the server names itself");
+
+    assert_eq!(server_info.name, "buff");
+
+    Ok(())
+}
+
 #[test]
 fn statically_registers_formatting_when_dynamic_registration_is_unsupported() -> Result<()> {
     let server = TestServerBuilder::new()?.build();

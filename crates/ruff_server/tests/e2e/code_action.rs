@@ -45,7 +45,7 @@ fn code_actions_for_python() -> Result<()> {
         @r#"
     [
       {
-        "title": "Ruff: Fix all auto-fixable problems",
+        "title": "buff: Fix all auto-fixable problems",
         "kind": "source.fixAll.ruff",
         "edit": {
           "changes": {
@@ -68,7 +68,7 @@ fn code_actions_for_python() -> Result<()> {
         }
       },
       {
-        "title": "Ruff: Organize imports",
+        "title": "buff: Organize imports",
         "kind": "source.organizeImports.ruff",
         "edit": {
           "changes": {}
@@ -111,7 +111,7 @@ extend-select = ["F401"]
     assert_json_snapshot!(actions, @r#"
     [
       {
-        "title": "Ruff (rule-codes-in-selectors): Replace rule code with `unused-import`",
+        "title": "buff (rule-codes-in-selectors): Replace rule code with `unused-import`",
         "kind": "quickfix",
         "diagnostics": [
           {
@@ -130,7 +130,7 @@ extend-select = ["F401"]
             "codeDescription": {
               "href": "https://kotlinisland.github.io/basedpython/rules/rule-codes-in-selectors"
             },
-            "source": "Ruff",
+            "source": "buff",
             "message": "Rule code used instead of name in `lint.extend-select`\n\nhelp: Replace rule code with `unused-import`",
             "tags": []
           }
@@ -158,7 +158,7 @@ extend-select = ["F401"]
         "data": "file://<temp_dir>/ruff.toml"
       },
       {
-        "title": "Ruff: Fix all auto-fixable problems",
+        "title": "buff: Fix all auto-fixable problems",
         "kind": "source.fixAll.ruff",
         "edit": {
           "changes": {
@@ -225,8 +225,8 @@ preview = true
         })
         .collect();
 
-    assert!(titles.contains(&"Ruff (unused-import): Remove unused import: `os`"));
-    assert!(titles.contains(&"Ruff (unused-import): Disable for this line"));
+    assert!(titles.contains(&"buff (unused-import): Remove unused import: `os`"));
+    assert!(titles.contains(&"buff (unused-import): Disable for this line"));
 
     Ok(())
 }
@@ -251,7 +251,7 @@ fn invalid_code_action_resolve_data_returns_unchanged_action() -> Result<()> {
     let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
 
     let action = CodeAction {
-        title: "Ruff: Fix all auto-fixable problems".to_string(),
+        title: "buff: Fix all auto-fixable problems".to_string(),
         kind: Some(CodeActionKind::from("source.fixAll.ruff")),
         data: Some(serde_json::json!("not-a-uri")),
         ..Default::default()

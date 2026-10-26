@@ -4,7 +4,7 @@ expression: actions
 ---
 [
   {
-    "title": "Ruff: Format document and organize imports",
+    "title": "buff: Format document and organize imports",
     "kind": "source.formatAndOrganizeImports.ruff",
     "edit": {
       "changes": {

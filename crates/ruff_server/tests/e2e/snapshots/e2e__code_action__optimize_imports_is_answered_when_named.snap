@@ -4,7 +4,7 @@ expression: actions
 ---
 [
   {
-    "title": "Ruff: Optimize imports",
+    "title": "buff: Optimize imports",
     "kind": "source.optimizeImports.ruff",
     "edit": {
       "changes": {

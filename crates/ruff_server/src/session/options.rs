@@ -355,7 +355,7 @@ impl AllOptions {
                         Falling back to default client settings..."
                     );
                     client.show_error_message(
-                        "Ruff received invalid client settings - \
+                        "buff received invalid client settings - \
                         falling back to default client settings.",
                     );
                 })

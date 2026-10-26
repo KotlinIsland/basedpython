@@ -89,7 +89,7 @@ impl super::SyncRequestHandler for ExecuteCommand {
         for Argument { uri, version } in arguments {
             let Some(snapshot) = session.take_snapshot(uri.clone()) else {
                 tracing::error!("Document at {uri} could not be opened");
-                client.show_error_message("Ruff does not recognize this file");
+                client.show_error_message("buff does not recognize this file");
                 return Ok(None);
             };
             match command {
@@ -179,7 +179,7 @@ fn apply_edit(
                     .failure_reason
                     .unwrap_or_else(|| String::from("unspecified reason"));
                 tracing::error!("Failed to apply workspace edit: {reason}");
-                client.show_error_message(format_args!("Ruff was unable to apply edits: {reason}"));
+                client.show_error_message(format_args!("buff was unable to apply edits: {reason}"));
             }
         },
     )

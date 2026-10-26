@@ -59,7 +59,7 @@ ignore = ["F401"]
           "codeDescription": {
             "href": "https://kotlinisland.github.io/basedpython/rules/unused-import"
           },
-          "source": "Ruff",
+          "source": "buff",
           "message": "`os` imported but unused\n\nhelp: Remove unused import: `os`",
           "tags": [
             1

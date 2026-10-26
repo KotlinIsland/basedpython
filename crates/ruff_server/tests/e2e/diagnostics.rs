@@ -35,7 +35,7 @@ fn uses_human_readable_names_in_preview() -> Result<()> {
           "codeDescription": {
             "href": "https://kotlinisland.github.io/basedpython/rules/unused-import"
           },
-          "source": "Ruff",
+          "source": "buff",
           "message": "`os` imported but unused\n\nhelp: Remove unused import: `os`",
           "tags": [
             1
@@ -119,7 +119,7 @@ extend-select = ["F401"]
           "codeDescription": {
             "href": "https://kotlinisland.github.io/basedpython/rules/rule-codes-in-selectors"
           },
-          "source": "Ruff",
+          "source": "buff",
           "message": "Rule code used instead of name in `lint.extend-select`\n\nhelp: Replace rule code with `unused-import`",
           "tags": [],
           "data": {
@@ -180,7 +180,7 @@ fn invalid_pyproject_toml_diagnostic() -> Result<()> {
           "codeDescription": {
             "href": "https://kotlinisland.github.io/basedpython/rules/invalid-pyproject-toml"
           },
-          "source": "Ruff",
+          "source": "buff",
           "message": "Failed to parse pyproject.toml: invalid type: integer `1`, expected a string",
           "tags": []
         }
