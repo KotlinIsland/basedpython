@@ -30,6 +30,7 @@ mod code_action;
 mod custom_extension;
 mod diagnostics;
 mod execute_command;
+mod format_settings;
 mod hover;
 mod notebook;
 mod workspace;

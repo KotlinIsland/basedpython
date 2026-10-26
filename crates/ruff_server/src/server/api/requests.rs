@@ -5,6 +5,7 @@ mod execute_command;
 mod explain_rule;
 mod format;
 mod format_range;
+mod format_settings;
 mod hover;
 mod shutdown;
 
@@ -22,6 +23,7 @@ pub(super) use execute_command::ExecuteCommand;
 pub(super) use explain_rule::ExplainRule;
 pub(super) use format::Format;
 pub(super) use format_range::FormatRange;
+pub(super) use format_settings::FormatSettingsHandler;
 pub(super) use hover::Hover;
 pub(super) use shutdown::ShutdownHandler;
 

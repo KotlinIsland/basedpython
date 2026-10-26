@@ -64,6 +64,9 @@ pub(super) fn request(req: server::Request) -> Task {
         request::Format::METHOD => {
             background_request_task::<request::Format>(req, BackgroundSchedule::Fmt)
         }
+        request::FormatSettingsHandler::METHOD => background_request_task::<
+            request::FormatSettingsHandler,
+        >(req, BackgroundSchedule::Worker),
         request::FormatRange::METHOD => {
             background_request_task::<request::FormatRange>(req, BackgroundSchedule::Fmt)
         }

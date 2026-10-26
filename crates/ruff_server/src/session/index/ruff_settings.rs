@@ -24,8 +24,9 @@ use crate::session::settings::{EditorSettings, ResolvedConfiguration};
 
 #[derive(Debug)]
 pub(crate) struct RuffSettings {
-    /// The path to this configuration file, used for debugging.
-    /// The default fallback configuration does not have a file path.
+    /// the path to this configuration file, which `buff/formatSettings` answers as the file a
+    /// document's settings were read from. the default fallback configuration does not have a
+    /// file path
     path: Option<PathBuf>,
     /// The resolved settings.
     settings: Settings,

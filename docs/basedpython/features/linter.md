@@ -67,6 +67,34 @@ both for the `basedpython` language as well as `python`, so a client that names
 `buff` in the `serverInfo` of its `initialize` answer, and `buff` is the source of
 its diagnostics
 
+an editor that shows the project's code style, or draws its right margin
+where `buff` wraps, asks `buff/formatSettings` for a document it has opened:
+
+```json
+{ "textDocument": { "uri": "file:///src/main.by" } }
+```
+
+and is answered with the settings `buff` formats that document with, resolved
+from the configuration that governs it and whatever the editor's own settings
+override in it, spelled as the configuration spells them:
+
+```json
+{
+  "lineLength": 100,
+  "indentWidth": 4,
+  "indentStyle": "space",
+  "quoteStyle": "single",
+  "lineEnding": "auto",
+  "configurationFile": "file:///pyproject.toml"
+}
+```
+
+`indentStyle` is `space` or `tab`, `quoteStyle` is `double`, `single` or
+`preserve`, and `lineEnding` is `auto`, `lf`, `cr-lf` or `native`.
+`configurationFile` is the file the settings were read from, and `null` when no
+file configures the document. the answer is `null` for a document the editor has
+not opened
+
 ## what the linter does not check
 
 the linter reads one file at a time and has no types. anything that takes a type
