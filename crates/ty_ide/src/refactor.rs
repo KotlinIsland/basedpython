@@ -22,6 +22,7 @@ mod extract_variable;
 mod flow;
 mod hazards;
 mod inline_variable;
+mod move_symbol;
 mod names;
 mod return_annotation;
 mod split_join;
@@ -38,6 +39,8 @@ use ty_python_core::ProgramFile;
 use ty_python_semantic::SemanticModel;
 
 use crate::FileEdit;
+
+pub use move_symbol::{MovableKind, MovableSymbol, SymbolMove, movable_symbol, move_symbol};
 
 /// The refactorings the server knows how to perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

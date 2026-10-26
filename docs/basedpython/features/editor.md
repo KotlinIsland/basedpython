@@ -570,6 +570,63 @@ a split list ends with a comma, which tells a formatter it is meant to stay spli
 and a joined one loses it unless it is a tuple of one. a list with a comment in it
 is refused, since joining would put what follows the comment inside it
 
+### moving a definition
+
+a module's top-level function, class or variable moves to another module of the
+project with `by/moveSymbol`, which a code action could not be: the user picks the
+target. the definition is cut with its decorators and the comments directly above
+it and appended to the target, and what it reads from its old module comes with
+it — an import it uses is written in the target too, and dropped from the old module
+when nothing else there uses it and no other module imports it from there, and another of the old module's names is imported
+from there:
+
+```py
+# shapes/util.py                       # shapes/geometry.py, after moving `area`
+import math                            import math
+
+RATE = 2                               from shapes.util import RATE
+
+def area(r):                           def area(r):
+    return math.pi * r * r * RATE          return math.pi * r * r * RATE
+```
+
+every reference in the project follows it: `from shapes.util import area` imports
+it from `shapes.geometry` (or, among other names, loses it to a new import),
+`shapes.util.area` reads `shapes.geometry.area` with `import shapes.geometry` added,
+a module that reached it through `from shapes.util import *` imports it by name, an
+`__all__` that listed it moves it, and the old module imports it back when it still
+uses it. each import added goes where the project's isort configuration sorts it
+
+the move is refused, with the reason, when the program would not run as before:
+
+- the definition reads a name private to its module, `_SECRET`, which nothing
+    outside the module is meant to import — make it public, or move it too
+- the two modules would import each other, which python cannot load: the old module
+    still uses the definition and the definition reads the old module's names, or the
+    target imports the old module already
+- the target binds the name already, or binds a name the definition reads to
+    something else
+- the name is bound more than once in its module
+- the definition assigns a name of its module through `global`, which would name
+    the target's once moved
+- the definition reads a name its module binds more than once, which an import
+    would see only as it was when imported
+- the definition reads an attribute of its module object, `__name__` or
+    `__file__`, which would be the target's
+- the definition reads a builtin the target binds to something else
+- the modules are not the same kind of file: basedpython does not move into python,
+    nor python into basedpython, which reads it differently
+
+`by/prepareMoveSymbol` takes `textDocument` and `position` — in a top-level
+definition's name, or in a reference to one — and answers `{name, kind, module, uri, range}`: the name, `function`, `class` or `variable`, the dotted name of the module
+it is defined in, and its name's range in the file `uri`, which need not be the
+document asked about; `null` where there is nothing to move. `by/moveSymbol` takes
+the same and `target`, the URI of an existing `.py` or `.by` file of the project
+(an editor creates a new module before asking), and answers `{edit, warnings}`, a
+`WorkspaceEdit` of `changes` to every file the move changes and the references it
+left as they were, each with its file and line, or `{refused, warnings}`, the reason
+nothing is moved. two edits at one position of a file apply in the order listed
+
 ## unwrap and remove
 
 `by/unwrap` answers what an editor's *unwrap/remove* offers around a range, innermost

@@ -240,6 +240,15 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::DeclarationRequestHandler::METHOD => background_document_request_task::<
             requests::DeclarationRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::PrepareMoveSymbolRequestHandler::METHOD => background_document_request_task::<
+            requests::PrepareMoveSymbolRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
+        // searches the whole project for references, like a rename
+        requests::MoveSymbolRequestHandler::METHOD => background_document_request_task::<
+            requests::MoveSymbolRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),

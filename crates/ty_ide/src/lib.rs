@@ -109,7 +109,10 @@ pub use override_members::{
     override_members,
 };
 pub use pasted_imports::{CopiedCode, CopiedImport, PastedImports, copied_imports, pasted_imports};
-pub use refactor::{Refactor, RefactorKind, RefactorOffer, refactor, refactors};
+pub use refactor::{
+    MovableKind, MovableSymbol, Refactor, RefactorKind, RefactorOffer, SymbolMove, movable_symbol,
+    move_symbol, refactor, refactors,
+};
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};
 pub use selection_range::selection_range;

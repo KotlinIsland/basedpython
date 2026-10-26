@@ -1098,8 +1098,11 @@ pub struct MembersInScope<'ast> {
 
 impl<'ast> MembersInScope<'ast> {
     /// An empty scope for importing a name that is already known to be unbound.
-    /// This avoids querying inferred types while constructing a diagnostic fix.
-    pub(crate) fn empty(at: TextSize) -> Self {
+    /// This avoids querying inferred types while constructing a diagnostic fix, and serves a
+    /// refactoring that has checked itself that the names it imports are free where it imports
+    /// them, as one moving a definition does: the definition is still in scope where it is
+    /// moving from, and would otherwise be taken for a conflict.
+    pub fn empty(at: TextSize) -> Self {
         Self {
             at,
             map: FxHashMap::default(),

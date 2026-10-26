@@ -53,6 +53,7 @@ mod implementation;
 mod initialize;
 mod injections;
 mod inlay_hints;
+mod move_symbol;
 mod named_text;
 mod notebook;
 mod on_type_formatting;
