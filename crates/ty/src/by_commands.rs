@@ -12,7 +12,7 @@ use ruff_db::diagnostic::{
     SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::system_path_to_file;
-use ruff_db::system::{OsSystem, SystemPath};
+use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_text_size::TextRange;
 use ty_project::metadata::options::OutputFormat;
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
@@ -27,8 +27,8 @@ use by_stage::emit::{
     CheckGate, Emit, Transpiled, is_unusable_source, transpile_failure_diagnostic,
 };
 use by_stage::project::{
-    BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, may_contain_sources, module_roots,
-    source_files,
+    BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, build_project_db_for,
+    may_contain_sources, module_roots, source_files,
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
 use by_stage::runtime::RuntimeLayout;
@@ -216,7 +216,13 @@ pub(crate) fn cmd_run(
     crate::by_stamps::fill_discovered(&mut config.stamps, project.root(), Some(&target));
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, None)?;
+    // the program is checked against the packages of the python it is about to run on
+    let checked_against = interpreter
+        .named_for_run
+        .then(|| environment_of(&python))
+        .flatten();
+    let (db, handles, rebuilder, root) =
+        build_project_db_for(&cwd, BY_SOURCES, None, checked_against.as_deref())?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Failure);
@@ -680,6 +686,10 @@ fn latest_python_version() -> PythonVersion {
 struct Interpreter {
     path: String,
     origin: String,
+    /// whether the command was told which python to run on, by `--python` or `$PYTHON`, rather
+    /// than finding the project's environment: the checker finds that one itself, and an
+    /// interpreter named only for the run has to be handed to it
+    named_for_run: bool,
     /// whether this is the bare `python3` off `PATH` — the last resort, and the
     /// only origin that says nothing about what the project targets
     is_from_path: bool,
@@ -710,7 +720,12 @@ fn discover_interpreter(
     let named = |path: String, origin: &str| Interpreter {
         path,
         origin: origin.to_owned(),
+        named_for_run: false,
         is_from_path: false,
+    };
+    let named_for_run = |path: String, origin: &str| Interpreter {
+        named_for_run: true,
+        ..named(path, origin)
     };
 
     if let Some(flag) = flag {
@@ -719,14 +734,14 @@ fn discover_interpreter(
         // run as it is written, which finds a bare name like `python3.14` on
         // `PATH`, as `$PYTHON` and the `python3` fallback are found
         if flag.is_file() {
-            return Ok(named(flag.display().to_string(), "`--python`"));
+            return Ok(named_for_run(flag.display().to_string(), "`--python`"));
         }
         if let Some(interpreter) =
             interpreter_in_environment(flag, SysPrefixPathOrigin::PythonCliFlag)
         {
-            return Ok(named(interpreter, "`--python`"));
+            return Ok(named_for_run(interpreter, "`--python`"));
         }
-        return Ok(named(flag.display().to_string(), "`--python`"));
+        return Ok(named_for_run(flag.display().to_string(), "`--python`"));
     }
 
     // what the project says its environment is, which is what the checker used.
@@ -756,12 +771,13 @@ fn discover_interpreter(
     }
 
     if let Ok(python) = std::env::var(EnvVars::PYTHON) {
-        return Ok(named(python, "`PYTHON`"));
+        return Ok(named_for_run(python, "`PYTHON`"));
     }
 
     Ok(discovered.unwrap_or_else(|| Interpreter {
         path: "python3".to_owned(),
         origin: "`PATH`".to_owned(),
+        named_for_run: false,
         is_from_path: true,
     }))
 }
@@ -903,6 +919,7 @@ fn discovered_environment(root: &Path) -> Option<Interpreter> {
     Some(Interpreter {
         path: interpreter.to_string(),
         origin: environment.origin().to_string(),
+        named_for_run: false,
         is_from_path,
     })
 }
@@ -922,6 +939,25 @@ fn interpreter_in_environment(path: &Path, origin: SysPrefixPathOrigin) -> Optio
 /// Probe `python`'s `major.minor` version (e.g. `3.9`) so `run` can target the
 /// interpreter it will execute on. Returns `None` if the interpreter can't be
 /// run or its output can't be parsed.
+/// The environment `python` runs in, as the checker takes one: the interpreter's own path when
+/// it names a file, and otherwise — a bare name such as `python3.14`, found on `PATH` — the
+/// `sys.prefix` the interpreter reports, since the checker does not search `PATH`.
+fn environment_of(python: &str) -> Option<SystemPathBuf> {
+    if Path::new(python).is_file() {
+        return SystemPathBuf::from_path_buf(std::path::absolute(python).ok()?).ok();
+    }
+    let output = Command::new(python)
+        .arg("-c")
+        .arg("import sys; print(sys.prefix)")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = String::from_utf8(output.stdout).ok()?;
+    Some(SystemPathBuf::from(prefix.trim()))
+}
+
 fn detect_python_version(python: &str) -> Option<PythonVersion> {
     let output = Command::new(python)
         .arg("-c")

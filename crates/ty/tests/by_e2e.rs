@@ -902,6 +902,83 @@ fn run_executes_module() {
     );
 }
 
+/// a program is checked against the packages of the python `--python` names to run it on, not
+/// against the environment the project would have found, so a package only that python has
+/// resolves rather than failing the check that comes before the run
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_checks_against_the_python_it_runs_on() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let environment = dir.path().join("env");
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let made = Command::new(&python)
+        .args(["-m", "venv", "--without-pip"])
+        .arg(&environment)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        eprintln!("skipping: {python} cannot make a virtual environment");
+        return;
+    }
+    // where the environment keeps its packages, which is `lib/pythonX.Y/site-packages` on unix
+    // and `Lib/site-packages` on windows
+    let purelib = Command::new(&python)
+        .args([
+            "-c",
+            "import sys, sysconfig\n\
+             print(sysconfig.get_path('purelib', 'venv', vars={'base': sys.argv[1], 'platbase': sys.argv[1]}))",
+        ])
+        .arg(&environment)
+        .output()
+        .expect("failed to spawn python");
+    if !purelib.status.success() {
+        eprintln!(
+            "skipping: {python} cannot say where a virtual environment keeps its packages:\n{}",
+            String::from_utf8_lossy(&purelib.stderr)
+        );
+        return;
+    }
+    let site_packages = PathBuf::from(String::from_utf8_lossy(&purelib.stdout).trim());
+    fs::create_dir_all(site_packages.join("fancypkg")).unwrap();
+    fs::write(site_packages.join("fancypkg/__init__.py"), "VALUE = 42\n").unwrap();
+
+    let project = dir.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pyproject.toml"),
+        "[project]\nname = \"project\"\nversion = \"0\"\n[tool.basedpython]\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("main.by"),
+        "import fancypkg\n\nprint(fancypkg.VALUE)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env_remove("VIRTUAL_ENV")
+        .env_remove("CONDA_PREFIX")
+        .env_remove("PYTHON")
+        .arg("run")
+        .arg("--python")
+        .arg(&environment)
+        .arg("main")
+        .current_dir(&project)
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
 /// the program runs out of a directory of transpiled copies that is deleted when
 /// the run ends, so every path python derives from a module's origin named a
 /// temporary file — leaving a tool started anywhere but the project root with

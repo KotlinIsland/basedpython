@@ -258,6 +258,11 @@ against, resolved the same way:
 1. `$PYTHON`
 1. `python3` on `PATH`
 
+the check `by run` makes first is against the same python: a package only the
+interpreter `--python` or `$PYTHON` names has installed is found by the check as it
+is by the run, rather than reported as an unresolved import because the project's
+own environment lacks it
+
 all of it relative to the project, not to where the command was run: `by run` in a
 subdirectory is still this project, uses the project's `.venv`, and builds the
 project's modules

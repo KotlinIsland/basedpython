@@ -59,7 +59,10 @@ project's `pyproject.toml`. `--python` overrides it for one run, and `PYTHON`
 stands in only where the project has no environment of its own, above the bare
 `python3` discovery falls back to. a third-party package lives in that
 environment's `site-packages` and nowhere else, so running anywhere else fails
-on an import the checker had no complaint about. all of that resolves against
+on an import the checker had no complaint about. so the check before the run is
+made against the python the run uses: one `--python` or `PYTHON` names, a bare name
+found on `PATH` by the `sys.prefix` it reports, has its packages checked as well as
+run. all of that resolves against
 the project root rather than the working directory, so `by run` in a
 subdirectory is still this project
 

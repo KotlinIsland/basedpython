@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
+use ty_project::metadata::options::{EnvironmentOptions, Options};
+use ty_project::metadata::value::RelativePathBuf;
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 
 /// Everything needed to build a project db a second time.
@@ -268,6 +270,23 @@ pub fn build_project_db(
     extensions: &[&str],
     output: Option<&Path>,
 ) -> anyhow::Result<ProjectBuild> {
+    build_project_db_for(cwd, extensions, output, None)
+}
+
+/// [`build_project_db`], checking the project against the python environment `python` — an
+/// interpreter or the environment holding it, as `by check --python` takes — rather than the
+/// one the project's configuration and discovery would find
+///
+/// what runs a program decides which packages it imports, so a command that runs the program on
+/// an interpreter it was told about has to check it against that interpreter's packages: checked
+/// against another environment, an import the program will find is reported as unresolved, and
+/// one it will not find passes
+pub fn build_project_db_for(
+    cwd: &Path,
+    extensions: &[&str],
+    output: Option<&Path>,
+    python: Option<&SystemPath>,
+) -> anyhow::Result<ProjectBuild> {
     // the project root must be canonicalized the same way the included files
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
@@ -278,8 +297,17 @@ pub fn build_project_db(
     let sys_cwd = SystemPath::from_std_path(&canonical_cwd)
         .with_context(|| format!("non-utf8 path: {}", canonical_cwd.display()))?;
     let system = OsSystem::new(sys_cwd);
-    let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
+    let mut project_metadata = ProjectMetadata::discover(sys_cwd, &system)
         .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
+    if let Some(python) = python {
+        project_metadata.set_override_options(Options {
+            environment: Some(EnvironmentOptions {
+                python: Some(RelativePathBuf::cli(python)),
+                ..EnvironmentOptions::default()
+            }),
+            ..Options::default()
+        });
+    }
 
     // the project is the project wherever the command was run from. rooting this
     // at the working directory instead means `by run` inside `tests/` transpiles
