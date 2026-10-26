@@ -433,11 +433,20 @@ fn run_test(
 
     // Test to fix all fixable diagnostics and verify that they don't introduce any syntax errors.
     // But don't try to run fixes for tests that are expected to panic.
+    //
+    // basedpython: an mdtest calls `reveal_type` without importing it as a matter of course, and
+    // fixing that adds the same import to nearly every test. applying it alone would type check
+    // the whole test a second time, a fifth of the suite's time, for a fix that
+    // `directives/reveal_type.md` covers, so it is left out here as it is left out of the
+    // snapshots above
     if test.should_expect_panic().is_err() {
         let token_source = CancellationTokenSource::new();
         let result = fix_all_diagnostics(
             db,
-            all_diagnostics,
+            all_diagnostics
+                .into_iter()
+                .filter(|diagnostic| !diagnostic.id().is_lint_named(&UNDEFINED_REVEAL.name()))
+                .collect(),
             Applicability::Unsafe,
             &token_source.token(),
         )

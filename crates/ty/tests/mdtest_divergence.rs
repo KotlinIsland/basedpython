@@ -30,6 +30,8 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use test_case::test_case;
+
 fn mdtest_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../ty_python_semantic/resources/mdtest")
 }
@@ -449,12 +451,46 @@ fn with_reveal_stub(transpiled: &str) -> String {
     }
 }
 
-#[test]
+/// how many tests the blocks are spread over. each is a test of its own, so nextest runs them
+/// beside one another and holds each to its own time limit, where one test running the whole
+/// corpus was held to a limit that the corpus outgrows as features add blocks
+const SHARDS: u64 = 8;
+
+/// the shard the blocks of the mdtest at `name` run in. a path's FNV-1a hash keeps a file in
+/// one shard as others come and go, and spreads the files without a list to rebalance. an
+/// entry of [`EXCLUDED`], [`REQUIRES`] or [`DIVERGES_BELOW`] goes to its file's shard the same
+/// way, so the shard that runs a section is the one that checks the entries naming it
+fn shard_of(name: &str) -> u64 {
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    }) % SHARDS
+}
+
+/// the blocks a shard works on at once. each alternates a cpu-bound `by` with a wait on the
+/// python it runs, so two keep a core busy. nextest runs shards beside one another and beside
+/// other tests, so a shard declares these threads to it, as `threads-required` in
+/// `.config/nextest.toml`, rather than sizing itself to the whole machine
+const SHARD_WORKERS: usize = 2;
+
+#[test_case(0)]
+#[test_case(1)]
+#[test_case(2)]
+#[test_case(3)]
+#[test_case(4)]
+#[test_case(5)]
+#[test_case(6)]
+#[test_case(7)]
+fn clean_mdtest_blocks_run(shard: u64) {
+    run_shard(shard);
+}
+
+/// the checker-clean blocks of the mdtests in `shard`, each transpiled and run
 #[expect(
     clippy::print_stderr,
     reason = "skip diagnostic when python is unavailable"
 )]
-fn clean_mdtest_blocks_run() {
+fn run_shard(shard: u64) {
+    assert!(shard < SHARDS, "shard {shard} is past the last of {SHARDS}");
     let Some(python) = python() else {
         eprintln!("skipping: no python 3.13 interpreter available (uv on unix, or set PYTHON)");
         return;
@@ -581,6 +617,9 @@ fn clean_mdtest_blocks_run() {
             .expect("an mdtest is under the mdtest directory")
             .to_string_lossy()
             .replace('\\', "/");
+        if shard_of(&name) != shard {
+            continue;
+        }
         let markdown = fs::read_to_string(file).expect("read mdtest");
         for (i, block) in by_blocks(&markdown).into_iter().enumerate() {
             if has_expected_diagnostics(&block.source) || block.multi_file {
@@ -624,13 +663,13 @@ fn clean_mdtest_blocks_run() {
     let stale: Vec<String> = EXCLUDED
         .iter()
         .zip(&excluded_seen)
-        .filter(|(_, seen)| !**seen)
+        .filter(|((file, ..), seen)| shard_of(file) == shard && !**seen)
         .map(|((file, heading, _), _)| format!("{file}: {heading}"))
         .chain(
             REQUIRES
                 .iter()
                 .zip(&requires_seen)
-                .filter(|(_, seen)| !**seen)
+                .filter(|((file, ..), seen)| shard_of(file) == shard && !**seen)
                 .map(|((file, heading, _, _), _)| {
                     format!("{file}: {}", heading.unwrap_or("every section"))
                 }),
@@ -639,7 +678,7 @@ fn clean_mdtest_blocks_run() {
             DIVERGES_BELOW
                 .iter()
                 .zip(&diverges_below_seen)
-                .filter(|(_, seen)| !**seen)
+                .filter(|((file, ..), seen)| shard_of(file) == shard && !**seen)
                 .map(|((file, heading, _, _), _)| format!("{file}: {heading}")),
         )
         .collect();
@@ -665,14 +704,7 @@ fn clean_mdtest_blocks_run() {
         None => failures.lock().unwrap().push(report),
     };
     let next = AtomicUsize::new(0);
-    // each block alternates a cpu-bound `by transpile` with a wait on the python
-    // subprocess, and `by` startup also reads typeshed from disk — so a little
-    // oversubscription past the core count overlaps that i/o and keeps the cores
-    // busy, while the cap bounds how many processes are ever live at once
-    let workers = std::thread::available_parallelism()
-        .map_or(4, |n| n.get() * 2)
-        .clamp(1, 16)
-        .min(total);
+    let workers = SHARD_WORKERS.min(total);
 
     // work-stealing pool: each worker claims the next index and processes it
     // until the list is drained. the closures borrow the shared state (the
@@ -774,7 +806,7 @@ fn clean_mdtest_blocks_run() {
     let refused = refused.into_inner().expect("refusals mutex poisoned");
     let diverged = diverged.into_inner().expect("divergences mutex poisoned");
     for (entry, (file, heading, floor, _)) in REQUIRES.iter().enumerate() {
-        if minor < *floor && !refused[entry] {
+        if shard_of(file) == shard && minor < *floor && !refused[entry] {
             failures.push(format!(
                 "{file}: {}: no block is refused below 3.{floor} any more; remove it from `REQUIRES`",
                 heading.unwrap_or("every section")
@@ -782,7 +814,7 @@ fn clean_mdtest_blocks_run() {
         }
     }
     for (entry, (file, heading, floor, _)) in DIVERGES_BELOW.iter().enumerate() {
-        if minor < *floor && !diverged[entry] {
+        if shard_of(file) == shard && minor < *floor && !diverged[entry] {
             failures.push(format!(
                 "{file}: {heading}: no block diverges below 3.{floor} any more; remove it from \
                  `DIVERGES_BELOW`"
