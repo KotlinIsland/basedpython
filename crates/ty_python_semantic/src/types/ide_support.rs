@@ -1829,15 +1829,15 @@ fn argument_form_from_binding<'db>(
     CallArgumentForm::Unknown
 }
 
-/// The type of a tuple or a list of targets a value is unpacked into: `kind, _, size` in
+/// the type of a tuple or a list of targets a value is unpacked into: `kind, _, size` in
 /// `kind, _, size = spec.partition(":")` is `tuple[str, str, str]`, the tuple of what each of
-/// its targets is bound to. A starred target, bound to a list of what it takes, stands for any
+/// its targets is bound to. a starred target, bound to a list of what it takes, stands for any
 /// number of elements of that list's element type, so `first, *rest` over a `list[int]` is
-/// `tuple[int, *tuple[int, ...]]`.
+/// `tuple[int, *tuple[int, ...]]`
 ///
 /// ty records no type for such a target, since it is not evaluated: the value is, and each target
 /// is bound to a part of it. `None` for anything else, and for a target part of which has no
-/// type.
+/// type
 pub fn unpacking_target_type<'db>(
     model: &SemanticModel<'db>,
     target: ast::ExprRef<'_>,
@@ -4827,6 +4827,45 @@ pub fn iterable_element_type<'db>(
 /// `await` would accept.
 pub fn is_awaitable<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
     ty.try_await(db, env).is_ok()
+}
+
+/// A use a value can be put to, as a postfix template written after it puts it to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueUse {
+    /// looping over it
+    Iterate,
+    /// measuring it with `len`
+    Measure,
+    /// entering it with `with`
+    Enter,
+    /// testing it for being `None`, which is only worth doing when it may be
+    TestForNone,
+}
+
+/// Whether a value of type `ty` can be put to `use_`. A type ty cannot read, `Unknown` among
+/// them, can be put to any.
+pub fn value_supports<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    use_: ValueUse,
+) -> bool {
+    match use_ {
+        ValueUse::Iterate => ty.try_iterate(db, env).is_ok(),
+        ValueUse::Measure => ty
+            .try_call_dunder(
+                db,
+                env,
+                "__len__",
+                CallArguments::none(),
+                TypeContext::default(),
+            )
+            .is_ok(),
+        ValueUse::Enter => ty
+            .try_enter_with_mode(db, env, ty_python_core::EvaluationMode::Sync)
+            .is_ok(),
+        ValueUse::TestForNone => Type::none(db, env).is_assignable_to(db, env, ty),
+    }
 }
 
 /// What calling `ty` with no arguments gives, or `None` when it can't be called

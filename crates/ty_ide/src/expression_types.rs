@@ -6,9 +6,9 @@
 //!
 //! on `shapes` the answer is `shapes`, `total_area(shapes)` and `total_area(shapes) * 2`, from the
 //! innermost out, each with the type ty inferred for it: `list[Shape]`, `float`, `float`. on a
-//! selection of `total_area(shapes)` it starts from that call. On `kind` in
+//! selection of `total_area(shapes)` it starts from that call. on `kind` in
 //! `kind, _, size = spec.partition(":")` it is `kind` and the tuple of targets around it, typed as
-//! the tuple of what each target is bound to.
+//! the tuple of what each target is bound to
 
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::find_node::covering_node;

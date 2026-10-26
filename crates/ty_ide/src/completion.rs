@@ -29,8 +29,8 @@ use ty_python_semantic::dependencies::{self, ImportStanding};
 use ty_python_semantic::importer::{ImportRequest, Importer, MembersInScope};
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::types::ide_support::{
-    context_sensitive_members, extension_members, is_awaitable, overridable_members,
-    takes_no_arguments,
+    ValueUse, context_sensitive_members, extension_members, is_awaitable, overridable_members,
+    takes_no_arguments, value_supports,
 };
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
@@ -3556,22 +3556,43 @@ fn add_main_completion(
 /// A postfix template: written after an expression's `.`, selecting one
 /// rewrites the whole `expr.name` rather than reading as attribute access.
 ///
-/// basedpython's `.await` is not one of these — it is real syntax, and so
-/// completes as an ordinary word.
+/// The set is PyCharm's python one, under its names, less `cast` and `main`,
+/// with basedpython's `let` and `var` and python's `match`, `type` and `repr`
+/// besides. basedpython's `.await` is not one of these — it is real syntax, and
+/// so completes as an ordinary word.
 #[derive(Clone, Copy)]
 enum Postfix {
     Print,
     Not,
     Type,
     Repr,
+    Len,
+    Str,
     List,
+    Set,
+    Tuple,
+    Dict,
+    Isinstance,
     Par,
+    Compl,
+    Comps,
+    Compg,
+    Compd,
     Return,
     Raise,
+    Yield,
     If,
+    Ifn,
+    Ifnn,
+    While,
+    With,
     Let,
     Var,
     For,
+    Iter,
+    Fore,
+    Itere,
+    Enum,
     Match,
 }
 
@@ -3581,14 +3602,33 @@ impl Postfix {
         Postfix::Not,
         Postfix::Type,
         Postfix::Repr,
+        Postfix::Len,
+        Postfix::Str,
         Postfix::List,
+        Postfix::Set,
+        Postfix::Tuple,
+        Postfix::Dict,
+        Postfix::Isinstance,
         Postfix::Par,
+        Postfix::Compl,
+        Postfix::Comps,
+        Postfix::Compg,
+        Postfix::Compd,
         Postfix::Return,
         Postfix::Raise,
+        Postfix::Yield,
         Postfix::If,
+        Postfix::Ifn,
+        Postfix::Ifnn,
+        Postfix::While,
+        Postfix::With,
         Postfix::Let,
         Postfix::Var,
         Postfix::For,
+        Postfix::Iter,
+        Postfix::Fore,
+        Postfix::Itere,
+        Postfix::Enum,
         Postfix::Match,
     ];
 
@@ -3598,14 +3638,33 @@ impl Postfix {
             Postfix::Not => "not",
             Postfix::Type => "type",
             Postfix::Repr => "repr",
+            Postfix::Len => "len",
+            Postfix::Str => "str",
             Postfix::List => "list",
+            Postfix::Set => "set",
+            Postfix::Tuple => "tuple",
+            Postfix::Dict => "dict",
+            Postfix::Isinstance => "isinstance",
             Postfix::Par => "par",
+            Postfix::Compl => "compl",
+            Postfix::Comps => "comps",
+            Postfix::Compg => "compg",
+            Postfix::Compd => "compd",
             Postfix::Return => "return",
             Postfix::Raise => "raise",
+            Postfix::Yield => "yield",
             Postfix::If => "if",
+            Postfix::Ifn => "ifn",
+            Postfix::Ifnn => "ifnn",
+            Postfix::While => "while",
+            Postfix::With => "with",
             Postfix::Let => "let",
             Postfix::Var => "var",
             Postfix::For => "for",
+            Postfix::Iter => "iter",
+            Postfix::Fore => "fore",
+            Postfix::Itere => "itere",
+            Postfix::Enum => "enum",
             Postfix::Match => "match",
         }
     }
@@ -3617,10 +3676,19 @@ impl Postfix {
             self,
             Postfix::Return
                 | Postfix::Raise
+                | Postfix::Yield
                 | Postfix::If
+                | Postfix::Ifn
+                | Postfix::Ifnn
+                | Postfix::While
+                | Postfix::With
                 | Postfix::Let
                 | Postfix::Var
                 | Postfix::For
+                | Postfix::Iter
+                | Postfix::Fore
+                | Postfix::Itere
+                | Postfix::Enum
                 | Postfix::Match
         )
     }
@@ -3631,12 +3699,49 @@ impl Postfix {
         matches!(self, Postfix::Let | Postfix::Var)
     }
 
+    /// What the rewrite puts the expression to, which a template is not offered
+    /// for an expression known not to support.
+    const fn needs(self) -> Option<ValueUse> {
+        match self {
+            Postfix::For
+            | Postfix::Iter
+            | Postfix::Fore
+            | Postfix::Itere
+            | Postfix::Enum
+            | Postfix::Compl
+            | Postfix::Comps
+            | Postfix::Compg
+            | Postfix::Compd => Some(ValueUse::Iterate),
+            Postfix::Len => Some(ValueUse::Measure),
+            Postfix::With => Some(ValueUse::Enter),
+            Postfix::Ifn | Postfix::Ifnn => Some(ValueUse::TestForNone),
+            _ => None,
+        }
+    }
+
     /// Whether the rewrite leaves somewhere for the cursor to go — a name to
     /// fill in, or a suite to write.
     const fn has_tab_stops(self) -> bool {
         matches!(
             self,
-            Postfix::If | Postfix::Let | Postfix::Var | Postfix::For | Postfix::Match
+            Postfix::Isinstance
+                | Postfix::Compl
+                | Postfix::Comps
+                | Postfix::Compg
+                | Postfix::Compd
+                | Postfix::If
+                | Postfix::Ifn
+                | Postfix::Ifnn
+                | Postfix::While
+                | Postfix::With
+                | Postfix::Let
+                | Postfix::Var
+                | Postfix::For
+                | Postfix::Iter
+                | Postfix::Fore
+                | Postfix::Itere
+                | Postfix::Enum
+                | Postfix::Match
         )
     }
 
@@ -3646,14 +3751,32 @@ impl Postfix {
             Postfix::Not => "negate the expression",
             Postfix::Type => "the expression's runtime type",
             Postfix::Repr => "the expression's `repr`",
+            Postfix::Len => "the expression's length",
+            Postfix::Str => "the expression as a `str`",
             Postfix::List => "collect the expression into a `list`",
+            Postfix::Set => "collect the expression into a `set`",
+            Postfix::Tuple => "collect the expression into a `tuple`",
+            Postfix::Dict => "make a `dict` of the expression",
+            Postfix::Isinstance => "test the expression's class",
             Postfix::Par => "wrap the expression in parentheses",
+            Postfix::Compl => "a list comprehension over the expression",
+            Postfix::Comps => "a set comprehension over the expression",
+            Postfix::Compg => "a generator expression over the expression",
+            Postfix::Compd => "a dict comprehension over the expression",
             Postfix::Return => "return the expression",
             Postfix::Raise => "raise the expression",
+            Postfix::Yield => "yield the expression",
             Postfix::If => "branch on the expression",
+            Postfix::Ifn => "branch on the expression being `None`",
+            Postfix::Ifnn => "branch on the expression not being `None`",
+            Postfix::While => "loop while the expression holds",
+            Postfix::With => "enter the expression as a context manager",
             Postfix::Let => "bind the expression to a `let`",
             Postfix::Var => "bind the expression to a `var`",
-            Postfix::For => "loop over the expression",
+            Postfix::For | Postfix::Iter => "loop over the expression",
+            Postfix::Fore | Postfix::Itere | Postfix::Enum => {
+                "loop over the expression with each element's index"
+            }
             Postfix::Match => "match on the expression",
         }
     }
@@ -3676,20 +3799,67 @@ impl Postfix {
                 text.to_string()
             }
         };
+        // the same stop again, which a snippet mirrors as its first is typed
+        let again = |number: u32, text: &str| {
+            if snippets {
+                format!("${number}")
+            } else {
+                text.to_string()
+            }
+        };
         let end = if snippets { "$0" } else { "" };
         match self {
             Postfix::Print => format!("print({expr})"),
             Postfix::Not => format!("not {expr}"),
             Postfix::Type => format!("type({expr})"),
             Postfix::Repr => format!("repr({expr})"),
+            Postfix::Len => format!("len({expr})"),
+            Postfix::Str => format!("str({expr})"),
             Postfix::List => format!("list({expr})"),
+            Postfix::Set => format!("set({expr})"),
+            Postfix::Tuple => format!("tuple({expr})"),
+            Postfix::Dict => format!("dict({expr})"),
+            Postfix::Isinstance => format!("isinstance({expr}, {}){end}", stop(1, "object")),
             Postfix::Par => format!("({expr})"),
+            Postfix::Compl => format!(
+                "[{} for {} in {expr}]{end}",
+                stop(1, "item"),
+                again(1, "item")
+            ),
+            Postfix::Comps => format!(
+                "{{{} for {} in {expr}}}{end}",
+                stop(1, "item"),
+                again(1, "item")
+            ),
+            Postfix::Compg => format!(
+                "({} for {} in {expr}){end}",
+                stop(1, "item"),
+                again(1, "item")
+            ),
+            Postfix::Compd => format!(
+                "{{{}: {} for {} in {expr}}}{end}",
+                stop(1, "item"),
+                again(1, "item"),
+                again(1, "item")
+            ),
             Postfix::Return => format!("return {expr}"),
             Postfix::Raise => format!("raise {expr}"),
+            Postfix::Yield => format!("yield {expr}"),
             Postfix::If => format!("if {expr}:\n{indent}{end}"),
+            Postfix::Ifn => format!("if {expr} is None:\n{indent}{end}"),
+            Postfix::Ifnn => format!("if {expr} is not None:\n{indent}{end}"),
+            Postfix::While => format!("while {expr}:\n{indent}{end}"),
+            Postfix::With => format!("with {expr} as {}:\n{indent}{end}", stop(1, "name")),
             Postfix::Let => format!("let {} = {expr}{end}", stop(1, "name")),
             Postfix::Var => format!("var {} = {expr}{end}", stop(1, "name")),
-            Postfix::For => format!("for {} in {expr}:\n{indent}{end}", stop(1, "item")),
+            Postfix::For | Postfix::Iter => {
+                format!("for {} in {expr}:\n{indent}{end}", stop(1, "item"))
+            }
+            Postfix::Fore | Postfix::Itere | Postfix::Enum => format!(
+                "for {}, {} in enumerate({expr}):\n{indent}{end}",
+                stop(1, "index"),
+                stop(2, "item")
+            ),
             Postfix::Match => format!("match {expr}:\n{indent}case {end}"),
         }
     }
@@ -3777,8 +3947,15 @@ fn add_postfix_completions<'db>(
         format!("{own}{}", stylist.indentation().as_str())
     });
 
+    // an expression whose type cannot be read could be anything, and is offered every template
+    let ty = expr.value.inferred_type(model);
     for &postfix in Postfix::ALL {
         if postfix.is_basedpython() && !source_type.is_basedpython() {
+            continue;
+        }
+        if let (Some(ty), Some(use_)) = (ty, postfix.needs())
+            && !value_supports(model.db(), env, ty, use_)
+        {
             continue;
         }
         let indent = match (postfix.is_statement(), indent.as_deref()) {
@@ -3788,7 +3965,10 @@ fn add_postfix_completions<'db>(
         };
         let snippets = capabilities.snippets && postfix.has_tab_stops();
         let insert = postfix.expand(text, indent, snippets);
+        // the label is the template's name, as an editor lists a postfix template, rather than
+        // the text it writes, which would otherwise stand in for it
         let builder = Completion::builder(postfix.name())
+            .label(postfix.name())
             .kind(CompletionKind::Snippet)
             .replace(replace)
             .filter_text(format!("{text}.{}", postfix.name()))
@@ -7190,11 +7370,11 @@ quux.<CURSOR>
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         bar :: int
         baz :: int
+        dict(quux) :: postfix
         foo :: int
-        for item in quux:
-             :: postfix
         if quux:
              :: postfix
+        isinstance(quux, object) :: postfix
         list(quux) :: postfix
         match quux:
             case  :: postfix
@@ -7204,7 +7384,13 @@ quux.<CURSOR>
         raise quux :: postfix
         repr(quux) :: postfix
         return quux :: postfix
+        set(quux) :: postfix
+        str(quux) :: postfix
+        tuple(quux) :: postfix
         type(quux) :: postfix
+        while quux:
+             :: postfix
+        yield quux :: postfix
         __annotations__ :: dict[str, Any]
         __class__() :: type[Quux]
         __delattr__() :: bound method Quux.__delattr__(name: str, /)
@@ -7273,10 +7459,10 @@ C.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
-        for item in C:
-             :: postfix
+        dict(C) :: postfix
         if C:
              :: postfix
+        isinstance(C, object) :: postfix
         list(C) :: postfix
         match C:
             case  :: postfix
@@ -7288,7 +7474,13 @@ C.<CURSOR>
         raise C :: postfix
         repr(C) :: postfix
         return C :: postfix
+        set(C) :: postfix
+        str(C) :: postfix
+        tuple(C) :: postfix
         type(C) :: postfix
+        while C:
+             :: postfix
+        yield C :: postfix
         __annotate__() :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
@@ -7359,10 +7551,10 @@ Meta.<CURSOR>
             {
                 assert_snapshot!(
                     builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
-                for item in Meta:
-                     :: postfix
+                dict(Meta) :: postfix
                 if Meta:
                      :: postfix
+                isinstance(Meta, object) :: postfix
                 list(Meta) :: postfix
                 match Meta:
                     case  :: postfix
@@ -7374,7 +7566,13 @@ Meta.<CURSOR>
                 raise Meta :: postfix
                 repr(Meta) :: postfix
                 return Meta :: postfix
+                set(Meta) :: postfix
+                str(Meta) :: postfix
+                tuple(Meta) :: postfix
                 type(Meta) :: postfix
+                while Meta:
+                     :: postfix
+                yield Meta :: postfix
                 __base__ :: type | None
                 __bases__ :: tuple[type, ...]
                 __basicsize__ :: int
@@ -7436,11 +7634,11 @@ class Quux:
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
         bar
         baz
+        dict(self)
         foo
-        for item in self:
-                    
         if self:
                     
+        isinstance(self, object)
         list(self)
         match self:
                     case 
@@ -7450,7 +7648,13 @@ class Quux:
         raise self
         repr(self)
         return self
+        set(self)
+        str(self)
+        tuple(self)
         type(self)
+        while self:
+                    
+        yield self
         __annotations__
         __class__()
         __delattr__()
@@ -7510,10 +7714,10 @@ Quux.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
-        for item in Quux:
-             :: postfix
+        dict(Quux) :: postfix
         if Quux:
              :: postfix
+        isinstance(Quux, object) :: postfix
         list(Quux) :: postfix
         match Quux:
             case  :: postfix
@@ -7524,12 +7728,18 @@ Quux.<CURSOR>
         raise Quux :: postfix
         repr(Quux) :: postfix
         return Quux :: postfix
+        set(Quux) :: postfix
         some_attribute :: int
         some_class_method() :: bound method <class 'Quux'>.some_class_method() -> int
         some_method() :: def some_method(self) -> int
         some_property :: property
         some_static_method() :: def some_static_method(self) -> int
+        str(Quux) :: postfix
+        tuple(Quux) :: postfix
         type(Quux) :: postfix
+        while Quux:
+             :: postfix
+        yield Quux :: postfix
         __annotate__() :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
@@ -7599,10 +7809,25 @@ Answer.<CURSOR>
                     builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
                 NO :: Literal[Answer.NO]
                 YES :: Literal[Answer.YES]
+                {item: item for item in Answer} :: postfix
+                (item for item in Answer) :: postfix
+                [item for item in Answer] :: postfix
+                {item for item in Answer} :: postfix
+                dict(Answer) :: postfix
+                for index, item in enumerate(Answer):
+                     :: postfix
                 for item in Answer:
+                     :: postfix
+                for index, item in enumerate(Answer):
                      :: postfix
                 if Answer:
                      :: postfix
+                isinstance(Answer, object) :: postfix
+                for item in Answer:
+                     :: postfix
+                for index, item in enumerate(Answer):
+                     :: postfix
+                len(Answer) :: postfix
                 list(Answer) :: postfix
                 match Answer:
                     case  :: postfix
@@ -7614,8 +7839,14 @@ Answer.<CURSOR>
                 raise Answer :: postfix
                 repr(Answer) :: postfix
                 return Answer :: postfix
+                set(Answer) :: postfix
+                str(Answer) :: postfix
+                tuple(Answer) :: postfix
                 type(Answer) :: postfix
                 value :: enum.property
+                while Answer:
+                     :: postfix
+                yield Answer :: postfix
                 __annotations__ :: dict[str, Any]
                 __base__ :: type | None
                 __bases__ :: tuple[type, ...]
@@ -7699,12 +7930,27 @@ quux.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
+        {item: item for item in quux} :: postfix
+        (item for item in quux) :: postfix
+        [item for item in quux] :: postfix
+        {item for item in quux} :: postfix
         count() :: bound method Quux.count(value: Any, /) -> int
+        dict(quux) :: postfix
+        for index, item in enumerate(quux):
+             :: postfix
         for item in quux:
+             :: postfix
+        for index, item in enumerate(quux):
              :: postfix
         if quux:
              :: postfix
         index() :: bound method Quux.index(value: Any, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int
+        isinstance(quux, object) :: postfix
+        for item in quux:
+             :: postfix
+        for index, item in enumerate(quux):
+             :: postfix
+        len(quux) :: postfix
         list(quux) :: postfix
         match quux:
             case  :: postfix
@@ -7714,9 +7960,15 @@ quux.<CURSOR>
         raise quux :: postfix
         repr(quux) :: postfix
         return quux :: postfix
+        set(quux) :: postfix
+        str(quux) :: postfix
+        tuple(quux) :: postfix
         type(quux) :: postfix
+        while quux:
+             :: postfix
         x :: int
         y :: str
+        yield quux :: postfix
         __add__() :: Overload[(value: tuple[int | str, ...], /) -> tuple[int | str, ...], [T](value: tuple[T, ...], /) -> tuple[int | str | T, ...]]
         __annotations__ :: dict[str, Any]
         __class__() :: type[Quux]
@@ -8256,11 +8508,13 @@ Re<CURSOR>
 
     #[test]
     fn attribute_access_set_keyword_prefix() {
+        // the `.isinstance` postfix template rewrites the set, which is not the builtin leaking in
         let builder = completion_test_builder(
             "\
 {1}.is<CURSOR>
 ",
-        );
+        )
+        .filter(|c| c.detail.as_deref() != Some("postfix"));
 
         builder
             .build()
@@ -8365,10 +8619,10 @@ b.a.<CURSOR>
 
         assert_snapshot!(builder.skip_dunders().build().snapshot(),
         @"
-        for item in b.a:
-            
+        dict(b.a)
         if b.a:
             
+        isinstance(b.a, object)
         list(b.a)
         match b.a:
             case 
@@ -8378,8 +8632,14 @@ b.a.<CURSOR>
         raise b.a
         repr(b.a)
         return b.a
+        set(b.a)
+        str(b.a)
+        tuple(b.a)
         type(b.a)
+        while b.a:
+            
         x
+        yield b.a
         ");
     }
 
@@ -8576,10 +8836,10 @@ q<CURSOR>.foo.xyz
         );
 
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
-        for item in ...:
-            
+        dict(...)
         if ...:
             
+        isinstance(..., object)
         list(...)
         match ...:
             case 
@@ -8589,7 +8849,13 @@ q<CURSOR>.foo.xyz
         raise ...
         repr(...)
         return ...
+        set(...)
+        str(...)
+        tuple(...)
         type(...)
+        while ...:
+            
+        yield ...
         __annotations__
         __class__()
         __delattr__()
@@ -13853,7 +14119,7 @@ if foo:
     /// ones that spell basedpython syntax are held back.
     #[test]
     fn postfix_in_python() {
-        completion_test_builder("x = 1\nx.<CURSOR>")
+        completion_test_builder("x = [1]\nx.<CURSOR>")
             .build()
             .contains("print")
             .contains("if")
@@ -13885,9 +14151,42 @@ if foo:
         assert_eq!(
             names,
             [
-                "for", "if", "let", "list", "match", "not", "par", "print", "raise", "repr",
-                "return", "type", "var",
+                "compd",
+                "compg",
+                "compl",
+                "comps",
+                "dict",
+                "enum",
+                "for",
+                "fore",
+                "if",
+                "isinstance",
+                "iter",
+                "itere",
+                "len",
+                "let",
+                "list",
+                "match",
+                "not",
+                "par",
+                "print",
+                "raise",
+                "repr",
+                "return",
+                "set",
+                "str",
+                "tuple",
+                "type",
+                "var",
+                "while",
+                "yield",
             ]
+        );
+        // listed by its name, as an editor lists a template, not by what it writes
+        assert!(
+            test.completions()
+                .iter()
+                .all(|completion| completion.label() == completion.name.as_str())
         );
 
         assert_eq!(inserted_text(&test, "not"), "not x");
@@ -13902,6 +14201,55 @@ if foo:
         assert_eq!(inserted_text(&test, "var"), "var name = x");
         assert_eq!(inserted_text(&test, "for"), "for item in x:\n    ");
         assert_eq!(inserted_text(&test, "match"), "match x:\n    case ");
+        assert_eq!(inserted_text(&test, "len"), "len(x)");
+        assert_eq!(inserted_text(&test, "isinstance"), "isinstance(x, object)");
+        assert_eq!(inserted_text(&test, "compl"), "[item for item in x]");
+        assert_eq!(inserted_text(&test, "compd"), "{item: item for item in x}");
+        assert_eq!(inserted_text(&test, "while"), "while x:\n    ");
+        assert_eq!(inserted_text(&test, "yield"), "yield x");
+        assert_eq!(
+            inserted_text(&test, "fore"),
+            "for index, item in enumerate(x):\n    "
+        );
+    }
+
+    /// A template is offered only for an expression it can be used on, when the expression's
+    /// type says: a loop for what can be iterated, `len` for what has a length, `with` for a
+    /// context manager, and a test for `None` for what may be `None`.
+    #[test]
+    fn postfix_templates_follow_the_expression_type() {
+        let offered = |source: &str| {
+            let builder = CursorTest::builder()
+                .source("main.py", source)
+                .completion_test_builder()
+                .filter(|c| c.detail.as_deref() == Some("postfix"));
+            let test = builder.build();
+            let mut names: Vec<String> = test
+                .completions()
+                .iter()
+                .map(|completion| completion.name.to_string())
+                .filter(|name| {
+                    ["for", "len", "with", "ifn", "ifnn", "print"].contains(&name.as_str())
+                })
+                .collect();
+            names.sort_unstable();
+            names.join(" ")
+        };
+        assert_eq!(offered("x = 1\nx.<CURSOR>"), "print");
+        assert_eq!(offered("x = 'ab'\nx.<CURSOR>"), "for len print");
+        assert_eq!(
+            offered("def f(x: int | None):\n    x.<CURSOR>"),
+            "ifn ifnn print"
+        );
+        assert_eq!(
+            offered("import threading\ndef f(x: threading.Lock):\n    x.<CURSOR>"),
+            "print with"
+        );
+        // a type that says nothing is offered everything
+        assert_eq!(
+            offered("from typing import Any\ndef f(x: Any):\n    x.<CURSOR>"),
+            "for ifn ifnn len print with"
+        );
     }
 
     /// A statement-shaped rewrite continues onto a line of its own, indented
@@ -16183,6 +16531,7 @@ def f(x: UnsafeUnion[int, str]):
         isdecimal()
         isdigit()
         isidentifier()
+        isinstance(x, object)
         islower()
         isnumeric()
         isprintable()

@@ -15,25 +15,34 @@ on `xs` replaces `xs.print` with `print(xs)`:
 xs.print        # → print(xs)
 ```
 
-| template      | rewrites `x` into |
-| ------------- | ----------------- |
-| `.print`      | `print(x)`        |
-| `.not`        | `not x`           |
-| `.type`       | `type(x)`         |
-| `.repr`       | `repr(x)`         |
-| `.list`       | `list(x)`         |
-| `.par`        | `(x)`             |
-| `.return`     | `return x`        |
-| `.raise`      | `raise x`         |
-| `.if`         | an `if` statement |
-| `.for`        | a `for` loop      |
-| `.match`      | a `match`         |
-| `.let` `.var` | a binding         |
+| template                            | rewrites `x` into                                     | offered for               |
+| ----------------------------------- | ----------------------------------------------------- | ------------------------- |
+| `.print`                            | `print(x)`                                            |                           |
+| `.not`                              | `not x`                                               |                           |
+| `.type` `.repr` `.str` `.len`       | `type(x)`, `repr(x)`, `str(x)`, `len(x)`              | `.len`: what has a length |
+| `.list` `.set` `.tuple` `.dict`     | `list(x)`, `set(x)`, `tuple(x)`, `dict(x)`            |                           |
+| `.isinstance`                       | `isinstance(x, object)`                               |                           |
+| `.par`                              | `(x)`                                                 |                           |
+| `.compl` `.comps` `.compg` `.compd` | a list, set, generator or dict comprehension over `x` | what can be iterated      |
+| `.return` `.raise` `.yield`         | `return x`, `raise x`, `yield x`                      |                           |
+| `.if` `.while`                      | an `if` or a `while` on `x`                           |                           |
+| `.ifn` `.ifnn`                      | `if x is None:`, `if x is not None:`                  | what may be `None`        |
+| `.with`                             | `with x as name:`                                     | a context manager         |
+| `.for` `.iter`                      | a `for` loop over `x`                                 | what can be iterated      |
+| `.fore` `.itere` `.enum`            | `for index, item in enumerate(x):`                    | what can be iterated      |
+| `.match`                            | a `match`                                             |                           |
+| `.let` `.var`                       | a binding                                             |                           |
 
-the templates from `.return` down are statements, so they are only offered
-where the expression is the whole statement — `f(xs.print)` offers `.print`
-but not `.for`. the ones that open a suite or need a name to bind place the
-cursor for you, when your editor supports snippets
+these are PyCharm's python templates, under its names, less `cast` and
+`main`. one that needs something of `x` is offered only where `x`'s type has
+it, and on an expression whose type says nothing, any. the templates from
+`.return` down are statements, so they are only offered where the expression is
+the whole statement — `f(xs.print)` offers `.print` but not `.for`. the ones
+that open a suite or need a name to bind place the cursor for you, when your
+editor supports snippets
+
+each is a completion labelled with its name, `for`, and the detail `postfix`,
+whose `textEdit` replaces the whole `x.for` and whose `filterText` is that text
 
 `.let` and `.var` spell basedpython bindings; the rest are valid python and are
 offered in `.py` files too
