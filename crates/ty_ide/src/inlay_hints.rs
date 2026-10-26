@@ -1409,6 +1409,13 @@ fn spell_type<'db>(
     for (target, detail) in details.targets.iter().zip(&details.details) {
         match detail {
             TypeDetail::Type(ty) => {
+                // `Unknown` is what ty says where it knows nothing, not a type a program can
+                // name: `ty_extensions` exists only for the checker, so an annotation naming it
+                // fails to import when the program runs, and one that held would claim a
+                // gradual type the author never chose. a type mentioning it has no annotation
+                if ty.is_unknown() {
+                    editable = false;
+                }
                 let start = target.start().to_usize();
                 let end = target.end().to_usize();
                 // If we skipped over some bytes, push them with no target

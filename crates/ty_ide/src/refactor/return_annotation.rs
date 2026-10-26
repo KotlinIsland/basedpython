@@ -198,6 +198,25 @@ mod tests {
         ");
     }
 
+    /// `x + y` of two unannotated parameters is a type ty does not know, and `Unknown` is no type
+    /// an annotation can name: `ty_extensions` exists only for the checker. writing the rest of
+    /// the union would claim more than the body says
+    #[test]
+    fn a_partly_unknown_return_type_is_not_written() {
+        assert_snapshot!(
+            RefactorTest::basedpython(
+                "
+                def <CURSOR>combine(x, y):
+                    if x and not y:
+                        return x + y
+                    return \"a\" + \"b\"
+                ",
+            )
+            .apply(RefactorKind::AddReturnAnnotation),
+            @"refused: Add return annotation (the inferred return type has no spelling this file can write)"
+        );
+    }
+
     #[test]
     fn annotated_function_is_not_offered() {
         assert_snapshot!(annotate(

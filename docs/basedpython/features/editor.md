@@ -363,6 +363,12 @@ while queue.pending():  # extracting `queue.pending()` is refused: it runs every
     queue.pop()
 ```
 
+adding a return annotation writes the return type the checker infers, importing
+what it names. it is refused when that type is partly `Unknown` — `x + y` of two
+unannotated parameters — since `Unknown` is no type a program can name, and the
+rest of the union would claim more than the body says. an inlay hint's
+double-click edit follows the same rule
+
 extracting statements from a method makes a method of the same class, called
 through the receiver. what the statements read from the function becomes a
 parameter, and what they assign that is read afterwards is returned
