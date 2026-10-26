@@ -86,6 +86,14 @@ pub struct Config {
     /// writes into its tree; a transpile with nowhere to write one leaves it
     /// `None`
     pub runtime_module: Option<String>,
+    /// when true, the module is a `by repl` session: the inputs typed so far, transpiled again
+    /// with each new one, of which only the statements written for the new input run. off by
+    /// default. two things follow. the module never runs as a script, so a top-level `main`
+    /// gets no `__main__` guard: it is a function like any other, and nothing calls it. and an
+    /// earlier input's statements have already run, so an import the emitted code needs is
+    /// written on a line of its own rather than joined to one of the module's own imports,
+    /// which would change a statement that cannot run again
+    pub session: bool,
 }
 
 /// What a float or complex literal type becomes in the emitted python.
@@ -127,6 +135,7 @@ impl Default for Config {
             float_literals: FloatLiteralLowering::Nominal,
             runtime_module: None,
             stamps: BTreeMap::new(),
+            session: false,
         }
     }
 }

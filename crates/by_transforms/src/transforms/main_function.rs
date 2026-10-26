@@ -27,11 +27,17 @@ use super::source_util::{is_synthetic_decorator, python_string_literal};
 pub(crate) struct MainFunction<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// a `by repl` session never runs as a script, so its `main` is called by nothing
+    session: bool,
 }
 
 impl<'src> MainFunction<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
-        Self { source, written }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, session: bool) -> Self {
+        Self {
+            source,
+            written,
+            session,
+        }
     }
 }
 
@@ -43,6 +49,9 @@ impl AstPass for MainFunction<'_> {
     }
 
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
+        if self.session {
+            return;
+        }
         let Some(entry) = entry_point(&module.body, self.source, self.written) else {
             return;
         };
@@ -638,6 +647,23 @@ mod tests {
                 if __name__ == \"__main__\":
                     main()
             "},
+        );
+    }
+
+    /// a session never runs as a script, so its `main` is a function like any other
+    #[test]
+    fn a_session_s_main_gets_no_guard() {
+        let config = Config {
+            session: true,
+            ..Config::test_default()
+        };
+        let source = indoc! {"
+            def main():
+                print(\"hi\")
+        "};
+        assert_eq!(
+            transpile(source, &config).unwrap(),
+            crate::python_passthrough::lazify_expected(source)
         );
     }
 

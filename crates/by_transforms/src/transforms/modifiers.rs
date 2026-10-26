@@ -1368,6 +1368,47 @@ mod tests {
         );
     }
 
+    /// the `Final` a `let` needs joins the module's own `typing` import, which is a line
+    /// already there
+    #[test]
+    fn let_decl_joins_the_module_s_typing_import() {
+        check(
+            indoc! {"
+                from typing import Protocol
+                let MAX = 100
+            "},
+            indoc! {"
+                from typing import Protocol, Final
+                MAX: Final = 100
+            "},
+        );
+    }
+
+    /// in a session the module's import is an earlier input, which has run, so the `Final`
+    /// is imported on a line of its own
+    #[test]
+    fn let_decl_in_a_session_imports_final_apart() {
+        let config = Config {
+            session: true,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(
+                indoc! {"
+                    from typing import Protocol
+                    let MAX = 100
+                "},
+                &config
+            )
+            .unwrap(),
+            crate::python_passthrough::lazify_expected(indoc! {"
+                from typing import Final
+                from typing import Protocol
+                MAX: Final = 100
+            "})
+        );
+    }
+
     #[test]
     fn class_var_annotated_decl() {
         check(

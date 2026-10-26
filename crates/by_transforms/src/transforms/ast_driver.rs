@@ -1496,7 +1496,7 @@ pub(crate) fn run_against_source<'a>(
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let match_type_pass = match_type::MatchTypePass::new(source_ref, written);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref, written, config);
-    let main_function_pass = main_function::MainFunction::new(source_ref, written);
+    let main_function_pass = main_function::MainFunction::new(source_ref, written, config.session);
     let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, written, config.is_stub);
@@ -2275,8 +2275,9 @@ pub(crate) fn run_against_source<'a>(
     ctx.required_imports.splice(0..0, builtins);
     // a name the module already imports from the same place goes on its line rather than on
     // one of ours. done here and not against `required_imports` alone, because the statement
-    // it joins is the module's own
-    if !ctx.required_imports.is_empty() {
+    // it joins is the module's own. a session's own imports have run already, so none of them
+    // is rewritten
+    if !config.session && !ctx.required_imports.is_empty() {
         ctx.required_imports =
             merge_into_own_imports(&mut out, std::mem::take(&mut ctx.required_imports));
     }
