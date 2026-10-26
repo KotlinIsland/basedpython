@@ -1215,7 +1215,15 @@ own, defines somewhere else. `by/superMembers` goes up: given a position on the 
 member is declared with — a `def` or a nested class, a name the class body
 assigns, annotates or captures, or an import's alias — it answers the
 superclass members that member overrides, each with its class, its file and the
-name to land on. a class goes up with `typeHierarchy/supertypes`
+name to land on. a class goes up with `by/mro`
+
+`by/mro` takes a position on a class's name, where it is declared or used, as
+`textDocument/prepareTypeHierarchy` does, and answers every class it inherits
+from in python's lookup order, its method resolution order without itself:
+`Shape`, `ABC`, `object` for `class Circle(Shape)` with `class Shape(ABC)`, and
+a diamond's shared base after both its sides. each is a type hierarchy item as
+`typeHierarchy/supertypes` answers one, which gives only the direct bases. the
+answer is `null` where there is no class
 
 what counts as an override is the override checks' own walk up the MRO, from
 the class as it is written rather than as a decorator returns it. of what that

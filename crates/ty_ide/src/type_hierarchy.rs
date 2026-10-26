@@ -60,6 +60,24 @@ pub fn type_hierarchy_supertypes(
         .collect()
 }
 
+/// the classes the class at `offset` inherits from, in its method resolution order: where python
+/// looks a member up after the class itself, `object` last. `None` where there is no class
+pub fn type_hierarchy_mro(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+) -> Option<Vec<TypeHierarchyItem>> {
+    let ty = resolve_type_at(db, file, offset)?;
+    let env = ProgramEnvironment::from_file(file);
+    ty_python_semantic::type_hierarchy_prepare(db, &env, ty)?;
+    Some(
+        ty_python_semantic::type_hierarchy_mro(db, &env, ty)
+            .into_iter()
+            .map(|class| type_hierarchy_class_to_item(db, class))
+            .collect(),
+    )
+}
+
 /// Get the subtypes (derived classes) of a type hierarchy item.
 ///
 /// This scans all available modules and can be expensive in large projects.
@@ -148,6 +166,49 @@ mod tests {
 
         let item = test.prepare().unwrap();
         insta::assert_snapshot!(snapshot(&test.db, &[item]), @"/main.py:7:14 MyClass :: main");
+    }
+
+    #[test]
+    fn mro_lists_every_ancestor_in_lookup_order() {
+        let test = cursor_test(
+            r#"
+            class A: ...
+            class B(A): ...
+            class C(A): ...
+            class D<CURSOR>(B, C): ...
+            "#,
+        );
+
+        let items = type_hierarchy_mro(
+            &test.db,
+            test.program_file(test.cursor.file),
+            test.cursor.offset,
+        )
+        .expect("a class");
+        insta::assert_snapshot!(snapshot(&test.db, &items), @"
+        /main.py:20:21 B :: main
+        /main.py:36:37 C :: main
+        /main.py:7:8 A :: main
+        vendored://stdlib/builtins.byi:2319:2325 object :: builtins
+        ");
+    }
+
+    #[test]
+    fn mro_of_a_non_class_is_none() {
+        let test = cursor_test(
+            r#"
+            x = 4<CURSOR>2
+            "#,
+        );
+
+        assert!(
+            type_hierarchy_mro(
+                &test.db,
+                test.program_file(test.cursor.file),
+                test.cursor.offset
+            )
+            .is_none()
+        );
     }
 
     #[test]

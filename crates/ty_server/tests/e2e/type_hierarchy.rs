@@ -197,3 +197,63 @@ fn subtypes(
         partial_result_params: PartialResultParams::default(),
     })
 }
+
+/// the request as a client sends it, in json throughout
+enum Mro {}
+
+impl lsp_types::Request for Mro {
+    type Params = serde_json::Value;
+    type Result = Option<Vec<lsp_types::TypeHierarchyItem>>;
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("by/mro");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
+}
+
+/// `by/mro` answers every class a class inherits from in python's lookup order, a diamond's
+/// shared base after both of its sides, each as `typeHierarchy/supertypes` answers a class
+#[test]
+fn mro_is_every_ancestor_in_lookup_order() -> anyhow::Result<()> {
+    let content = r#"class A: ...
+class B(A): ...
+class C(A): ...
+class D(B, C): ...
+
+x = D()
+"#;
+
+    let mut server = TestServerBuilder::new()?
+        .with_file("foo.py", content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document("foo.py", content, 1);
+    let uri = server.file_uri("foo.py");
+
+    let mro = server
+        .send_request_await::<Mro>(serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": Position::new(3, 6),
+        }))
+        .expect("a class");
+    let names: Vec<_> = mro.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names, ["B", "C", "A", "object"]);
+    assert_eq!(mro[0].uri, uri);
+    assert_eq!(mro[0].selection_range.start, Position::new(1, 6));
+
+    // and the same from a use of the class
+    let from_use = server
+        .send_request_await::<Mro>(serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": Position::new(5, 4),
+        }))
+        .expect("a class");
+    assert_eq!(from_use, mro);
+
+    // where there is no name, nothing
+    let none = server.send_request_await::<Mro>(serde_json::json!({
+        "textDocument": { "uri": uri },
+        "position": Position::new(4, 0),
+    }));
+    assert_eq!(none, None);
+    Ok(())
+}

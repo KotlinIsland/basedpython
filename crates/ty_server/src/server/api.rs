@@ -91,6 +91,9 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::MroRequestHandler::METHOD => background_document_request_task::<
+            requests::MroRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::DocumentInheritedMembersRequestHandler::METHOD => {
             background_document_request_task::<requests::DocumentInheritedMembersRequestHandler>(
                 req,

@@ -52,6 +52,7 @@ mod inlay_hints;
 mod module_name;
 mod move_members;
 mod move_symbol;
+mod mro;
 mod on_type_formatting;
 mod overridable_members;
 mod override_members;
@@ -125,6 +126,7 @@ pub(super) use move_members::{
     PushMembersDownRequestHandler,
 };
 pub(super) use move_symbol::{MoveSymbolRequestHandler, PrepareMoveSymbolRequestHandler};
+pub(super) use mro::MroRequestHandler;
 pub(super) use on_type_formatting::OnTypeFormattingRequestHandler;
 pub(super) use overridable_members::OverridableMembersRequestHandler;
 pub(super) use override_members::OverrideMembersRequestHandler;

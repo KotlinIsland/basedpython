@@ -138,7 +138,8 @@ pub use syntax_outline::{
 pub use test_links::{NewTest, SubjectTests, TestLink, subject_tests, test_subjects};
 pub use ty_python_semantic::types::ide_support::InheritedMethodKind;
 pub use type_hierarchy::{
-    TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_subtypes, type_hierarchy_supertypes,
+    TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_mro, type_hierarchy_subtypes,
+    type_hierarchy_supertypes,
 };
 pub use unwrap::{UnwrapOption, unwrap_options};
 pub use usage_counts::{
