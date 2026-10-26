@@ -1167,8 +1167,11 @@ language spells it:
 ```
 
 with a selection the first is the smallest expression containing it, which is
-the selected one when the selection is exactly an expression. an expression ty
-has no type for, such as one inside a string annotation, is left out. the answer
+the selected one when the selection is exactly an expression. the targets a
+value is unpacked into, `kind, _, size` in `kind, _, size = spec.partition(":")`,
+are the tuple of what each is bound to, `(str, str, str)`, a starred one standing
+for any number of its list's elements. an expression ty has no type for, such as
+one inside a string annotation, is left out. the answer
 is an empty list where the range is in no expression, a `def`'s name or a
 keyword, and `null` when language services are off
 

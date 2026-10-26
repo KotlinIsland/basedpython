@@ -44,6 +44,7 @@ use crate::types::signatures::{
     Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
     is_placeholder_default,
 };
+use crate::types::tuple::TupleType;
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, ClassBase, ClassLiteral, ClassType, KnownClass,
     KnownFunction, KnownInstanceType, KnownUnion, PropertyAccessorRole, SpecialFormType,
@@ -1826,6 +1827,61 @@ fn argument_form_from_binding<'db>(
     }
 
     CallArgumentForm::Unknown
+}
+
+/// The type of a tuple or a list of targets a value is unpacked into: `kind, _, size` in
+/// `kind, _, size = spec.partition(":")` is `tuple[str, str, str]`, the tuple of what each of
+/// its targets is bound to. A starred target, bound to a list of what it takes, stands for any
+/// number of elements of that list's element type, so `first, *rest` over a `list[int]` is
+/// `tuple[int, *tuple[int, ...]]`.
+///
+/// ty records no type for such a target, since it is not evaluated: the value is, and each target
+/// is bound to a part of it. `None` for anything else, and for a target part of which has no
+/// type.
+pub fn unpacking_target_type<'db>(
+    model: &SemanticModel<'db>,
+    target: ast::ExprRef<'_>,
+) -> Option<Type<'db>> {
+    let (ast::ExprRef::Tuple(ast::ExprTuple {
+        elts: elements,
+        ctx: ast::ExprContext::Store,
+        ..
+    })
+    | ast::ExprRef::List(ast::ExprList {
+        elts: elements,
+        ctx: ast::ExprContext::Store,
+        ..
+    })) = target
+    else {
+        return None;
+    };
+    let db = model.db();
+    let env = model.program_environment();
+    let mut prefix = Vec::new();
+    let mut variable = None;
+    let mut suffix = Vec::new();
+    for element in elements {
+        if let ast::Expr::Starred(starred) = element {
+            // a second starred target is a syntax error, and binds nothing
+            if variable.is_some() {
+                return None;
+            }
+            let list = starred.value.inferred_type(model)?;
+            variable = Some(list.iterate(db, &env).homogeneous_element_type(db, &env));
+            continue;
+        }
+        let element = ast::ExprRef::from(element);
+        let ty = unpacking_target_type(model, element).or_else(|| element.inferred_type(model))?;
+        if variable.is_some() {
+            suffix.push(ty);
+        } else {
+            prefix.push(ty);
+        }
+    }
+    Some(match variable {
+        Some(variable) => Type::tuple(TupleType::mixed(db, &env, prefix, variable, suffix)),
+        None => Type::heterogeneous_tuple(db, &env, prefix),
+    })
 }
 
 /// Whether `call` calls python's `isinstance`, by whatever name it is reached.

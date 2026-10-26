@@ -1,33 +1,36 @@
-//! The expressions a range is in, each with its type: what an editor's *type info* offers.
+//! the expressions a range is in, each with its type: what an editor's *type info* offers
 //!
 //! ```py
 //! total = total_area(shapes) * 2
 //! ```
 //!
-//! On `shapes` the answer is `shapes`, `total_area(shapes)` and `total_area(shapes) * 2`, from the
-//! innermost out, each with the type ty inferred for it: `list[Shape]`, `float`, `float`. On a
-//! selection of `total_area(shapes)` it starts from that call.
+//! on `shapes` the answer is `shapes`, `total_area(shapes)` and `total_area(shapes) * 2`, from the
+//! innermost out, each with the type ty inferred for it: `list[Shape]`, `float`, `float`. on a
+//! selection of `total_area(shapes)` it starts from that call. On `kind` in
+//! `kind, _, size = spec.partition(":")` it is `kind` and the tuple of targets around it, typed as
+//! the tuple of what each target is bound to.
 
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::find_node::covering_node;
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::ProgramFile;
+use ty_python_semantic::types::ide_support::unpacking_target_type;
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 use crate::Db;
 
-/// An expression and its type.
+/// an expression and its type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpressionType {
     pub range: TextRange,
-    /// The type as the file would spell it: `1` in a basedpython file, `Literal[1]` in python.
+    /// the type as the file would spell it: `1` in a basedpython file, `Literal[1]` in python
     pub ty: String,
 }
 
-/// The expressions of the statement `range` is in that contain all of it, innermost first, each
-/// with its type. An expression ty has no type for, such as one inside a string annotation, is
+/// the expressions of the statement `range` is in that contain all of it, innermost first, each
+/// with its type. an expression ty has no type for, such as one inside a string annotation, is
 /// left out, and so is everything outside the statement: a statement has no type, and what
-/// contains it is not an expression.
+/// contains it is not an expression
 pub fn expression_types(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -53,7 +56,11 @@ pub fn expression_types(
             {
                 continue;
             }
-            let Some(ty) = expression.inferred_type(&model) else {
+            // a tuple of targets has no type of its own, but is the tuple of its targets'
+            let Some(ty) = expression
+                .inferred_type(&model)
+                .or_else(|| unpacking_target_type(&model, expression))
+            else {
                 continue;
             };
             found.push(ExpressionType {
@@ -100,6 +107,25 @@ def main(shapes: list[int]) -> None:
         shapes : list[int]
         total_area(shapes) : int | float
         total_area(shapes) * 2 : int | float
+        ");
+    }
+
+    #[test]
+    fn a_tuple_of_targets_is_the_tuple_of_what_they_are_bound_to() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+def main(text: str, numbers: list[int]) -> None:
+    (kind, _, si<CURSOR>ze), (first, *rest) = text.partition(':'), numbers
+",
+            )
+            .build();
+
+        assert_snapshot!(types(&test, TextRange::empty(test.cursor.offset)), @"
+        size : str
+        (kind, _, size) : tuple[str, str, str]
+        (kind, _, size), (first, *rest) : tuple[tuple[str, str, str], tuple[int, *tuple[int, ...]]]
         ");
     }
 
