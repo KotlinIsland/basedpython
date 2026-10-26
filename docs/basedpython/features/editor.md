@@ -557,7 +557,10 @@ rename location:
 ```
 
 inlining is offered on the variable's assignment and on any of its reads alike, and
-replaces every read either way
+replaces every read either way. the value is parenthesised only where python
+would read it otherwise: inlining `square = radius ** 2` into `math.pi * square`
+writes `math.pi * radius ** 2`, and `x = a - b` into `c - x` writes
+`c - (a - b)`
 
 moving an expression can change when it runs, so that is what most refusals are
 about. a value made of names and literals, and of python's own operators over

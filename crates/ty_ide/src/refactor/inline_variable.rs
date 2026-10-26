@@ -658,6 +658,9 @@ fn needs_parentheses(
     if atomic {
         return false;
     }
+    if let Some(needed) = operand_needs_parentheses(value, parent, read) {
+        return needed;
+    }
     if !is_free_position(parent, read) {
         return true;
     }
@@ -669,6 +672,46 @@ fn needs_parentheses(
         Expr::Generator(_) => true,
         _ => OperatorPrecedence::from_expr(value) <= OperatorPrecedence::Starred,
     }
+}
+
+/// whether `value`, written as the operand `read` of the operator `parent`, needs parentheses
+/// for the operator to take it whole, as python's precedence and associativity read it: none for
+/// an operand that binds tighter, `math.pi * radius ** 2`, and for the left operand of an operator
+/// as tight that groups from the left, `scale * math.pi * radius ** 2 + 1`; some for the right
+/// one, `a - (b - c)`, which would otherwise group the other way, and for any comparison inside
+/// another, which python would chain. `None` where `parent` is no operator
+fn operand_needs_parentheses(
+    value: &Expr,
+    parent: AnyNodeRef<'_>,
+    read: &ast::ExprName,
+) -> Option<bool> {
+    let precedence = OperatorPrecedence::from_expr(value);
+    let range = read.range();
+    Some(match parent {
+        AnyNodeRef::ExprBinOp(operation) => {
+            let operator = OperatorPrecedence::from(operation.op);
+            let is_left = operation.left.range() == range;
+            match precedence.cmp(&operator) {
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Less => true,
+                // `**` groups from the right, everything else from the left
+                std::cmp::Ordering::Equal => is_left == operator.is_right_associative(),
+            }
+        }
+        AnyNodeRef::ExprBoolOp(operation) => {
+            let operator = OperatorPrecedence::from(operation.op);
+            let is_first = operation
+                .values
+                .first()
+                .is_some_and(|first| first.range() == range);
+            precedence < operator || (precedence == operator && !is_first)
+        }
+        AnyNodeRef::ExprUnaryOp(operation) => precedence < OperatorPrecedence::from(operation.op),
+        AnyNodeRef::ExprCompare(_) => {
+            precedence <= OperatorPrecedence::ComparisonsMembershipIdentity
+        }
+        _ => return None,
+    })
 }
 
 /// Whether a read is a whole expression on its own — a statement's value, an
@@ -785,21 +828,34 @@ mod tests {
     /// wherever it is evaluated, so it is inlined into both reads
     #[test]
     fn value_over_builtin_scalars_inlines_into_every_read() {
-        assert_snapshot!(inline(
+        assert_snapshot!(RefactorTest::basedpython(
             "
-            def f(name: str, count: int):
+            def f(name: final str, count: final int):
                 greeting<CURSOR> = 'hello ' + name
                 print(greeting * count)
                 return greeting
             ",
-        ), @"
+        ).apply(RefactorKind::InlineVariable), @"
         Inline variable `greeting`
         ---
 
-        def f(name: str, count: int):
+        def f(name: final str, count: final int):
             print(('hello ' + name) * count)
             return 'hello ' + name
         ");
+    }
+
+    /// a `str` may be an instance of a subclass, whose `+` is its own and may have effects
+    #[test]
+    fn value_over_a_str_that_may_be_a_subclass_is_not_inlined_into_every_read() {
+        assert_snapshot!(inline(
+            "
+            def f(name: str):
+                greeting<CURSOR> = 'hello ' + name
+                print(greeting)
+                return greeting
+            ",
+        ), @"refused: Inline variable `greeting` (its value would be evaluated once for each read, and evaluating it may have effects)");
     }
 
     /// a module's attribute can be assigned between the assignment and a read
@@ -848,6 +904,59 @@ mod tests {
 
         def f(a, b):
             return (a + b) * 2
+        ");
+    }
+
+    /// an operand that binds tighter than its operator, or as tightly on the side the operator
+    /// groups from, is written without parentheses
+    #[test]
+    fn operator_value_is_bare_where_precedence_keeps_it_whole() {
+        assert_snapshot!(RefactorTest::basedpython(
+            "
+            import math
+
+            def f(radius: final float):
+                square<CURSOR> = radius ** 2
+                return math.pi * square
+            ",
+        ).apply(RefactorKind::InlineVariable), @"
+        Inline variable `square`
+        ---
+
+        import math
+
+        def f(radius: final float):
+            return math.pi * radius ** 2
+        ");
+        assert_snapshot!(RefactorTest::basedpython(
+            "
+            import math
+
+            def f(radius: final float, scale: final float):
+                area<CURSOR> = scale * math.pi * radius ** 2
+                return area + 1
+            ",
+        ).apply(RefactorKind::InlineVariable), @"
+        Inline variable `area`
+        ---
+
+        import math
+
+        def f(radius: final float, scale: final float):
+            return scale * math.pi * radius ** 2 + 1
+        ");
+        assert_snapshot!(RefactorTest::basedpython(
+            "
+            def f(a: final int, b: final int, c: final int):
+                x<CURSOR> = a - b
+                return x - c, c - x, -x, x < c, x ** 2, 2 ** x
+            ",
+        ).apply(RefactorKind::InlineVariable), @"
+        Inline variable `x`
+        ---
+
+        def f(a: final int, b: final int, c: final int):
+            return a - b - c, c - (a - b), -(a - b), a - b < c, (a - b) ** 2, 2 ** (a - b)
         ");
     }
 
