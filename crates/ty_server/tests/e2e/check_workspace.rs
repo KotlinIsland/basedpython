@@ -189,6 +189,7 @@ fn the_report_comes_whole_in_the_response() -> Result<()> {
 mod a_script_environment_being_set_up {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     use std::time::{Duration, Instant};
 
     use anyhow::{Result, bail};
@@ -205,8 +206,10 @@ mod a_script_environment_being_set_up {
     use crate::{AwaitResponseError, TestServer, TestServerBuilder};
 
     /// run beside the script, it says it has started, waits to be released, and fails, which
-    /// ends the setup with an environment that has an error rather than one that is pending
+    /// ends the setup with an environment that has an error rather than one that is pending.
+    /// asked for its version, it answers at once, which is how the test runs it first
     const UV: &str = "#!/bin/sh
+[ \"$1\" = --version ] && exit 0
 touch started
 i=0
 while [ ! -e release ] && [ \"$i\" -lt 3000 ]; do
@@ -262,6 +265,15 @@ exit 1
             .with_file("bin/uv", UV)?;
         let uv = builder.file_path("bin/uv");
         fs::set_permissions(uv.as_std_path(), fs::Permissions::from_mode(0o755))?;
+        // the first run of an executable that was just written can be held before it starts
+        // while the operating system assesses the file. macOS does, and holds it for longer than
+        // `wait_until_started` waits while other new executables are being run, as the rest of
+        // the test suite runs them. so the test runs it once itself, for as long as that takes,
+        // and what `wait_until_started` waits for is the server alone
+        let warmed = Command::new(uv.as_std_path()).arg("--version").status()?;
+        if !warmed.success() {
+            bail!("the stand-in `uv` did not run: {warmed}");
+        }
         let setup = Setup {
             started: builder.file_path("src/started"),
             release: builder.file_path("src/release"),
