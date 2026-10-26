@@ -65,7 +65,11 @@ expression: initialization_result
         "refactor.rewrite.toDataClass",
         "refactor.rewrite.fromDataClass",
         "refactor.rewrite.splitList",
-        "refactor.rewrite.joinList"
+        "refactor.rewrite.joinList",
+        "refactor.rewrite.invertIf",
+        "refactor.rewrite.deMorgan",
+        "refactor.rewrite.flipQuotes",
+        "refactor.rewrite.loopToComprehension"
       ],
       "resolveProvider": true
     },

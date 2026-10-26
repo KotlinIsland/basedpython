@@ -458,19 +458,23 @@ a refactoring either keeps the program meaning what it meant or is refused, and 
 refusal says why. an editor that asks for refactorings explicitly shows the reason;
 one that asks while the caret moves is only offered what applies
 
-| refactoring             | kind                                | offered on                           |
-| ----------------------- | ----------------------------------- | ------------------------------------ |
-| inline variable         | `refactor.inline.variable`          | a variable assigned once             |
-| extract variable        | `refactor.extract.variable`         | a selected expression                |
-| introduce constant      | `refactor.extract.constant`         | a selected expression of literals    |
-| introduce parameter     | `refactor.extract.parameter`        | an expression of literals in a `def` |
-| introduce attribute     | `refactor.extract.field`            | a selected expression in a method    |
-| extract function        | `refactor.extract.function`         | selected statements                  |
-| add return annotation   | `refactor.rewrite.returnAnnotation` | a `def` header with no `->`          |
-| convert to data class   | `refactor.rewrite.toDataClass`      | a class header                       |
-| convert from data class | `refactor.rewrite.fromDataClass`    | a `data class` header                |
-| put on separate lines   | `refactor.rewrite.splitList`        | a list not yet one element a line    |
-| put on one line         | `refactor.rewrite.joinList`         | a list spread over several lines     |
+| refactoring             | kind                                   | offered on                           |
+| ----------------------- | -------------------------------------- | ------------------------------------ |
+| inline variable         | `refactor.inline.variable`             | a variable assigned once             |
+| extract variable        | `refactor.extract.variable`            | a selected expression                |
+| introduce constant      | `refactor.extract.constant`            | a selected expression of literals    |
+| introduce parameter     | `refactor.extract.parameter`           | an expression of literals in a `def` |
+| introduce attribute     | `refactor.extract.field`               | a selected expression in a method    |
+| extract function        | `refactor.extract.function`            | selected statements                  |
+| add return annotation   | `refactor.rewrite.returnAnnotation`    | a `def` header with no `->`          |
+| convert to data class   | `refactor.rewrite.toDataClass`         | a class header                       |
+| convert from data class | `refactor.rewrite.fromDataClass`       | a `data class` header                |
+| put on separate lines   | `refactor.rewrite.splitList`           | a list not yet one element a line    |
+| put on one line         | `refactor.rewrite.joinList`            | a list spread over several lines     |
+| invert `if` condition   | `refactor.rewrite.invertIf`            | an `if` with an `else`               |
+| apply De Morgan's law   | `refactor.rewrite.deMorgan`            | an `and` or an `or`                  |
+| convert quotes          | `refactor.rewrite.flipQuotes`          | a string or bytes literal            |
+| loop to comprehension   | `refactor.rewrite.loopToComprehension` | a loop filling an empty collection   |
 
 inlining is offered on the variable's assignment and on any of its reads alike, and
 replaces every read either way
@@ -561,6 +565,32 @@ defers sending the edit, not working it out: whether a refactoring applies is
 decided by working out the rewrite, so the actions a `textDocument/codeAction`
 reply offers have each been computed to answer it. send `only` to narrow that —
 a request that does not ask for `refactor` kinds does no refactoring work at all
+
+inverting an `if` negates its condition and swaps its body with its `else`'s. a
+negation takes off a `not`, swaps `and` and `or` by De Morgan's law, and flips a
+comparison's operator only where that means the same: `is`, `is not`, `in` and
+`not in` always, `==` and `!=` between python's own numbers, strings and bytes, and
+the orderings between its integers, strings or bytes — `not x > 1` is not
+`x <= 1` for a float that is `nan`, so a float's comparison is written
+`not (x > 1)`. inverting an `if` and De Morgan's law are refused where a comment
+in the condition would be lost. De Morgan's law rewrites `not (a or b)` as `not a and not b`, and
+`a and b` as `not (not a or not b)` where only the truth of it is read — an `if`, a
+`while`, an `assert` or a `not` — or where it is a `bool` already, since `a and b`
+otherwise evaluates to `a` or `b`. converting a string's quotes escapes the new
+quote where it appears and unescapes the old one, and is refused for a raw string
+holding the new quote, which cannot be escaped. a loop that only adds to a
+collection made empty right above it — a list's `append`, a set's `add`, a dict's
+item assignment, under at most one `if` — becomes a comprehension, refused where
+the loop's variable is read anywhere outside the loop that the loop's binding may
+reach — above it on a later round, in a function, or as `del` (a comprehension
+leaves it unbound) — or is declared `global` or `nonlocal`, where the loop reads
+what it builds, where a function that reads the collection may be called while the
+loop builds it, where it has an `else`, in a class body, where it adds what a
+`yield` evaluates to or assigns its variable or its iterable with a walrus, which
+python does not allow in a comprehension, where it has a comment the comprehension
+would not keep, where it calls `super()` without arguments before python 3.12, and
+for a dict whose key and value could both have effects, which a comprehension
+evaluates in the other order
 
 putting a list on separate lines, or on one, rewrites the innermost list with
 brackets of its own around the caret — a call's arguments, a definition's

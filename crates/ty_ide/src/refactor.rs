@@ -24,6 +24,7 @@ mod extract_variable;
 mod flow;
 mod hazards;
 mod inline_variable;
+mod intentions;
 mod move_symbol;
 mod names;
 mod return_annotation;
@@ -66,6 +67,10 @@ pub enum RefactorKind {
     ConvertFromDataClass,
     SplitList,
     JoinList,
+    InvertIf,
+    DeMorgan,
+    FlipQuotes,
+    LoopToComprehension,
 }
 
 impl RefactorKind {
@@ -81,6 +86,10 @@ impl RefactorKind {
         RefactorKind::ConvertFromDataClass,
         RefactorKind::SplitList,
         RefactorKind::JoinList,
+        RefactorKind::InvertIf,
+        RefactorKind::DeMorgan,
+        RefactorKind::FlipQuotes,
+        RefactorKind::LoopToComprehension,
     ];
 
     /// The LSP code action kind the refactoring is offered as.
@@ -97,6 +106,10 @@ impl RefactorKind {
             RefactorKind::ConvertFromDataClass => "refactor.rewrite.fromDataClass",
             RefactorKind::SplitList => "refactor.rewrite.splitList",
             RefactorKind::JoinList => "refactor.rewrite.joinList",
+            RefactorKind::InvertIf => "refactor.rewrite.invertIf",
+            RefactorKind::DeMorgan => "refactor.rewrite.deMorgan",
+            RefactorKind::FlipQuotes => "refactor.rewrite.flipQuotes",
+            RefactorKind::LoopToComprehension => "refactor.rewrite.loopToComprehension",
         }
     }
 
@@ -115,6 +128,10 @@ impl RefactorKind {
             RefactorKind::ConvertFromDataClass => "convert-from-data-class",
             RefactorKind::SplitList => "split-list",
             RefactorKind::JoinList => "join-list",
+            RefactorKind::InvertIf => "invert-if",
+            RefactorKind::DeMorgan => "de-morgan",
+            RefactorKind::FlipQuotes => "flip-quotes",
+            RefactorKind::LoopToComprehension => "loop-to-comprehension",
         }
     }
 
@@ -241,6 +258,10 @@ impl<'db> RefactorContext<'db> {
             }
             RefactorKind::SplitList => split_join::plan(self, range, split_join::Direction::Split),
             RefactorKind::JoinList => split_join::plan(self, range, split_join::Direction::Join),
+            RefactorKind::InvertIf => intentions::invert_if(self, range),
+            RefactorKind::DeMorgan => intentions::de_morgan(self, range),
+            RefactorKind::FlipQuotes => intentions::flip_quotes(self, range),
+            RefactorKind::LoopToComprehension => intentions::loop_to_comprehension(self, range),
         }
     }
 }
