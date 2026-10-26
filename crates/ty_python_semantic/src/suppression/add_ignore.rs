@@ -16,6 +16,8 @@ use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::token::TokenKind;
+use ruff_python_trivia::encoding_declaration;
+use ruff_source_file::UniversalNewlineIterator;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use smallvec::SmallVec;
 
@@ -180,6 +182,67 @@ pub fn suppress_single(db: &dyn Db, file: PythonFile<'_>, id: LintId, range: Tex
     add_end_of_line_suppression(&source, codes, suppression_range.end())
 }
 
+/// creates a fix to suppress a lint in the whole of `file`
+///
+/// that is a `ty: ignore` comment on a line of its own at the top of the file, before any code,
+/// which the typing spec reads as covering the whole file. an editable one there already takes
+/// the code instead of a second comment being written; a new one goes on the first line, or
+/// after a `#!` line or an encoding declaration, which have to stay where they are
+pub fn suppress_in_file(db: &dyn Db, file: PythonFile<'_>, id: LintId) -> Fix {
+    let suppressions = suppressions(db, file);
+    let source = source_text(db, file.file(db));
+    let codes = &[id.name()];
+
+    let existing = suppressions.file.iter().find_map(|suppression| {
+        let prefix = editable_suppression_prefix(&source[suppression.comment_range])?;
+        let separator = if prefix.ends_with('[') { "" } else { ", " };
+        Some(ExistingSuppression {
+            insertion_offset: suppression.comment_range.start() + prefix.text_len(),
+            kind: suppression.kind,
+            separator,
+        })
+    });
+    if let Some(existing) = existing {
+        return add_to_existing_suppression(existing, codes);
+    }
+
+    let offset = file_suppression_offset(&source);
+    // the line the comment goes after needs a newline ending it, which the last line of a file
+    // may not have
+    let before = source[..offset.to_usize()].trim_start_matches('\u{feff}');
+    let leading = if before.is_empty() || before.ends_with(['\n', '\r']) {
+        ""
+    } else {
+        "\n"
+    };
+    Fix::safe_edit(Edit::insertion(
+        format!(
+            "{leading}# ty: ignore[{codes}]\n",
+            codes = Codes(SuppressionKind::Ty, codes)
+        ),
+        offset,
+    ))
+}
+
+/// where a new file-level suppression goes: after the lines python reads before any code, which
+/// have to stay where they are. that is a `#!` line, which has to be the first, and a PEP 263
+/// encoding declaration, which python reads only on the first two lines. a byte order mark
+/// stays ahead of everything
+fn file_suppression_offset(source: &str) -> TextSize {
+    let start = if source.starts_with('\u{feff}') {
+        '\u{feff}'.text_len()
+    } else {
+        TextSize::ZERO
+    };
+    if let Some(declaration) = encoding_declaration(source.as_bytes()) {
+        return declaration.line.end();
+    }
+    match UniversalNewlineIterator::with_offset(&source[start.to_usize()..], start).next() {
+        Some(first) if first.starts_with("#!") => first.full_end(),
+        _ => start,
+    }
+}
+
 /// Returns the suppression range for the given `range`.
 ///
 /// The suppression range is defined as:
@@ -337,5 +400,106 @@ impl std::fmt::Display for Codes<'_> {
         }
 
         joiner.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::files::system_path_to_file;
+    use ruff_db::source::source_text;
+    use ruff_db::{PythonFile, system::DbWithWritableSystem as _};
+    use ruff_text_size::Ranged as _;
+
+    use super::suppress_in_file;
+    use crate::Db as _;
+    use crate::db::tests::TestDbBuilder;
+    use crate::suppression::suppressions;
+
+    /// `source` with a file-level suppression of `unresolved-reference` added, checking that the
+    /// comment it adds is one that covers the whole file
+    fn suppressed_in_file(source: &str) -> String {
+        let mut db = TestDbBuilder::new()
+            .with_file("test.py", source)
+            .build()
+            .unwrap();
+        let file = system_path_to_file(&db, "test.py").unwrap();
+        let lint = db.lint_registry().get("unresolved-reference").unwrap();
+        let fix = suppress_in_file(&db, PythonFile::new(&db, file, db.python_version()), lint);
+        let mut suppressed = source.to_owned();
+        for edit in fix.edits().iter().rev() {
+            suppressed.replace_range(
+                edit.start().to_usize()..edit.end().to_usize(),
+                edit.content().unwrap_or_default(),
+            );
+        }
+        db.write_file("test.py", &suppressed).unwrap();
+        let file = system_path_to_file(&db, "test.py").unwrap();
+        assert_eq!(source_text(&db, file).as_str(), suppressed);
+        let python_file = PythonFile::new(&db, file, db.python_version());
+        assert_eq!(
+            suppressions(&db, python_file).file.len(),
+            1,
+            "{suppressed:?}"
+        );
+        suppressed
+    }
+
+    #[test]
+    fn file_suppression_goes_first() {
+        assert_eq!(
+            suppressed_in_file("a = b\n"),
+            "# ty: ignore[unresolved-reference]\na = b\n"
+        );
+    }
+
+    #[test]
+    fn file_suppression_goes_after_an_encoding_declaration() {
+        assert_eq!(
+            suppressed_in_file("# -*- coding: latin-1 -*-\na = b\n"),
+            "# -*- coding: latin-1 -*-\n# ty: ignore[unresolved-reference]\na = b\n"
+        );
+        assert_eq!(
+            suppressed_in_file("#!/usr/bin/env python\n# vim: set fileencoding=utf-8 :\na = b\n"),
+            "#!/usr/bin/env python\n# vim: set fileencoding=utf-8 :\n\
+             # ty: ignore[unresolved-reference]\na = b\n"
+        );
+        assert_eq!(
+            suppressed_in_file("# a comment\n# coding=utf-8\na = b\n"),
+            "# a comment\n# coding=utf-8\n# ty: ignore[unresolved-reference]\na = b\n"
+        );
+    }
+
+    /// python reads a declaration on the second line only when the first could not be code, and
+    /// a comment that only mentions an encoding is not one
+    #[test]
+    fn file_suppression_goes_first_without_an_encoding_declaration() {
+        assert_eq!(
+            suppressed_in_file("# no coding here\na = b\n"),
+            "# ty: ignore[unresolved-reference]\n# no coding here\na = b\n"
+        );
+        assert_eq!(
+            suppressed_in_file("a = b\n# coding: utf-8\n"),
+            "# ty: ignore[unresolved-reference]\na = b\n# coding: utf-8\n"
+        );
+    }
+
+    #[test]
+    fn file_suppression_goes_after_a_byte_order_mark() {
+        assert_eq!(
+            suppressed_in_file("\u{feff}a = b\n"),
+            "\u{feff}# ty: ignore[unresolved-reference]\na = b\n"
+        );
+        assert_eq!(
+            suppressed_in_file("\u{feff}# coding: utf-8\r\na = b\r\n"),
+            "\u{feff}# coding: utf-8\r\n# ty: ignore[unresolved-reference]\na = b\r\n"
+        );
+    }
+
+    #[test]
+    fn file_suppression_after_a_last_line_without_a_newline() {
+        assert_eq!(
+            suppressed_in_file("#!/usr/bin/env python"),
+            "#!/usr/bin/env python\n# ty: ignore[unresolved-reference]\n"
+        );
     }
 }

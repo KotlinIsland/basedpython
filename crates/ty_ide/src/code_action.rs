@@ -11,10 +11,10 @@ use ruff_text_size::TextRange;
 use ty_project::Db;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::lint::LintId;
-use ty_python_semantic::suppress_single;
 use ty_python_semantic::types::{
     MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT, UNRESOLVED_REFERENCE,
 };
+use ty_python_semantic::{suppress_in_file, suppress_single};
 
 /// A `QuickFix` Code Action
 #[derive(Debug, Clone)]
@@ -111,6 +111,12 @@ pub fn code_actions(
         suppress_single(db, file.python_file(db), lint_id, diagnostic_range).into_edits(),
         false,
     ));
+    actions.push(QuickFix::new(
+        format!("Ignore '{}' in this file", lint_id.name()),
+        file.file(db),
+        suppress_in_file(db, file.python_file(db), lint_id).into_edits(),
+        false,
+    ));
 
     actions
 }
@@ -163,6 +169,69 @@ mod tests {
         types::{UNDEFINED_REVEAL, UNRESOLVED_REFERENCE},
     };
 
+    /// a file that already starts with a suppression of its own has the code added to it
+    #[test]
+    fn add_ignore_in_file_to_an_existing_file_suppression() {
+        let test = CodeActionTest::with_source(
+            "#!/usr/bin/env python\n# ty: ignore[division-by-zero]\nb = <START>a<END> / 10",
+        );
+
+        assert_snapshot!(test.code_actions(&UNRESOLVED_REFERENCE), @"
+        info[code-action]: Ignore 'unresolved-reference' for this line
+         --> main.py:3:5
+          |
+        3 | b = a / 10
+          |     ^
+          |
+        2 | # ty: ignore[division-by-zero]
+          - b = a / 10
+        3 + b = a / 10  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:5
+          |
+        3 | b = a / 10
+          |     ^
+          |
+        1 | #!/usr/bin/env python
+          - # ty: ignore[division-by-zero]
+        2 + # ty: ignore[division-by-zero, unresolved-reference]
+        3 | b = a / 10
+          |
+        ");
+    }
+
+    /// a new file suppression goes after a `#!` line, which has to stay first
+    #[test]
+    fn add_ignore_in_file_after_a_shebang() {
+        let test = CodeActionTest::with_source("#!/usr/bin/env python\nb = <START>a<END> / 10");
+
+        assert_snapshot!(test.code_actions(&UNRESOLVED_REFERENCE), @"
+        info[code-action]: Ignore 'unresolved-reference' for this line
+         --> main.py:2:5
+          |
+        2 | b = a / 10
+          |     ^
+          |
+        1 | #!/usr/bin/env python
+          - b = a / 10
+        2 + b = a / 10  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 10
+          |     ^
+          |
+        1 | #!/usr/bin/env python
+        2 + # ty: ignore[unresolved-reference]
+        3 | b = a / 10
+          |
+        ");
+    }
+
     #[test]
     fn add_ignore() {
         let test = CodeActionTest::with_source(r#"b = <START>a<END> / 10"#);
@@ -176,6 +245,16 @@ mod tests {
           |
           - b = a / 10
         1 + b = a / 10  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:1:5
+          |
+        1 | b = a / 10
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 | b = a / 10
           |
         ");
     }
@@ -193,6 +272,16 @@ mod tests {
           |
           - b = a / 10  # fmt: off
         1 + b = a / 10  # fmt: off  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:1:5
+          |
+        1 | b = a / 10  # fmt: off
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 | b = a / 10  # fmt: off
           |
         ");
     }
@@ -224,6 +313,16 @@ mod tests {
           - b = a / 0  # ty:ignore[division-by-zero]
         2 + b = a / 0  # ty:ignore[division-by-zero, unresolved-reference]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # ty:ignore[division-by-zero]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -245,6 +344,16 @@ mod tests {
         1 |
           - b = a / 10  # ty:ignore[]
         2 + b = a / 10  # ty:ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 10  # ty:ignore[]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -270,6 +379,16 @@ mod tests {
           - # ty:ignore[]
         3 + # ty:ignore[unresolved-reference]
         4 | b = a / 10
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:4:5
+          |
+        4 | b = a / 10
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -301,6 +420,16 @@ mod tests {
         3 + # ty:ignore[ignore-comment-unknown-rule] # ty:ignore[not-a-rule] # ty:ignore[division-by-zero]
         4 | value = 1 / 0
           |
+
+        info[code-action]: Ignore 'ignore-comment-unknown-rule' in this file
+         --> main.py:3:27
+          |
+        3 | # ty:ignore[] # ty:ignore[not-a-rule] # ty:ignore[division-by-zero]
+          |                           ^^^^^^^^^^
+          |
+        1 + # ty: ignore[ignore-comment-unknown-rule]
+        2 |
+          |
         ");
     }
 
@@ -329,6 +458,16 @@ mod tests {
           - # ty:ignore[]
         3 + # ty:ignore[unresolved-reference]
         4 | values = [
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:7:5
+          |
+        7 |     absent,
+          |     ^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -361,6 +500,16 @@ mod tests {
         5 + # ty:ignore[invalid-assignment, unresolved-reference]
         6 | values: tuple[int] = [
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:9:5
+          |
+        9 |     absent,
+          |     ^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -383,6 +532,16 @@ mod tests {
           - b = a / 0  # type:ignore[ty:division-by-zero]
         2 + b = a / 0  # type:ignore[ty:division-by-zero, ty:unresolved-reference]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # type:ignore[ty:division-by-zero]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -404,6 +563,16 @@ mod tests {
         1 |
           - b = a / 0  # type:ignore[mypy-code]
         2 + b = a / 0  # type:ignore[mypy-code]  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # type:ignore[mypy-code]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -429,6 +598,18 @@ mod tests {
           - b = a / 0
         4 + b = a / 0  # ty: ignore[unresolved-reference]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:4:5
+          |
+        4 | b = a / 0
+          |     ^
+          |
+        1 |
+          - # ty:ignore[division-by-zero]
+        2 + # ty:ignore[division-by-zero, unresolved-reference]
+        3 |
+          |
         ");
     }
 
@@ -450,6 +631,16 @@ mod tests {
         1 |
           - b = a / 0  # ty:ignore[division-by-zero,]
         2 + b = a / 0  # ty:ignore[division-by-zero, unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # ty:ignore[division-by-zero,]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -473,6 +664,16 @@ mod tests {
           - b = a / 0  # ty:ignore[division-by-zero   ]
         2 + b = a / 0  # ty:ignore[division-by-zero, unresolved-reference   ]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # ty:ignore[division-by-zero   ]
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -494,6 +695,16 @@ mod tests {
         1 |
           - b = a / 0  # ty:ignore[division-by-zero] some explanation
         2 + b = a / 0  # ty:ignore[division-by-zero] some explanation  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a / 0  # ty:ignore[division-by-zero] some explanation
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -524,6 +735,18 @@ mod tests {
         3 +         a  # ty:ignore[division-by-zero, unresolved-reference]
         4 |         /
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:9
+          |
+        3 | /         a  # ty:ignore[division-by-zero]
+        4 | |         /
+        5 | |         0
+          | |_________^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -552,6 +775,18 @@ mod tests {
           -         0  # ty:ignore[division-by-zero]
         5 +         0  # ty:ignore[division-by-zero, unresolved-reference]
         6 | )
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:9
+          |
+        3 | /         a
+        4 | |         /
+        5 | |         0  # ty:ignore[division-by-zero]
+          | |_________^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -582,6 +817,18 @@ mod tests {
         3 +         a  # ty:ignore[division-by-zero, unresolved-reference]
         4 |         /
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:9
+          |
+        3 | /         a  # ty:ignore[division-by-zero]
+        4 | |         /
+        5 | |         0  # ty:ignore[division-by-zero]
+          | |_________^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -606,6 +853,16 @@ mod tests {
         4 |     more text
           - """
         5 + """  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:6
+          |
+        3 |     {a}
+          |      ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         "#);
     }
@@ -635,6 +892,16 @@ mod tests {
         4 +     a  # ty: ignore[unresolved-reference]
         5 |     }
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:4:5
+          |
+        4 |     a
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -659,6 +926,16 @@ mod tests {
           - """
         4 + """  # ty: ignore[unresolved-reference]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a + """
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         "#);
     }
 
@@ -681,6 +958,16 @@ mod tests {
         2 | b = a \
           - + "test"
         3 + + "test"  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:5
+          |
+        2 | b = a \
+          |     ^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         "#);
     }
@@ -709,6 +996,16 @@ mod tests {
         5 +   # ty: ignore[unresolved-reference]
         6 |     ] # test
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:4:11
+          |
+        4 |         + ddd  \
+          |           ^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 | b = bbbbb \
+          |
         ");
     }
 
@@ -730,6 +1027,16 @@ mod tests {
         1 |
           - reveal_type(1)
         2 + reveal_type(1)  # ty: ignore[undefined-reveal]
+          |
+
+        info[code-action]: Ignore 'undefined-reveal' in this file
+         --> main.py:2:1
+          |
+        2 | reveal_type(1)
+          | ^^^^^^^^^^^
+          |
+        1 + # ty: ignore[undefined-reveal]
+        2 |
           |
         ");
     }
@@ -777,6 +1084,16 @@ mod tests {
         2 + @deprecated("do not use")  # ty: ignore[unresolved-reference]
         3 | def my_func(): ...
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:2
+          |
+        2 | @deprecated("do not use")
+          |  ^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         "#);
     }
 
@@ -811,6 +1128,16 @@ mod tests {
         1 |
           - dt.timedelta(days=1)
         2 + dt.timedelta(days=1)  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:1
+          |
+        2 | dt.timedelta(days=1)
+          | ^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -873,6 +1200,16 @@ mod tests {
         4 + @deprecated("do not use")  # ty: ignore[unresolved-reference]
         5 | def my_func(): ...
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:4:2
+          |
+        4 | @deprecated("do not use")
+          |  ^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         "#);
     }
 
@@ -907,6 +1244,16 @@ mod tests {
         1 |
           - ExecutionLoader
         2 + ExecutionLoader  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:2:1
+          |
+        2 | ExecutionLoader
+          | ^^^^^^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -946,6 +1293,16 @@ mod tests {
         2 | import importlib
           - ExecutionLoader
         3 + ExecutionLoader  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:1
+          |
+        3 | ExecutionLoader
+          | ^^^^^^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
           |
         ");
     }
@@ -995,6 +1352,16 @@ mod tests {
           - ExecutionLoader
         3 + ExecutionLoader  # ty: ignore[unresolved-reference]
           |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:3:1
+          |
+        3 | ExecutionLoader
+          | ^^^^^^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 |
+          |
         ");
     }
 
@@ -1025,6 +1392,16 @@ mod tests {
           |
           - NamespaceReport()
         1 + NamespaceReport()  # ty: ignore[unresolved-reference]
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' in this file
+         --> main.py:1:1
+          |
+        1 | NamespaceReport()
+          | ^^^^^^^^^^^^^^^
+          |
+        1 + # ty: ignore[unresolved-reference]
+        2 | NamespaceReport()
           |
         ");
     }

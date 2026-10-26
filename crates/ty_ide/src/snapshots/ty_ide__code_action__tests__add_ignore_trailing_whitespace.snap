@@ -11,3 +11,13 @@ info[code-action]: Ignore 'unresolved-reference' for this line
   - b = a / 10  
 1 + b = a / 10  # ty: ignore[unresolved-reference]
   |
+
+info[code-action]: Ignore 'unresolved-reference' in this file
+ --> main.py:1:5
+  |
+1 | b = a / 10  
+  |     ^
+  |
+1 + # ty: ignore[unresolved-reference]
+2 | b = a / 10  
+  |

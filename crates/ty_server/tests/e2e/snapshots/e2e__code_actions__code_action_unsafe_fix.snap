@@ -98,5 +98,53 @@ expression: code_actions
         ]
       }
     }
+  },
+  {
+    "title": "Ignore 'unused-ignore-comment' in this file",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 0
+          },
+          "end": {
+            "line": 0,
+            "character": 31
+          }
+        },
+        "severity": 2,
+        "code": "unused-ignore-comment",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unused-ignore-comment"
+        },
+        "source": "ty",
+        "message": "Unused `ty: ignore` directive\n\nhelp: Remove the unused suppression comment",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "isPreferred": false,
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/src/foo.py": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 29
+              },
+              "end": {
+                "line": 0,
+                "character": 29
+              }
+            },
+            "newText": ", unused-ignore-comment"
+          }
+        ]
+      }
+    }
   }
 ]

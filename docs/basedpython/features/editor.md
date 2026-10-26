@@ -634,6 +634,16 @@ the caret goes in the document as the edits leave it:
 like the other document requests it takes `textHash`, and it is `null` when
 language services are off
 
+## suppressing a diagnostic
+
+every diagnostic has two quick fixes that silence it rather than fix it.
+*ignore for this line* writes `# ty: ignore[<rule>]` at the end of its line,
+and *ignore in this file* writes it on a line of its own at the top of the
+file, before any code, which suppresses the rule throughout the file. a
+suppression already there takes the rule instead of a second comment being
+written, and a `#!` line stays first. ty has no suppression that covers one
+function or one class, so neither does the editor
+
 ## hover
 
 a hover opens with what the name is: its kind and the dotted name it is

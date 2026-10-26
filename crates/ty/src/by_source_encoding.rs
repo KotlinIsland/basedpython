@@ -21,6 +21,8 @@
 //!
 //! [PEP 263]: https://peps.python.org/pep-0263/
 
+use ruff_python_trivia::encoding_declaration;
+
 /// a python source decoded to utf-8, and whether decoding had to rewrite it.
 #[derive(Debug)]
 pub(crate) struct DecodedSource {
@@ -44,81 +46,24 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DecodedSource, String> {
         });
     }
 
-    let Some(cookie) = coding_cookie(bytes) else {
+    let Some(declaration) = encoding_declaration(bytes) else {
         return Err(
             "not valid utf-8, and no PEP 263 encoding declaration on its first two lines"
                 .to_owned(),
         );
     };
 
-    let Some(text) = decode_single_byte(bytes, &cookie.encoding) else {
+    let Some(text) = decode_single_byte(bytes, declaration.name) else {
         return Err(format!(
             "declares `{}`, which this build cannot decode (only utf-8 and the latin family)",
-            cookie.encoding
+            declaration.name
         ));
     };
 
     Ok(DecodedSource {
-        text: rewrite_cookie(&text),
-        recoded_from: Some(cookie.encoding),
+        text: rewrite_declaration(text),
+        recoded_from: Some(declaration.name.to_owned()),
     })
-}
-
-/// the encoding a source declares, and where it says so.
-struct Cookie {
-    encoding: String,
-}
-
-/// PEP 263: `coding[:=]\s*([-\w.]+)` in a comment on line 1 or line 2, and only
-/// on line 2 when line 1 is blank or a comment.
-///
-/// scanned over bytes rather than text, since the whole point is that the text
-/// cannot be decoded yet. the syntax is ascii, so a byte scan reads it exactly.
-fn coding_cookie(bytes: &[u8]) -> Option<Cookie> {
-    let mut lines = bytes.split(|byte| *byte == b'\n');
-    let first = lines.next()?;
-    if let Some(cookie) = cookie_in_line(first) {
-        return Some(cookie);
-    }
-    // a declaration on line 2 only counts when line 1 could not have been code,
-    // which is to say line 1 is blank or a comment
-    let first_is_code = first
-        .iter()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .is_some_and(|byte| *byte != b'#');
-    if first_is_code {
-        return None;
-    }
-    cookie_in_line(lines.next()?)
-}
-
-fn cookie_in_line(line: &[u8]) -> Option<Cookie> {
-    let hash = line.iter().position(|byte| *byte == b'#')?;
-    let comment = &line[hash..];
-    let at = find(comment, b"coding")?;
-    let rest = &comment[at + b"coding".len()..];
-    let mut rest = rest.iter().copied();
-    // `coding:` or `coding=`, then optional spaces
-    if !matches!(rest.next(), Some(b':' | b'=')) {
-        return None;
-    }
-    let rest: Vec<u8> = rest.skip_while(u8::is_ascii_whitespace).collect();
-    let name: Vec<u8> = rest
-        .into_iter()
-        .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        .collect();
-    if name.is_empty() {
-        return None;
-    }
-    Some(Cookie {
-        encoding: String::from_utf8(name).ok()?,
-    })
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 /// decode a single-byte encoding whose code points are its byte values, which is
@@ -146,54 +91,12 @@ fn decode_single_byte(bytes: &[u8], encoding: &str) -> Option<String> {
 ///
 /// only the name is replaced, so the shape the file chose — `# -*- coding: X -*-`,
 /// `# coding=X` — survives.
-fn rewrite_cookie(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut lines = text.split_inclusive('\n');
-    let mut rewritten = false;
-    for _ in 0..2 {
-        let Some(line) = lines.next() else { break };
-        if rewritten {
-            out.push_str(line);
-            continue;
-        }
-        match rewrite_cookie_in_line(line) {
-            Some(replaced) => {
-                out.push_str(&replaced);
-                rewritten = true;
-            }
-            None => out.push_str(line),
-        }
+fn rewrite_declaration(mut text: String) -> String {
+    if let Some(declaration) = encoding_declaration(text.as_bytes()) {
+        let range = declaration.name_range.to_std_range();
+        text.replace_range(range, "utf-8");
     }
-    for line in lines {
-        out.push_str(line);
-    }
-    out
-}
-
-fn rewrite_cookie_in_line(line: &str) -> Option<String> {
-    let hash = line.find('#')?;
-    let at = line[hash..].find("coding")? + hash + "coding".len();
-    let after = &line[at..];
-    let mut chars = after.char_indices();
-    if !matches!(chars.next(), Some((_, ':' | '='))) {
-        return None;
-    }
-    let name_start = after
-        .char_indices()
-        .skip(1)
-        .find(|(_, c)| !c.is_ascii_whitespace())
-        .map(|(i, _)| i)?;
-    let name_len = after[name_start..]
-        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-        .unwrap_or(after.len() - name_start);
-    if name_len == 0 {
-        return None;
-    }
-    let mut out = String::with_capacity(line.len());
-    out.push_str(&line[..at + name_start]);
-    out.push_str("utf-8");
-    out.push_str(&after[name_start + name_len..]);
-    Some(out)
+    text
 }
 
 #[cfg(test)]
@@ -228,6 +131,27 @@ mod tests {
     fn a_declaration_below_code_does_not_count() {
         let error = decode(b"s = '\xe9'\n# coding: latin-1\n").unwrap_err();
         assert!(error.contains("no PEP 263"), "{error}");
+    }
+
+    // python reads a declaration only from a comment that is the whole line
+    #[test]
+    fn a_declaration_after_code_on_its_line_does_not_count() {
+        let error = decode(b"s = '\xe9'  # coding: latin-1\n").unwrap_err();
+        assert!(error.contains("no PEP 263"), "{error}");
+    }
+
+    // `coding` not followed by `:` or `=` is skipped, and a later one is read
+    #[test]
+    fn the_declaration_is_any_coding_the_comment_spells_out() {
+        let decoded = decode(b"# the coding, coding: latin-1\ns = '\xdf'\n").unwrap();
+        assert_eq!(decoded.text, "# the coding, coding: utf-8\ns = 'ß'\n");
+    }
+
+    // a non-ascii character ahead of the declaration moves it in the decoded text
+    #[test]
+    fn the_declaration_is_rewritten_where_the_decoded_text_has_it() {
+        let decoded = decode(b"# \xe9 coding: latin-1\ns = '\xdf'\n").unwrap();
+        assert_eq!(decoded.text, "# é coding: utf-8\ns = 'ß'\n");
     }
 
     #[test]

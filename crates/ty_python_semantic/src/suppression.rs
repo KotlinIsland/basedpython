@@ -17,8 +17,8 @@ use rustc_hash::FxHasher;
 
 use crate::diagnostic::DiagnosticGuard;
 use crate::lint::{GetLintError, Level, LintMetadata, LintRegistry, LintStatus, TyCompat};
-pub use crate::suppression::add_ignore::suppress_single;
 pub(crate) use crate::suppression::add_ignore::{SuppressFix, suppress_all};
+pub use crate::suppression::add_ignore::{suppress_in_file, suppress_single};
 use crate::suppression::parser::{
     ParseError, ParseErrorKind, SuppressionComment, SuppressionParser,
 };

@@ -35,8 +35,8 @@ pub use semantic_model::{
 };
 use std::hash::BuildHasherDefault;
 pub use suppression::UNUSED_IGNORE_COMMENT;
-pub use suppression::suppress_single;
 pub(crate) use suppression::{SuppressFix, is_unused_ignore_comment_lint, suppress_all};
+pub use suppression::{suppress_in_file, suppress_single};
 use ty_module_resolver::ModuleGlobSet;
 pub use ty_python_core::Program;
 use ty_python_core::ProgramFile;

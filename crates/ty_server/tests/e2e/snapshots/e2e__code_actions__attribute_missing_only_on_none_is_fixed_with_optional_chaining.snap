@@ -92,5 +92,50 @@ expression: code_actions
         ]
       }
     }
+  },
+  {
+    "title": "Ignore 'unresolved-attribute' in this file",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 4,
+            "character": 11
+          },
+          "end": {
+            "line": 4,
+            "character": 22
+          }
+        },
+        "severity": 1,
+        "code": "unresolved-attribute",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unresolved-attribute"
+        },
+        "source": "ty",
+        "message": "Attribute `name` is not defined on `None` in union `User | None`\n\nhelp: Use `?.` to read `name` only when the value is not `None`"
+      }
+    ],
+    "isPreferred": false,
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/src/foo.by": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 0
+              },
+              "end": {
+                "line": 0,
+                "character": 0
+              }
+            },
+            "newText": "# ty: ignore[unresolved-attribute]\n"
+          }
+        ]
+      }
+    }
   }
 ]

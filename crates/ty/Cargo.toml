@@ -33,6 +33,7 @@ ruff_python_ast = { workspace = true }
 ruff_text_size = { workspace = true }
 ruff_diagnostics = { workspace = true }
 ruff_python_parser = { workspace = true, features = ["stacker"] }
+ruff_python_trivia = { workspace = true }
 by_build = { workspace = true }
 by_ir = { workspace = true }
 by_irbuild = { workspace = true }
@@ -73,7 +74,6 @@ tikv-jemallocator = { workspace = true }
 
 [dev-dependencies]
 ruff_db = { workspace = true, features = ["testing"] }
-ruff_python_trivia = { workspace = true }
 ty_module_resolver = { workspace = true }
 ty_python_core = { workspace = true }
 
