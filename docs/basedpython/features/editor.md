@@ -704,6 +704,43 @@ the caret goes in the document as the edits leave it:
 like the other document requests it takes `textHash`, and it is `null` when
 language services are off
 
+## writing a docstring
+
+typing `"""` and Enter at the top of a function's body leaves an empty docstring,
+and an editor asks `by/docstringStub` with a position inside it for the stub to
+fill it with:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/shapes.by" },
+  "position": { "line": 2, "character": 11 },
+  "format": "google"
+}
+```
+
+the answer replaces the whole literal, quotes and prefix kept, and says where the
+caret goes in the document once `newText` is in it — the summary line, which is
+written indented and empty:
+
+```json
+{
+  "range": { "start": { "line": 2, "character": 8 }, "end": { "line": 2, "character": 14 } },
+  "newText": "\"\"\"\n        \n\n        Args:\n            item:\n\n        Returns:\n        \"\"\"",
+  "caret": { "line": 3, "character": 8 }
+}
+```
+
+the stub lists every parameter but a method's receiver — the instance or class
+a method is passed, and the class `__new__` is — with `*args` and `**kwargs`, and
+says what the function hands back: `Yields` for a generator, `Returns` when its
+annotation is something other than `None`, `NoReturn` or `Never`, or with no
+annotation when it returns a value. `format` is `rest` (`:param item:`),
+`google`, `numpy` or `plain` (the summary alone); without one, the format is the
+one the file's other docstrings are written in, and reStructuredText, as PyCharm
+writes by default, when none of them says. the answer is `null` anywhere that is
+not inside a triple-quoted docstring of a function holding nothing but whitespace
+on a line of its own
+
 ## suppressing a diagnostic
 
 every diagnostic has two quick fixes that silence it rather than fix it.

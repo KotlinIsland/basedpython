@@ -243,6 +243,13 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        // asked as Enter is typed, which waits on it
+        requests::DocstringStubRequestHandler::METHOD => {
+            background_document_request_task::<requests::DocstringStubRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         // asked while a person waits on the popup, like hover
         requests::ExpressionTypesRequestHandler::METHOD => {
             background_document_request_task::<requests::ExpressionTypesRequestHandler>(

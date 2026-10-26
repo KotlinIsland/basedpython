@@ -42,6 +42,7 @@ mod data_flow;
 mod declaration;
 mod diagnostic_snapshots;
 mod django_templates;
+mod docstring_stub;
 mod evaluatable_expression;
 mod expression_types;
 mod file_watching;

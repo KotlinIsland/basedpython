@@ -3671,6 +3671,35 @@ pub enum InheritedMethodKind {
     Static,
 }
 
+/// basedpython: what the method `definition`, a `def` written in a class body, is passed as its
+/// first parameter: from its decorators as the checker resolves them, under whatever name they
+/// are bound to, and from the methods python makes static or class methods by their name alone,
+/// `__new__`, `__init_subclass__` and `__class_getitem__`. `None` for a definition that is not a
+/// `def`
+pub fn method_kind_of<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Option<InheritedMethodKind> {
+    let function = infer_definition_types(db, definition).function_type(definition)?;
+    Some(if function.is_staticmethod(db) {
+        InheritedMethodKind::Static
+    } else if function.is_classmethod(db) {
+        InheritedMethodKind::Class
+    } else {
+        InheritedMethodKind::Instance
+    })
+}
+
+/// basedpython: whether `ty` is the builtin class `super`, or the bound super object
+/// basedpython's `super` keyword evaluates to
+pub fn is_super(db: &dyn Db, ty: Type<'_>) -> bool {
+    match ty {
+        Type::ClassLiteral(class) => class.known(db) == Some(KnownClass::Super),
+        Type::BoundSuper(_) => true,
+        _ => false,
+    }
+}
+
 /// basedpython: a method a class inherits and does not define itself, with everything a
 /// declaration overriding it has to say
 #[derive(Debug, Clone)]

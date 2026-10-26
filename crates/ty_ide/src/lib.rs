@@ -17,6 +17,7 @@ mod declaration;
 mod django_template;
 mod doc_highlights;
 mod docstring;
+mod docstring_stub;
 mod document_symbols;
 mod evaluatable_expression;
 mod expression_types;
@@ -34,6 +35,7 @@ mod importer;
 mod injection;
 mod inlay_hints;
 mod markup;
+mod method_kind;
 mod module_rename;
 mod on_type_formatting;
 mod override_members;
@@ -81,6 +83,7 @@ pub use django_template::{
     django_template_semantic_tokens, django_template_signature_help, is_django_template_path,
 };
 pub use doc_highlights::document_highlights;
+pub use docstring_stub::{DocstringFormat, DocstringStub, docstring_stub};
 pub use document_symbols::{document_symbols, symbol_detail};
 pub use evaluatable_expression::evaluatable_expression;
 pub use expression_types::{ExpressionType, expression_types};
@@ -95,6 +98,7 @@ pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
+pub use method_kind::{MethodKind, method_kind};
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
 };
