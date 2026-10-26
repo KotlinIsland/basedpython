@@ -67,8 +67,13 @@ pub struct OutlineStatement {
     pub parameters: Vec<TextRange>,
     /// for a `def` a class body makes, what its first parameter is passed
     pub method: Option<MethodKind>,
-    /// For a simple statement, the expression Enter may break across lines by wrapping it in
-    /// parentheses; see [`wrappable`].
+    /// for a `def` a class body makes, what its first parameter is, the receiver an editor writes
+    /// when the parameter list is opened: `Instance` (`self`) or `Class` (`cls`). `__new__` is a
+    /// static method that is passed its class explicitly, so its receiver is `Class`; any other
+    /// static method has none
+    pub receiver: Option<MethodKind>,
+    /// for a simple statement, the expression Enter may break across lines by wrapping it in
+    /// parentheses; see [`wrappable`]
     pub wrap: Option<TextRange>,
 }
 
@@ -86,8 +91,8 @@ pub struct OutlineClause {
     pub range: TextRange,
     /// The statements of the suite.
     pub body: Vec<OutlineStatement>,
-    /// The expression of the header Enter may break across lines by wrapping it in parentheses;
-    /// see [`wrappable`].
+    /// the expression of the header Enter may break across lines by wrapping it in parentheses;
+    /// see [`wrappable`]
     pub wrap: Option<TextRange>,
 }
 
@@ -265,6 +270,15 @@ impl OutlineBuilder<'_> {
             }
             _ => None,
         };
+        let receiver = match (method, stmt) {
+            (Some(MethodKind::Static), Stmt::FunctionDef(function))
+                if function.name.as_str() == "__new__" =>
+            {
+                Some(MethodKind::Class)
+            }
+            (Some(MethodKind::Static), _) => None,
+            (kind, _) => kind,
+        };
         OutlineStatement {
             range: stmt.range(),
             clauses: self.clauses(stmt, in_class),
@@ -273,6 +287,7 @@ impl OutlineBuilder<'_> {
             name: Self::name(stmt),
             parameters: Self::parameters(stmt),
             method,
+            receiver,
             wrap: statement_expression(stmt)
                 .filter(|expr| wrappable(expr))
                 .map(Ranged::range),
@@ -635,10 +650,10 @@ impl OutlineBuilder<'_> {
 }
 
 /// One clause of a compound statement, as [`OutlineBuilder::clause_heads`] finds it.
-/// The one expression of a simple statement that Enter could break: an assignment's value, a
+/// the one expression of a simple statement that Enter could break: an assignment's value, a
 /// `return`'s, an expression statement, a `raise` without `from`, an `assert` without a message
-/// and a `type` alias's value. A statement with two expressions, such as `raise E from cause`,
-/// has none, since one pair of parentheses cannot hold both.
+/// and a `type` alias's value. a statement with two expressions, such as `raise E from cause`,
+/// has none, since one pair of parentheses cannot hold both
 fn statement_expression(stmt: &Stmt) -> Option<&Expr> {
     match stmt {
         Stmt::Expr(stmt) => Some(&stmt.value),
@@ -655,8 +670,8 @@ fn statement_expression(stmt: &Stmt) -> Option<&Expr> {
     }
 }
 
-/// The expressions clause headers of `stmt` hold that Enter could break: the condition of an
-/// `if`, an `elif` and a `while`, the iterable of a `for` and the subject of a `match`.
+/// the expressions clause headers of `stmt` hold that Enter could break: the condition of an
+/// `if`, an `elif` and a `while`, the iterable of a `for` and the subject of a `match`
 fn header_expressions(stmt: &Stmt) -> Vec<&Expr> {
     match stmt {
         Stmt::If(stmt) if stmt.pattern.is_none() => std::iter::once(&*stmt.test)
@@ -673,14 +688,14 @@ fn header_expressions(stmt: &Stmt) -> Vec<&Expr> {
     }
 }
 
-/// Whether `expr` means the same wrapped in parentheses, so that Enter inside it can break it
-/// over lines by wrapping it rather than with a backslash.
+/// whether `expr` means the same wrapped in parentheses, so that Enter inside it can break it
+/// over lines by wrapping it rather than with a backslash
 ///
-/// Every python expression in these positions does — `x = (a + b)`, `if (a and b):`,
-/// `return (1, 2)`. What does not is basedpython's: a statement used as an expression, a type
+/// every python expression in these positions does — `x = (a + b)`, `if (a and b):`,
+/// `return (1, 2)`. what does not is basedpython's: a statement used as an expression, a type
 /// written in a form only an annotation reads, and a tuple whose parentheses are its syntax,
 /// such as an anonymous named tuple, all of which are left alone, along with a starred
-/// expression on its own.
+/// expression on its own
 fn wrappable(expr: &Expr) -> bool {
     struct Unwrappable(bool);
     impl<'a> SourceOrderVisitor<'a> for Unwrappable {
@@ -1699,7 +1714,10 @@ else:
                 let method = statement
                     .method
                     .map_or("not a method", |kind| kind.as_str());
-                Some(format!("{name}: {method}"))
+                let receiver = statement.receiver.map_or(String::new(), |kind| {
+                    format!(", receives the {}", kind.as_str())
+                });
+                Some(format!("{name}: {method}{receiver}"))
             },
             &mut out,
         );
@@ -1731,16 +1749,16 @@ def free(): ...
 "
         ), @"
         Shape: not a method
-        area: instance
-        unit: class
+        area: instance, receives the instance
+        unit: class, receives the class
         origin: static
         zero: static
-        build: class
-        size: instance
-        __new__: static
-        __init_subclass__: class
-        maybe: instance
-        outer: instance
+        build: class, receives the class
+        size: instance, receives the instance
+        __new__: static, receives the class
+        __init_subclass__: class, receives the class
+        maybe: instance, receives the instance
+        outer: instance, receives the instance
         inner: not a method
         free: not a method
         ");

@@ -1599,7 +1599,10 @@ character of the fragment. the outline also carries the name each `def` and
 from `@staticmethod` and `@classmethod`, `static def` and `class def`, and the
 methods python makes so by name, `__new__` static (it is handed its class
 explicitly, as its first argument) and `__init_subclass__` and `__class_getitem__`
-class methods; a plain function has none.
+class methods; a plain function has none. beside it, `receiver` says what the
+first parameter is, the `self` or `cls` an editor writes when the parameter
+list is opened: `instance` or `class`, `class` for `__new__` too, and absent for
+any other static method.
 
 a line broken inside an expression needs the expression in brackets, or a
 backslash, to go on parsing. `wrap` names the expression Enter may break by

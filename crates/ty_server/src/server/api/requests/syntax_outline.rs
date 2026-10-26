@@ -97,7 +97,12 @@ pub(crate) struct Statement {
     /// is passed
     #[serde(default, skip_serializing_if = "Option::is_none")]
     method: Option<String>,
-    /// On a simple statement: the expression Enter may break by wrapping it in parentheses.
+    /// on a `def` a class body makes: `instance` or `class`, what its first parameter is, the
+    /// `self` or `cls` an editor writes when the parameter list is opened. `class` for `__new__`,
+    /// which is static but passed its class; absent for any other static method
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    receiver: Option<String>,
+    /// on a simple statement: the expression Enter may break by wrapping it in parentheses
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wrap: Option<Range>,
 }
@@ -120,7 +125,7 @@ pub(crate) struct Clause {
     /// The suite's statements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     body: Vec<Statement>,
-    /// The header's expression Enter may break by wrapping it in parentheses.
+    /// the header's expression Enter may break by wrapping it in parentheses
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wrap: Option<Range>,
 }
@@ -290,6 +295,7 @@ impl Converter<'_> {
                         .filter_map(|range| self.range(*range))
                         .collect(),
                     method: statement.method.map(|kind| kind.as_str().to_string()),
+                    receiver: statement.receiver.map(|kind| kind.as_str().to_string()),
                     wrap: statement.wrap.and_then(|range| self.range(range)),
                 })
             })
