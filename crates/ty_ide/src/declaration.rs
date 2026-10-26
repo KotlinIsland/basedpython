@@ -15,16 +15,19 @@
 //! name local to a function, a parameter among them, has no qualified name, and nor does a type
 //! parameter: nothing outside the function or the generic reaches it.
 
+use ruff_db::files::FileRange;
 use ruff_db::parsed::parsed_module;
+use ruff_text_size::{Ranged, TextSize};
 use ty_module_resolver::file_to_module;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place::PlaceExprRef;
 use ty_python_core::scope::{FileScopeId, ScopeKind};
 use ty_python_core::{ProgramFile, semantic_index};
-use ty_python_semantic::ResolvedDefinition;
 use ty_python_semantic::types::ide_support::decorated_function;
+use ty_python_semantic::{HasDefinition, ImportAliasResolution, ResolvedDefinition, SemanticModel};
 
-use crate::Db;
+use crate::goto::{Definitions, GotoTarget, find_goto_target};
+use crate::{Db, NavigationTarget, RangedValue};
 
 /// What kind of thing a declaration declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +76,69 @@ pub struct Declaration {
     /// `shapes.base.Circle.area`. `None` for a name local to a function, and for a declaration
     /// in a file no module is imported from.
     pub qualified_name: Option<String>,
+}
+
+/// the declaration the name at `offset` refers to, or declares, with where it is
+#[derive(Debug, Clone)]
+pub struct DeclarationAt {
+    pub declaration: Declaration,
+    /// where the declaration is: the whole of it, and the name it declares
+    pub target: NavigationTarget,
+}
+
+/// what the name at `offset` declares, or refers to: on `total_area` in `total_area(shapes)`
+/// the function `shapes.util.total_area`, on `Circle` in `Circle(3)` the class rather than the
+/// `__init__` the call runs. `None` where there is no name, and for a name whose definitions
+/// declare different things
+pub fn declaration_at(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+) -> Option<RangedValue<DeclarationAt>> {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+    let model = SemanticModel::new(db, file);
+    let goto_target = find_goto_target(&model, &parsed, offset)?;
+    let declared = declared_definitions(&model, &goto_target)?;
+    let declaration = single_declaration(db, &declared)?;
+    let target = declared.into_navigation_targets(db).into_iter().next()?;
+    Some(RangedValue {
+        range: FileRange::new(file.file(db), goto_target.range()),
+        value: DeclarationAt {
+            declaration,
+            target,
+        },
+    })
+}
+
+/// the definitions of what the name at `goto_target` declares, read off the name's own
+/// definitions rather than off what a call of it runs: `Circle` in `Circle(3)` is the class,
+/// whose `__init__` the call runs, and the name of a decorated `def` is the `def`, which a
+/// decorator returning a function of its own would otherwise stand in for
+pub(crate) fn declared_definitions<'db>(
+    model: &SemanticModel<'db>,
+    goto_target: &GotoTarget<'_>,
+) -> Option<Definitions<'db>> {
+    match goto_target {
+        GotoTarget::Expression(_) | GotoTarget::Call { .. } => {
+            goto_target.expression_definitions(model, ImportAliasResolution::ResolveAliases)
+        }
+        GotoTarget::FunctionDef(function) => {
+            Some(Definitions::new(vec![ResolvedDefinition::Definition(
+                function.definition(model),
+            )]))
+        }
+        _ => goto_target.definitions(model, ImportAliasResolution::ResolveAliases),
+    }
+}
+
+/// the one declaration `declared` makes, when its definitions all declare the same name the same
+/// way: the bindings of a variable assigned twice are one variable
+pub(crate) fn single_declaration(db: &dyn Db, declared: &Definitions<'_>) -> Option<Declaration> {
+    let mut declarations = declared.iter().map(|resolved| declaration(db, resolved));
+    let first = declarations.next()??;
+    declarations
+        .all(|other| other.as_ref() == Some(&first))
+        .then_some(first)
 }
 
 /// What `resolved` declares. `None` for what is not a declaration of a name: an import that was

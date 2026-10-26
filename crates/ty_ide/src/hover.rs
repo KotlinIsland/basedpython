@@ -1,5 +1,5 @@
 use crate::annotation_expression::is_in_annotation_expression;
-use crate::declaration::{Declaration, DeclaredKind, declaration};
+use crate::declaration::{Declaration, DeclaredKind, declared_definitions, single_declaration};
 use crate::docstring::{Docstring, DocstringFragment};
 use crate::goto::{
     Definitions, GotoTarget, docstring_for_call_definition, find_goto_target, find_goto_target_impl,
@@ -26,9 +26,7 @@ use ty_python_semantic::types::{
 use ty_python_semantic::{DisplaySettings, ProgramEnvironment};
 
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
-use ty_python_semantic::{
-    HasDefinition, HasType, SemanticModel, TypeQualifiers, with_display_for_file,
-};
+use ty_python_semantic::{HasType, SemanticModel, TypeQualifiers, with_display_for_file};
 
 pub fn hover<'db>(
     db: &'db dyn Db,
@@ -113,23 +111,7 @@ fn hover_inner<'db>(
 
     let mut alias_docstring: Option<Docstring> = None;
 
-    // what the hovered name declares, read off the name's own definitions rather than off what a
-    // call of it runs: `Circle` in `Circle(3)` is the class, whose `__init__` the call runs
-    let declared = match &goto_target {
-        GotoTarget::Expression(_) | GotoTarget::Call { .. } => goto_target.expression_definitions(
-            &model,
-            ty_python_semantic::ImportAliasResolution::ResolveAliases,
-        ),
-        // the `def` itself, which a decorator that returns a function of its own would otherwise
-        // stand in for
-        GotoTarget::FunctionDef(function) => Some(Definitions::new(vec![
-            ty_python_semantic::ResolvedDefinition::Definition(function.definition(&model)),
-        ])),
-        _ => goto_target.definitions(
-            &model,
-            ty_python_semantic::ImportAliasResolution::ResolveAliases,
-        ),
-    };
+    let declared = declared_definitions(&model, &goto_target);
     let declaration = declared
         .as_ref()
         .and_then(|declared| single_declaration(db, declared));
@@ -141,8 +123,8 @@ fn hover_inner<'db>(
         })
     };
 
-    let docs = if let Some((_, docstring)) = &decorated {
-        docstring.clone().map(HoverContent::Docstring)
+    let docs = if let Some(decorated) = &decorated {
+        decorated.docstring.clone().map(HoverContent::Docstring)
     } else if keyword_argument.is_some() || typed_dict_key.is_some() {
         None
     } else if let GotoTarget::Call { call, .. } = goto_target {
@@ -180,8 +162,15 @@ fn hover_inner<'db>(
     }
     if let Some(keyword_argument) = keyword_argument {
         contents.extend(keyword_argument);
-    } else if let Some((function, _)) = decorated {
-        contents.push(function);
+    } else if let Some(decorated) = decorated {
+        if let Some(ty) = decorated.replacement {
+            contents.push(HoverContent::Type {
+                ty,
+                variance: None,
+                qualifiers: TypeQualifiers::empty(),
+            });
+        }
+        contents.push(decorated.written);
     } else if let Some(signature) = goto_target.call_signature(&model) {
         contents.push(HoverContent::Signature(signature));
     } else if let Some(typed_dict_key) = typed_dict_key {
@@ -335,20 +324,16 @@ fn annotation_operator(
     }
 }
 
-/// The one declaration `declared` makes, when its definitions all declare the same name the same
-/// way: the bindings of a variable assigned twice are one variable.
-fn single_declaration(db: &dyn Db, declared: &Definitions<'_>) -> Option<Declaration> {
-    let mut declarations = declared.iter().map(|resolved| declaration(db, resolved));
-    let first = declarations.next()??;
-    declarations
-        .all(|other| other.as_ref() == Some(&first))
-        .then_some(first)
+/// a decorated `def`: the type its decorators bind the name to, a `wrapper(*args, **kwargs)` or a
+/// `_lru_cache_wrapper[...]`, when that is not the function the `def` writes, then the `def` as
+/// its source writes it, its decorators over its own signature, and its own docstring rather than
+/// the wrapper's
+struct DecoratedFunctionHover<'db> {
+    replacement: Option<Type<'db>>,
+    written: HoverContent<'db>,
+    docstring: Option<Docstring>,
 }
 
-/// A decorated `def` as its source writes it, its decorators over its own signature, and its own
-/// docstring: what the name's type would show instead is whatever its decorators return, a
-/// `wrapper(*args, **kwargs)` or a `_lru_cache_wrapper[...]`, documented as the wrapper is.
-///
 /// `None` for a `def` without decorators, whose type is the function it writes, and for a use of
 /// a property, which reads the property's value rather than naming the `def`.
 fn decorated_function_hover<'db>(
@@ -356,7 +341,7 @@ fn decorated_function_hover<'db>(
     goto_target: &GotoTarget<'_>,
     declared: &Definitions<'db>,
     declaration: Option<&Declaration>,
-) -> Option<(HoverContent<'db>, Option<Docstring>)> {
+) -> Option<DecoratedFunctionHover<'db>> {
     let mut definitions = declared.iter();
     let (Some(ty_python_semantic::ResolvedDefinition::Definition(definition)), None) =
         (definitions.next(), definitions.next())
@@ -382,18 +367,19 @@ fn decorated_function_hover<'db>(
     if decorators.is_empty() {
         return None;
     }
-    let function = decorated_function(db, *definition)?.undecorated;
+    let function = decorated_function(db, *definition)?;
     let docstring = Definitions::new(vec![ty_python_semantic::ResolvedDefinition::Definition(
         *definition,
     )])
     .docstring(db);
-    Some((
-        HoverContent::DecoratedFunction {
+    Some(DecoratedFunctionHover {
+        replacement: function.replacement(db),
+        written: HoverContent::DecoratedFunction {
             decorators,
-            function,
+            function: function.undecorated,
         },
         docstring,
-    ))
+    })
 }
 
 fn keyword_argument_hover_contents<'db>(
@@ -2585,6 +2571,8 @@ mod tests {
         assert_snapshot!(test.hover(), @"
         function main.foo
         ---------------------------------------------
+        Literal[42]
+        ---------------------------------------------
         @decorator
         def foo()
         ---------------------------------------------
@@ -2592,6 +2580,10 @@ mod tests {
 
         ---------------------------------------------
         function `main.foo`
+        ---
+        ```python
+        Literal[42]
+        ```
         ---
         ```python
         @decorator
@@ -5253,8 +5245,8 @@ def function():
         ");
     }
 
-    /// a decorated method is shown as its `def` writes it, not as the wrapper its decorator
-    /// returns, and with its own docstring rather than the wrapper's
+    /// a decorated method is shown as the wrapper its decorator returns, then as its `def` writes
+    /// it, with its own docstring rather than the wrapper's
     #[test]
     fn hover_decorated_method_call() {
         let test = hover_test(
@@ -5278,6 +5270,8 @@ def function():
         assert_snapshot!(test.hover(), @"
         method main.Circle.area
         ---------------------------------------------
+        def wrapper(...) -> Unknown
+        ---------------------------------------------
         @logged
         def area(
             self,
@@ -5288,6 +5282,10 @@ def function():
 
         ---------------------------------------------
         method `main.Circle.area`
+        ---
+        ```python
+        def wrapper(...) -> Unknown
+        ```
         ---
         ```python
         @logged
@@ -5310,6 +5308,140 @@ def function():
         ");
     }
 
+    /// a `def` whose decorator returns something other than a function is shown as that, then as
+    /// the `def` writes it
+    #[test]
+    fn hover_context_manager_def_use() {
+        let test = hover_test(
+            r#"
+            from contextlib import contextmanager
+            from collections.abc import Iterator
+
+            @contextmanager
+            def opened() -> Iterator[int]:
+                """Open it."""
+                yield 1
+
+            open<CURSOR>ed()
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        function main.opened
+        ---------------------------------------------
+        () -> _GeneratorContextManager[int, None, None]
+        ---------------------------------------------
+        @contextmanager
+        def opened() -> Iterator[int]
+        ---------------------------------------------
+        Open it.
+
+        ---------------------------------------------
+        function `main.opened`
+        ---
+        ```python
+        () -> _GeneratorContextManager[int, None, None]
+        ```
+        ---
+        ```python
+        @contextmanager
+        def opened() -> Iterator[int]
+        ```
+        ---
+        Open it.
+        ---------------------------------------------
+        info[hover]: Hovered content is
+          --> main.py:10:1
+           |
+        10 | opened()
+           | ^^^^-^
+           | |   |
+           | |   Cursor offset
+           | source
+        ");
+    }
+
+    #[test]
+    fn hover_cached_def() {
+        let test = hover_test(
+            r#"
+            import functools
+
+            @functools.cache
+            def comp<CURSOR>uted(x: int) -> str:
+                return ""
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        function main.computed
+        ---------------------------------------------
+        _lru_cache_wrapper[def computed(x: int) -> str]
+        ---------------------------------------------
+        @functools.cache
+        def computed(x: int) -> str
+        ---------------------------------------------
+        function `main.computed`
+        ---
+        ```python
+        _lru_cache_wrapper[def computed(x: int) -> str]
+        ```
+        ---
+        ```python
+        @functools.cache
+        def computed(x: int) -> str
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:5:5
+          |
+        5 | def computed(x: int) -> str:
+          |     ^^^^-^^^
+          |     |   |
+          |     |   Cursor offset
+          |     source
+        ");
+    }
+
+    /// a decorator that returns the function it is given leaves the name bound to the `def`, so
+    /// the hover shows only the `def` as it is written
+    #[test]
+    fn hover_def_decorated_by_identity_decorator() {
+        let test = hover_test(
+            r#"
+            def registered[F](function: F) -> F:
+                return function
+
+            @registered
+            def han<CURSOR>dler(x: int) -> str:
+                return ""
+            "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        function main.handler
+        ---------------------------------------------
+        @registered
+        def handler(x: int) -> str
+        ---------------------------------------------
+        function `main.handler`
+        ---
+        ```python
+        @registered
+        def handler(x: int) -> str
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:6:5
+          |
+        6 | def handler(x: int) -> str:
+          |     ^^^-^^^
+          |     |  |
+          |     |  Cursor offset
+          |     source
+        ");
+    }
+
     /// a property's `def` is shown with its decorator, and its kind says it is a property
     #[test]
     fn hover_property_def() {
@@ -5325,10 +5457,16 @@ def function():
         assert_snapshot!(test.hover(), @"
         property main.Circle.diameter
         ---------------------------------------------
+        property
+        ---------------------------------------------
         @property
         def diameter(self) -> int | float
         ---------------------------------------------
         property `main.Circle.diameter`
+        ---
+        ```python
+        property
+        ```
         ---
         ```python
         @property

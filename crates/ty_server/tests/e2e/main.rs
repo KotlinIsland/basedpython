@@ -39,6 +39,7 @@ mod complete_statement;
 mod completions;
 mod configuration;
 mod data_flow;
+mod declaration;
 mod diagnostic_snapshots;
 mod django_templates;
 mod evaluatable_expression;

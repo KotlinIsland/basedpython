@@ -5047,12 +5047,28 @@ pub struct DecoratedFunction<'db> {
     pub undecorated: Type<'db>,
     /// what the decorators bind the name to, which is the function itself when there are none
     pub decorated: Type<'db>,
+    definition: Definition<'db>,
 }
 
-impl DecoratedFunction<'_> {
+impl<'db> DecoratedFunction<'db> {
     /// whether the decorators bind the name to a property
     pub fn is_property(&self) -> bool {
         matches!(self.decorated, Type::PropertyInstance(_))
+    }
+
+    /// what the decorators bind the name to when it is not the function the `def` writes but
+    /// something a decorator returned in its place, a wrapper, a `_lru_cache_wrapper[...]` or an
+    /// `int`. `None` when the decorators leave the name bound to the `def`'s own function, as
+    /// `@staticmethod`, `@final` and a decorator that returns its argument do
+    pub fn replacement(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+        match self.decorated {
+            Type::FunctionLiteral(function)
+                if function.contains_definition(db, self.definition) =>
+            {
+                None
+            }
+            decorated => Some(decorated),
+        }
     }
 }
 
@@ -5066,5 +5082,6 @@ pub fn decorated_function<'db>(
     Some(DecoratedFunction {
         undecorated: Type::FunctionLiteral(function),
         decorated: binding_type(db, definition),
+        definition,
     })
 }

@@ -237,6 +237,9 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::LatencySensitive
         ),
+        requests::DeclarationRequestHandler::METHOD => background_document_request_task::<
+            requests::DeclarationRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),

@@ -68,7 +68,7 @@ pub use completion::{
     CompletionKind, CompletionSettings, completion,
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
-pub use declaration::{Declaration, DeclaredKind};
+pub use declaration::{Declaration, DeclarationAt, DeclaredKind, declaration_at};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
     PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover, TemplateInlayHint,

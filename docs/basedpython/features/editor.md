@@ -607,6 +607,52 @@ a wrapper of its own is `def wrapper(*args, **kwargs)`, it is shown first, befor
 the def as written. that holds wherever the name is hovered, a call of it included,
 except a use of a property, which reads the property's value
 
+## what a name declares
+
+an editor's *copy reference* copies a declaration's dotted name, and a search
+for usages names what it searched for. both ask `by/declaration`, with the
+position of a name where it is declared or where it is used:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "position": { "line": 3, "character": 16 }
+}
+```
+
+and the answer is what the name declares, or refers to, and where:
+
+```json
+{
+  "kind": "method",
+  "name": "area",
+  "qualifiedName": "shapes.base.Circle.area",
+  "originSelectionRange": {
+    "start": { "line": 3, "character": 14 },
+    "end": { "line": 3, "character": 18 }
+  },
+  "uri": "file:///src/shapes/base.by",
+  "range": {
+    "start": { "line": 4, "character": 4 },
+    "end": { "line": 5, "character": 26 }
+  },
+  "selectionRange": {
+    "start": { "line": 4, "character": 8 },
+    "end": { "line": 4, "character": 12 }
+  }
+}
+```
+
+`kind` is one of the kinds a hover names. `qualifiedName` is the module's
+dotted name, each class the declaration is made in, and the name; an attribute
+a method assigns on `self` is the class's, `shapes.base.Circle.radius`. it is
+`null` for a name local to a function, a parameter, a type parameter, and a
+declaration in a file no module is imported from. `originSelectionRange` is the
+name at the position, `range` the whole declaration and `selectionRange` its
+name. a called class is the class, not the `__init__` the call runs, and a
+decorated `def` is the `def`. the answer is `null` where there is no name, and
+for a name whose definitions declare different things
+
 ## extend selection
 
 `textDocument/selectionRange` grows a selection the way a reader reads the
