@@ -12398,7 +12398,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             };
             (groups, any_str)
         } else {
-            let Some((text, any_str)) = regex::pattern_source(db, env, pattern_ty) else {
+            let Some((text, any_str, dialect)) = regex::pattern_source(db, env, pattern_ty) else {
                 return;
             };
             let flags = overload
@@ -12413,7 +12413,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let Some(verbose) = self.regex_verbose_flag(flags) else {
                 return;
             };
-            match regex::analyze(&text, verbose) {
+            match regex::analyze(&text, verbose, dialect) {
                 regex::PatternAnalysis::Groups(parsed) => {
                     (regex::RegexGroups::from_parsed(db, &parsed), any_str)
                 }
@@ -12593,11 +12593,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let Some(groups) = regex::groups_of(db, pattern_ty) {
                     return Some(groups);
                 }
-                let (text, _) = regex::pattern_source(db, env, pattern_ty)?;
+                let (text, _, dialect) = regex::pattern_source(db, env, pattern_ty)?;
                 // no signature has been matched yet, so the `flags` parameter is
                 // located by its position in `re.sub`/`re.subn` directly
                 let verbose = self.regex_verbose_flag(arguments.find_argument_value("flags", 4))?;
-                match regex::analyze(&text, verbose) {
+                match regex::analyze(&text, verbose, dialect) {
                     regex::PatternAnalysis::Groups(parsed) => {
                         Some(regex::RegexGroups::from_parsed(db, &parsed))
                     }

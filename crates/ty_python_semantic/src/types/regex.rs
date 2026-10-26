@@ -27,7 +27,7 @@ use crate::types::{
     UnionType,
 };
 
-pub(crate) use parse::{PatternAnalysis, analyze};
+pub(crate) use parse::{Dialect, PatternAnalysis, analyze};
 pub(crate) use source::pattern_range;
 
 /// one capture group of a statically-known pattern
@@ -356,22 +356,27 @@ pub(crate) fn is_regex_class(known: Option<KnownClass>) -> bool {
 }
 
 /// the pattern text of a literal `re` pattern argument, with the `str`/`bytes`
-/// type the resulting match is over
+/// type the resulting match is over and the dialect `re` reads it in
 pub(crate) fn pattern_source<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
-) -> Option<(String, Type<'db>)> {
+) -> Option<(String, Type<'db>, Dialect)> {
+    let dialect = |bytes| Dialect {
+        version: env.python_version(db),
+        bytes,
+    };
     match ty.as_literal_value_kind()? {
         LiteralValueTypeKind::String(literal) => Some((
             literal.value(db).to_string(),
             KnownClass::Str.to_instance(db, env),
+            dialect(false),
         )),
         LiteralValueTypeKind::Bytes(literal) => {
             // read the bytes as latin-1 so one byte stays one character, which
             // keeps the offsets in python's own error messages right
             let text = literal.value(db).iter().copied().map(char::from).collect();
-            Some((text, KnownClass::Bytes.to_instance(db, env)))
+            Some((text, KnownClass::Bytes.to_instance(db, env), dialect(true)))
         }
         _ => None,
     }

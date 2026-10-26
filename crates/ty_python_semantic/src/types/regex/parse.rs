@@ -12,6 +12,7 @@
 
 use std::ops::Range;
 
+use ruff_python_ast::PythonVersion;
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashMap;
 
@@ -80,15 +81,25 @@ pub(crate) enum PatternAnalysis {
     Unknown,
 }
 
+/// which `re` reads a pattern: the python version's, for a `str` or a `bytes`
+/// pattern
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Dialect {
+    pub(crate) version: PythonVersion,
+    /// a `bytes` pattern has no `\u`, `\U` or `\N` escape
+    pub(crate) bytes: bool,
+}
+
 /// analyse `pattern` as python regular-expression source
 ///
 /// `verbose` is the `re.VERBOSE`/`re.X` flag from the call site; a pattern that
 /// turns verbose mode on itself with a global `(?x)` is re-parsed from the
 /// start, since the flag changes how the text before it tokenizes
-pub(crate) fn analyze(pattern: &str, verbose: bool) -> PatternAnalysis {
-    match Parser::new(pattern, verbose).run() {
+pub(crate) fn analyze(pattern: &str, verbose: bool, dialect: Dialect) -> PatternAnalysis {
+    match Parser::new(pattern, verbose, dialect).run() {
         Ok(groups) => PatternAnalysis::Groups(groups),
-        Err(Failure::RestartVerbose) if !verbose => match Parser::new(pattern, true).run() {
+        Err(Failure::RestartVerbose) if !verbose => match Parser::new(pattern, true, dialect).run()
+        {
             Ok(groups) => PatternAnalysis::Groups(groups),
             Err(Failure::Invalid(error)) => PatternAnalysis::Invalid(error),
             Err(_) => PatternAnalysis::Unknown,
@@ -135,8 +146,15 @@ struct Parser {
     chars: Vec<char>,
     pos: usize,
     verbose: bool,
+    dialect: Dialect,
     depth: u32,
     group_count: u32,
+    /// whether each group, by number less one, has been closed, which a
+    /// backreference to it needs
+    closed: Vec<bool>,
+    /// inside a lookbehind, the number of the first group opened in it, which no
+    /// backreference in it may refer to
+    lookbehind_groups: Option<u32>,
     /// group name to the number it was first bound to, for redefinition checks
     names: FxHashMap<Name, u32>,
     /// group number to name, built as groups are opened
@@ -144,13 +162,16 @@ struct Parser {
 }
 
 impl Parser {
-    fn new(pattern: &str, verbose: bool) -> Self {
+    fn new(pattern: &str, verbose: bool, dialect: Dialect) -> Self {
         Self {
             chars: pattern.chars().collect(),
             pos: 0,
             verbose,
+            dialect,
             depth: 0,
             group_count: 0,
+            closed: Vec::new(),
+            lookbehind_groups: None,
             names: FxHashMap::default(),
             group_names: Vec::new(),
         }
@@ -367,7 +388,7 @@ impl Parser {
                 Ok(Some(Node::Atom))
             }
             Some('\\') => {
-                self.parse_escape()?;
+                self.parse_escape(false)?;
                 Ok(Some(Node::Atom))
             }
             Some(_) => {
@@ -378,16 +399,195 @@ impl Parser {
         }
     }
 
-    fn parse_escape(&mut self) -> Result<(), Failure> {
+    /// consume an escape, `in_class` saying whether it is written in a `[…]`
+    ///
+    /// the rules are `sre_parse`'s `_escape` and `_class_escape`: an ASCII letter
+    /// or digit that is not an escape is an error, rather than the letter, so
+    /// that a later python can give it a meaning
+    fn parse_escape(&mut self, in_class: bool) -> Result<(), Failure> {
         let start = self.pos;
         self.pos += 1;
-        if self.peek().is_none() {
+        let Some(escaped) = self.peek() else {
             return Err(Failure::Invalid(RegexError::new(
                 "bad escape (end of pattern)",
                 start,
             )));
-        }
+        };
         self.pos += 1;
+        let text = !self.dialect.bytes;
+        match escaped {
+            // the escapes of special characters, `\b` a backspace in a set
+            '\\' | 'a' | 'b' | 'f' | 'n' | 'r' | 't' | 'v' => Ok(()),
+            // the character classes, which a set may hold
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' => Ok(()),
+            // the anchors, which it may not
+            'A' | 'B' | 'Z' if !in_class => Ok(()),
+            'z' if !in_class && self.dialect.version >= PythonVersion::PY314 => Ok(()),
+            'x' => self.hex_escape(start, 2),
+            'u' if text => self.hex_escape(start, 4),
+            'U' if text => {
+                self.hex_escape(start, 8)?;
+                // `chr` refuses a code point past unicode's last
+                if u32::from_str_radix(&self.text(start + 2..self.pos), 16)
+                    .is_ok_and(|code| code <= 0x0010_ffff)
+                {
+                    Ok(())
+                } else {
+                    Err(self.bad_escape(start))
+                }
+            }
+            'N' if text && self.dialect.version >= PythonVersion::PY38 => self.named_escape(),
+            '0'..='7' if in_class => {
+                self.eat_octal_digits(2);
+                self.octal_in_range(start)
+            }
+            '0' => {
+                self.eat_octal_digits(2);
+                Ok(())
+            }
+            '1'..='9' if !in_class => self.group_reference(start),
+            escaped if escaped.is_ascii_alphanumeric() => Err(self.bad_escape(start)),
+            _ => Ok(()),
+        }
+    }
+
+    fn bad_escape(&self, start: usize) -> Failure {
+        Failure::Invalid(RegexError::spanning(
+            format_args!("bad escape {}", self.text(start..self.pos)),
+            start,
+            start..self.pos,
+        ))
+    }
+
+    fn text(&self, range: Range<usize>) -> String {
+        self.chars[range].iter().collect()
+    }
+
+    /// the `digits` hex digits of a `\x`, `\u` or `\U` escape starting at `start`
+    fn hex_escape(&mut self, start: usize, digits: usize) -> Result<(), Failure> {
+        let first = self.pos;
+        while self.pos - first < digits && self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+            self.pos += 1;
+        }
+        if self.pos - first == digits {
+            Ok(())
+        } else {
+            Err(Failure::Invalid(RegexError::spanning(
+                format_args!("incomplete escape {}", self.text(start..self.pos)),
+                start,
+                start..self.pos,
+            )))
+        }
+    }
+
+    /// the `{NAME}` of a `\N{NAME}`, whose name is not looked up: python's
+    /// unicode database is not ours, so a name it lacks is a missed error rather
+    /// than a valid pattern reported as invalid
+    fn named_escape(&mut self) -> Result<(), Failure> {
+        if !self.eat('{') {
+            return Err(Failure::Invalid(RegexError::new("missing {", self.pos)));
+        }
+        let name = self.pos;
+        loop {
+            match self.peek() {
+                None if self.pos == name => {
+                    return Err(Failure::Invalid(RegexError::new(
+                        "missing character name",
+                        self.pos,
+                    )));
+                }
+                None => {
+                    return Err(Failure::Invalid(RegexError::spanning(
+                        "missing }, unterminated name",
+                        name,
+                        name..self.pos,
+                    )));
+                }
+                Some('}') if self.pos == name => {
+                    return Err(Failure::Invalid(RegexError::new(
+                        "missing character name",
+                        self.pos,
+                    )));
+                }
+                Some('}') => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    fn eat_octal_digits(&mut self, most: usize) {
+        for _ in 0..most {
+            if !self.peek().is_some_and(|c| c.is_digit(8)) {
+                break;
+            }
+            self.pos += 1;
+        }
+    }
+
+    /// an octal escape starting at `start` names a byte at most
+    fn octal_in_range(&self, start: usize) -> Result<(), Failure> {
+        let digits = self.text(start + 1..self.pos);
+        if u32::from_str_radix(&digits, 8).is_ok_and(|value| value <= 0o377) {
+            Ok(())
+        } else {
+            Err(Failure::Invalid(RegexError::spanning(
+                format_args!(
+                    "octal escape value {} outside of range 0-0o377",
+                    self.text(start..self.pos)
+                ),
+                start,
+                start..self.pos,
+            )))
+        }
+    }
+
+    /// `\1` to `\99`, a backreference, unless it is three octal digits, which
+    /// is an octal escape
+    fn group_reference(&mut self, start: usize) -> Result<(), Failure> {
+        if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            self.pos += 1;
+            if self.chars[start + 1..self.pos]
+                .iter()
+                .all(|c| c.is_digit(8))
+                && self.peek().is_some_and(|c| c.is_digit(8))
+            {
+                self.pos += 1;
+                return self.octal_in_range(start);
+            }
+        }
+        let group = self
+            .text(start + 1..self.pos)
+            .parse::<u32>()
+            .unwrap_or(u32::MAX);
+        if group > self.group_count {
+            return Err(Failure::Invalid(RegexError::spanning(
+                format_args!("invalid group reference {group}"),
+                start + 1,
+                start + 1..self.pos,
+            )));
+        }
+        if !self
+            .closed
+            .get(group as usize - 1)
+            .copied()
+            .unwrap_or_default()
+        {
+            return Err(Failure::Invalid(RegexError::spanning(
+                "cannot refer to an open group",
+                start,
+                start..self.pos,
+            )));
+        }
+        if self.lookbehind_groups.is_some_and(|first| group >= first) {
+            return Err(Failure::Invalid(RegexError::spanning(
+                "cannot refer to group defined in the same lookbehind subpattern",
+                self.pos,
+                start..self.pos,
+            )));
+        }
         Ok(())
     }
 
@@ -413,7 +613,7 @@ impl Parser {
                     self.pos += 1;
                     return Ok(());
                 }
-                Some('\\') => self.parse_escape()?,
+                Some('\\') => self.parse_escape(true)?,
                 Some(_) => self.pos += 1,
             }
         }
@@ -435,7 +635,7 @@ impl Parser {
         if !self.eat('?') {
             let index = self.open_capturing_group(None, open)?;
             let node = self.parse_alternation()?;
-            self.close_group(open)?;
+            self.close_capturing_group(open, index)?;
             return Ok(Some(Node::Group {
                 index: Some(index),
                 node: Box::new(node),
@@ -462,8 +662,13 @@ impl Parser {
                 Some('=' | '!') => {
                     let negative = self.peek_at(1) == Some('!');
                     self.pos += 2;
-                    self.parse_plain_group(open, None)
-                        .map(|node| Some(uncertain_if(node, negative)))
+                    // the groups a backreference inside may not refer to are the
+                    // ones opened in the outermost lookbehind
+                    let outer = self.lookbehind_groups;
+                    self.lookbehind_groups = outer.or(Some(self.group_count + 1));
+                    let node = self.parse_plain_group(open, None);
+                    self.lookbehind_groups = outer;
+                    node.map(|node| Some(uncertain_if(node, negative)))
                 }
                 Some(char) => Err(Failure::Invalid(RegexError::new(
                     format_args!("unknown extension ?<{char}"),
@@ -531,6 +736,14 @@ impl Parser {
         }
     }
 
+    fn close_capturing_group(&mut self, open: usize, index: u32) -> Result<(), Failure> {
+        self.close_group(open)?;
+        if let Some(closed) = self.closed.get_mut(index as usize - 1) {
+            *closed = true;
+        }
+        Ok(())
+    }
+
     /// `(?P<name>…)` and `(?P=name)`
     fn parse_named_extension(&mut self, open: usize) -> Result<Option<Node>, Failure> {
         self.pos += 1;
@@ -541,7 +754,7 @@ impl Parser {
                 let name = Self::validate_group_name(&name, start)?;
                 let index = self.open_capturing_group(Some(name), start)?;
                 let node = self.parse_alternation()?;
-                self.close_group(open)?;
+                self.close_capturing_group(open, index)?;
                 Ok(Some(Node::Group {
                     index: Some(index),
                     node: Box::new(node),
@@ -724,6 +937,7 @@ impl Parser {
             )));
         }
         self.group_names.push(name);
+        self.closed.push(false);
         Ok(index)
     }
 }
@@ -793,15 +1007,26 @@ fn collect_certainty(node: &Node, certain: bool, out: &mut [bool]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParsedGroup, PatternAnalysis, analyze};
+    use ruff_python_ast::PythonVersion;
+
+    use super::{Dialect, ParsedGroup, PatternAnalysis, analyze};
+
+    const STR: Dialect = Dialect {
+        version: PythonVersion::PY313,
+        bytes: false,
+    };
 
     /// `!` marks an optional group, `?` an unnamed one, e.g. `"?, !name"`
     fn shape(pattern: &str) -> String {
-        shape_with(pattern, false)
+        shape_in(pattern, false, STR)
     }
 
     fn shape_with(pattern: &str, verbose: bool) -> String {
-        match analyze(pattern, verbose) {
+        shape_in(pattern, verbose, STR)
+    }
+
+    fn shape_in(pattern: &str, verbose: bool, dialect: Dialect) -> String {
+        match analyze(pattern, verbose, dialect) {
             PatternAnalysis::Groups(groups) => groups
                 .iter()
                 .map(
@@ -1077,6 +1302,120 @@ mod tests {
         assert_eq!(
             shape(r"\"),
             "invalid: bad escape (end of pattern) at position 0"
+        );
+    }
+
+    /// what python 3.13's `re` says of each, for a `str` pattern, and of the
+    /// same pattern as `bytes`
+    #[test]
+    fn escapes() {
+        let bytes = Dialect { bytes: true, ..STR };
+        let both = |pattern: &str, expected: &str| {
+            assert_eq!(shape(pattern), expected, "{pattern} as str");
+            assert_eq!(
+                shape_in(pattern, false, bytes),
+                expected,
+                "{pattern} as bytes"
+            );
+        };
+        both(r"\q", r"invalid: bad escape \q at position 0");
+        both(r"a\q", r"invalid: bad escape \q at position 1");
+        both(r"[\q]", r"invalid: bad escape \q at position 1");
+        both(r"[\z]", r"invalid: bad escape \z at position 1");
+        both(r"[\A]", r"invalid: bad escape \A at position 1");
+        both(r"[\8]", r"invalid: bad escape \8 at position 1");
+        both(r"\x4", r"invalid: incomplete escape \x4 at position 0");
+        both(r"\xg", r"invalid: incomplete escape \x at position 0");
+        both(
+            r"\777",
+            r"invalid: octal escape value \777 outside of range 0-0o377 at position 0",
+        );
+        both(
+            r"[\777]",
+            r"invalid: octal escape value \777 outside of range 0-0o377 at position 1",
+        );
+        both(r"\8", "invalid: invalid group reference 8 at position 1");
+        both(r"\12", "invalid: invalid group reference 12 at position 1");
+        both(r"(a)\2", "invalid: invalid group reference 2 at position 4");
+        both(
+            r"(a\1)",
+            "invalid: cannot refer to an open group at position 2",
+        );
+        both(
+            r"(?<=(a)\1)",
+            "invalid: cannot refer to group defined in the same lookbehind subpattern at position 9",
+        );
+        for valid in [
+            r"\A\b\B\d\D\s\S\w\W\Z",
+            r"[\b\d\D\s\S\w\W]",
+            r"\a\f\n\r\t\v\\",
+            r"\x41",
+            r"\0",
+            r"\07777",
+            r"\177",
+            r"[\1]",
+            r"\-",
+            r"[\-]",
+            r"\_",
+            r"\ ",
+            "\\\u{e9}",
+        ] {
+            both(valid, "");
+        }
+        both(r"(a)\1", "?");
+        both(r"(a)(?<=\1)", "?");
+
+        // the escapes a `bytes` pattern does not have
+        assert_eq!(shape(r"\u0041\U0010ffff"), "");
+        assert_eq!(shape(r"\N{EM DASH}"), "");
+        assert_eq!(
+            shape_in(r"\u0041", false, bytes),
+            r"invalid: bad escape \u at position 0"
+        );
+        assert_eq!(
+            shape_in(r"\U0010ffff", false, bytes),
+            r"invalid: bad escape \U at position 0"
+        );
+        assert_eq!(
+            shape_in(r"\N{EM DASH}", false, bytes),
+            r"invalid: bad escape \N at position 0"
+        );
+        assert_eq!(
+            shape(r"\u12"),
+            r"invalid: incomplete escape \u12 at position 0"
+        );
+        assert_eq!(
+            shape(r"\U0011ffff"),
+            r"invalid: bad escape \U0011ffff at position 0"
+        );
+        assert_eq!(shape(r"\N"), "invalid: missing { at position 2");
+        assert_eq!(shape(r"\Nx"), "invalid: missing { at position 2");
+        assert_eq!(
+            shape(r"\N{"),
+            "invalid: missing character name at position 3"
+        );
+        assert_eq!(
+            shape(r"\N{}"),
+            "invalid: missing character name at position 3"
+        );
+        assert_eq!(
+            shape(r"\N{ab"),
+            "invalid: missing }, unterminated name at position 3"
+        );
+    }
+
+    /// `\z` is an anchor from python 3.14, and a bad escape before it
+    #[test]
+    fn escapes_by_version() {
+        assert_eq!(shape(r"\z"), r"invalid: bad escape \z at position 0");
+        let py314 = Dialect {
+            version: PythonVersion::PY314,
+            ..STR
+        };
+        assert_eq!(shape_in(r"\z", false, py314), "");
+        assert_eq!(
+            shape_in(r"[\z]", false, py314),
+            r"invalid: bad escape \z at position 1"
         );
     }
 

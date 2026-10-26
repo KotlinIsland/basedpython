@@ -120,6 +120,13 @@ escape, a pattern written as adjacent literals at the literal that has the
 character, and an error about a construct as a whole, `{2,1}` or a group's
 redefined name, at all of it. a pattern passed by name is reported at the name.
 
+escapes are read by `re`'s own rules for the python version checked against: an
+ASCII letter or digit after a backslash that is no escape, `\q`, is a bad escape
+rather than the letter, a `bytes` pattern has no `\u`, `\U` or `\N`, `\z` is an
+anchor only from 3.14, and a backreference has to name a group already closed.
+each is reported at the whole escape. the name in a `\N{...}` is not looked up,
+so a name python's unicode database lacks goes unreported
+
 a construct the pattern reader does not model produces neither a refinement nor
 a diagnostic: a pattern reported invalid when `re.compile` would have accepted it
 is much worse than one left alone.

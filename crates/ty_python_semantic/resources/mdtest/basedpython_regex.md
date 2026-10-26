@@ -326,6 +326,38 @@ re.findall("(", "")  # error: [invalid-regex] "missing ), unterminated subpatter
 re.sub("(", "", "")  # error: [invalid-regex] "missing ), unterminated subpattern at position 0"
 ```
 
+## bad escapes
+
+An ASCII letter or digit after a backslash that is not an escape `re` knows is an error, not the
+letter: python keeps them for escapes a later version may add. A `bytes` pattern has no `\u`, `\U`
+or `\N` escape, and a backreference has to name a group that is already closed.
+
+```py
+import re
+
+re.compile(r"a\q")  # error: [invalid-regex] "bad escape \q at position 1"
+re.compile(r"[\A]")  # error: [invalid-regex] "bad escape \A at position 1"
+re.compile(r"\x4")  # error: [invalid-regex] "incomplete escape \x4 at position 0"
+re.compile(rb"\u0041")  # error: [invalid-regex] "bad escape \u at position 0"
+re.compile(r"(a)\2")  # error: [invalid-regex] "invalid group reference 2 at position 4"
+re.compile(r"(a\1)")  # error: [invalid-regex] "cannot refer to an open group at position 2"
+
+re.compile(r"\A\d\w+[\b\s]\u0041\N{EM DASH}\x41\0(a)\1\Z")  # no diagnostic
+```
+
+`\z` is an anchor from python 3.14, and a bad escape before it.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+import re
+
+re.compile(r"a\z")  # error: [invalid-regex] "bad escape \z at position 1"
+```
+
 ## an invalid pattern's error points at the character it is about
 
 python names the position in the pattern where it gave up, which is the character the error is
@@ -401,6 +433,22 @@ error[invalid-regex]: redefinition of group name 'name' as group 2; was group 1 
    |                            ^^^^
 ```
 
+a bad escape is all of the escape.
+
+```py
+import re
+
+re.compile(r"a\q")  # snapshot
+```
+
+```snapshot
+error[invalid-regex]: bad escape \q at position 1
+  --> src/mdtest_snippet.py:18:15
+   |
+18 | re.compile(r"a\q")  # snapshot
+   |               ^^
+```
+
 a pattern that is not written where it is passed is pointed at as what was passed.
 
 ```py
@@ -412,9 +460,9 @@ re.compile(pattern)  # snapshot
 
 ```snapshot
 error[invalid-regex]: missing ), unterminated subpattern at position 1
-  --> src/mdtest_snippet.py:19:12
+  --> src/mdtest_snippet.py:22:12
    |
-19 | re.compile(pattern)  # snapshot
+22 | re.compile(pattern)  # snapshot
    |            ^^^^^^^
 ```
 
