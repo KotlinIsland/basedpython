@@ -71,6 +71,14 @@ impl EnvVars {
     /// Equivalent to the `--no-server` command-line argument.
     pub const BY_NO_PROJECT_SERVER: &'static str = "BY_NO_PROJECT_SERVER";
 
+    /// Report the tests pytest runs under `by run` as service messages, `TeamCity`'s protocol.
+    ///
+    /// Set this to `teamcity` for an IDE's test runner to read the run: a suite for each test
+    /// file, named by the `.by` it was transpiled from, and one for each class in it, each test
+    /// with its pytest node id and where it is in the `.by`, and a failing `==` with what each
+    /// side was. Any other value is refused.
+    pub const BY_TEST_REPORTER: &'static str = "BY_TEST_REPORTER";
+
     /// Enable uv integration.
     ///
     /// When set to `"1"` or `"true"`, ty invokes `uv workspace metadata` to discover the workspace

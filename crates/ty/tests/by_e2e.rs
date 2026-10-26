@@ -1611,17 +1611,15 @@ fn run_coverage_maps_a_module_a_test_runner_compiled() {
     );
 }
 
-/// pytest compiles a test module itself, to rewrite its assertions, so a failure
-/// in a test was reported from the staged `.py`, at a line of the generated python
-/// and quoting it. the plugin `by run` puts in the tree moves the module's functions
-/// to the `.by`, so a failure — in a test, or in a fixture of a `conftest.by` — is
-/// reported at the `.by` line that failed, quoting the `.by`
-#[test]
+/// A project of `.by` tests for pytest to run, with a module they test, checked
+/// against the environment the tests run in: the `conftest` imports pytest, which
+/// `--python` does not configure. `None`, having said why, when `$PYTHON` (or
+/// `python3`) cannot import pytest.
 #[expect(
     clippy::print_stderr,
     reason = "a skipped test must say why it skipped, or it reads as a pass"
 )]
-fn run_pytest_reports_a_failure_at_the_by_line() {
+fn pytest_project(dir: &Path) -> Option<String> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     let pytest = Command::new(&python)
         .args(["-c", "import pytest"])
@@ -1629,10 +1627,8 @@ fn run_pytest_reports_a_failure_at_the_by_line() {
         .is_ok_and(|status| status.success());
     if !pytest {
         eprintln!("skipping: {python} cannot import pytest");
-        return;
+        return None;
     }
-    // the conftest imports pytest, so the check has to see the environment the tests
-    // run in, which `--python` does not configure
     let executable = Command::new(&python)
         .args(["-c", "import sys; print(sys.executable)"])
         .output()
@@ -1640,35 +1636,53 @@ fn run_pytest_reports_a_failure_at_the_by_line() {
     let executable = String::from_utf8_lossy(&executable.stdout)
         .trim()
         .to_owned();
-    let dir = tempfile::tempdir().expect("tempdir");
-    project_with_partly_covered_modules(dir.path());
+    project_with_partly_covered_modules(dir);
     fs::write(
-        dir.path().join("pyproject.toml"),
+        dir.join("pyproject.toml"),
         format!("[tool.basedpython.environment]\npython = {executable:?}\n"),
     )
     .unwrap();
-    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::create_dir_all(dir.join("tests")).unwrap();
     // `let` is basedpython's own, so the quoted source is the `.by`'s and not python
     fs::write(
-        dir.path().join("tests/test_calc.by"),
+        dir.join("tests/test_calc.by"),
         "from pkg.calc import add\n\n\ndef test_sum():\n    let total = add(1, 2)\n    assert total == 4\n\n\nclass TestGroup:\n    def test_fixture(self, broken: int):\n        assert broken\n",
     )
     .unwrap();
     fs::write(
-        dir.path().join("tests/conftest.by"),
+        dir.join("tests/conftest.by"),
         "import pytest\n\n\n@pytest.fixture\ndef broken() -> int:\n    let value = 0\n    assert value == 1\n    return value\n",
     )
     .unwrap();
+    Some(python)
+}
 
+/// `by run --in-build pytest` in `dir`, with `env` set, answering its standard output
+fn run_pytest(dir: &Path, python: &str, env: &[(&str, &str)]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .envs(env.iter().copied())
         .arg("run")
-        .args(["--python", &python, "--in-build"])
+        .args(["--python", python, "--in-build"])
         .args(["pytest", "-p", "no:cacheprovider"])
-        .current_dir(dir.path())
+        .current_dir(dir)
         .output()
         .expect("failed to spawn by");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// pytest compiles a test module itself, to rewrite its assertions, so a failure
+/// in a test was reported from the staged `.py`, at a line of the generated python
+/// and quoting it. the plugin `by run` puts in the tree moves the module's functions
+/// to the `.by`, so a failure — in a test, or in a fixture of a `conftest.by` — is
+/// reported at the `.by` line that failed, quoting the `.by`
+#[test]
+fn run_pytest_reports_a_failure_at_the_by_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    let stdout = run_pytest(dir.path(), &python, &[]);
     assert!(
         stdout.contains(&format!(
             "{}:6: AssertionError",
@@ -1690,6 +1704,160 @@ fn run_pytest_reports_a_failure_at_the_by_line() {
             .match_indices(".py:")
             .any(|(at, found)| stdout[at + found.len()..].starts_with(|c: char| c.is_ascii_digit())),
         "a failure is reported at a line of the generated python:\n{stdout}"
+    );
+}
+
+/// the plugin looks through a test module's values for the functions it moves to the `.by`
+/// without running any of the program's own code: an object whose `__getattr__` answers every
+/// name, as a proxy's does, is not asked for its `__dict__`
+#[test]
+fn run_pytest_runs_none_of_a_test_module_s_code_to_reline_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    fs::write(
+        dir.path().join("tests/test_proxy.by"),
+        "class Proxy:\n    __slots__ = ()\n\n    def __getattr__(self, name: str) -> object:\n        raise RuntimeError(f\"the plugin read {name}\")\n\n\nproxy = Proxy()\n\n\ndef test_proxy():\n    assert True\n",
+    )
+    .unwrap();
+    let stdout = run_pytest(dir.path(), &python, &[]);
+    let module = Path::new("tests")
+        .join("test_proxy.py")
+        .display()
+        .to_string();
+    assert!(
+        !stdout.contains("the plugin read") && stdout.contains(&format!("{module} .")),
+        "{stdout}"
+    );
+}
+
+/// a test module's top level runs as pytest compiled it, at the lines of the
+/// generated python, before the plugin sees the module. an error it raises, or an
+/// import of it fails with, is reported as `by run` reports one in a program, as
+/// python prints it with each frame at its `.by` line and quoting the `.by`
+#[test]
+fn run_pytest_reports_an_error_importing_a_test_module_at_the_by_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    fs::write(
+        dir.path().join("tests/test_broken.by"),
+        "from pkg.calc import add\n\nlet total = add(1, 2)\nraise RuntimeError(f\"broken at {total}\")\n\n\ndef test_never():\n    pass\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tests/test_missing.by"),
+        "import importlib\n\nlet name = \"missing_module\"\nlet _ = importlib.import_module(name)\n\n\ndef test_never():\n    pass\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let stdout = run_pytest(dir.path(), &python, &[]);
+    for (file, line, quoted, error) in [
+        (
+            "test_broken.by",
+            4,
+            "raise RuntimeError(f\"broken at {total}\")",
+            "RuntimeError: broken at 3",
+        ),
+        (
+            "test_missing.by",
+            4,
+            "let _ = importlib.import_module(name)",
+            "ModuleNotFoundError: No module named",
+        ),
+    ] {
+        let at = format!(
+            "  File \"{}\", line {line}, in <module>\n    {quoted}\n",
+            project.join("tests").join(file).display()
+        );
+        assert!(
+            stdout.contains(&at),
+            "{file}'s error is not reported at its `.by` line:\n{stdout}"
+        );
+        // the summary's line names the error, as it does for one pytest reports
+        assert!(
+            stdout.contains(&format!(" - {error}")),
+            "{file}'s error is not summarised:\n{stdout}"
+        );
+    }
+}
+
+/// with `BY_TEST_REPORTER=teamcity` the run is reported as the `TeamCity` service
+/// messages an IDE's test runner reads: suites named by the `.by` files and the
+/// classes in them, each test with its node id and its line in the `.by`, a failing
+/// `==` with what each side was and the failure's traceback at the `.by` line, and
+/// a fixture's failure as the test's error at setup
+#[test]
+fn run_pytest_reports_teamcity_messages() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    let project = dir.path().canonicalize().unwrap();
+    let test_file = project.join("tests").join("test_calc.by");
+    let url = format!("file://{}", test_file.display());
+
+    let stdout = run_pytest(
+        dir.path(),
+        &python,
+        &[(EnvVars::BY_TEST_REPORTER, "teamcity")],
+    );
+    let messages: Vec<&str> = stdout
+        .match_indices("##teamcity[")
+        .map(|(at, _)| {
+            let message = &stdout[at..];
+            &message[..message.find("]\n").map_or(message.len(), |end| end + 1)]
+        })
+        .collect();
+    let named = |kind: &str, name: &str| {
+        messages
+            .iter()
+            .copied()
+            .find(|message| message.starts_with(&format!("##teamcity[{kind} name='{name}'")))
+            .unwrap_or_else(|| panic!("no {kind} for {name}:\n{stdout}"))
+    };
+
+    assert_eq!(messages.first(), Some(&"##teamcity[enteredTheMatrix]"));
+    assert_eq!(
+        named("testSuiteStarted", "tests/test_calc.by"),
+        format!("##teamcity[testSuiteStarted name='tests/test_calc.by' locationHint='{url}']")
+    );
+    assert_eq!(
+        named("testStarted", "test_sum"),
+        format!(
+            "##teamcity[testStarted name='test_sum' locationHint='{url}:4' metainfo='tests/test_calc.py::test_sum' captureStandardOutput='false']"
+        )
+    );
+    let failed = named("testFailed", "test_sum");
+    assert!(
+        failed
+            .starts_with("##teamcity[testFailed name='test_sum' message='assert 3 == 4' details='")
+            && failed.contains(">       assert total == 4|n")
+            && failed.contains("tests/test_calc.by:6: AssertionError'")
+            && failed.ends_with(" type='comparisonFailure' expected='4' actual='3']"),
+        "{failed}"
+    );
+    assert_eq!(
+        named("testSuiteStarted", "TestGroup"),
+        format!("##teamcity[testSuiteStarted name='TestGroup' locationHint='{url}:9']")
+    );
+    let errored = named("testFailed", "test_fixture");
+    assert!(
+        errored.starts_with(
+            "##teamcity[testFailed name='test_fixture' message='error at setup: assert 0 == 1' details='"
+        ) && errored.contains("conftest.by:7: AssertionError")
+            && errored.ends_with(" type='comparisonFailure' expected='1' actual='0']"),
+        "{errored}"
+    );
+    assert!(
+        messages.ends_with(&[
+            "##teamcity[testSuiteFinished name='TestGroup']",
+            "##teamcity[testSuiteFinished name='tests/test_calc.by']",
+        ]),
+        "{stdout}"
     );
 }
 

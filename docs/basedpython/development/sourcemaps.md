@@ -128,8 +128,13 @@ of its tests runs, the plugin moves the code of every function the module define
 — the methods of its classes, what a decorator wraps, a fixture's function, and
 the functions nested in each — to the `.by` lines, as the shim's own loader does.
 a failure in a test or a fixture is then reported at the `.by` line, quoting the
-`.by`. the module's top level ran as it was imported, before the plugin saw it, so
-an error raised while importing a test module still names the staged `.py`
+`.by`. the module's top level ran as it was imported, before the plugin saw it, at
+the lines of the generated python: an error it raises, or an import in it fails
+with, is reported in place of pytest's report of it as `by run` reports an error in
+a program, python's traceback with each frame at its `.by` line. pytest's node ids
+still name the staged `.py`, `tests/test_calc.py::test_sum`: they are what pytest
+is given back to run a test again, and what its cache and its `--deselect` read,
+and they have to name a file in the tree pytest runs in
 
 both tables are keyed by the generated path exactly as the map spells it. the
 shim resolves symlinks before matching a frame's filename against it — a

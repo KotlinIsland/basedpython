@@ -1433,6 +1433,44 @@ project's `src/shapes/circle.by` is `shapes.circle`, and `src/shapes` and
 `src/shapes/__init__.by` are both `shapes`. it is `null` for a path no module is
 imported from, and for a file that resolution would never reach
 
+### running tests in an IDE
+
+`by run pytest` reports to an IDE's test runner when `BY_TEST_REPORTER=teamcity`
+is set: the pytest plugin `by run` puts in the tree writes the run to standard
+output as TeamCity service messages, alongside pytest's own output, which is left
+as the arguments ask for. what it writes:
+
+- `enteredTheMatrix` as the session starts, so a client knows the plugin is
+    reporting before the first test, and `testCount` with how many tests were
+    collected
+- a file that failed to collect, a test module whose import raised, as a test of
+    its own at the top level, named by its file: `testStarted`, `testFailed` with the
+    error's line as `message` and the whole report as `details`, and `testFinished`;
+    a file skipped as a whole has `testIgnored` instead
+- for each test, the suites it is in: its file, named by the project file it was
+    transpiled from or copied out of relative to the project, `tests/test_calc.by`,
+    and each class it is collected under, `TestGroup`, each opened before the first
+    of its tests and closed after the last
+- `testStarted` with the test's `name` as pytest gives it, `test_sum` or
+    `test_add[1-2]`, its node id as `metainfo`, `tests/test_calc.py::test_sum`, which
+    is what pytest is given to run it again, and `captureStandardOutput` `false`
+    while pytest captures its output, which follows as `testStdOut` and
+    `testStdErr`
+- `testFailed` when any of its setup, call or teardown failed: the error's line as
+    `message`, prefixed `error at setup:` or `error at teardown:` for those, and
+    pytest's report of the failure as `details`, every frame at its `.by` line. when
+    the failure is an assertion that failed comparing two values with `==`, and that
+    comparison is the one it made, it carries `type='comparisonFailure'`, `actual`,
+    the left side, and `expected`, the right side, each a string as it is and
+    anything else as `pprint` writes it. `assert a == b or c == d` carries neither
+- `testIgnored` for a test skipped, with the reason, or failing as expected, with
+    `expected failure:` and the reason, then `testFinished` with its `duration` in
+    milliseconds
+
+every `locationHint` is `file://` and the absolute path of the project file, with
+`:` and the 1-based line of the `def` or `class` for a test or a class. any other
+value of `BY_TEST_REPORTER` is refused as a usage error
+
 ## override and implement members
 
 an editor's *override methods* and *implement methods* ask twice: once for what

@@ -13,6 +13,15 @@ not open the socket that makes it reachable.
 
 Equivalent to the `--no-server` command-line argument.
 
+### `BY_TEST_REPORTER`
+
+report the tests pytest runs under `by run` as service messages, `TeamCity`'s protocol
+
+set this to `teamcity` for an IDE's test runner to read the run: a suite for each test
+file, named by the `.by` it was transpiled from, and one for each class in it, each test
+with its pytest node id and where it is in the `.by`, and a failing `==` with what each
+side was. any other value is refused
+
 ### `TY_CONFIG_FILE`
 
 Path to a `ty.toml` configuration file to use.
