@@ -11,6 +11,7 @@ use ruff_python_ast::{
 use ruff_python_trivia::{CommentLinePosition, is_python_whitespace};
 use ruff_source_file::{LineRanges, UniversalNewlines};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use rustc_hash::FxHashSet;
 
 use crate::Db;
 
@@ -66,6 +67,7 @@ pub fn folding_ranges(
     let mut visitor = FoldingRangeVisitor {
         source: source.as_str(),
         ranges: vec![],
+        docstrings: FxHashSet::default(),
         active_block_fold_start_lines: vec![],
         tokens: parsed.tokens(),
         range_filter,
@@ -102,6 +104,9 @@ pub fn folding_ranges(
 struct FoldingRangeVisitor<'a> {
     source: &'a str,
     ranges: Vec<FoldingRange>,
+    /// the docstrings given a range of their own, which the string literal each of them is
+    /// does not get a second time
+    docstrings: FxHashSet<TextRange>,
     active_block_fold_start_lines: Vec<ActiveBlockFoldStartLine<'a>>,
     tokens: &'a Tokens,
     range_filter: Option<TextRange>,
@@ -416,7 +421,11 @@ impl<'a> FoldingRangeVisitor<'a> {
         if !is_string_like {
             return;
         }
-        self.add_range(FoldingRange::from(first_stmt.range()).with_kind(FoldingRangeKind::Comment));
+        if self
+            .add_range(FoldingRange::from(first_stmt.range()).with_kind(FoldingRangeKind::Comment))
+        {
+            self.docstrings.insert(expr_stmt.value.range());
+        }
     }
 
     /// Attempts to find the start of the given token in the given range.
@@ -672,20 +681,10 @@ impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
             // Compound statements that create folding regions
             AnyNodeRef::StmtFunctionDef(func) => {
                 self.add_documented_block_ranges(node, &func.body);
-                // Note that this may be duplicative with folding
-                // ranges added for string literals. But I don't think
-                // the LSP protocol specifies that this is a problem.
-                // If we do need to de-dupe, then we'll want to keep
-                // this one since it attaches a "comment" folding range
-                // kind to the range. So we'll need to skip over the
-                // corresponding range for the literal.
                 self.add_docstring_range(&func.body);
             }
             AnyNodeRef::StmtClassDef(class) => {
                 self.add_documented_block_ranges(node, &class.body);
-                // See comment above for class docstrings about this
-                // being duplicative with adding folding ranges for
-                // string literals.
                 self.add_docstring_range(&class.body);
             }
             AnyNodeRef::StmtIf(if_stmt) => {
@@ -800,12 +799,15 @@ impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
                 self.add_call_expression_ranges(call, node);
             }
 
-            // String and bytes literals
+            // string and bytes literals. a docstring already has its range, and an editor
+            // given the same range twice draws two folds on one line
             AnyNodeRef::ExprStringLiteral(_)
             | AnyNodeRef::ExprBytesLiteral(_)
             | AnyNodeRef::ExprFString(_)
             | AnyNodeRef::ExprTString(_) => {
-                self.add_expression_range(node.range());
+                if !self.docstrings.contains(&node.range()) {
+                    self.add_expression_range(node.range());
+                }
             }
 
             _ => {}
@@ -2312,15 +2314,6 @@ def my_function():
         5 | |     docstring.
         6 | |     """
           | |_______^
-
-        info[folding-range]: Folding Range
-         --> main.py:3:5
-          |
-        3 | /     """
-        4 | |     This is a multiline
-        5 | |     docstring.
-        6 | |     """
-          | |_______^
         "#);
     }
 
@@ -2381,15 +2374,6 @@ def with_rawstring_doc():
           | |_______^
 
         info[folding-range]: Folding Range
-         --> main.py:3:5
-          |
-        3 | /     f"""
-        4 | |     This is an f-string
-        5 | |     used as a docstring.
-        6 | |     """
-          | |_______^
-
-        info[folding-range]: Folding Range
           --> main.py:10:24
            |
         10 |   def with_tstring_doc():
@@ -2411,15 +2395,6 @@ def with_rawstring_doc():
            | |_______^
 
         info[folding-range]: Folding Range
-          --> main.py:11:5
-           |
-        11 | /     t"""
-        12 | |     This is a t-string
-        13 | |     used as a docstring.
-        14 | |     """
-           | |_______^
-
-        info[folding-range]: Folding Range
           --> main.py:18:26
            |
         18 |   def with_rawstring_doc():
@@ -2432,15 +2407,6 @@ def with_rawstring_doc():
            | |________^
 
         info[folding-range]: Folding Range (comment)
-          --> main.py:19:5
-           |
-        19 | /     r"""
-        20 | |     This is a raw string
-        21 | |     used as a docstring.
-        22 | |     """
-           | |_______^
-
-        info[folding-range]: Folding Range
           --> main.py:19:5
            |
         19 | /     r"""
@@ -2588,16 +2554,6 @@ with open("file.txt") as f:
           | |_______________________^
 
         info[folding-range]: Folding Range
-         --> main.py:3:21
-          |
-        3 | /                     """Split a date range into chunks respecting the maximum days limit.
-        4 | |
-        5 | |                     The API has a 1-month limit, so this function splits larger ranges
-        6 | |                     into smaller chunks that can be requested individually.
-        7 | |                     """
-          | |_______________________^
-
-        info[folding-range]: Folding Range
           --> main.py:11:42
            |
         11 |                       while current <= end:
@@ -2654,15 +2610,6 @@ with open("file.txt") as f:
         4 | |     More.
         5 | |     """
           | |_______^
-
-        info[folding-range]: Folding Range
-         --> main.py:2:5
-          |
-        2 | /     """Docs.
-        3 | |
-        4 | |     More.
-        5 | |     """
-          | |_______^
         "#);
     }
 
@@ -2687,15 +2634,6 @@ with open("file.txt") as f:
           | |__^
 
         info[folding-range]: Folding Range (comment)
-         --> main.py:4:5
-          |
-        4 | /     """Docs.
-        5 | |
-        6 | |     More.
-        7 | |     """
-          | |_______^
-
-        info[folding-range]: Folding Range
          --> main.py:4:5
           |
         4 | /     """Docs.
