@@ -2607,6 +2607,15 @@ impl<'src> Parser<'src> {
         let first = self.parse_string();
 
         if !self.at_ts(STRING_START_SET) {
+            // basedpython dedents a lone triple-quoted string, so its value is
+            // what is left once the indent is stripped
+            if self.options.is_basedpython {
+                let (string, error) = first.dedented(self.source);
+                if let Some(error) = error {
+                    self.add_error(ParseErrorType::BasedPythonOnly(error.to_string()), error);
+                }
+                return string.into();
+            }
             return first.into();
         }
 

@@ -9,6 +9,7 @@
 use std::ops::Range;
 
 use ruff_python_ast as ast;
+use ruff_python_ast::str::dedented_runs;
 use ruff_text_size::{TextRange, TextSize};
 
 /// where in `source` the characters `span` of `pattern` were written, when
@@ -16,26 +17,34 @@ use ruff_text_size::{TextRange, TextSize};
 ///
 /// a bytes pattern is `pattern` read as latin-1, one character a byte. `span`
 /// is clamped to the pattern, so a span past its end — an error at the end —
-/// is its last character. `None` for an expression that is not a literal, or a
-/// literal whose value does not read as `pattern`, which leaves the caller to
-/// point at the expression as a whole
+/// is its last character. `dedents` says whether `source` is basedpython, which
+/// reads a lone triple-quoted string from the text its dedent keeps. `None` for
+/// an expression that is not a literal, or a literal whose value does not read
+/// as `pattern`, which leaves the caller to point at the expression as a whole
 pub(crate) fn pattern_range(
     expr: &ast::Expr,
     source: &str,
+    dedents: bool,
     pattern: &str,
     span: Range<usize>,
 ) -> Option<TextRange> {
     let mut written = Vec::new();
     match expr {
         ast::Expr::StringLiteral(string) => {
+            let dedented = string
+                .as_single_part_string()
+                .filter(|_| dedents)
+                .and_then(|part| dedented_runs(source, part.range, part.flags.into()));
             for part in &string.value {
-                read_part(
-                    source,
-                    part.content_range(),
-                    part.flags.prefix().is_raw(),
-                    false,
-                    &mut written,
-                )?;
+                let raw = part.flags.prefix().is_raw();
+                match &dedented {
+                    Some(runs) => {
+                        for run in runs {
+                            read_part(source, *run, raw, false, &mut written)?;
+                        }
+                    }
+                    None => read_part(source, part.content_range(), raw, false, &mut written)?,
+                }
             }
         }
         ast::Expr::BytesLiteral(bytes) => {
@@ -82,7 +91,8 @@ struct Written {
     range: TextRange,
 }
 
-/// read the text between one literal's quotes, `content`, as python does
+/// read the text `content` of a literal as python does: the text between its
+/// quotes, or one run of it its dedent keeps, which never splits an escape
 fn read_part(
     source: &str,
     content: TextRange,
@@ -194,7 +204,7 @@ mod tests {
     fn written(literal: &str, pattern: &str, span: std::ops::Range<usize>) -> Option<String> {
         let parsed = parse_expression(literal).expect("a literal");
         let expr: &ast::Expr = parsed.expr();
-        pattern_range(expr, literal, pattern, span).map(|range| literal[range].to_string())
+        pattern_range(expr, literal, false, pattern, span).map(|range| literal[range].to_string())
     }
 
     #[test]
@@ -231,6 +241,17 @@ mod tests {
             written(r#"("\t" r"\d" "x{2,1}")"#, "\t\\dx{2,1}", 4..9).as_deref(),
             Some("{2,1}")
         );
+    }
+
+    /// basedpython reads a lone triple-quoted string from the text its dedent
+    /// keeps, so a character of the pattern is found in that text
+    #[test]
+    fn a_dedented_literal_is_read_from_what_its_dedent_keeps() {
+        let literal = "\"\"\"\n    a\n    (b\n    \"\"\"";
+        let parsed = parse_expression(literal).expect("a literal");
+        let range = pattern_range(parsed.expr(), literal, true, "a\n(b", 2..3);
+        assert_eq!(range.map(|range| &literal[range]), Some("("));
+        assert_eq!(range.map(|range| range.start().to_u32()), Some(14));
     }
 
     #[test]

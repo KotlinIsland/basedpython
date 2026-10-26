@@ -60,15 +60,17 @@ pub fn dedent_triple_quoted_body(body: &str) -> TripleQuotedDedent<'_> {
 }
 
 impl TripleQuotedDedent<'_> {
-    /// The runs of the body this was read from that the dedent keeps, as ranges
-    /// of the body in order, or `None` when the body is not dedented.
+    /// the runs of the body this was read from that the dedent keeps, as ranges
+    /// of the body in order, or `None` when the body is not dedented
     ///
-    /// The text the string holds is these runs read one after another: each line
+    /// the text the string holds is these runs read one after another: each line
     /// after the indent the lines share, with the newline that ends it, except
     /// that a blank line keeps only its newline, the opening newline is dropped,
     /// and so is the line the closing quotes sit on together with the newline
-    /// before it. A run is never empty. What is dropped is whitespace and nothing
-    /// else, so an escape sequence never straddles two runs.
+    /// before it. a run is never empty. what is dropped is whitespace and nothing
+    /// else, so an escape sequence never straddles two runs, save for a `\` ending
+    /// the last line, whose newline is dropped: a reader of the string rejects that
+    /// one (`ruff_python_ast::str::dedent`)
     pub fn runs(&self) -> Option<Vec<TextRange>> {
         let Self::Dedents { content, indent } = self else {
             return None;

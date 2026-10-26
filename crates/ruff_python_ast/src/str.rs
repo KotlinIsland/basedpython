@@ -2,7 +2,126 @@ use aho_corasick::{AhoCorasick, AhoCorasickKind, Anchored, Input, MatchKind, Sta
 use std::fmt;
 use std::sync::LazyLock;
 
-use ruff_text_size::{TextLen, TextRange};
+use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
+
+use crate::{AnyStringFlags, StringFlags};
+
+/// basedpython: the runs of the string written at `range` of `source` that its
+/// [auto-dedent](https://docs.basedpython.org/features/dedent-strings) keeps, as
+/// ranges of `source` in order, or `None` when it is not dedented or cannot be
+/// (see [`dedent`])
+pub fn dedented_runs(
+    source: &str,
+    range: TextRange,
+    flags: AnyStringFlags,
+) -> Option<Vec<TextRange>> {
+    match dedent(source, range, flags) {
+        Dedent::Runs { runs, .. } => Some(runs),
+        Dedent::Unchanged | Dedent::Invalid(_) => None,
+    }
+}
+
+/// basedpython: how the string written at `range` of `source` is
+/// [auto-dedented](https://docs.basedpython.org/features/dedent-strings), the one
+/// rule the parser, the checker and the transpiler all read a dedented string by
+///
+/// only a lone triple-quoted literal is dedented, never one of several adjacent
+/// ones, which is for the caller to know; a bytes literal never is, whatever its quotes
+pub fn dedent(source: &str, range: TextRange, flags: AnyStringFlags) -> Dedent {
+    if !flags.is_triple_quoted() || flags.is_unclosed() || flags.is_byte_string() {
+        return Dedent::Unchanged;
+    }
+    let body = TextRange::new(
+        range.start() + flags.opener_len(),
+        range.end() - flags.closer_len(),
+    );
+    let Some(text) = source.get(body.start().to_usize()..body.end().to_usize()) else {
+        return Dedent::Unchanged;
+    };
+    let dedent = dedent_triple_quoted_body(text);
+    if dedent == TripleQuotedDedent::ClosingOverIndented {
+        return Dedent::Invalid(DedentError {
+            kind: DedentErrorKind::ClosingOverIndented {
+                quote: flags.quote_str(),
+            },
+            range: TextRange::new(body.end(), range.end()),
+        });
+    }
+    let TripleQuotedDedent::Dedents { indent, .. } = dedent else {
+        return Dedent::Unchanged;
+    };
+    let indent = indent.text_len();
+    let Some(runs) = dedent.runs() else {
+        return Dedent::Unchanged;
+    };
+    let runs: Vec<TextRange> = runs.into_iter().map(|run| run + body.start()).collect();
+    // a `\` ending the last line continues the string past the newline after it, which is
+    // the newline the dedent drops, so there is nothing left for it to continue onto. a raw
+    // string has no line continuation: its backslash is text
+    if !flags.prefix().is_raw()
+        && let Some(last) = runs.last()
+        && let trailing = source[*last].len() - source[*last].trim_end_matches('\\').len()
+        && trailing % 2 == 1
+    {
+        return Dedent::Invalid(DedentError {
+            kind: DedentErrorKind::LineContinuationAtEnd,
+            range: TextRange::at(last.end() - '\\'.text_len(), '\\'.text_len()),
+        });
+    }
+    Dedent::Runs { runs, indent }
+}
+
+/// basedpython: how a string is [auto-dedented](dedent)
+#[derive(Debug, PartialEq, Eq)]
+pub enum Dedent {
+    /// the string is not dedented, and is read as written
+    Unchanged,
+    /// the string is dedented by stripping `indent` from each of its lines
+    Runs {
+        /// the runs of the source the dedent keeps, in order: the text the string is read
+        /// from is these runs, one after another
+        runs: Vec<TextRange>,
+        /// the length of the indent stripped from each line that is not blank
+        indent: TextSize,
+    },
+    /// the string has the shape of a dedented one, but no reading of it as one
+    Invalid(DedentError),
+}
+
+/// basedpython: why a string that has the shape of a dedented one cannot be read as one
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DedentError {
+    kind: DedentErrorKind,
+    range: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DedentErrorKind {
+    ClosingOverIndented { quote: &'static str },
+    LineContinuationAtEnd,
+}
+
+impl Ranged for DedentError {
+    fn range(&self) -> TextRange {
+        self.range
+    }
+}
+
+impl fmt::Display for DedentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            DedentErrorKind::ClosingOverIndented { quote } => write!(
+                f,
+                "closing `{quote}` is indented more than the content of the triple-quoted string"
+            ),
+            DedentErrorKind::LineContinuationAtEnd => f.write_str(
+                "a line continuation cannot end the last line of a dedented string, \
+                 whose newline the dedent drops",
+            ),
+        }
+    }
+}
 
 /// Enumeration of the two kinds of quotes that can be used
 /// for Python string/f/t-string/bytestring literals

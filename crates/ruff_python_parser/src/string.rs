@@ -3,6 +3,7 @@
 use bstr::ByteSlice;
 use std::fmt;
 
+use ruff_python_ast::str::{Dedent, DedentError, dedent};
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{self as ast, AnyStringFlags, AtomicNodeIndex, Expr, StringFlags};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -35,6 +36,96 @@ impl From<StringType> for Expr {
             StringType::Bytes(node) => Expr::from(node),
             StringType::FString(node) => Expr::from(node),
             StringType::TString(node) => Expr::from(node),
+        }
+    }
+}
+
+impl StringType {
+    /// basedpython: this string as the program holds it once a lone triple-quoted
+    /// string is [auto-dedented](https://docs.basedpython.org/features/dedent-strings),
+    /// and why it cannot be when it has the shape of a dedented string but no reading as
+    /// one, in which case it is left as written
+    ///
+    /// the transpiler strips the indent from the text the string is written as,
+    /// and python reads what is left, so the value here is the one read from the
+    /// text the dedent keeps. only values change: every node keeps the range it
+    /// was written at, since the text the dedent drops is still in the file.
+    /// a bytes literal is not dedented, and neither is a string written as
+    /// several adjacent literals, so the caller passes only a lone one
+    pub(crate) fn dedented(self, source: &str) -> (Self, Option<DedentError>) {
+        let (range, flags) = match &self {
+            // a string whose escapes do not read has already been reported, and has no
+            // value to dedent
+            StringType::Str(literal) if literal.flags.is_invalid() => return (self, None),
+            StringType::Str(literal) => (literal.range, AnyStringFlags::from(literal.flags)),
+            StringType::FString(fstring) => (fstring.range, AnyStringFlags::from(fstring.flags)),
+            StringType::TString(tstring) => (tstring.range, AnyStringFlags::from(tstring.flags)),
+            StringType::Bytes(_) => return (self, None),
+        };
+        let runs = match dedent(source, range, flags) {
+            Dedent::Unchanged => return (self, None),
+            Dedent::Invalid(error) => return (self, Some(error)),
+            Dedent::Runs { runs, .. } => runs,
+        };
+        let dedented = match self {
+            StringType::Str(mut literal) => {
+                let content = literal.content_range();
+                let text = text_of(source, &runs, content);
+                if let Ok(StringType::Str(dedented)) =
+                    StringParser::new(&text, flags, content.start(), literal.range).parse()
+                {
+                    literal.value = dedented.value;
+                }
+                StringType::Str(literal)
+            }
+            StringType::FString(mut fstring) => {
+                dedent_literal_elements(source, &runs, flags, &mut fstring.elements);
+                StringType::FString(fstring)
+            }
+            StringType::TString(mut tstring) => {
+                dedent_literal_elements(source, &runs, flags, &mut tstring.elements);
+                StringType::TString(tstring)
+            }
+            StringType::Bytes(_) => self,
+        };
+        (dedented, None)
+    }
+}
+
+/// the text of `within` that `runs` keep
+fn text_of(source: &str, runs: &[TextRange], within: TextRange) -> String {
+    runs.iter()
+        .filter_map(|run| run.intersect(within))
+        .map(|kept| &source[kept])
+        .collect()
+}
+
+/// read again each literal element of an f- or t-string, the literal text of its
+/// format specs included, from the text the dedent keeps of it. the replacement
+/// fields are code, which the indent does not change the meaning of
+fn dedent_literal_elements(
+    source: &str,
+    runs: &[TextRange],
+    flags: AnyStringFlags,
+    elements: &mut ast::InterpolatedStringElements,
+) {
+    for element in elements.iter_mut() {
+        match element {
+            ast::InterpolatedStringElement::Literal(literal) => {
+                let text = text_of(source, runs, literal.range);
+                if text != source[literal.range]
+                    && let Ok(dedented) =
+                        StringParser::new(&text, flags, literal.range.start(), literal.range)
+                            .parse_interpolated_string_middle()
+                {
+                    literal.value = dedented.value;
+                }
+            }
+            ast::InterpolatedStringElement::Interpolation(interpolation) => {
+                if let Some(spec) = &mut interpolation.format_spec {
+                    dedent_literal_elements(source, runs, flags, &mut spec.elements);
+                }
+            }
         }
     }
 }
@@ -537,6 +628,106 @@ mod tests {
     const WINDOWS_EOL: &str = "\r\n";
     const MAC_EOL: &str = "\r";
     const UNIX_EOL: &str = "\n";
+
+    /// the value of each string statement of `source`, its literal text for an
+    /// f-string, parsed as a `.by` file when `basedpython`
+    fn string_values(source: &str, basedpython: bool) -> Vec<String> {
+        let source_type = if basedpython {
+            ruff_python_ast::PySourceType::BasedPython
+        } else {
+            ruff_python_ast::PySourceType::Python
+        };
+        let parsed = crate::parse_unchecked_source(source, source_type);
+        parsed
+            .suite()
+            .iter()
+            .filter_map(|stmt| match &*stmt.as_expr_stmt()?.value {
+                ruff_python_ast::Expr::StringLiteral(string) => Some(string.value.to_string()),
+                ruff_python_ast::Expr::FString(string) => Some(
+                    string
+                        .value
+                        .elements()
+                        .filter_map(|element| Some(&*element.as_literal()?.value))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn basedpython_reads_a_lone_triple_quoted_string_dedented() {
+        let source = r#""""
+    a
+      \t
+    """
+r'''
+  \d
+  '''
+f"""
+    {x}
+    b
+    """
+"""
+    a
+    """ "b"
+"#;
+        assert_eq!(
+            string_values(source, true),
+            ["a\n  \t", r"\d", "\nb", "\n    a\n    b"]
+        );
+        assert_eq!(
+            string_values(source, false),
+            [
+                "\n    a\n      \t\n    ",
+                "\n  \\d\n  ",
+                "\n    \n    b\n    ",
+                "\n    a\n    b"
+            ]
+        );
+    }
+
+    /// the errors parsing `source` as a `.by` file reports, each with the text it points at
+    fn basedpython_errors(source: &str) -> Vec<(String, &str)> {
+        crate::parse_unchecked_source(source, ruff_python_ast::PySourceType::BasedPython)
+            .errors()
+            .iter()
+            .map(|error| (error.error.to_string(), &source[error.location]))
+            .collect()
+    }
+
+    #[test]
+    fn basedpython_rejects_a_string_it_cannot_dedent() {
+        assert_eq!(
+            basedpython_errors("'''\n  a\n    '''\n"),
+            [(
+                "closing `'''` is indented more than the content of the triple-quoted string"
+                    .to_owned(),
+                "'''"
+            )]
+        );
+        let continuation = "a line continuation cannot end the last line of a dedented string, \
+            whose newline the dedent drops";
+        for source in [
+            "\"\"\"\n    a\\\n    \"\"\"\n",
+            "\"\"\"\n    a\\\\\\\n    \"\"\"\n",
+            "f\"\"\"\n    {x}\\\n    \"\"\"\n",
+            "t\"\"\"\n    {x}\\\n    \"\"\"\n",
+        ] {
+            assert_eq!(
+                basedpython_errors(source),
+                [(continuation.to_owned(), "\\")],
+                "{source:?}"
+            );
+        }
+        for source in [
+            "\"\"\"\n    a\\\\\n    \"\"\"\n",
+            "r\"\"\"\n    a\\\n    \"\"\"\n",
+            "\"\"\"\n    a\\\n    b\n    \"\"\"\n",
+        ] {
+            assert_eq!(basedpython_errors(source), [], "{source:?}");
+        }
+    }
 
     fn parse_suite(source: &str) -> Result<Suite, ParseError> {
         parse_module(source).map(Parsed::into_suite)

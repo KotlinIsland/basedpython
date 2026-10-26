@@ -11,6 +11,7 @@
 use ruff_db::PythonFile;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_python_ast::str::{Dedent, dedent};
 use ruff_python_ast::token::{TokenKind, Tokens, parenthesized_range};
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, walk_expr, walk_f_string, walk_t_string,
@@ -19,12 +20,10 @@ use ruff_python_ast::{
     self as ast, AnyNodeRef, AnyStringFlags, Expr, InterpolatedStringElement,
     InterpolatedStringElements, Stmt, StringFlags,
 };
-use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::Db;
 use crate::comma_list::comma_lists;
-use crate::injection::text_ranges;
 use crate::method_kind::{MethodKind, method_kind};
 
 /// The block structure and string literals of one file.
@@ -73,7 +72,7 @@ pub struct OutlineStatement {
     /// static method has none
     pub receiver: Option<MethodKind>,
     /// for a simple statement, the expression Enter may break across lines by wrapping it in
-    /// parentheses; see [`wrappable`]
+    /// parentheses; see `wrappable`
     pub wrap: Option<TextRange>,
 }
 
@@ -92,7 +91,7 @@ pub struct OutlineClause {
     /// The statements of the suite.
     pub body: Vec<OutlineStatement>,
     /// the expression of the header Enter may break across lines by wrapping it in parentheses;
-    /// see [`wrappable`]
+    /// see `wrappable`
     pub wrap: Option<TextRange>,
 }
 
@@ -126,10 +125,11 @@ pub struct OutlineString {
     /// How many leading characters basedpython strips from each line of this literal, when it
     /// strips any.
     ///
-    /// The rule is [`dedent_triple_quoted_body`]'s, the one the transpiler applies, so this is
-    /// set exactly when the program's string differs from the literal as written: a lone
+    /// the rule is [`dedent`]'s, the one the transpiler and the parser apply, so this is set
+    /// exactly when the program's string differs from the literal as written: a lone
     /// triple-quoted string in a basedpython file whose content starts on the line after the
-    /// opening quotes and whose closing quotes sit on a line of their own.
+    /// opening quotes and whose closing quotes sit on a line of their own. a string of that
+    /// shape the dedent has no reading of, an error there, is left as written
     pub stripped_indent: Option<TextSize>,
     /// The `{...}` interpolations of an f-string or t-string, braces included.
     pub interpolations: Vec<TextRange>,
@@ -873,26 +873,14 @@ impl StringCollector<'_> {
         interpolations: Vec<TextRange>,
         literal_runs: &[TextRange],
     ) {
-        let stripped_indent = if self.dedents
-            && self.dedentable == Some(range)
-            && flags.is_triple_quoted()
-            && !flags.is_unclosed()
-            && !flags.is_byte_string()
-        {
-            let body = TextRange::new(
-                range.start() + flags.opener_len(),
-                range.end() - flags.closer_len(),
-            );
-            match self
-                .source
-                .get(body.to_std_range())
-                .map(dedent_triple_quoted_body)
-            {
-                Some(TripleQuotedDedent::Dedents { indent, .. }) => Some(TextSize::of(indent)),
-                _ => None,
-            }
+        let dedent = if self.dedents && self.dedentable == Some(range) {
+            dedent(self.source, range, flags)
         } else {
-            None
+            Dedent::Unchanged
+        };
+        let (stripped_indent, dedented_runs) = match dedent {
+            Dedent::Runs { runs, indent } => (Some(indent), Some(runs)),
+            Dedent::Unchanged | Dedent::Invalid(_) => (None, None),
         };
 
         let mut escapes = Vec::new();
@@ -902,13 +890,7 @@ impl StringCollector<'_> {
             }
         }
 
-        let text = Self::text(
-            range,
-            flags,
-            stripped_indent.is_some(),
-            &interpolations,
-            self.source,
-        );
+        let text = Self::text(range, flags, dedented_runs, &interpolations);
 
         self.strings.push(OutlineString {
             range,
@@ -919,15 +901,14 @@ impl StringCollector<'_> {
         });
     }
 
-    /// See [`OutlineString::text`]. `stripped` says whether basedpython dedents this literal,
-    /// whose runs are then the ones the dedent leaves, by [`text_ranges`] — the rule the
-    /// language-injection fragments are reported by, so a string reads the same either way.
+    /// see [`OutlineString::text`]. `dedented_runs` are the runs basedpython's dedent leaves
+    /// of this literal, when it dedents it — the rule the language-injection fragments are
+    /// reported by, so a string reads the same either way
     fn text(
         range: TextRange,
         flags: AnyStringFlags,
-        stripped: bool,
+        dedented_runs: Option<Vec<TextRange>>,
         interpolations: &[TextRange],
-        source: &str,
     ) -> Vec<TextRange> {
         let start = range.start() + flags.opener_len();
         let closer = if flags.is_unclosed() {
@@ -937,11 +918,7 @@ impl StringCollector<'_> {
         };
         let end = range.end().checked_sub(closer).unwrap_or(start).max(start);
         let body = TextRange::new(start, end);
-        let runs = if stripped {
-            text_ranges(body, source).into_vec()
-        } else {
-            vec![body]
-        };
+        let runs = dedented_runs.unwrap_or_else(|| vec![body]);
 
         // An interpolation is an expression rather than text, so each run is cut around it.
         let mut text = Vec::with_capacity(runs.len());
@@ -1412,6 +1389,9 @@ def f():
     closing_past_the_content = \"\"\"
     a
         \"\"\"
+    continued_last_line = \"\"\"
+        a\\
+        \"\"\"
     concatenated = \"\"\"
         a
         \"\"\" \"b\"
@@ -1428,6 +1408,7 @@ def f():
 \"\"\"Summary.⏎        more⏎        \"\"\"
 \"\"\"⏎        text\"\"\"
 \"\"\"⏎    a⏎        \"\"\"
+\"\"\"⏎        a\\⏎        \"\"\" escape `\\⏎`
 \"\"\"⏎        a⏎        \"\"\"
 \"b\"
 b\"\"\"⏎        a⏎        \"\"\"

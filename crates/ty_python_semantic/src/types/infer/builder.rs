@@ -12426,6 +12426,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             regex::pattern_range(
                                 pattern,
                                 &source_text(db, self.file()),
+                                self.file().source_type(db).is_basedpython(),
                                 &text,
                                 error.span(),
                             )

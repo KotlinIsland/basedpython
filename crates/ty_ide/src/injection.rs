@@ -50,13 +50,13 @@
 
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
+use ruff_python_ast::str::dedented_runs;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_body, walk_expr, walk_stmt,
 };
-use ruff_python_ast::{self as ast, AnyNodeRef, StringFlags};
-use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_python_ast::{self as ast, AnyNodeRef};
+use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashMap;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -409,6 +409,11 @@ impl<'db> SourceOrderVisitor<'db> for InjectionFinder<'_, 'db> {
 /// `dedent_string`: a lone triple-quoted literal. A fragment written as several
 /// adjacent literals is left as written there, so it is left as written here
 /// too, and the two agree about what the program holds.
+///
+/// the runs are [`dedented_runs`]', the rule the transpiler and the parser read
+/// the string by. a string shaped like a dedented one that has no reading as one,
+/// its closing quotes indented past its content or a `\` ending its last line, is
+/// an error there and is left as written, so it is left as written here too
 fn content_ranges(
     string: &ast::ExprStringLiteral,
     source: &str,
@@ -416,68 +421,15 @@ fn content_ranges(
 ) -> Box<[TextRange]> {
     if dedents
         && let Some(part) = string.as_single_part_string()
-        && part.flags.is_triple_quoted()
+        && let Some(runs) = dedented_runs(source, part.range, part.flags.into())
     {
-        return text_ranges(part.content_range(), source);
+        return runs.into_boxed_slice();
     }
     string
         .value
         .iter()
         .map(ast::StringLiteral::content_range)
         .collect()
-}
-
-/// The runs of `body` that survive basedpython's dedent, or `body` itself when
-/// nothing is stripped from it.
-///
-/// The dedent rule is [`dedent_triple_quoted_body`]'s, which is the one the
-/// transpiler applies (`by_transforms`'s `dedent_string`), so a fragment reads
-/// here exactly as it will at runtime. Empty runs are dropped: a blank line
-/// contributes only the newline that follows it, and the range before that
-/// newline is nothing at all.
-pub(crate) fn text_ranges(body: TextRange, source: &str) -> Box<[TextRange]> {
-    let Some(text) = source.get(body.start().to_usize()..body.end().to_usize()) else {
-        return Box::from([body]);
-    };
-    let (content, indent) = match dedent_triple_quoted_body(text) {
-        TripleQuotedDedent::Dedents { content, indent } => (content, indent),
-        // Nothing is stripped, so the text is the body exactly as written.
-        TripleQuotedDedent::Unchanged => return Box::from([body]),
-        // The transpiler refuses this one rather than guessing a depth, so
-        // there is no dedented text to point at: report the body as written and
-        // let the error the transpiler raises be the thing that gets fixed.
-        TripleQuotedDedent::ClosingOverIndented => return Box::from([body]),
-    };
-
-    // `content` is `text` without its opening newline and without the line the
-    // closing quotes sit on, so it starts one character in.
-    let start = body.start() + TextSize::from(1);
-    let mut ranges = Vec::new();
-    let mut offset = start;
-    let mut lines = content.split('\n').peekable();
-    while let Some(line) = lines.next() {
-        // A blank line is erased entirely, exactly as the transpiler erases it;
-        // what is left of it is the newline that ends it.
-        let stripped = if line.trim().is_empty() {
-            TextSize::of(line)
-        } else {
-            TextSize::of(indent)
-        };
-        let line_end = offset + TextSize::of(line);
-        let text_start = offset + stripped;
-        // The newline between two lines is part of the text; the last line has
-        // none, its newline having been consumed as the closing line's.
-        let end = if lines.peek().is_some() {
-            line_end + TextSize::from(1)
-        } else {
-            line_end
-        };
-        if text_start < end {
-            ranges.push(TextRange::new(text_start, end));
-        }
-        offset = line_end + TextSize::from(1);
-    }
-    ranges.into_boxed_slice()
 }
 
 /// The language the parameter named `name` of the function `definition` defines
@@ -922,6 +874,34 @@ def render():
           | -
         6 |     </div>
           |     ------
+        "#);
+    }
+
+    /// a `\` ending the last line of a dedented string would continue it onto the
+    /// newline the dedent drops, so the string has no dedented reading: the
+    /// transpiler reports it and the parser keeps it as written, and so does the
+    /// fragment
+    #[test]
+    fn a_string_the_dedent_cannot_read_is_reported_as_written() {
+        let test = injection_test(
+            "\
+def render():
+    # language=html
+    page = \"\"\"
+    <div>\\
+    \"\"\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: html (comment)
+         --> main.by:3:15
+          |
+        3 |       page = """
+          |  _______________^
+        4 | |     <div>\
+        5 | |     """
+          | |____^
         "#);
     }
 

@@ -81,6 +81,11 @@ impl<'ast> Visitor<'ast> for IndentString<'_> {
 fn indent_triple_string(raw: &str, line_indent: &str) -> Option<String> {
     let quote_start = raw.find("\"\"\"").or_else(|| raw.find("'''"))?;
     let prefix = &raw[..quote_start];
+    // a raw string has no line continuation: the backslash and newline after its opening
+    // quotes are both text
+    if prefix.contains(['r', 'R']) {
+        return None;
+    }
     let quote = &raw[quote_start..quote_start + 3];
     let after_open = &raw[quote_start + 3..];
 
@@ -101,7 +106,11 @@ fn indent_triple_string(raw: &str, line_indent: &str) -> Option<String> {
     // form 2: closing """ sits right after the last content character (no trailing newline)
     //   content's leading whitespace is meaningful (string value) — preserve as-is
     // anything else (bare \n before closing """) is left alone
-    if let Some(content) = inner.strip_suffix("\\\n") {
+    // the `\\` before the closing line's newline is a line continuation only when it is not
+    // the second half of an escaped backslash; an escaped one holds a backslash and a newline
+    if let Some(content) = inner.strip_suffix("\\\n")
+        && (content.len() - content.trim_end_matches('\\').len()) % 2 == 0
+    {
         let indent = format!("{line_indent}    ");
         let indented_lines: Vec<String> = content
             .split('\n')
@@ -243,16 +252,19 @@ mod tests {
         );
     }
 
+    /// a raw string's backslashes are text, so it holds no line continuation to read
     #[test]
-    fn rstring_indent() {
-        check(
-            "text = r\"\"\"\\\nhello\\\n\"\"\"\n",
-            indoc! {r#"
-                text = r"""
-                    hello
-                    """
-            "#},
-        );
+    fn rstring_unchanged() {
+        let source = "text = r\"\"\"\\\nhello\\\n\"\"\"\n";
+        check(source, source);
+    }
+
+    /// a `\\` before the closing line is an escaped backslash, and the newline after it
+    /// is part of the string
+    #[test]
+    fn escaped_backslash_before_the_closing_line_unchanged() {
+        let source = "text = \"\"\"\\\nhello\\\\\n\"\"\"\n";
+        check(source, source);
     }
 
     #[test]

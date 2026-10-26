@@ -1,11 +1,11 @@
 //! strips common indentation from triple-quoted multiline strings
 
+use ruff_python_ast::str::{Dedent, dedent};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
     AnyStringFlags, Expr, InterpolatedStringElement, InterpolatedStringElements, ModModule, Stmt,
     StringFlags,
 };
-use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
@@ -42,23 +42,21 @@ struct State<'src> {
 }
 
 impl State<'_> {
-    /// dedent the lone triple-quoted literal `string`, whose literal text — the
-    /// text that is not a replacement field — is `literals`, or all of its body
-    /// when that is `None`
-    fn dedent(&mut self, string: TextRange, flags: AnyStringFlags, literals: Option<&[TextRange]>) {
-        let raw = &self.source[string];
-        let literals = literals.map(|literals| {
-            literals
-                .iter()
-                .map(|literal| *literal - string.start())
-                .collect::<Vec<_>>()
-        });
-        match dedent_triple_string(raw, flags, literals.as_deref()) {
-            DedentOutcome::Transformed(out) => {
-                self.edits.push((string, out));
+    /// dedent the lone literal `string`, whose literal text — the text that is not a
+    /// replacement field — is `literals`, or all of its body when that is `None`
+    fn dedent(
+        &mut self,
+        string: TextRange,
+        flags: AnyStringFlags,
+        literals: Option<Vec<TextRange>>,
+    ) {
+        match dedent(self.source, string, flags) {
+            Dedent::Unchanged => {}
+            Dedent::Invalid(error) => self.errors.push(error.to_string()),
+            Dedent::Runs { runs, .. } => {
+                let written = dedented_literal(self.source, string, flags, &runs, literals);
+                self.edits.push((string, written));
             }
-            DedentOutcome::Error(msg) => self.errors.push(msg),
-            DedentOutcome::Unchanged => {}
         }
     }
 }
@@ -71,26 +69,20 @@ impl<'ast> Visitor<'ast> for State<'_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         match expr {
             Expr::StringLiteral(string_expr) => {
-                if let Some(part) = string_expr.as_single_part_string()
-                    && part.flags.is_triple_quoted()
-                {
+                if let Some(part) = string_expr.as_single_part_string() {
                     self.dedent(part.range(), part.flags.into(), None);
                 }
             }
             Expr::FString(string_expr) => {
-                if let Some(fstring) = string_expr.as_single_part_fstring()
-                    && fstring.flags.is_triple_quoted()
-                {
+                if let Some(fstring) = string_expr.as_single_part_fstring() {
                     let literals = literal_ranges(&fstring.elements);
-                    self.dedent(fstring.range(), fstring.flags.into(), Some(&literals));
+                    self.dedent(fstring.range(), fstring.flags.into(), Some(literals));
                 }
             }
             Expr::TString(string_expr) => {
-                if let Some(tstring) = string_expr.as_single_part_tstring()
-                    && tstring.flags.is_triple_quoted()
-                {
+                if let Some(tstring) = string_expr.as_single_part_tstring() {
                     let literals = literal_ranges(&tstring.elements);
-                    self.dedent(tstring.range(), tstring.flags.into(), Some(&literals));
+                    self.dedent(tstring.range(), tstring.flags.into(), Some(literals));
                 }
             }
             _ => {}
@@ -100,7 +92,7 @@ impl<'ast> Visitor<'ast> for State<'_> {
 }
 
 /// the ranges of an f- or t-string's literal text, including the literal text of
-/// its format specs, which a raw prefix makes raw too
+/// its format specs, which a raw prefix makes raw too, in source order
 fn literal_ranges(elements: &InterpolatedStringElements) -> Vec<TextRange> {
     let mut ranges = Vec::new();
     let mut pending = vec![elements];
@@ -116,73 +108,65 @@ fn literal_ranges(elements: &InterpolatedStringElements) -> Vec<TextRange> {
             }
         }
     }
+    ranges.sort_unstable_by_key(Ranged::start);
     ranges
 }
 
-enum DedentOutcome {
-    Unchanged,
-    Transformed(String),
-    Error(String),
-}
-
-/// dedent the triple-quoted literal `raw`, prefix and quotes included
+/// the literal `string` written so that it holds the text of `runs`, the runs of the
+/// source its dedent keeps
 ///
-/// the dedented text is written between a quote ending in a line continuation
-/// and a line continuation before the closing quote, so the literal keeps the
-/// lines it was written on. a raw literal has no line continuation — its
-/// backslash and newline are both text — so it is written as the plain literal
-/// that holds the same text instead: every backslash and quote of its literal
-/// text, `literals` (relative to `raw`, or all of the body when `None`), escaped
-fn dedent_triple_string(
-    raw: &str,
+/// the text is written between a quote ending in a line continuation and a line
+/// continuation before the closing quote, so the literal keeps the lines it was written
+/// on. a raw literal has no line continuation — its backslash and newline are both
+/// text — so it is written as the plain literal that holds the same text instead: every
+/// backslash and quote of its literal text, `literals` (in source order, or all of the
+/// body when `None`), escaped
+fn dedented_literal(
+    source: &str,
+    string: TextRange,
     flags: AnyStringFlags,
-    literals: Option<&[TextRange]>,
-) -> DedentOutcome {
-    if flags.is_unclosed() {
-        return DedentOutcome::Unchanged;
-    }
-    let opener = flags.opener_len().to_usize();
-    let Some(body) = raw.get(opener..raw.len() - flags.closer_len().to_usize()) else {
-        return DedentOutcome::Unchanged;
-    };
+    runs: &[TextRange],
+    literals: Option<Vec<TextRange>>,
+) -> String {
     let quote = flags.quote_str();
-
-    let dedent = dedent_triple_quoted_body(body);
-    if dedent == TripleQuotedDedent::ClosingOverIndented {
-        return DedentOutcome::Error(format!(
-            "closing `{quote}` is indented more than the content of the triple-quoted string"
-        ));
-    }
-    let Some(runs) = dedent.runs() else {
-        return DedentOutcome::Unchanged;
-    };
-
-    let raw_prefix = flags.prefix().is_raw();
-    let mut prefix = raw[..opener - quote.len()].to_string();
-    if raw_prefix {
+    let opener = &source[TextRange::at(string.start(), flags.opener_len())];
+    let mut prefix = opener[..opener.len() - quote.len()].to_owned();
+    let raw = flags.prefix().is_raw();
+    if raw {
         prefix.retain(|c| !matches!(c, 'r' | 'R'));
     }
-    let body_start = TextSize::try_from(opener).unwrap_or_default();
-    let is_literal = |offset: TextSize| {
-        literals.is_none_or(|literals| literals.iter().any(|literal| literal.contains(offset)))
-    };
     let quote_char = flags.quote_style().as_char();
 
-    let mut content = String::with_capacity(body.len());
+    let mut content = String::new();
+    // the runs and the literal text are both in source order, so one pass over each
+    // finds the literal text every character of the runs is in
+    let mut literals = literals.map(|literals| literals.into_iter().peekable());
     for run in runs {
-        if !raw_prefix {
-            content.push_str(&body[run]);
+        if !raw {
+            content.push_str(&source[*run]);
             continue;
         }
-        for (index, c) in body[run].char_indices() {
-            let offset = body_start + run.start() + TextSize::try_from(index).unwrap_or_default();
-            if (c == '\\' || c == quote_char) && is_literal(offset) {
+        for (index, c) in source[*run].char_indices() {
+            let offset = run.start() + TextSize::try_from(index).unwrap_or_default();
+            let is_literal = match &mut literals {
+                None => true,
+                Some(literals) => {
+                    while literals
+                        .next_if(|literal| literal.end() <= offset)
+                        .is_some()
+                    {}
+                    literals
+                        .peek()
+                        .is_some_and(|literal| literal.contains(offset))
+                }
+            };
+            if (c == '\\' || c == quote_char) && is_literal {
                 content.push('\\');
             }
             content.push(c);
         }
     }
-    DedentOutcome::Transformed(format!("{prefix}{quote}\\\n{content}\\\n{quote}"))
+    format!("{prefix}{quote}\\\n{content}\\\n{quote}")
 }
 
 #[cfg(test)]
@@ -406,6 +390,32 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("indented more"), "got: {err}");
+    }
+
+    /// the newline a `\\` ending the last line continues past is the one the dedent drops
+    #[test]
+    fn a_line_continuation_ending_the_last_line_errors() {
+        for source in [
+            "text = \"\"\"\n    a\\\n    \"\"\"\n",
+            "text = \"\"\"\n    a\\\\\\\n    \"\"\"\n",
+            "text = f\"\"\"\n    {a}\\\n    \"\"\"\n",
+        ] {
+            let err = transpile(source, &Config::test_default()).unwrap_err();
+            assert!(err.contains("line continuation"), "{source:?} got: {err}");
+        }
+    }
+
+    /// an escaped backslash is no line continuation, and a raw string has none
+    #[test]
+    fn a_backslash_ending_the_last_line_as_text() {
+        check(
+            "text = \"\"\"\n    a\\\\\n    \"\"\"\n",
+            "text = \"\"\"\\\na\\\\\\\n\"\"\"\n",
+        );
+        check(
+            "text = r\"\"\"\n    a\\\n    \"\"\"\n",
+            "text = \"\"\"\\\na\\\\\\\n\"\"\"\n",
+        );
     }
 
     #[test]

@@ -15,6 +15,11 @@ def doc():
 the logical content is `"hello\n  world"` — the common leading indent of
 each interior line is stripped
 
+that is the value the checker sees too: the literal type of `doc()`'s string is
+`"hello\n  world"`, a regular expression written this way is checked as the
+pattern `re` will compile, and a name written this way in `__all__` is the name
+exported
+
 ## trigger conditions
 
 dedenting fires when *all* of these hold:
@@ -73,3 +78,6 @@ pattern = r"""
 # \\d+ \"units\"\
 # """
 ```
+
+a `\` ending the last line of the content of a string that is not raw is
+rejected, since it would continue onto the newline the dedent drops

@@ -50,13 +50,6 @@ def reindent():
   """
     return z
 
-# the closing quotes are indented past the content, which has no consistent
-# dedent depth — left for the transpiler to reject
-def closing_past_the_content():
-    return """
-  a
-    """
-
 # the closing quotes share a line with content, so nothing is dedented and
 # nothing may be reindented
 def closing_on_the_content_line():
@@ -137,14 +130,6 @@ def reindent():
         indented
         """
     return z
-
-
-# the closing quotes are indented past the content, which has no consistent
-# dedent depth — left for the transpiler to reject
-def closing_past_the_content():
-    return """
-  a
-    """
 
 
 # the closing quotes share a line with content, so nothing is dedented and
