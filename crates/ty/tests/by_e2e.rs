@@ -1534,6 +1534,88 @@ fn run_coverage_maps_a_module_a_test_runner_compiled() {
     );
 }
 
+/// pytest compiles a test module itself, to rewrite its assertions, so a failure
+/// in a test was reported from the staged `.py`, at a line of the generated python
+/// and quoting it. the plugin `by run` puts in the tree moves the module's functions
+/// to the `.by`, so a failure — in a test, or in a fixture of a `conftest.by` — is
+/// reported at the `.by` line that failed, quoting the `.by`
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_pytest_reports_a_failure_at_the_by_line() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let pytest = Command::new(&python)
+        .args(["-c", "import pytest"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !pytest {
+        eprintln!("skipping: {python} cannot import pytest");
+        return;
+    }
+    // the conftest imports pytest, so the check has to see the environment the tests
+    // run in, which `--python` does not configure
+    let executable = Command::new(&python)
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()
+        .expect("python runs");
+    let executable = String::from_utf8_lossy(&executable.stdout)
+        .trim()
+        .to_owned();
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_partly_covered_modules(dir.path());
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!("[tool.basedpython.environment]\npython = {executable:?}\n"),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    // `let` is basedpython's own, so the quoted source is the `.by`'s and not python
+    fs::write(
+        dir.path().join("tests/test_calc.by"),
+        "from pkg.calc import add\n\n\ndef test_sum():\n    let total = add(1, 2)\n    assert total == 4\n\n\nclass TestGroup:\n    def test_fixture(self, broken: int):\n        assert broken\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tests/conftest.by"),
+        "import pytest\n\n\n@pytest.fixture\ndef broken() -> int:\n    let value = 0\n    assert value == 1\n    return value\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("run")
+        .args(["--python", &python, "--in-build"])
+        .args(["pytest", "-p", "no:cacheprovider"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "{}:6: AssertionError",
+            Path::new("tests").join("test_calc.by").display()
+        )) && stdout.contains(">       assert total == 4"),
+        "the test's failure is not reported at its `.by` line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "{}:7: AssertionError",
+            Path::new("tests").join("conftest.by").display()
+        )) && stdout.contains(">       assert value == 1"),
+        "the fixture's failure is not reported at its `.by` line:\n{stdout}"
+    );
+    // a node id still names the staged `.py`, as `tests/test_calc.py::test_sum`; a
+    // location names a line, as `tests/test_calc.py:129`
+    assert!(
+        !stdout
+            .match_indices(".py:")
+            .any(|(at, found)| stdout[at + found.len()..].starts_with(|c: char| c.is_ascii_digit())),
+        "a failure is reported at a line of the generated python:\n{stdout}"
+    );
+}
+
 /// `multiprocessing`'s spawn start method — the default on macos and windows —
 /// reads `__main__.__spec__.name` to tell the child what to re-import, and falls
 /// back to running `__file__` as a *path* when there is none. `__file__` is a

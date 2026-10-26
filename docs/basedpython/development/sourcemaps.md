@@ -118,6 +118,19 @@ that imported and the line that failed. a module some other loader stands behind
 — a test runner that rewrites assertions — keeps that loader, which python calls
 directly; only its `__file__` is set, as the module is created
 
+pytest is that test runner, and it reports a failure from the frames it caught,
+not through the excepthook, so its report used to name the staged `.py` at a line
+of the generated python and quote the generated python. `by run` puts a pytest
+plugin in the tree, `_by_pytest`, declared by a `pytest11` entry point in a
+`_by_pytest-0.dist-info` beside it, so pytest loads it wherever the tree is on
+`sys.path`. once pytest has imported a test module or a `conftest`, and before any
+of its tests runs, the plugin moves the code of every function the module defines
+— the methods of its classes, what a decorator wraps, a fixture's function, and
+the functions nested in each — to the `.by` lines, as the shim's own loader does.
+a failure in a test or a fixture is then reported at the `.by` line, quoting the
+`.by`. the module's top level ran as it was imported, before the plugin saw it, so
+an error raised while importing a test module still names the staged `.py`
+
 both tables are keyed by the generated path exactly as the map spells it. the
 shim resolves symlinks before matching a frame's filename against it — a
 temporary tree under `/tmp` on macOS is reached by a different path than the one
