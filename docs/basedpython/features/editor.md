@@ -1138,6 +1138,16 @@ a removed rule is left out. `by/explainRule` gives a rule's whole
 documentation, and the linter's rules, `F401` among them, are `buff`'s. rules
 have no categories
 
+## a console's input
+
+a console running [`by repl`](repl.md) asks `by/inputStatus`, with the text
+typed so far as `text`, whether enter runs it or starts another line of it. the
+answer's `status` is `complete`, `incomplete` — a compound statement whose body
+could still go on, an open bracket, an unterminated triple-quoted string, a line
+continued with `\` — or `invalid`, input no further line can make valid, which
+runs to report why. it is the answer `by repl` gives itself for the lines it
+reads, and needs no document open
+
 ## suppressing a diagnostic
 
 every diagnostic has two quick fixes that silence it rather than fix it.

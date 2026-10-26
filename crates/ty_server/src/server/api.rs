@@ -147,6 +147,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::RulesHandler::METHOD => {
             background_request_task::<requests::RulesHandler>(req, BackgroundSchedule::Worker)
         }
+        // a question about the text a `by repl` console holds, with no document behind it
+        requests::InputStatusHandler::METHOD => {
+            background_request_task::<requests::InputStatusHandler>(req, BackgroundSchedule::Worker)
+        }
         // The program model a run configuration is built from. Asked by URI rather than by open
         // document, because the module a configuration names is usually not open, and asked off
         // an editor's own schedule, so none of the three is latency sensitive.

@@ -74,6 +74,10 @@ pub(crate) struct Parser<'src> {
     /// Stores all the syntax errors found during the parsing.
     errors: Vec<ParseError>,
 
+    /// basedpython: whether the first of `errors` was met at the end of the input, see
+    /// [`Parsed::ran_out_of_input`]. it says nothing while `errors` is empty
+    first_error_at_end: bool,
+
     /// Stores non-fatal syntax errors found during parsing, such as version-related errors.
     unsupported_syntax_errors: Vec<UnsupportedSyntaxError>,
 
@@ -180,6 +184,7 @@ impl<'src> Parser<'src> {
             options,
             source,
             errors: Vec::new(),
+            first_error_at_end: false,
             unsupported_syntax_errors: Vec::new(),
             tokens,
             name_interner: NameInterner::default(),
@@ -284,6 +289,7 @@ impl<'src> Parser<'src> {
         );
         // TODO consider re-integrating lexical error handling into the parser?
         let parse_errors = self.errors;
+        let ran_out_of_input = !parse_errors.is_empty() && self.first_error_at_end;
         let (tokens, lex_errors) = self.tokens.finish();
 
         // Fast path for when there are no lex errors.
@@ -294,6 +300,7 @@ impl<'src> Parser<'src> {
                 syntax,
                 tokens: Tokens::new(tokens),
                 errors: parse_errors,
+                ran_out_of_input,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
                 generated_names: self.generated_names,
             };
@@ -327,6 +334,7 @@ impl<'src> Parser<'src> {
             syntax,
             tokens: Tokens::new(tokens),
             errors: merged,
+            ran_out_of_input,
             unsupported_syntax_errors: self.unsupported_syntax_errors,
             generated_names: self.generated_names,
         }
@@ -721,7 +729,21 @@ impl<'src> Parser<'src> {
             }
         }
 
+        if self.errors.is_empty() {
+            self.first_error_at_end = self.at_end_of_input();
+        }
         inner(&mut self.errors, error, ranged.range());
+    }
+
+    /// basedpython: whether every token is consumed but the dedents that close the input's
+    /// open blocks. an implicit newline ending the last line does not count: the line it ends
+    /// is over
+    fn at_end_of_input(&self) -> bool {
+        match self.current_token_kind() {
+            TokenKind::EndOfFile => true,
+            TokenKind::Dedent => self.current_token_range().start() == TextSize::of(self.source),
+            _ => false,
+        }
     }
 
     /// Add an [`UnsupportedSyntaxError`] with the given [`UnsupportedSyntaxErrorKind`] and

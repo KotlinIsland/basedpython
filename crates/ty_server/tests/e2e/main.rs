@@ -57,6 +57,7 @@ mod inherited_members;
 mod initialize;
 mod injections;
 mod inlay_hints;
+mod input_status;
 mod merge_conflicts;
 mod move_symbol;
 mod named_text;

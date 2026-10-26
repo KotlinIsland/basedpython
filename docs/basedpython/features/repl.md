@@ -1,7 +1,7 @@
 # the repl
 
-> **status: design.** what this page describes is being built; `by repl` and `by/inputStatus`
-> land in the commits that follow it
+> **status: design.** `by/inputStatus` is built; `by repl` itself is being built, and lands in
+> the commits that follow
 
 `by repl` is an interactive session in which you type basedpython. each input is checked and
 transpiled with everything the session has defined so far, and runs in one python process

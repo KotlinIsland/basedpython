@@ -49,6 +49,8 @@
 //!   which source, for an editor to ask.
 //! - [`run_module`] — which file `by run <module>` executes, and the module a
 //!   file runs as.
+//! - [`session`] — a `by repl` session, and whether what has been typed into it
+//!   is a whole input yet
 
 pub mod emit;
 pub mod layout;
@@ -57,6 +59,7 @@ pub mod record;
 pub mod restage;
 pub mod run_module;
 pub mod runtime;
+pub mod session;
 pub mod sourcemap;
 pub mod staging;
 pub mod verbatim;

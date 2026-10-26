@@ -331,6 +331,7 @@ pub fn parse_cells_unchecked(
     let mut body = Suite::new();
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
+    let mut ran_out_of_input = false;
     let mut unsupported_syntax_errors = Vec::new();
     let mut generated_names = GeneratedNames::default();
     let mut previous_end: Option<TextSize> = None;
@@ -347,6 +348,7 @@ pub fn parse_cells_unchecked(
             syntax,
             tokens: cell_tokens,
             errors: cell_errors,
+            ran_out_of_input: cell_ran_out_of_input,
             unsupported_syntax_errors: cell_unsupported_syntax_errors,
             generated_names: cell_generated_names,
         } = Parser::new_starts_at(cell_source, range.start(), options.clone())
@@ -356,6 +358,9 @@ pub fn parse_cells_unchecked(
 
         body.extend(syntax.body);
         tokens.extend(cell_tokens);
+        if errors.is_empty() {
+            ran_out_of_input = cell_ran_out_of_input;
+        }
         errors.extend(cell_errors);
         unsupported_syntax_errors.extend(cell_unsupported_syntax_errors);
         generated_names.extend(cell_generated_names);
@@ -392,6 +397,7 @@ pub fn parse_cells_unchecked(
         tokens: Tokens::new(tokens),
         generated_names,
         errors,
+        ran_out_of_input,
         unsupported_syntax_errors,
     }
 }
@@ -402,6 +408,7 @@ pub struct Parsed<T> {
     syntax: T,
     tokens: Tokens,
     errors: Vec<ParseError>,
+    ran_out_of_input: bool,
     unsupported_syntax_errors: Vec<UnsupportedSyntaxError>,
     generated_names: GeneratedNames,
 }
@@ -420,6 +427,15 @@ impl<T> Parsed<T> {
     /// Returns a list of syntax errors found during parsing.
     pub fn errors(&self) -> &[ParseError] {
         &self.errors
+    }
+
+    /// basedpython: whether the first syntax error the parser met is the input ending where the
+    /// grammar needs more of it — a block whose body has not begun, a decorator with nothing
+    /// after it, a `try` with no handler yet — which is what an interactive console reads as
+    /// an input still being typed. an open bracket or an unterminated string is the lexer's
+    /// error instead, in [`Parsed::errors`]
+    pub fn ran_out_of_input(&self) -> bool {
+        self.ran_out_of_input
     }
 
     /// Returns a list of version-related syntax errors found during parsing.
@@ -517,6 +533,7 @@ impl Parsed<Mod> {
                 syntax: module,
                 tokens: self.tokens,
                 errors: self.errors,
+                ran_out_of_input: self.ran_out_of_input,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
                 generated_names: self.generated_names,
             }),
@@ -538,6 +555,7 @@ impl Parsed<Mod> {
                 syntax: expression,
                 tokens: self.tokens,
                 errors: self.errors,
+                ran_out_of_input: self.ran_out_of_input,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
                 generated_names: self.generated_names,
             }),

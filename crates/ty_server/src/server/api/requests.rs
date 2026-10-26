@@ -50,6 +50,7 @@ mod goto_type_definition;
 mod hover;
 mod injections;
 mod inlay_hints;
+mod input_status;
 mod merge_conflicts;
 mod module_name;
 mod move_members;
@@ -126,6 +127,7 @@ pub(super) use goto_type_definition::GotoTypeDefinitionRequestHandler;
 pub(super) use hover::HoverRequestHandler;
 pub(super) use injections::InjectionsRequestHandler;
 pub(super) use inlay_hints::InlayHintRequestHandler;
+pub(super) use input_status::InputStatusHandler;
 pub(super) use merge_conflicts::{DiffIgnoredRangesHandler, ResolveMergeConflictsHandler};
 pub(super) use module_name::ModuleNameHandler;
 pub(super) use move_members::{
