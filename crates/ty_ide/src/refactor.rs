@@ -18,7 +18,7 @@
 mod change_signature;
 mod class_members;
 mod data_class;
-mod evaluation;
+pub(crate) mod evaluation;
 mod extract_function;
 mod extract_variable;
 mod flow;

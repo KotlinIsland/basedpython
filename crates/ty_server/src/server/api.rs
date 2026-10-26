@@ -163,7 +163,14 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::EndpointsHandler::METHOD => {
             background_request_task::<requests::EndpointsHandler>(req, BackgroundSchedule::Worker)
         }
-        // The class a debugger names a value's type by, which is in no document it has open.
+        // A merge's and a diff's texts, which are versions no document holds.
+        requests::ResolveMergeConflictsHandler::METHOD => background_request_task::<
+            requests::ResolveMergeConflictsHandler,
+        >(req, BackgroundSchedule::Worker),
+        requests::DiffIgnoredRangesHandler::METHOD => background_request_task::<
+            requests::DiffIgnoredRangesHandler,
+        >(req, BackgroundSchedule::Worker),
+        // the class a debugger names a value's type by, which is in no document it has open
         requests::TypeDeclarationHandler::METHOD => background_request_task::<
             requests::TypeDeclarationHandler,
         >(req, BackgroundSchedule::Worker),

@@ -1531,6 +1531,68 @@ holding one — leaves its route out rather than listing it at a path it may not
 have, and so does a FastAPI router built somewhere other than where it is
 assigned, and a route whose handler, declaration or application cannot be opened
 
+## merges and diffs
+
+an editor's merge and diff tools compare versions of a file no document holds, so
+both requests take texts, and an optional `uri` naming the file they are versions
+of: its extension says how they are parsed (python without one), and the isort
+configuration buff reads for it sorts imports (the first project's root's
+without one).
+
+`by/resolveMergeConflicts` takes the merge's three versions, `base`, `ours` and
+`theirs`, each a whole file, and `conflicts`, the lines each conflict spans in
+each version, `{"base": {"start": 3, "end": 3}, "ours": {"start": 3, "end": 5}, "theirs": {"start": 3, "end": 4}}`, 0-based with `end` excluded. it answers, for
+each conflict in order, the text that replaces its lines, or `null` where it
+cannot be resolved. a conflict is read as what its lines hold in each version's
+whole syntax tree, and is resolved only where the lines are in the same body or
+display in all three versions, and the two sides' changes provably touch nothing
+in common:
+
+- import statements: every import either side added, without those either side
+    removed, written as buff's isort configuration sorts and writes them. refused
+    when both sides changed what one name is bound to differently, when the result
+    binds one name to two things (`from a import x` and `from b import x`), when a
+    side imports a name the other side binds elsewhere other than by an import of
+    the same thing, when either side has a star import among them, and when a
+    comment is among them
+- functions and classes, methods among them, that each side added: each kept
+    where it was added, at least two blank lines apart at the top level and one
+    elsewhere. refused when a side changed or removed a statement or added
+    anything else, or added a name the other side's version binds anywhere in that
+    scope, in any form, or, in a class, assigns as an attribute anywhere in the
+    file; a star import in that scope refuses too. what both sides added first or
+    last in one place is kept once. definitions both sides added differently in
+    one place are kept, ours first, only when running each binds its name and does
+    nothing else: no decorator, no base class or class keyword, and every default
+    and annotation a name or a literal
+- elements of a list, set, tuple or dict display, or of a decorator list, that
+    each side added in a different place: each kept where it was added. refused
+    when both sides added different elements in one place, since a display
+    evaluates and keeps its elements in order and decorators apply in order, so
+    `__all__` entries both sides append are left to you, and when a side changed
+    or removed one, two elements share a line, an element that would no longer be
+    last has no comma after it, or both sides add one key of a dict
+- sides whose statements or elements are the same syntax tree with the same
+    comments, which differ only in formatting: ours
+
+anything else is `null`: lines that are not whole statements or whole elements,
+and two sides that changed one statement, as `LIMIT = 20` and `LIMIT = 30` did.
+
+`by/diffIgnoredRanges` takes `{"text": "…"}` and answers what a diff ignoring
+imports and formatting may ignore in it, `{"imports": [...], "formatting": [...]}`,
+each a list of ranges. `imports` is each import statement, wherever it is.
+`formatting` is the text python's tokenizer discards without its being
+significant: whitespace between two tokens of a logical line, the line breaks and
+indentation of a line continued inside brackets or after a backslash, and blank
+lines. the indentation a logical line starts with is not formatting, since it
+says which block the line is in, and nor is anything inside an f-string or a
+t-string, where `f"{x = }"` prints the spaces around its `=`. two texts that
+differ only in what is ignored tokenize alike. a change that is formatting
+across lines, as rewrapping a call is, is ignored only where each side's
+whitespace is, which is as much as one text can say: whether two texts differ
+only in formatting is a question about both, which `by/resolveMergeConflicts`
+answers for a conflict
+
 ## override and implement members
 
 an editor's *override methods* and *implement methods* ask twice: once for what

@@ -1,11 +1,11 @@
-//! The class a dotted type name names: what a debugger's *jump to type source* asks.
+//! the class a dotted type name names: what a debugger's *jump to type source* asks
 //!
-//! A debugger knows a value's type by name, `type(value).__module__` and its `__qualname__`:
-//! `shapes.base.Circle`, or `shapes.base.Shape.Meta` for a class nested in another. The name is
+//! a debugger knows a value's type by name, `type(value).__module__` and its `__qualname__`:
+//! `shapes.base.Circle`, or `shapes.base.Shape.Meta` for a class nested in another. the name is
 //! resolved as an import of it would be — its module from the search paths, then each name after it
 //! as a member of what came before, through re-exports and submodules — so `builtins.list` is the
-//! class typeshed declares and `fastapi.FastAPI` the one its package does. A name that reaches
-//! something other than a class, or nothing, as `make.<locals>.Local` does, is not answered.
+//! class typeshed declares and `fastapi.FastAPI` the one its package does. a name that reaches
+//! something other than a class, or nothing, as `make.<locals>.Local` does, is not answered
 
 use ty_module_resolver::ModuleName;
 use ty_python_core::ProgramFile;
@@ -16,8 +16,8 @@ use crate::Db;
 use crate::declaration::{DeclarationAt, single_declaration};
 use crate::goto::Definitions;
 
-/// The class `type_name` names, as a module of the program `context` is in would import it, with
-/// its declaration where its source is, or its stub for a class that has no other.
+/// the class `type_name` names, as a module of the program `context` is in would import it, with
+/// its declaration where its source is, or its stub for a class that has no other
 pub fn type_declaration(
     db: &dyn Db,
     context: ProgramFile<'_>,

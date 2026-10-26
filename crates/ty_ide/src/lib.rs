@@ -14,6 +14,7 @@ mod complete_statement;
 mod completion;
 mod data_flow;
 mod declaration;
+mod diff_ignored;
 mod django_template;
 mod doc_highlights;
 mod docstring;
@@ -38,6 +39,7 @@ mod inherited_members;
 mod injection;
 mod inlay_hints;
 mod markup;
+mod merge;
 mod method_kind;
 mod module_rename;
 mod on_type_formatting;
@@ -77,6 +79,7 @@ pub use completion::{
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use declaration::{ClassName, Declaration, DeclarationAt, DeclaredKind, declaration_at};
+pub use diff_ignored::{DiffIgnoredRanges, diff_ignored_ranges};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
     PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover, TemplateInlayHint,
@@ -105,6 +108,7 @@ pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
+pub use merge::{ConflictLines, MergeTexts, resolve_file_merge_conflicts, resolve_merge_conflicts};
 pub use method_kind::MethodKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,

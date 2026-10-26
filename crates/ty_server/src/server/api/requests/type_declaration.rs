@@ -1,11 +1,11 @@
 //! `by/typeDeclaration` — the class a dotted type name names, for a debugger's *jump to type
-//! source*.
+//! source*
 //!
-//! A debugger knows a value's type by its module and qualified name, `shapes.base.Circle`, and
+//! a debugger knows a value's type by its module and qualified name, `shapes.base.Circle`, and
 //! has no position in a document to ask `by/declaration` about; `workspace/symbol` matches a
 //! query loosely and only among the project's own files, where `builtins.list` or a package's
-//! class is not. The name is resolved here as an import of it would be: see
-//! [`ty_ide::type_declaration`].
+//! class is not. the name is resolved here as an import of it would be: see
+//! [`ty_ide::type_declaration`]
 
 use lsp_types::{LspRequestMethod, MessageDirection, Range, Request, Uri};
 use ty_ide::type_declaration;
@@ -30,24 +30,24 @@ impl Request for TypeDeclarationRequest {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TypeDeclarationParams {
-    /// The type's module and qualified name, dot-separated: `shapes.base.Shape.Meta`.
+    /// the type's module and qualified name, dot-separated: `shapes.base.Shape.Meta`
     type_name: String,
 }
 
-/// The class, as `by/declaration` describes a declaration.
+/// the class, as `by/declaration` describes a declaration
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TypeDeclaration {
-    /// Always `class`.
+    /// always `class`
     kind: String,
     name: String,
-    /// The class's own module and qualified name, which differs from the name asked about for a
-    /// class reached through a re-export.
+    /// the class's own module and qualified name, which differs from the name asked about for a
+    /// class reached through a re-export
     qualified_name: Option<String>,
     uri: Uri,
-    /// The whole class.
+    /// the whole class
     range: Range,
-    /// Its name.
+    /// its name
     selection_range: Range,
 }
 
@@ -58,8 +58,8 @@ impl RequestHandler for TypeDeclarationHandler {
 }
 
 impl BackgroundRequestHandler for TypeDeclarationHandler {
-    /// The first project in the session whose environment the name resolves in; `null` for a name
-    /// that names no class.
+    /// the first project in the session whose environment the name resolves in; `null` for a name
+    /// that names no class
     fn run(
         snapshot: &SessionSnapshot,
         _client: &Client,

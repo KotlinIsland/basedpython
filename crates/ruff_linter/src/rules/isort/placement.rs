@@ -206,6 +206,58 @@ impl<'a> ImportOrder<'a> {
     }
 }
 
+/// `source`, a run of import statements and nothing else, sorted and written as `I001`'s fix
+/// writes an import block with the same settings: one block, deduplicated, `from` imports of one
+/// module combined, in sections. `None` for source with anything other than import statements in
+/// it, or a comment, which isort keeps beside the import it is on and this cannot place.
+pub fn sort_import_statements(
+    source: &str,
+    settings: &crate::settings::LinterSettings,
+    package: Option<PackageRoot<'_>>,
+    source_type: ruff_python_ast::PySourceType,
+    target_version: PythonVersion,
+) -> Option<String> {
+    use ruff_python_codegen::Stylist;
+    use ruff_python_index::Indexer;
+
+    let parsed = ruff_python_parser::parse_unchecked_source(source, source_type);
+    if parsed.has_syntax_errors() {
+        return None;
+    }
+    let indexer = Indexer::from_tokens(parsed.tokens(), source);
+    if !indexer.comment_ranges().is_empty() {
+        return None;
+    }
+    let imports: Vec<&ruff_python_ast::Stmt> = parsed.suite().iter().collect();
+    if imports
+        .iter()
+        .any(|statement| !(statement.is_import_stmt() || statement.is_import_from_stmt()))
+    {
+        return None;
+    }
+    let block = super::block::Block {
+        nested: false,
+        imports,
+        trailer: None,
+    };
+    let locator = crate::Locator::new(source);
+    let stylist = Stylist::from_tokens(parsed.tokens(), source);
+    Some(super::format_imports(
+        &block,
+        Vec::new(),
+        &locator,
+        settings.line_length,
+        crate::line_width::LineWidthBuilder::new(settings.tab_size),
+        &stylist,
+        &settings.src,
+        package,
+        source_type,
+        target_version,
+        &settings.isort,
+        parsed.tokens(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use ruff_python_ast::PythonVersion;

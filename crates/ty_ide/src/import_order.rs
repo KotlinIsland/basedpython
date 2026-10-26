@@ -22,8 +22,8 @@ use ruff_db::source::source_text;
 use ruff_db::system::{System, SystemPath};
 use ruff_linter::package::PackageRoot;
 use ruff_linter::packaging::detect_package_root;
-use ruff_linter::rules::isort::placement::{ImportOrder, ImportPosition};
-use ruff_python_ast::PythonVersion;
+use ruff_linter::rules::isort::placement::{ImportOrder, ImportPosition, sort_import_statements};
+use ruff_python_ast::{PySourceType, PythonVersion};
 use ruff_python_importer::{ImportOrdering, SortedImport};
 use ruff_workspace::configuration::Configuration;
 use ruff_workspace::pyproject::{
@@ -74,19 +74,55 @@ impl IsortConfig {
     /// The configuration that applies to the file at `path`. `project_root` stands in for the
     /// directory buff resolves `src` against when no configuration file is found.
     pub(crate) fn for_file(system: &dyn System, path: &Path, project_root: &Path) -> Self {
-        let directory = path.parent().unwrap_or(path);
+        Self::new(
+            system,
+            path.parent().unwrap_or(path),
+            Some(path),
+            project_root,
+        )
+    }
+
+    /// the configuration that applies to a file in `directory`, without a per-file target
+    /// version, which only a file's path can match
+    pub(crate) fn for_directory(
+        system: &dyn System,
+        directory: &Path,
+        project_root: &Path,
+    ) -> Self {
+        Self::new(system, directory, None, project_root)
+    }
+
+    fn new(
+        system: &dyn System,
+        directory: &Path,
+        file: Option<&Path>,
+        project_root: &Path,
+    ) -> Self {
         let settings = settings_for(system, directory, project_root);
         let package_root = detect_package_root(directory, &settings.linter.namespace_packages)
             .map(Path::to_path_buf);
-        let target_version = settings
-            .linter
-            .resolve_target_version(path)
+        let target_version = file
+            .map_or(settings.linter.unresolved_target_version, |file| {
+                settings.linter.resolve_target_version(file)
+            })
             .linter_version();
         Self {
             settings,
             package_root,
             target_version,
         }
+    }
+
+    /// `source`, a run of import statements, as buff's `I001` fix sorts and writes them, or
+    /// `None` for source with anything else in it, a comment among them.
+    pub(crate) fn sort(&self, source: &str, source_type: PySourceType) -> Option<String> {
+        sort_import_statements(
+            source,
+            &self.settings.linter,
+            self.package_root.as_deref().map(PackageRoot::root),
+            source_type,
+            self.target_version,
+        )
     }
 
     pub(crate) fn order(&self) -> ImportOrder<'_> {
