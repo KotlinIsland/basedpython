@@ -19,6 +19,7 @@ by <COMMAND>
 <dt><a href="#by-version"><code>by version</code></a></dt><dd><p>Display ty's version</p></dd>
 <dt><a href="#by-explain"><code>by explain</code></a></dt><dd><p>Explain rules and other parts of ty</p></dd>
 <dt><a href="#by-run"><code>by run</code></a></dt><dd><p>Transpile and run a module with <code>python -m &lt;module&gt;</code></p></dd>
+<dt><a href="#by-repl"><code>by repl</code></a></dt><dd><p>start an interactive session in basedpython</p></dd>
 <dt><a href="#by-init"><code>by init</code></a></dt><dd><p>Start a new project</p></dd>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
 <dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute the slots of a set of edited files in a build tree that already exists</p></dd>
@@ -271,6 +272,31 @@ by run [OPTIONS] [MODULE] [ARGS]...
 </dd><dt id="by-run--runtime-raises-checks"><a href="#by-run--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-run--soundness"><a href="#by-run--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd><dt id="by-run--stamp"><a href="#by-run--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
+</dd></dl>
+
+## by repl
+
+start an interactive session in basedpython
+
+each input is checked and transpiled as the continuation of the module made of the inputs that ran before it, and runs in one python process that lives as long as the session. the project is staged as `by run` stages it, so its modules import as they do in a program
+
+<h3 class="cli-reference">Usage</h3>
+
+```
+by repl [OPTIONS]
+```
+
+<h3 class="cli-reference">Options</h3>
+
+<dl class="cli-reference"><dt id="by-repl--help"><a href="#by-repl--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
+</dd><dt id="by-repl--min-version"><a href="#by-repl--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the session's python must run on [default: the version of the interpreter that will run it]</p>
+</dd><dt id="by-repl--no-unique-loop-bindings"><a href="#by-repl--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
+</dd><dt id="by-repl--python"><a href="#by-repl--python"><code>--python</code></a>, <code>--venv</code> <i>path</i></dt><dd><p>the interpreter to run on, or the environment holding it, as <code>by run</code> takes it</p>
+</dd><dt id="by-repl--runtime-raises-checks"><a href="#by-repl--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
+</dd><dt id="by-repl--session-file"><a href="#by-repl--session-file"><code>--session-file</code></a> <i>path</i></dt><dd><p>keep PATH holding the session's source: the inputs that ran, in order</p>
+<p>for an editor's console, whose completion is asked of the module this file holds followed by the input being typed</p>
+</dd><dt id="by-repl--soundness"><a href="#by-repl--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
+<p>[default: default]</p></dd><dt id="by-repl--stamp"><a href="#by-repl--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
 </dd></dl>
 
 ## by init

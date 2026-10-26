@@ -979,6 +979,97 @@ fn run_checks_against_the_python_it_runs_on() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
 }
 
+/// the environment a program is checked against is the one the interpreter `--python` names
+/// says it runs in, not one guessed from where the file is: a launcher script that runs a
+/// virtual environment's python is checked against that environment
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_checks_against_the_environment_a_launcher_runs_in() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let environment = dir.path().join("env");
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let made = Command::new(&python)
+        .args(["-m", "venv", "--without-pip"])
+        .arg(&environment)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !made {
+        eprintln!("skipping: {python} cannot make a virtual environment");
+        return;
+    }
+    // where the environment keeps its packages, which is `lib/pythonX.Y/site-packages` on unix
+    // and `Lib/site-packages` on windows
+    let purelib = Command::new(&python)
+        .args([
+            "-c",
+            "import sys, sysconfig\n\
+             print(sysconfig.get_path('purelib', 'venv', vars={'base': sys.argv[1], 'platbase': sys.argv[1]}))",
+        ])
+        .arg(&environment)
+        .output()
+        .expect("failed to spawn python");
+    if !purelib.status.success() {
+        eprintln!(
+            "skipping: {python} cannot say where a virtual environment keeps its packages:\n{}",
+            String::from_utf8_lossy(&purelib.stderr)
+        );
+        return;
+    }
+    let site_packages = PathBuf::from(String::from_utf8_lossy(&purelib.stdout).trim());
+    fs::create_dir_all(site_packages.join("fancypkg")).unwrap();
+    fs::write(site_packages.join("fancypkg/__init__.py"), "VALUE = 42\n").unwrap();
+    let launcher = dir.path().join("launcher").join("python3");
+    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexec '{}' \"$@\"\n",
+            environment.join("bin").join("python").display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let project = dir.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pyproject.toml"),
+        "[project]\nname = \"project\"\nversion = \"0\"\n[tool.basedpython]\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("main.by"),
+        "import fancypkg\n\nprint(fancypkg.VALUE)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env_remove("VIRTUAL_ENV")
+        .env_remove("CONDA_PREFIX")
+        .env_remove("PYTHON")
+        .arg("run")
+        .arg("--python")
+        .arg(&launcher)
+        .arg("main")
+        .current_dir(&project)
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
 /// the program runs out of a directory of transpiled copies that is deleted when
 /// the run ends, so every path python derives from a module's origin named a
 /// temporary file — leaving a tool started anywhere but the project root with
@@ -1802,6 +1893,164 @@ fn run_profile_maps_a_module_a_test_runner_compiled() {
             .iter()
             .any(|function| function.file.ends_with("test_calc.py")),
         "the staged test module is named: {functions:#?}"
+    );
+}
+
+/// What a `by repl` session in `dir` printed, and how it ended, given `input` on its standard
+/// input, which is not a terminal: no prompts are written.
+fn repl_session(dir: &Path, input: &str, extra: &[&str]) -> (Option<i32>, String, String) {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("NO_COLOR", "1")
+        .args(["repl", "--python", &python])
+        .args(extra)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn by");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(input.as_bytes())
+        .expect("the session reads its input");
+    let output = child.wait_with_output().expect("the session ends");
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n"),
+    )
+}
+
+/// A project with a `.by` module for a session to import.
+fn project_with_a_module(dir: &Path) {
+    let package = dir.join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    fs::write(
+        package.join("calc.by"),
+        "def fib(n: int) -> int:\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\n\ndef ratio(a: int, b: int) -> float:\n    return a / b\n",
+    )
+    .unwrap();
+}
+
+/// each input is checked as the continuation of the inputs before it: a name defined earlier
+/// is defined, a `let` stays read-only, and an expression's value is printed
+#[test]
+fn repl_checks_each_input_as_the_session_s_continuation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_module(dir.path());
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "let rate = 0.2\n\
+         def taxed(amount: float) -> float:\n    return amount * (1 + rate)\n\n\
+         taxed(10.0)\n\
+         rate = 0.3\n\
+         rate\n\
+         from pkg.calc import fib\n\
+         fib(10)\n\
+         def main():\n    print(\"main ran\")\n\n\
+         print('done')\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "12.0\n0.2\n55\ndone\n", "{stderr}");
+    // the refused input is reported against itself, and the declaration it breaks against the
+    // input that made it
+    assert!(
+        stderr.contains("error[invalid-assignment]")
+            && stderr.contains("--> <by-input-4>:1:1")
+            && stderr.contains("::: <by-input-1>:1:1"),
+        "{stderr}"
+    );
+}
+
+/// an input that raises prints a traceback whose frames are the inputs and the project's
+/// modules, at their own lines, and the session goes on
+#[test]
+fn repl_reports_an_exception_at_the_inputs_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_module(dir.path());
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "from pkg.calc import ratio\n\
+         def share(total: int, parts: int) -> float:\n    return ratio(total, parts)\n\n\
+         share(1, 0)\n\
+         'still here'\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "'still here'\n", "{stderr}");
+    let calc = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("pkg/calc.by")
+        .display()
+        .to_string();
+    assert!(
+        stderr.contains("  File \"<by-input-3>\", line 1, in <module>\n    share(1, 0)\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "  File \"<by-input-2>\", line 2, in share\n    return ratio(total, parts)\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "  File \"{calc}\", line 8, in ratio\n    return a / b\n"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("ZeroDivisionError: division by zero"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("_by_repl.py"), "{stderr}");
+}
+
+/// an input sent framed, as a terminal frames a paste, is one input whatever blank lines it
+/// holds; the lines after it that the program reads with `input()` are the program's; and
+/// the session's exit status is what `sys.exit` was given
+#[test]
+fn repl_takes_a_framed_input_whole_and_hands_input_lines_to_the_program() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "\x1b[200~def total() -> int:\n    first = 1\n\n    return first + 1\n\x1b[201~\n\
+         total()\n\
+         name = input()\n\
+         basedpython\n\
+         name\n\
+         import sys\n\
+         sys.exit(3)\n\
+         'never'\n",
+        &[],
+    );
+    assert_eq!(status, Some(3), "{stderr}");
+    assert_eq!(stdout, "2\n'basedpython'\n", "{stderr}");
+}
+
+/// `--session-file` holds the inputs that ran, and not one the checker refused, for an
+/// editor's console to complete against
+#[test]
+fn repl_session_file_holds_the_inputs_that_ran() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, _, stderr) = repl_session(
+        dir.path(),
+        "let rate = 0.2\nrate = 0.3\nx = rate * 2\n",
+        &["--session-file", "session.by"],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("session.by")).expect("the session file"),
+        "let rate = 0.2\nx = rate * 2\n"
     );
 }
 

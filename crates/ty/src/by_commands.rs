@@ -148,22 +148,46 @@ pub(crate) struct RunFlags<'a> {
     pub(crate) profile: Option<&'a Path>,
 }
 
-#[allow(clippy::exit, clippy::print_stderr)]
-pub(crate) fn cmd_run(
-    module: Option<&str>,
-    args: &[String],
+/// What `by run` and `by repl` both start from: the project checked, transpiled and staged
+/// into a temporary tree, and the interpreter that runs out of it.
+pub(crate) struct StagedRun {
+    /// where the command was invoked, which is where the program runs
+    pub(crate) cwd: PathBuf,
+    project: ResolvedProject,
+    pub(crate) interpreter: Interpreter,
+    /// what the project was transpiled for: the interpreter's version unless told otherwise
+    pub(crate) config: Config,
+    /// the staged tree, deleted when this is dropped
+    pub(crate) tree: tempfile::TempDir,
+    /// the project file behind each copy in the tree
+    pub(crate) carried: BTreeMap<PathBuf, PathBuf>,
+    traceback_entries: Vec<TracebackEntry>,
+    /// the means to build the project's db again, unfrozen
+    pub(crate) rebuilder: Rebuilder,
+    /// the module `by run` runs, which a session has none of
+    module: Option<String>,
+}
+
+/// What a staged tree is for.
+#[derive(Clone, Copy)]
+pub(crate) enum RunTarget<'a> {
+    /// `by run`'s program: the module named, or the project's entry point
+    Module(Option<&'a str>),
+    /// a `by repl` session, which runs no module of the project's
+    Session,
+}
+
+/// Check, transpile and stage the project around the working directory for `target`, on the
+/// interpreter `python_flag` names or discovery finds. `Err` is the exit status of a project
+/// that cannot run: one that does not check, having said why.
+#[allow(clippy::print_stderr)]
+pub(crate) fn stage_run(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
-    flags: RunFlags<'_>,
-) -> anyhow::Result<ExitStatus> {
-    let RunFlags {
-        compiled,
-        in_build,
-        python: python_flag,
-        launcher,
-        coverage,
-        profile,
-    } = flags;
+    python_flag: Option<&Path>,
+    compiled: bool,
+    run_target: RunTarget<'_>,
+) -> anyhow::Result<Result<StagedRun, ExitStatus>> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     // one resolution of the project, for the environment and the target version
     // both: they are two readings of the same configuration and must not be able
@@ -176,7 +200,8 @@ pub(crate) fn cmd_run(
     // match what that python actually supports. an explicit `--min-version`
     // wins, but it cannot exceed the interpreter — that would emit code the
     // interpreter cannot parse
-    let probed = detect_python_version(&python);
+    let probe = probe_interpreter(&python);
+    let probed = probe.as_ref().map(|probe| probe.version);
     let mut config = match (min_version, probed) {
         (Some(flag), probed) => {
             let config = parse_version(flag)?;
@@ -220,30 +245,32 @@ pub(crate) fn cmd_run(
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
     // the program is checked against the packages of the python it is about to run on
-    let checked_against = interpreter
-        .named_for_run
-        .then(|| environment_of(&python))
-        .flatten();
+    let checked_against = probe
+        .filter(|_| interpreter.named_for_run)
+        .map(|probe| probe.prefix);
     let (db, handles, rebuilder, root) =
         build_project_db_for(&cwd, BY_SOURCES, None, checked_against.as_deref())?;
-    if handles.is_empty() {
+    // a session can start in a project with nothing to stage, as python's repl starts
+    // anywhere; a program has to be somewhere
+    if handles.is_empty() && matches!(run_target, RunTarget::Module(_)) {
         eprintln!("no .by files found");
-        return Ok(ExitStatus::Failure);
+        return Ok(Err(ExitStatus::Failure));
     }
     let roots = module_roots(&db, &root);
 
     // an explicit module always wins; otherwise the project's configured entry
     // point stands in for it. resolving before the (much slower) check means a
     // project with neither fails immediately rather than after transpiling
-    let module = match module {
-        Some(module) => module.to_owned(),
-        None => match by_stage::run_module::configured_main(&db) {
-            Some(main) => main,
+    let module = match run_target {
+        RunTarget::Module(Some(module)) => Some(module.to_owned()),
+        RunTarget::Module(None) => match by_stage::run_module::configured_main(&db) {
+            Some(main) => Some(main),
             None => anyhow::bail!(
                 "no module given and no entry point configured — \
                  name a module (`by run main`) or set `run.main` in the project configuration"
             ),
         },
+        RunTarget::Session => None,
     };
 
     // each generated `.py` paired with its source `.by` and the line table that
@@ -271,7 +298,7 @@ pub(crate) fn cmd_run(
         },
     )?;
     if !matches!(status, ExitStatus::Success) {
-        return Ok(status);
+        return Ok(Err(status));
     }
     // a program is its data as much as its modules: a `.py` module it imports, a
     // json file it opens, a template it renders. running out of a directory
@@ -288,7 +315,7 @@ pub(crate) fn cmd_run(
     // configuration would emit different code in exactly the case that matters
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, Some(module.clone()), compiled, &config),
+        &BuildRecord::new(&root, &roots, module.clone(), compiled, &config),
     )?;
     // the project file behind each copy in the tree, for the runner to run it as
     // and a coverage report to name: the copy is deleted with the tree when the
@@ -302,6 +329,58 @@ pub(crate) fn cmd_run(
         .collect();
     write_project_module(&mut staging, &root, &carried)?;
     staging.finish()?;
+    Ok(Ok(StagedRun {
+        cwd,
+        project,
+        interpreter,
+        config,
+        tree: tmp,
+        carried,
+        traceback_entries,
+        rebuilder,
+        module,
+    }))
+}
+
+#[allow(clippy::exit, clippy::print_stderr)]
+pub(crate) fn cmd_run(
+    module: Option<&str>,
+    args: &[String],
+    min_version: Option<&str>,
+    lowering: &LoweringArgs,
+    flags: RunFlags<'_>,
+) -> anyhow::Result<ExitStatus> {
+    let RunFlags {
+        compiled,
+        in_build,
+        python: python_flag,
+        launcher,
+        coverage,
+        profile,
+    } = flags;
+    let staged = match stage_run(
+        min_version,
+        lowering,
+        python_flag,
+        compiled,
+        RunTarget::Module(module),
+    )? {
+        Ok(staged) => staged,
+        Err(status) => return Ok(status),
+    };
+    let StagedRun {
+        cwd,
+        project,
+        interpreter,
+        config,
+        tree: tmp,
+        carried,
+        traceback_entries,
+        rebuilder: _,
+        module,
+    } = staged;
+    let python = interpreter.path.clone();
+    let module = module.context("a program is staged for the module it runs")?;
 
     if compiled {
         // the extension lands beside the generated `.py`, and python's finder
@@ -705,7 +784,8 @@ pub(crate) fn default_project_python_version() -> PythonVersion {
     if interpreter.is_from_path {
         return latest_python_version();
     }
-    detect_python_version(&interpreter.path).unwrap_or_else(|| Config::default().min_version)
+    probe_interpreter(&interpreter.path)
+        .map_or_else(|| Config::default().min_version, |probe| probe.version)
 }
 
 /// The newest python this release can emit for.
@@ -718,9 +798,9 @@ fn latest_python_version() -> PythonVersion {
 
 /// The interpreter `by run` executes on, and how it was chosen.
 #[derive(Clone)]
-struct Interpreter {
-    path: String,
-    origin: String,
+pub(crate) struct Interpreter {
+    pub(crate) path: String,
+    pub(crate) origin: String,
     /// whether the command was told which python to run on, by `--python` or `$PYTHON`, rather
     /// than finding the project's environment: the checker finds that one itself, and an
     /// interpreter named only for the run has to be handed to it
@@ -971,38 +1051,34 @@ fn interpreter_in_environment(path: &Path, origin: SysPrefixPathOrigin) -> Optio
         .map(|interpreter| interpreter.to_string())
 }
 
-/// Probe `python`'s `major.minor` version (e.g. `3.9`) so `run` can target the
-/// interpreter it will execute on. Returns `None` if the interpreter can't be
-/// run or its output can't be parsed.
-/// The environment `python` runs in, as the checker takes one: the interpreter's own path when
-/// it names a file, and otherwise — a bare name such as `python3.14`, found on `PATH` — the
-/// `sys.prefix` the interpreter reports, since the checker does not search `PATH`.
-fn environment_of(python: &str) -> Option<SystemPathBuf> {
-    if Path::new(python).is_file() {
-        return SystemPathBuf::from_path_buf(std::path::absolute(python).ok()?).ok();
-    }
-    let output = Command::new(python)
-        .arg("-c")
-        .arg("import sys; print(sys.prefix)")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let prefix = String::from_utf8(output.stdout).ok()?;
-    Some(SystemPathBuf::from(prefix.trim()))
+/// what an interpreter says of itself, asked once
+struct Probed {
+    /// its `major.minor`, e.g. `3.9`, which `run` targets
+    version: PythonVersion,
+    /// its `sys.prefix`: the environment it runs in, as the checker takes one
+    prefix: SystemPathBuf,
 }
 
-fn detect_python_version(python: &str) -> Option<PythonVersion> {
+/// `python`'s version and the environment it runs in, or `None` when it cannot be run or what
+/// it says cannot be read
+///
+/// the environment is the one the interpreter reports rather than one derived from where its
+/// file is, so an interpreter named by path and the same one found on `PATH` are checked
+/// against one environment, a launcher script that runs another included
+fn probe_interpreter(python: &str) -> Option<Probed> {
     let output = Command::new(python)
         .arg("-c")
-        .arg("import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')")
+        .arg("import json, sys; print(json.dumps([sys.version_info[0], sys.version_info[1], sys.prefix]))")
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
+    let (major, minor, prefix): (u8, u8, String) = serde_json::from_slice(&output.stdout).ok()?;
+    Some(Probed {
+        version: PythonVersion::from((major, minor)),
+        prefix: SystemPathBuf::from(prefix),
+    })
 }
 
 // ── build ────────────────────────────────────────────────────────────────────
@@ -1913,6 +1989,7 @@ fn write_traceback_runtime(
         None,
         BY_PYTEST_PLUGIN_SRC,
     )?;
+    staging.write(Path::new(BY_REPL_FILENAME), None, BY_REPL_SRC)?;
     for (name, text) in BY_PYTEST_DISTRIBUTION {
         staging.write(
             &Path::new(BY_PYTEST_DISTRIBUTION_DIR).join(name),
@@ -1922,6 +1999,174 @@ fn write_traceback_runtime(
     }
     Ok(())
 }
+
+/// the python half of a `by repl` session, which `by repl` runs in the tree it staged
+pub(crate) const BY_REPL_FILENAME: &str = "_by_repl.py";
+
+const BY_REPL_SRC: &str = r#"# generated by `by repl` — the python half of a session, see `by_repl.rs`
+import ast
+import json
+import linecache
+import os
+import signal
+import socket
+import sys
+import types
+
+import _by_runner
+
+# what a terminal sends around a paste, and an editor around an input it sends whole
+_PASTE_START = "\x1b[200~"
+_PASTE_END = "\x1b[201~"
+
+_INTERACTIVE = sys.stdin.isatty()
+
+
+class _Session:
+    """The connection to `by repl`, which says whether an input is whole and what it runs as."""
+
+    def __init__(self):
+        port = int(os.environ.pop("BY_REPL_PORT"))
+        token = os.environ.pop("BY_REPL_TOKEN")
+        self._socket = socket.create_connection(("127.0.0.1", port))
+        self._reader = self._socket.makefile("r", encoding="utf-8", newline="\n")
+        self.tell({"token": token})
+
+    def tell(self, message):
+        self._socket.sendall((json.dumps(message) + "\n").encode("utf-8"))
+
+    def ask(self, message):
+        # a ctrl-c that arrives while the answer is on its way is held until it has arrived,
+        # so the next question is not answered with this one's answer
+        interrupted = []
+        previous = signal.signal(signal.SIGINT, lambda *_: interrupted.append(True))
+        try:
+            self.tell(message)
+            line = self._reader.readline()
+        finally:
+            signal.signal(signal.SIGINT, previous)
+        if not line:
+            raise EOFError
+        if interrupted:
+            raise KeyboardInterrupt
+        return json.loads(line)
+
+
+def _read(prompt):
+    # what the last input printed is out before anything else is read, as it is on a terminal,
+    # wherever the streams go
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if _INTERACTIVE:
+        return input(prompt) + "\n"
+    line = sys.stdin.readline()
+    if not line:
+        raise EOFError
+    return line
+
+
+def _read_input(session):
+    """The next input: lines until `by repl` says they are whole, or a framed block."""
+    line = _read(">>> ")
+    if line.startswith(_PASTE_START):
+        text = line[len(_PASTE_START):]
+        while _PASTE_END not in text:
+            text += _read("")
+        return text[: text.index(_PASTE_END)]
+    text = line
+    while session.ask({"status": text})["status"] == "incomplete":
+        text += _read("... ")
+    return text
+
+
+def _run(session, namespace, text):
+    reply = session.ask({"run": text})
+    if "python" not in reply:
+        # refused: `by repl` has said why
+        return
+    number = reply["input"]
+    filename = f"<by-input-{number}>"
+    lines = text.splitlines(True)
+    # what a traceback quotes for a line of the input, for as long as the session lasts
+    linecache.cache[filename] = (len(text), None, lines, filename)
+    generated = reply["lines"]
+    widths = [len(line.rstrip("\r\n")) for line in lines]
+
+    def by_line(line):
+        mapped = generated[line - 1] if line is not None and 0 < line <= len(generated) else None
+        return 0 if mapped is None else mapped + 1
+
+    def width(line):
+        return widths[line - 1] if 0 < line <= len(widths) else 0
+
+    module = ast.parse(reply["python"])
+    body = [module.body[index] for index in reply["statements"]]
+    shown = None
+    if reply["display"] and body and isinstance(body[-1], ast.Expr):
+        shown = body.pop()
+    try:
+        codes = []
+        if body:
+            codes.append(
+                compile(ast.Module(body=body, type_ignores=[]), filename, "exec", dont_inherit=True)
+            )
+        if shown is not None:
+            # as python's repl compiles an input, which prints an expression's value
+            codes.append(
+                compile(ast.Interactive(body=[shown]), filename, "single", dont_inherit=True)
+            )
+        codes = [_by_runner._relined(code, filename, by_line, width) for code in codes]
+    except Exception:
+        sys.stderr.write("error: the python this input was transpiled to does not compile:\n")
+        sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
+        return
+    session.tell({"ran": number})
+    try:
+        for code in codes:
+            exec(code, namespace)
+    except SystemExit:
+        raise
+    except BaseException:
+        sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
+
+
+def main():
+    session = _Session()
+    sys.meta_path.insert(0, _by_runner._ByFinder())
+    sys.excepthook = _by_runner._excepthook
+    sys.argv = [""]
+    main_module = types.ModuleType("__main__")
+    sys.modules["__main__"] = main_module
+    namespace = main_module.__dict__
+    if _INTERACTIVE:
+        try:
+            import readline  # noqa: F401 — line editing for `input`
+        except ImportError:
+            pass
+    while True:
+        try:
+            text = _read_input(session)
+        except EOFError:
+            if _INTERACTIVE:
+                sys.stdout.write("\n")
+            return
+        except KeyboardInterrupt:
+            sys.stderr.write("\nKeyboardInterrupt\n")
+            continue
+        if not text.strip():
+            continue
+        try:
+            _run(session, namespace, text)
+        except KeyboardInterrupt:
+            sys.stderr.write("\nKeyboardInterrupt\n")
+        except EOFError:
+            # `by repl` has gone, and with it the session
+            return
+
+
+if __name__ == "__main__":
+    main()
+"#;
 
 /// the pytest plugin that moves a test module's functions to the `.by` it was
 /// transpiled from, so that a failure is reported at the `.by` line that failed
@@ -2362,6 +2607,8 @@ _BY_SOURCES = {os.path.realpath(info[0]): py for py, info in SOURCEMAP.items()}
 
 # this file, whose frames are never the program's
 _RUNNER = os.path.realpath(__file__)
+# the start of the name `by repl` compiles an input under, `<by-input-3>`
+_SESSION_INPUT = "<by-input-"
 # the tree the project was staged into, which this file is at the top of
 _TREE = os.path.dirname(_RUNNER)
 # the hand-written `.py` files carried over into the tree, each with the project
@@ -2437,13 +2684,15 @@ def _still_current(key, by_path):
 
 
 def _rewrite(frames):
-    # drop the runner/runpy bootstrap above the first user frame
+    # drop the runner/runpy bootstrap above the first user frame. an input to a `by repl`
+    # session is the program's own as much as a module of the project is
     first = next(
         (
             i
             for i, f in enumerate(frames)
             if os.path.realpath(f.filename) in _BY_MAP
             or os.path.realpath(f.filename) in _BY_SOURCES
+            or f.filename.startswith(_SESSION_INPUT)
         ),
         None,
     )

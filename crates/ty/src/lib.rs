@@ -4,6 +4,7 @@ mod by_coverage;
 mod by_init;
 mod by_lowering;
 mod by_project_server;
+mod by_repl;
 mod by_source_encoding;
 mod by_stamps;
 mod by_wheels;
@@ -141,6 +142,17 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 coverage: coverage.as_deref(),
                 profile: profile.as_deref(),
             },
+        ),
+        Command::Repl {
+            min_version,
+            python,
+            lowering,
+            session_file,
+        } => by_repl::cmd_repl(
+            min_version.as_deref(),
+            &lowering,
+            python.as_deref(),
+            session_file.as_deref(),
         ),
         Command::Init {
             path,

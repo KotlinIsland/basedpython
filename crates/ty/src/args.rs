@@ -145,6 +145,30 @@ pub(crate) enum Command {
         profile: Option<PathBuf>,
     },
 
+    /// Start an interactive session in basedpython.
+    ///
+    /// Each input is checked and transpiled as the continuation of the module made of the
+    /// inputs that ran before it, and runs in one python process that lives as long as the
+    /// session. The project is staged as `by run` stages it, so its modules import as they do
+    /// in a program.
+    Repl {
+        /// minimum Python version the session's python must run on
+        /// [default: the version of the interpreter that will run it]
+        #[arg(long, value_name = "VERSION")]
+        min_version: Option<String>,
+        /// The interpreter to run on, or the environment holding it, as `by run` takes it.
+        #[arg(long, value_name = "PATH", alias = "venv")]
+        python: Option<PathBuf>,
+        #[command(flatten)]
+        lowering: LoweringArgs,
+        /// Keep PATH holding the session's source: the inputs that ran, in order.
+        ///
+        /// For an editor's console, whose completion is asked of the module this file holds
+        /// followed by the input being typed.
+        #[arg(long, value_name = "PATH")]
+        session_file: Option<PathBuf>,
+    },
+
     /// Start a new project.
     ///
     /// Writes a `pyproject.toml` that names the basedpython build backend, a

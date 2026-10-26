@@ -19,17 +19,15 @@ default-run = "by"
 name = "by"
 path = "src/main.rs"
 
-[package.metadata.cargo-shear]
-# Used only to enable parser stack growth.
-ignored = ["ruff_python_parser"]
-
 [lib]
 doctest = false
 
 [dependencies]
 ruff_command_line = { workspace = true }
 ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
+ruff_notebook = { workspace = true }
 ruff_python_ast = { workspace = true }
+ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
 ruff_diagnostics = { workspace = true }
 ruff_python_parser = { workspace = true, features = ["stacker"] }

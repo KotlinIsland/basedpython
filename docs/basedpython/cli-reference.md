@@ -14,6 +14,7 @@ in addition to the cli provided by `ty`, `by` includes:
 | command             | what it does                                                       |
 | ------------------- | ------------------------------------------------------------------ |
 | `run`               | transpile and run a module with `python -m <module>`               |
+| `repl`              | an interactive session in basedpython                              |
 | `build`             | transpile every `.by`/`.byi` file and write to `build/`            |
 | `compile`           | compile `.by` files to native CPython extension modules            |
 | `generate-api-file` | write a public-api lockfile (see [api-lock](features/api-lock.md)) |
@@ -171,6 +172,19 @@ to
 hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
 treated as project source: they are neither checked nor transpiled, by `run`
 and `build` alike
+
+## `by repl`
+
+```sh
+by repl                             # an interactive session, on the project's interpreter
+by repl --python python3.14         # on another interpreter
+```
+
+an interactive session in which you type basedpython, each input checked and transpiled as the
+continuation of the inputs before it and run in one python process. it starts where `by run`
+would, with the project staged as `by run` stages it, so the project's modules import as they
+do in a program. `--session-file PATH` keeps `PATH` holding the inputs that ran, for an editor's
+console to complete against. see [the repl](features/repl.md)
 
 ## `by build`
 

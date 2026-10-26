@@ -1,8 +1,5 @@
 # the repl
 
-> **status: design.** `by/inputStatus` is built; `by repl` itself is being built, and lands in
-> the commits that follow
-
 `by repl` is an interactive session in which you type basedpython. each input is checked and
 transpiled with everything the session has defined so far, and runs in one python process
 that lives as long as the session
@@ -13,11 +10,19 @@ $ by repl
 >>> def taxed(amount: float) -> float:
 ...     return amount * (1 + rate)
 ...
->>> taxed(10)
+>>> taxed(10.0)
 12.0
 >>> rate = 0.3
-  --> <by-input-4>:1:1
-error[invalid-assignment]: Reassignment of `Final` symbol `rate` is not allowed
+error[invalid-assignment]: read-only symbol `rate` cannot be reassigned
+ --> <by-input-4>:1:1
+  |
+1 | rate = 0.3
+  | ^^^^^^^^^^ reassigned here
+  |
+ ::: <by-input-1>:1:1
+  |
+1 | let rate = 0.2
+  | ---- declared read-only here
 ```
 
 it starts where `by run` would: in the project around the working directory, on the
@@ -49,14 +54,15 @@ any runtime helper they need that has not run yet. the earlier inputs' statement
 they were entered. an input that would change the python an earlier input was transpiled to —
 which has already run, and cannot run again differently — is refused, and says so
 
-two things differ from `by run`, because a session is never run as a whole. an `import` runs
-when it is entered rather than lazily, so a module that cannot be imported says so then, and a
-`def main` is a function like any other: nothing calls it
+two things differ from `by run`, because a session is never run as a whole. a `from` import
+binds its names when it is entered rather than at their first use, so a name that cannot be
+imported says so then, and a `def main` is a function like any other: nothing calls it
 
 ## what is printed
 
-an input that ends in an expression prints its value, through `sys.displayhook`, as python's
-repl prints it. an exception prints a traceback whose frames name the
+each expression statement of an input prints its value, through `sys.displayhook`, as python's
+repl prints it: both of `1; 2`, and one in a loop's body, but not one in a function's. an input is numbered whether it runs or not, as python numbers its own. an
+exception prints a traceback whose frames name the
 input they ran in, at the input's line, with the line quoted, and the project's modules at
 their `.by` lines
 
@@ -68,6 +74,7 @@ their `.by` lines
 Traceback (most recent call last):
   File "<by-input-2>", line 1, in <module>
     ratio(1, 0)
+    ~~~~~^^^^^^
   File "<by-input-1>", line 2, in ratio
     return a / b
 ZeroDivisionError: division by zero
@@ -82,7 +89,7 @@ it. whether an input is complete is a question about basedpython's grammar, so `
 — the same answer the [language server](#in-an-editor) gives
 
 the end of input (ctrl-d) ends the session, and its exit status is the program's: 0, or what
-`sys.exit` was given. ctrl-c abandons the input being typed, or interrupts the one running with
+`sys.exit` was given, or, when a signal ends the interpreter, 128 and the signal's number. ctrl-c abandons the input being typed, or interrupts the one running with
 a `KeyboardInterrupt`, which is printed, and the session carries on
 
 an input can also be sent whole, framed as a terminal frames a paste: `ESC [200~` before it and
