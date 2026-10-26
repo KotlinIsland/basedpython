@@ -67,7 +67,8 @@ pub(crate) struct ClassItem {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MemberItem {
     name: String,
-    /// `method`, `classmethod`, `staticmethod`, `property` or `attribute`
+    /// `method`, `classmethod`, `staticmethod`, `property` or `attribute`, or `base` for a base
+    /// the class statement writes, which a pull up moves into the superclass's bases
     kind: String,
     /// how it reads in a list: a method or property as its name and parameters as written,
     /// `fetch(self, key: str)`, an attribute as its name
@@ -135,6 +136,7 @@ impl BackgroundDocumentRequestHandler for PrepareMoveMembersRequestHandler {
                         MemberKind::StaticMethod => "staticmethod",
                         MemberKind::Property => "property",
                         MemberKind::Attribute => "attribute",
+                        MemberKind::Base => "base",
                     }
                     .to_string(),
                     detail: member.detail,

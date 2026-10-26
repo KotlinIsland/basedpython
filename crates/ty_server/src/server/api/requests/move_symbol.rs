@@ -186,7 +186,7 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
 }
 
 impl MoveSymbolAnswer {
-    /// The answer to a move: its edits as a workspace edit and its warnings, or why it refused.
+    /// the answer to a move: its edits as a workspace edit and its warnings, or why it refused
     pub(super) fn of(
         db: &ProjectDatabase,
         snapshot: &DocumentSnapshot,

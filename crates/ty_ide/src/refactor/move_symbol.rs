@@ -970,7 +970,7 @@ pub(super) struct Cut {
     /// The definition with its decorators and the comments directly above it, ending in a line
     /// break.
     pub(super) text: String,
-    /// Where `text` starts in the module.
+    /// where `text` starts in the module
     pub(super) start: TextSize,
     /// Its lines and the blank lines that separated it from the statement after it, or, when it is
     /// the last statement, from the one before.
@@ -1369,8 +1369,8 @@ fn rewrite_references(
     );
 }
 
-/// The range of the module a `from` import names, its leading dots included: from the token
-/// after `from` to the end of the module's name, or of its dots when it has none.
+/// the range of the module a `from` import names, its leading dots included: from the token
+/// after `from` to the end of the module's name, or of its dots when it has none
 fn from_module_range(parsed: &ParsedModuleRef, from: &ast::StmtImportFrom) -> Option<TextRange> {
     let mut tokens = parsed.tokens().in_range(from.range()).iter();
     let keyword = tokens.next()?;
@@ -1461,7 +1461,7 @@ X = os.sep
             .build()
     }
 
-    /// Every file `moved` changes, as it is afterwards, and its warnings; or why it refused.
+    /// every file `moved` changes, as it is afterwards, and its warnings; or why it refused
     pub(in crate::refactor) fn rendered(
         db: &ty_project::TestDb,
         moved: Result<super::SymbolMove, String>,

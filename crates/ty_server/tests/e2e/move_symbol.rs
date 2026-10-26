@@ -280,6 +280,12 @@ fn a_class_lists_its_members_and_where_they_could_go() -> Result<()> {
                     "detail": "describe(self)",
                     "range": { "start": { "line": 7, "character": 8 }, "end": { "line": 7, "character": 16 } },
                 },
+                {
+                    "name": "Shape",
+                    "kind": "base",
+                    "detail": "Shape",
+                    "range": { "start": { "line": 4, "character": 13 }, "end": { "line": 4, "character": 18 } },
+                },
             ],
             "superclasses": [{
                 "name": "Shape",

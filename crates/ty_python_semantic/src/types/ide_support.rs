@@ -2693,8 +2693,8 @@ fn direct_subtypes<'db>(
     subtypes
 }
 
-/// The classes `class` names as its bases, as class literals, for a refactoring that asks what
-/// a class inherits from above itself. Empty for a type that is no class.
+/// the classes `class` names as its bases, as class literals, for a refactoring that asks what
+/// a class inherits from above itself. empty for a type that is no class
 pub fn class_bases<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -2711,8 +2711,8 @@ pub fn class_bases<'db>(
         .collect()
 }
 
-/// The names of the members an instance of `class` has, its own and inherited, attributes its
-/// methods assign included. Empty for a type that is no class.
+/// the names of the members an instance of `class` has, its own and inherited, attributes its
+/// methods assign included. empty for a type that is no class
 pub fn instance_member_names<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -2729,9 +2729,9 @@ pub fn instance_member_names<'db>(
         .collect()
 }
 
-/// Whether every value of `receiver` is one of `classes`, or below one of them: an instance of
-/// one of them or of a subclass, or one of them or a subclass itself. A member read off such a
-/// receiver is looked up from one of those classes down, never from above them.
+/// whether every value of `receiver` is one of `classes`, or below one of them: an instance of
+/// one of them or of a subclass, or one of them or a subclass itself. a member read off such a
+/// receiver is looked up from one of those classes down, never from above them
 ///
 /// a gradual receiver may hold any value, so only a subtype of a class's instances, under any
 /// specialization of it, is within that class

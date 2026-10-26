@@ -1,5 +1,5 @@
-//! Pulling a class's members up into one of its superclasses, and pushing them down into its
-//! subclasses.
+//! pulling a class's members up into one of its superclasses, and pushing them down into its
+//! subclasses
 //!
 //! ```py
 //! class Shape:                          class Shape:
@@ -10,11 +10,11 @@
 //!         return type(self).__name__        pass
 //! ```
 //!
-//! A member is every statement of a class body that binds its name: a method (with its property
-//! accessors or overloads, which share the name), or a class attribute. It moves with its
-//! decorators and the comments directly above it, reindented for the body it lands in.
+//! a member is every statement of a class body that binds its name: a method (with its property
+//! accessors or overloads, which share the name), or a class attribute. it moves with its
+//! decorators and the comments directly above it, reindented for the body it lands in
 //!
-//! Either move is refused, with the reason, where the program would no longer mean what it
+//! either move is refused, with the reason, where the program would no longer mean what it
 //! meant:
 //!
 //! - pulled up, a member that reads an attribute of its receiver the superclass does not have,
@@ -32,7 +32,7 @@
 //! `override` follows the move: a method pulled up overrides nothing where it lands unless the
 //! superclass inherits the name, so it loses the modifier there, and the methods of the same
 //! name below the superclass then override it and gain the modifier; a method pushed down keeps
-//! it only where something above still has the name.
+//! it only where something above still has the name
 
 use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
@@ -64,7 +64,9 @@ use crate::import_order;
 use crate::method_kind::{MethodKind, method_kind};
 use crate::references::{ReferencesMode, references};
 
-/// What kind of member of a class a member is.
+mod bases;
+
+/// what kind of member of a class a member is
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberKind {
     Method,
@@ -72,44 +74,47 @@ pub enum MemberKind {
     StaticMethod,
     Property,
     Attribute,
+    /// A base the class statement names, which a pull up moves into the superclass's bases.
+    Base,
 }
 
-/// A member [`pull_members_up`] or [`push_members_down`] can move.
+/// A member [`pull_members_up`] or [`push_members_down`] can move, or a base a pull up can.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassMember {
+    /// Its name, or a base as the class statement writes it.
     pub name: String,
     pub kind: MemberKind,
-    /// The range of its name in its first statement.
+    /// The range of its name in its first statement, or of the base.
     pub name_range: TextRange,
     /// How it reads in a list of members: a method or property as its name and its parameters
     /// as its first statement writes them, `fetch(self, key: str)`, an attribute as its name.
     pub detail: String,
 }
 
-/// A class of the project, where its name is.
+/// a class of the project, where its name is
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HierarchyClass {
     pub file: File,
     pub name: String,
-    /// Its module's dotted name and its own, the way [`pull_members_up`] is told which
-    /// superclass to pull into.
+    /// its module's dotted name and its own, the way [`pull_members_up`] is told which
+    /// superclass to pull into
     pub qualified_name: Option<String>,
     pub name_range: TextRange,
 }
 
-/// The members of the class at a position, and the classes of the project above and below it
-/// they could move to.
+/// the members of the class at a position, and the classes of the project above and below it
+/// they could move to
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MovableMembers {
     pub class: HierarchyClass,
     pub members: Vec<ClassMember>,
-    /// The project's classes the class inherits from, nearest first.
+    /// the project's classes the class inherits from, nearest first
     pub superclasses: Vec<HierarchyClass>,
-    /// The project's classes that name the class as a base.
+    /// the project's classes that name the class as a base
     pub subclasses: Vec<HierarchyClass>,
 }
 
-/// The class around `offset`, its members, and where they could go.
+/// the class around `offset`, its members, and where they could go
 pub fn movable_members(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -139,6 +144,16 @@ pub fn movable_members(
             detail: member_detail(source.as_str(), statement),
         });
     }
+    members.extend(
+        bases::written_bases(def, source.as_str())
+            .into_iter()
+            .map(|base| ClassMember {
+                name: base.text.to_string(),
+                kind: MemberKind::Base,
+                name_range: base.expression.range(),
+                detail: base.text.to_string(),
+            }),
+    );
     Some(MovableMembers {
         class: class.item(db),
         members,
@@ -183,12 +198,32 @@ pub fn pull_members_up(
         .def()
         .ok_or_else(|| format!("{target} cannot be read"))?;
     let env = ProgramEnvironment::from_file(class.file);
-    let super_members = instance_member_names(db, &env, superclass.ty);
-    let pulled: FxHashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut super_members = instance_member_names(db, &env, superclass.ty);
     let source = source_text(db, class.file.file(db));
     let source = source.as_str();
 
+    // a name the class body binds is a member; any other is one of the bases it writes
+    let (names, pulled_bases): (Vec<&String>, Vec<&String>) = names
+        .iter()
+        .partition(|name| !member_statements(def, name).is_empty());
     let mut moved = SymbolMove::default();
+    if !pulled_bases.is_empty() {
+        let pulled = bases::pull_bases_up(
+            db,
+            &class,
+            superclass,
+            &pulled_bases
+                .iter()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>(),
+            source,
+        )?;
+        // what the bases bring is the superclass's from now on, for the members pulled with them
+        super_members.extend(pulled.gained);
+        moved.edits.extend(pulled.edits);
+    }
+    let pulled: FxHashSet<&str> = names.iter().map(|name| name.as_str()).collect();
+
     let mut texts: Vec<(usize, MemberKind, String)> = Vec::new();
     let mut removed: Vec<usize> = Vec::new();
     let mut target_imports: Vec<OwnedRequest> = Vec::new();
@@ -353,9 +388,9 @@ pub fn pull_members_up(
     Ok(moved)
 }
 
-/// Moves the members `names` of the class around `offset` into each of the project's classes
+/// moves the members `names` of the class around `offset` into each of the project's classes
 /// that name it as a base, as a copy into each that does not define the member itself. `Err`
-/// says why they cannot be moved.
+/// says why they cannot be moved
 pub fn push_members_down(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -742,7 +777,7 @@ fn module_binds(class: &ClassSite<'_>, db: &dyn Db, name: &str) -> bool {
         .is_some_and(|symbol| globals.symbol(symbol).is_bound())
 }
 
-/// A class of the project, parsed.
+/// a class of the project, parsed
 struct ClassSite<'db> {
     file: ProgramFile<'db>,
     file_id: File,
@@ -754,7 +789,7 @@ struct ClassSite<'db> {
 }
 
 impl<'db> ClassSite<'db> {
-    /// The innermost class whose definition `offset` is in.
+    /// the innermost class whose definition `offset` is in
     fn at(db: &'db dyn Db, file: ProgramFile<'db>, offset: TextSize) -> Option<Self> {
         let parsed = parsed_module(db, file.python_file(db)).load(db);
         let def = all_classes(&parsed)
@@ -766,7 +801,7 @@ impl<'db> ClassSite<'db> {
         Self::new(db, file, parsed, name_range, ty)
     }
 
-    /// The class whose name is at `name_range` in `file`, of the type `ty`.
+    /// the class whose name is at `name_range` in `file`, of the type `ty`
     fn new(
         db: &'db dyn Db,
         file: ProgramFile<'db>,
@@ -794,7 +829,7 @@ impl<'db> ClassSite<'db> {
         })
     }
 
-    /// The class described by `class`, a class of the type hierarchy, of the type `ty`.
+    /// the class described by `class`, a class of the type hierarchy, of the type `ty`
     fn of_hierarchy(
         db: &'db dyn Db,
         program: ProgramFile<'db>,
@@ -829,7 +864,7 @@ impl<'db> ClassSite<'db> {
         }
     }
 
-    /// The project's classes this class names as its bases.
+    /// the project's classes this class names as its bases
     fn bases(&self, db: &'db dyn Db) -> Vec<ClassSite<'db>> {
         let env = ProgramEnvironment::from_file(self.file);
         class_bases(db, &env, self.ty)
@@ -841,7 +876,7 @@ impl<'db> ClassSite<'db> {
             .collect()
     }
 
-    /// The project's classes this class inherits from, nearest first.
+    /// the project's classes this class inherits from, nearest first
     fn ancestors(&self, db: &'db dyn Db) -> Vec<ClassSite<'db>> {
         let mut found: Vec<ClassSite<'db>> = Vec::new();
         let mut pending = self.bases(db);
@@ -858,7 +893,7 @@ impl<'db> ClassSite<'db> {
         found
     }
 
-    /// Whether this class names `base` as its one base.
+    /// whether this class names `base` as its one base
     fn has_only_base(&self, db: &'db dyn Db, base: &ClassSite<'_>) -> bool {
         let env = ProgramEnvironment::from_file(self.file);
         let bases = class_bases(db, &env, self.ty);
@@ -872,7 +907,7 @@ impl<'db> ClassSite<'db> {
             .any(|ancestor| ancestor.same(self))
     }
 
-    /// The project's classes that name this class as a base.
+    /// the project's classes that name this class as a base
     fn subclasses(&self, db: &'db dyn Db) -> Vec<ClassSite<'db>> {
         let env = ProgramEnvironment::from_file(self.file);
         let modules: Vec<_> =
@@ -898,7 +933,7 @@ impl<'db> ClassSite<'db> {
             .collect()
     }
 
-    /// The project's classes below this one, at any depth.
+    /// the project's classes below this one, at any depth
     fn descendants(&self, db: &'db dyn Db) -> Vec<ClassSite<'db>> {
         let mut found: Vec<ClassSite<'db>> = Vec::new();
         let mut pending = self.subclasses(db);
@@ -933,7 +968,7 @@ impl<'db> ClassSite<'db> {
     }
 }
 
-/// Every class definition of a module, at any depth.
+/// every class definition of a module, at any depth
 fn all_classes(parsed: &ParsedModuleRef) -> Vec<&ast::StmtClassDef> {
     #[derive(Default)]
     struct Classes<'a> {
@@ -1040,7 +1075,7 @@ fn binds(statement: &Stmt, name: &str) -> bool {
     member_of(statement).is_some_and(|(bound, _)| bound.as_str() == name)
 }
 
-/// The indices of the statements of `class`'s body that bind `name`.
+/// the indices of the statements of `class`'s body that bind `name`
 fn member_statements(class: &ast::StmtClassDef, name: &str) -> Vec<usize> {
     class
         .body
@@ -1230,8 +1265,8 @@ fn has_override(statement: &Stmt) -> bool {
     override_marker(statement).is_some()
 }
 
-/// The range that takes `decorator` out: an `@override` line with its line break, or the
-/// `override` modifier keyword with the space after it.
+/// the range that takes `decorator` out: an `@override` line with its line break, or the
+/// `override` modifier keyword with the space after it
 fn override_range(source: &str, decorator: &ast::Decorator) -> TextRange {
     if source[decorator.range()].starts_with('@') {
         TextRange::new(
@@ -1264,7 +1299,7 @@ fn member_text(source: &str, body: &[Stmt], index: usize, strip_override: bool) 
     cut.text
 }
 
-/// The indentation the statements of `class`'s body are written with.
+/// the indentation the statements of `class`'s body are written with
 fn body_indentation(source: &str, class: &ast::StmtClassDef) -> String {
     class.body.first().map_or_else(
         || "    ".to_string(),
@@ -1275,7 +1310,7 @@ fn body_indentation(source: &str, class: &ast::StmtClassDef) -> String {
     )
 }
 
-/// `text` with each line's leading `from` replaced by `to`.
+/// `text` with each line's leading `from` replaced by `to`
 fn reindent(text: &str, from: &str, to: &str) -> String {
     if from == to {
         return text.to_string();
@@ -1288,7 +1323,7 @@ fn reindent(text: &str, from: &str, to: &str) -> String {
         .collect()
 }
 
-/// Whether a body statement stands in for no body: `pass` or `...`.
+/// whether a body statement stands in for no body: `pass` or `...`
 fn is_placeholder(statement: &Stmt) -> bool {
     match statement {
         Stmt::Pass(_) => true,
@@ -1301,8 +1336,8 @@ fn is_docstring(statement: &Stmt) -> bool {
     matches!(statement, Stmt::Expr(expression) if expression.value.is_string_literal_expr())
 }
 
-/// The edits taking the statements `removed` out of `class`'s body, leaving `pass` when nothing
-/// but a docstring would be left.
+/// the edits taking the statements `removed` out of `class`'s body, leaving `pass` when nothing
+/// but a docstring would be left
 fn remove_members(
     file: File,
     source: &str,
@@ -1375,9 +1410,9 @@ fn remove_members(
     edits
 }
 
-/// The edits adding `members` to `class`'s body: an attribute after its last attribute, before
+/// the edits adding `members` to `class`'s body: an attribute after its last attribute, before
 /// its first method; a method after its last statement, a blank line away; in place of a body
-/// that is only `pass` or `...`.
+/// that is only `pass` or `...`
 fn insert_members(
     file: File,
     source: &str,
@@ -1471,8 +1506,8 @@ fn insert_members(
     edits
 }
 
-/// The edits importing `requests` into `class`'s module, each under the name the moved code
-/// reads it by.
+/// the edits importing `requests` into `class`'s module, each under the name the moved code
+/// reads it by
 fn add_imports(
     db: &dyn Db,
     class: &ClassSite<'_>,
@@ -1502,8 +1537,8 @@ fn add_imports(
         .collect())
 }
 
-/// The edits marking `statement`, a method of `class`, as an override: basedpython's `override`
-/// modifier, or python's `@override` with its import.
+/// the edits marking `statement`, a method of `class`, as an override: basedpython's `override`
+/// modifier, or python's `@override` with its import
 fn add_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<FileEdit> {
     let Stmt::FunctionDef(function) = statement else {
         return Vec::new();
@@ -1559,7 +1594,7 @@ fn add_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<Fil
     edits
 }
 
-/// The edit taking the `override` off `statement`, a method of `class`.
+/// the edit taking the `override` off `statement`, a method of `class`
 fn remove_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<FileEdit> {
     let Some(decorator) = override_marker(statement) else {
         return Vec::new();
@@ -1571,7 +1606,7 @@ fn remove_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<
     }]
 }
 
-/// The type of the receiver of the attribute whose name is at `range` in `file`: `x` of `x.name`.
+/// the type of the receiver of the attribute whose name is at `range` in `file`: `x` of `x.name`
 fn attribute_receiver_type<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
@@ -1706,7 +1741,7 @@ class GrandChild(Child):
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
         assert_snapshot!(test.movable(), @"
         cls.shapes.Child
-        members: LIMIT (Attribute), __init__(self, x) (Method), area(self) (Method), plain(self) (Method), helper(self) (Method)
+        members: LIMIT (Attribute), __init__(self, x) (Method), area(self) (Method), plain(self) (Method), helper(self) (Method), Base (Base)
         superclasses: cls.shapes.Base
         subclasses: cls.shapes.GrandChild
         ");
@@ -1740,6 +1775,139 @@ class GrandChild(Child):
         superclasses: 
         subclasses:
         ");
+    }
+
+    fn mixins(source: &str) -> CursorTest {
+        CursorTestBuilder::default()
+            .source("main.py", source)
+            .build()
+    }
+
+    /// A base the class writes is pulled up into the superclass's bases, after its own, where
+    /// every class below the superclass finds what it found before.
+    #[test]
+    fn a_base_is_pulled_up_into_the_superclass() {
+        let test = mixins(
+            r#"class Mixin:
+    def mix(self):
+        return 1
+
+
+class Base:
+    def keep(self):
+        return 1
+
+
+class <CURSOR>Child(Base, Mixin, metaclass=type):
+    def own(self):
+        return self.mix()
+"#,
+        );
+        assert_snapshot!(test.movable(), @"
+        main.Child
+        members: own(self) (Method), Base (Base), Mixin (Base)
+        superclasses: main.Base, main.Mixin
+        subclasses:
+        ");
+        assert_snapshot!(test.pull_up(&["Mixin", "own"], "main.Base"), @"
+        --- /main.py
+        class Mixin:
+            def mix(self):
+                return 1
+
+
+        class Base(Mixin):
+            def keep(self):
+                return 1
+
+            def own(self):
+                return self.mix()
+
+
+        class Child(Base, metaclass=type):
+            pass
+        ");
+    }
+
+    /// Whatever a class below the superclass finds, it has to find in the same class afterwards.
+    #[test]
+    fn a_base_that_changes_what_a_class_finds_is_refused() {
+        let test = mixins(
+            r#"class Mixin:
+    def keep(self):
+        return 2
+
+
+class Base:
+    def keep(self):
+        return 1
+
+
+class <CURSOR>Child(Mixin, Base):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: Child would find `keep` in another class than it does");
+
+        let test = mixins(
+            r#"class Mixin:
+    def shared(self):
+        return 2
+
+
+class Other:
+    def shared(self):
+        return 3
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base, Mixin):
+    pass
+
+
+class Sibling(Base, Other):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: Sibling would find `shared` in another class than it does");
+    }
+
+    /// The superclass names the base where it is defined, so the name has to be bound there, and
+    /// the class cannot lose the base it reaches the superclass through.
+    #[test]
+    fn a_base_the_superclass_cannot_take_is_refused() {
+        let test = mixins(
+            r#"class Base:
+    pass
+
+
+class Mixin:
+    pass
+
+
+class <CURSOR>Child(Base, Mixin):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: `Mixin` is not bound above Base, where it would be written");
+
+        let test = mixins(
+            r#"class Base:
+    pass
+
+
+class Middle(Base):
+    pass
+
+
+class <CURSOR>Child(Middle):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["Middle"], "main.Base"), @"refused: Child inherits Base through `Middle`, so it cannot lose it");
     }
 
     #[test]
@@ -1779,7 +1947,7 @@ class GrandChild(Child):
     }
 
     /// `area` reads `self.x`, which only a `Child` has; `Other` would inherit an `area` that
-    /// fails.
+    /// fails
     #[test]
     fn a_method_that_reads_what_the_superclass_lacks_is_refused() {
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
@@ -1787,7 +1955,7 @@ class GrandChild(Child):
         assert_snapshot!(test.pull_up(&["helper"], "cls.shapes.Base"), @"refused: `helper` uses `self.plain` on line 19, which Base does not have; pull it up too");
     }
 
-    /// Pulled up together, `helper` finds the `plain` it calls.
+    /// pulled up together, `helper` finds the `plain` it calls
     #[test]
     fn members_pulled_up_together_satisfy_each_other() {
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
@@ -1824,14 +1992,14 @@ class GrandChild(Child):
         ");
     }
 
-    /// `Base().keep()` would no longer find `keep`.
+    /// `Base().keep()` would no longer find `keep`
     #[test]
     fn a_member_read_off_the_class_itself_is_not_pushed_down() {
         let test = project(&SHAPES.replace("class Base:", "class <CURSOR>Base:"));
         assert_snapshot!(test.push_down(&["keep"]), @"refused: cls/user.py:3 uses `keep` on what may be a Base rather than a subclass");
     }
 
-    /// `helper` calls `self.plain()` on what may be a `Child` rather than a `GrandChild`.
+    /// `helper` calls `self.plain()` on what may be a `Child` rather than a `GrandChild`
     #[test]
     fn a_member_the_class_s_own_methods_read_is_not_pushed_down() {
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
@@ -1885,8 +2053,8 @@ def use(child: Child, other: Other):
         ");
     }
 
-    /// Pulled up where nothing above has the name, a method overrides nothing, and what has
-    /// the name below the superclass then overrides it: in basedpython it gains the modifier.
+    /// pulled up where nothing above has the name, a method overrides nothing, and what has
+    /// the name below the superclass then overrides it: in basedpython it gains the modifier
     #[test]
     fn override_follows_a_pull_up() {
         let test = CursorTestBuilder::default()
@@ -1934,7 +2102,7 @@ class Leaf(Child):
         "#);
     }
 
-    /// In python it gains `@override`, imported.
+    /// in python it gains `@override`, imported
     #[test]
     fn override_follows_a_pull_up_in_python() {
         let test = CursorTestBuilder::default()
@@ -1976,7 +2144,7 @@ class Other(Base):
         "#);
     }
 
-    /// `Leaf` would inherit `Mid`'s `describe` instead of the one it pulls up.
+    /// `Leaf` would inherit `Mid`'s `describe` instead of the one it pulls up
     #[test]
     fn a_class_between_with_the_name_is_refused() {
         let test = CursorTestBuilder::default()

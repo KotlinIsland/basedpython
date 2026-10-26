@@ -765,6 +765,14 @@ moves with its decorators and the comments above it, reindented for the body it
 lands in: attributes before the methods, methods after them, in the order they
 were written
 
+a base the class statement names — a mixin, say — is pulled up the same way, out
+of the class's bases and into the end of the superclass's, as python's own pull
+members up offers it. it is refused unless the superclass and every class of the
+project below it still find every name they found in the class they found it in,
+python can still order each one's bases, the class still reaches the superclass
+without the base, and the base is bound at the top of the module above the
+superclass, which is in the class's module
+
 either is refused, with the reason, where the program would no longer mean what it
 meant:
 
@@ -803,10 +811,14 @@ it once nothing above has the name
 and answers `{class, members, superclasses, subclasses}`: the class and the classes
 of the project above it, nearest first, and below it, each `{name, qualifiedName, uri, range}` with `range` its name; and its members, each `{name, kind, detail, range}`,
 `kind` one of `method`, `classmethod`, `staticmethod`, `property` and `attribute`,
+or `base` for a base the class statement names, as it writes it,
 `detail` how the member reads in a list — a method or property as its name and its
 parameters as written, on one line, `fetch(self, key: str)`, an attribute as its name;
 `null` outside a class. `by/pullMembersUp` takes the same position, `members`, the
-names to move, and `target`, a superclass's `qualifiedName`; `by/pushMembersDown`
+names of the members to move, `bases`, the bases to move, each as listed with kind
+`base`, and `target`, a superclass's `qualifiedName`; a request without `bases`
+names its bases among `members`, each read by the kind `by/prepareMoveMembers` lists
+it with, and a name listed as both is refused. `by/pushMembersDown`
 takes the position and `members`. both answer as `by/moveSymbol` does,
 `{edit, warnings}` or `{refused, warnings}`
 
