@@ -157,3 +157,172 @@ fn a_refused_move_says_why() -> Result<()> {
     );
     Ok(())
 }
+
+/// the import the definition takes with it and the definition are removed as one edit: two
+/// removals that both claim the blank lines between them would overlap, which a client rejects
+#[test]
+fn a_move_s_edits_to_a_file_do_not_overlap() -> Result<()> {
+    const CIRCLE: &str = "import math\n\n\ndef area(r): return math.pi*r*r\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/shapes/__init__.py"), "")?
+        .with_file(SystemPath::new("src/shapes/circle.py"), CIRCLE)?
+        .with_file(SystemPath::new("src/shapes/geometry.py"), "")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(SystemPath::new("src/shapes/circle.py"), CIRCLE, 1);
+    let circle = server.file_uri(SystemPath::new("src/shapes/circle.py"));
+    let answer = server
+        .send_request_await::<MoveSymbol>(json!({
+            "textDocument": { "uri": circle },
+            "position": { "line": 3, "character": 5 },
+            "target": server.file_uri(SystemPath::new("src/shapes/geometry.py")),
+        }))
+        .expect("an answer");
+    assert_eq!(
+        answer["edit"]["changes"][circle.as_str()],
+        json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 4, "character": 0 } },
+            "newText": "",
+        }]),
+        "{answer:#}"
+    );
+    Ok(())
+}
+
+/// `by/prepareMoveMembers`, in json throughout
+enum PrepareMoveMembers {}
+
+impl Request for PrepareMoveMembers {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/prepareMoveMembers");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+/// `by/pullMembersUp`, in json throughout
+enum PullMembersUp {}
+
+impl Request for PullMembersUp {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/pullMembersUp");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+/// `by/pushMembersDown`, in json throughout
+enum PushMembersDown {}
+
+impl Request for PushMembersDown {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/pushMembersDown");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+const SHAPES: &str = "\
+class Shape:
+    pass
+
+
+class Square(Shape):
+    SIDES = 4
+
+    def describe(self) -> str:
+        return 'square'
+";
+
+fn shapes_server() -> Result<TestServer> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/shapes.py"), SHAPES)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(SystemPath::new("src/shapes.py"), SHAPES, 1);
+    Ok(server)
+}
+
+#[test]
+fn a_class_lists_its_members_and_where_they_could_go() -> Result<()> {
+    let mut server = shapes_server()?;
+    let uri = server.file_uri(SystemPath::new("src/shapes.py"));
+    let answer = server.send_request_await::<PrepareMoveMembers>(json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 4, "character": 7 },
+    }));
+    assert_eq!(
+        answer,
+        Some(json!({
+            "class": {
+                "name": "Square",
+                "qualifiedName": "shapes.Square",
+                "uri": uri,
+                "range": { "start": { "line": 4, "character": 6 }, "end": { "line": 4, "character": 12 } },
+            },
+            "members": [
+                {
+                    "name": "SIDES",
+                    "kind": "attribute",
+                    "range": { "start": { "line": 5, "character": 4 }, "end": { "line": 5, "character": 9 } },
+                },
+                {
+                    "name": "describe",
+                    "kind": "method",
+                    "range": { "start": { "line": 7, "character": 8 }, "end": { "line": 7, "character": 16 } },
+                },
+            ],
+            "superclasses": [{
+                "name": "Shape",
+                "qualifiedName": "shapes.Shape",
+                "uri": uri,
+                "range": { "start": { "line": 0, "character": 6 }, "end": { "line": 0, "character": 11 } },
+            }],
+            "subclasses": [],
+        }))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_pull_up_answers_its_edit_and_a_push_down_with_nowhere_to_go_is_refused() -> Result<()> {
+    let mut server = shapes_server()?;
+    let uri = server.file_uri(SystemPath::new("src/shapes.py"));
+    let pulled = server
+        .send_request_await::<PullMembersUp>(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 4, "character": 7 },
+            "members": ["describe"],
+            "target": "shapes.Shape",
+        }))
+        .expect("an answer");
+    assert_eq!(
+        pulled["edit"]["changes"][uri.as_str()],
+        json!([
+            {
+                // the blank line above it and the method, to the end of the file
+                "range": { "start": { "line": 6, "character": 0 }, "end": { "line": 9, "character": 0 } },
+                "newText": "",
+            },
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 2, "character": 0 } },
+                "newText": "    def describe(self) -> str:\n        return 'square'\n",
+            },
+        ]),
+        "{pulled:#}"
+    );
+
+    let pushed = server.send_request_await::<PushMembersDown>(json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 4, "character": 7 },
+        "members": ["SIDES"],
+    }));
+    assert_eq!(
+        pushed,
+        Some(json!({
+            "refused": "no class of the project names Square as a base, so there is nowhere to \
+                        push to",
+            "warnings": [],
+        }))
+    );
+    Ok(())
+}

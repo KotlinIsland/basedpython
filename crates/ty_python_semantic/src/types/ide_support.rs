@@ -46,8 +46,9 @@ use crate::types::signatures::{
 };
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, ClassBase, ClassLiteral, ClassType, KnownClass,
-    KnownFunction, KnownInstanceType, KnownUnion, PropertyAccessorRole, SpecialFormType, Type,
-    TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, binding_type,
+    KnownFunction, KnownInstanceType, KnownUnion, PropertyAccessorRole, SpecialFormType,
+    SubclassOfType, Type, TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+    binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
 use ruff_db::files::{File, FileRange};
@@ -2594,6 +2595,70 @@ fn direct_subtypes<'db>(
     subtypes
 }
 
+/// The classes `class` names as its bases, as class literals, for a refactoring that asks what
+/// a class inherits from above itself. Empty for a type that is no class.
+pub fn class_bases<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: Type<'db>,
+) -> Vec<Type<'db>> {
+    let Some(class_literal) = extract_class_literal(db, env, class) else {
+        return Vec::new();
+    };
+    class_literal
+        .explicit_bases(db)
+        .iter()
+        .filter_map(|base| extract_class_literal(db, env, *base))
+        .map(Type::from)
+        .collect()
+}
+
+/// The names of the members an instance of `class` has, its own and inherited, attributes its
+/// methods assign included. Empty for a type that is no class.
+pub fn instance_member_names<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: Type<'db>,
+) -> rustc_hash::FxHashSet<Name> {
+    let Some(class_literal) = extract_class_literal(db, env, class) else {
+        return rustc_hash::FxHashSet::default();
+    };
+    let instance = Type::instance(db, env, class_literal.default_specialization(db));
+    crate::types::list_members::all_members(db, env, instance)
+        .into_iter()
+        .chain(crate::types::list_members::all_members(db, env, class))
+        .map(|member| member.name)
+        .collect()
+}
+
+/// Whether every value of `receiver` is one of `classes`, or below one of them: an instance of
+/// one of them or of a subclass, or one of them or a subclass itself. A member read off such a
+/// receiver is looked up from one of those classes down, never from above them.
+///
+/// a gradual receiver may hold any value, so only a subtype of a class's instances, under any
+/// specialization of it, is within that class
+pub fn is_within_classes<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    receiver: Type<'db>,
+    classes: &[Type<'db>],
+) -> bool {
+    if let Type::Union(union) = receiver {
+        return union
+            .elements(db)
+            .iter()
+            .all(|element| is_within_classes(db, env, *element, classes));
+    }
+    classes
+        .iter()
+        .filter_map(|class| extract_class_literal(db, env, *class))
+        .any(|class| {
+            let class = class.top_materialization(db);
+            receiver.is_subtype_of(db, env, Type::instance(db, env, class))
+                || receiver.is_subtype_of(db, env, SubclassOfType::from(db, env, class))
+        })
+}
+
 /// Enumerates the reachable class definitions in `file`.
 fn reachable_class_literals_in_file<'db>(
     db: &'db dyn Db,
@@ -4967,6 +5032,104 @@ mod tests {
     use ruff_python_ast as ast;
     use ruff_text_size::Ranged;
     use ty_python_core::ProgramFile;
+
+    /// what `describe` says of the types of the expression statements in `source`'s last `def`
+    /// and of those at the end of the module
+    fn describe_statement_types(
+        source: &str,
+        describe: impl for<'db> Fn(
+            &'db crate::db::tests::TestDb,
+            &crate::ProgramEnvironment<'db>,
+            &[crate::types::Type<'db>],
+            &[crate::types::Type<'db>],
+        ) -> Vec<String>,
+    ) -> anyhow::Result<Vec<String>> {
+        let db = TestDbBuilder::new()
+            .with_file("/src/foo.py", source)
+            .build()?;
+        let file = system_path_to_file(&db, "/src/foo.py")?;
+        let file = ProgramFile::new(&db, file, db.program_environment().program(&db));
+        let parsed = parsed_module(&db, file.python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, file);
+        let types = |suite: &[ast::Stmt]| {
+            suite
+                .iter()
+                .filter_map(ast::Stmt::as_expr_stmt)
+                .filter_map(|statement| crate::HasType::inferred_type(&*statement.value, &model))
+                .collect::<Vec<_>>()
+        };
+        let function = parsed
+            .suite()
+            .iter()
+            .rev()
+            .find_map(ast::Stmt::as_function_def_stmt)
+            .context("expected a function")?;
+        let env = crate::ProgramEnvironment::from_file(file);
+        Ok(describe(
+            &db,
+            &env,
+            &types(&function.body),
+            &types(parsed.suite()),
+        ))
+    }
+
+    #[test]
+    fn a_receiver_is_within_classes_only_when_every_value_is() -> anyhow::Result<()> {
+        let receivers = describe_statement_types(
+            r#"
+from typing import Any
+
+class Shape: ...
+class Circle(Shape): ...
+class Box[T](Shape): ...
+
+def f(
+    circle: Circle,
+    box: Box[int],
+    circle_class: type[Circle],
+    shape: Shape,
+    gradual: Circle | Any,
+    gradual_class: type[Circle] | type[Any],
+    unknown,
+):
+    circle
+    box
+    circle_class
+    shape
+    gradual
+    gradual_class
+    unknown
+
+Circle
+Box
+"#,
+            |db, env, receivers, classes| {
+                receivers
+                    .iter()
+                    .map(|receiver| {
+                        format!(
+                            "{}: {}",
+                            receiver.display(db, env),
+                            super::is_within_classes(db, env, *receiver, classes)
+                        )
+                    })
+                    .collect()
+            },
+        )?;
+        assert_eq!(
+            receivers,
+            [
+                "Circle: true",
+                "Box[int]: true",
+                "type[Circle]: true",
+                "Shape: false",
+                "Circle | Any: false",
+                "type[Circle | Any]: false",
+                "unknown@f: false",
+            ]
+        );
+        Ok(())
+    }
 
     /// what [`super::new_attribute_obstacle`] says of each class in `source`, by name
     fn new_attribute_obstacles(source: &str) -> anyhow::Result<Vec<String>> {

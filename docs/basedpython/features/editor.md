@@ -627,6 +627,59 @@ the same and `target`, the URI of an existing `.py` or `.by` file of the project
 left as they were, each with its file and line, or `{refused, warnings}`, the reason
 nothing is moved. two edits at one position of a file apply in the order listed
 
+### pulling members up and pushing them down
+
+a class's members — a method, with the accessors or overloads that share its name,
+or a class attribute — move into one of the project's classes it inherits from
+with `by/pullMembersUp`, or into the project's classes that name it as a base with
+`by/pushMembersDown`, a copy into each that does not define the member itself. each
+moves with its decorators and the comments above it, reindented for the body it
+lands in: attributes before the methods, methods after them, in the order they
+were written
+
+either is refused, with the reason, where the program would no longer mean what it
+meant:
+
+- pulled up, a member that reads an attribute of `self` the superclass does not
+    have — which the superclass's other subclasses would miss — unless that is pulled
+    up with it; that calls `super()` from a class whose one base is not the
+    superclass; that a class below the superclass would then find in another class
+    than it does, by its method resolution order — another subclass that finds it
+    in a mixin or above the superclass, or the class itself in a class it finds
+    before the superclass; that reads, where the class body evaluates it — a value,
+    a default, a decorator — a name the class body binds that is not pulled with it,
+    or a name bound after the superclass is defined; or that the superclass has
+    already
+- pushed down, a member something reads off the class itself, or off what may be an
+    instance of the class rather than of a subclass — another of the class's methods,
+    through `self`, included — or of a class nothing in the project subclasses
+- a name-mangled `__member`, whose name depends on the class it is written in, a
+    method that reads `__class__`, which is the class it is written in, a member that
+    reads a name one class finds in a scope around it — a function it is defined in,
+    say — and the other finds elsewhere, and, between modules, a member that reads one
+    of its module's own names that the other module would have to import from a module
+    that imports it, or for any reason a moved
+    function is refused for between modules ([moving a definition](#moving-a-definition)):
+    a `global` write, a name its module binds more than once, a private name, an
+    attribute of its module object, a builtin or a name the other module binds to
+    something else. the imports a member reads go with it
+
+`override` follows the move. a method pulled up where nothing above has its name
+overrides nothing there, so it loses the modifier, and the methods of that name
+below the superclass now override it and gain one — `override def` in basedpython,
+`@override` with its import in python. a method pushed down keeps it only where
+something above still has the name, and a subclass's own method of that name loses
+it once nothing above has the name
+
+`by/prepareMoveMembers` takes `textDocument` and `position` (anywhere in a class)
+and answers `{class, members, superclasses, subclasses}`: the class and the classes
+of the project above it, nearest first, and below it, each `{name, qualifiedName, uri, range}` with `range` its name; and its members, each `{name, kind, range}`,
+`kind` one of `method`, `classmethod`, `staticmethod`, `property` and `attribute`;
+`null` outside a class. `by/pullMembersUp` takes the same position, `members`, the
+names to move, and `target`, a superclass's `qualifiedName`; `by/pushMembersDown`
+takes the position and `members`. both answer as `by/moveSymbol` does,
+`{edit, warnings}` or `{refused, warnings}`
+
 ## unwrap and remove
 
 `by/unwrap` answers what an editor's *unwrap/remove* offers around a range, innermost

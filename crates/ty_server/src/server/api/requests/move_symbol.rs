@@ -14,7 +14,7 @@ use ruff_db::files::{FileRange, system_path_to_file};
 use ruff_db::system::SystemPathBuf;
 use ruff_text_size::Ranged;
 use rustc_hash::FxHashMap;
-use ty_ide::{MovableKind, movable_symbol, move_symbol};
+use ty_ide::{MovableKind, SymbolMove, movable_symbol, move_symbol};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{FileRangeExt, PositionExt};
@@ -197,12 +197,6 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
         else {
             return Ok(None);
         };
-        let refused = |reason: &str| {
-            Ok(Some(MoveSymbolAnswer {
-                refused: Some(reason.to_string()),
-                ..MoveSymbolAnswer::default()
-            }))
-        };
         let Some(target) = params
             .target
             .to_file_path()
@@ -210,12 +204,35 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
             .and_then(|path| SystemPathBuf::from_path_buf(path).ok())
             .and_then(|path| system_path_to_file(db, &path).ok())
         else {
-            return refused("the target is not a file that exists");
+            return Ok(Some(MoveSymbolAnswer::of(
+                db,
+                snapshot,
+                Err("the target is not a file that exists".to_string()),
+            )));
         };
 
-        let moved = match move_symbol(db, db.program_file(file), offset, target) {
+        Ok(Some(MoveSymbolAnswer::of(
+            db,
+            snapshot,
+            move_symbol(db, db.program_file(file), offset, target),
+        )))
+    }
+}
+
+impl MoveSymbolAnswer {
+    /// The answer to a move: its edits as a workspace edit and its warnings, or why it refused.
+    pub(super) fn of(
+        db: &ProjectDatabase,
+        snapshot: &DocumentSnapshot,
+        moved: Result<SymbolMove, String>,
+    ) -> Self {
+        let refused = |reason: String| MoveSymbolAnswer {
+            refused: Some(reason),
+            ..MoveSymbolAnswer::default()
+        };
+        let moved = match moved {
             Ok(moved) => moved,
-            Err(reason) => return refused(&reason),
+            Err(reason) => return refused(reason),
         };
         let mut changes: FxHashMap<Uri, Vec<TextEdit>> = FxHashMap::default();
         for file_edit in moved.edits {
@@ -223,14 +240,14 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
                 .to_lsp_range(db, snapshot.encoding())
                 .and_then(|range| range.to_location())
             else {
-                return refused("a file the move changes cannot be edited");
+                return refused("a file the move changes cannot be edited".to_string());
             };
             changes.entry(location.uri).or_default().push(TextEdit {
                 range: location.range,
                 new_text: file_edit.edit.content().unwrap_or_default().to_string(),
             });
         }
-        Ok(Some(MoveSymbolAnswer {
+        MoveSymbolAnswer {
             edit: Some(WorkspaceEdit {
                 changes: Some(changes.into_iter().collect()),
                 document_changes: None,
@@ -238,7 +255,7 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
             }),
             refused: None,
             warnings: moved.warnings,
-        }))
+        }
     }
 }
 

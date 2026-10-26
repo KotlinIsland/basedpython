@@ -15,6 +15,7 @@
 //! hands its edits back rather than throwing them away, and the caller tells it
 //! which refactorings to consider rather than being given all of them.
 
+mod class_members;
 mod data_class;
 mod evaluation;
 mod extract_function;
@@ -40,6 +41,10 @@ use ty_python_semantic::SemanticModel;
 
 use crate::FileEdit;
 
+pub use class_members::{
+    ClassMember, HierarchyClass, MemberKind, MovableMembers, movable_members, pull_members_up,
+    push_members_down,
+};
 pub use move_symbol::{MovableKind, MovableSymbol, SymbolMove, movable_symbol, move_symbol};
 
 /// The refactorings the server knows how to perform.

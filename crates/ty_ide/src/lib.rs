@@ -110,8 +110,9 @@ pub use override_members::{
 };
 pub use pasted_imports::{CopiedCode, CopiedImport, PastedImports, copied_imports, pasted_imports};
 pub use refactor::{
-    MovableKind, MovableSymbol, Refactor, RefactorKind, RefactorOffer, SymbolMove, movable_symbol,
-    move_symbol, refactor, refactors,
+    ClassMember, HierarchyClass, MemberKind, MovableKind, MovableMembers, MovableSymbol, Refactor,
+    RefactorKind, RefactorOffer, SymbolMove, movable_members, movable_symbol, move_symbol,
+    pull_members_up, push_members_down, refactor, refactors,
 };
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};

@@ -34,6 +34,7 @@ use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_diagnostics::Edit;
 use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_python_codegen::Stylist;
@@ -45,7 +46,7 @@ use ty_project::Db;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::DefinitionKind;
 use ty_python_core::scope::FileScopeId;
-use ty_python_core::semantic_index;
+use ty_python_core::{SemanticIndex, semantic_index};
 use ty_python_semantic::importer::{ImportAction, ImportRequest, MembersInScope};
 use ty_python_semantic::types::Type;
 use ty_python_semantic::{HasType, SemanticModel};
@@ -186,11 +187,48 @@ pub fn move_symbol(
         return Err(format!("{target_module} has a `{name}` already"));
     }
 
+    // a `global` in the definition names the module it is in, which the move changes
+    if let Some(written) = global_written_by(db, index, declaration.statement.range()) {
+        return Err(format!(
+            "`{name}` assigns {source_module}'s `{written}` through `global`, which would name \
+             {target_module}'s once moved"
+        ));
+    }
+
     // What the definition reads from its module comes with it.
     let dependencies = dependencies(db, source, &parsed, declaration.statement, name);
     let mut target_imports: Vec<OwnedRequest> = Vec::new();
     let mut from_source: Vec<String> = Vec::new();
+    for builtin in builtins_read(db, source, declaration.statement) {
+        if target_binds(&builtin) {
+            return Err(format!(
+                "`{name}` uses the builtin `{builtin}`, which {target_module} binds to something \
+                 else"
+            ));
+        }
+    }
     for dependency in &dependencies {
+        let read = match dependency {
+            Dependency::Imported { request, .. } => &request.binds,
+            Dependency::Sibling(sibling) => sibling,
+        };
+        if globals.symbol_id(read).is_some_and(|symbol| {
+            bindings_of_symbol(
+                db,
+                index,
+                &parsed,
+                FileScopeId::global(),
+                symbol,
+                source_type.is_stub(),
+            )
+            .len()
+                > 1
+        }) {
+            return Err(format!(
+                "`{name}` uses `{read}`, which {source_module} binds more than once, and an import \
+                 of it would keep only the value it had when imported"
+            ));
+        }
         match dependency {
             Dependency::Imported { request, .. } => {
                 if target_binds(&request.binds)
@@ -288,6 +326,15 @@ pub fn move_symbol(
             request,
         } = dependency
             && !used_elsewhere(&parsed, &request.binds, statement_range)
+            && !imported_from(
+                db,
+                source,
+                &parsed,
+                &model,
+                *binding_statement,
+                *alias_index,
+                &source_module,
+            )
             && let Some(edit) = remove_alias(
                 source_text,
                 parsed.suite(),
@@ -390,7 +437,68 @@ pub fn move_symbol(
             &mut moved,
         );
     }
+    moved.edits = disjoint(db, moved.edits)?;
     Ok(moved)
+}
+
+/// `edits` without two that overlap, which an editor would refuse. each removal of a statement
+/// takes the blank lines around it, so two removed next to each other both claim the lines
+/// between them: overlapping removals are made one. an insertion inside a removal goes where the
+/// removal starts, which keeps it in the same place among what is left. any other overlap is
+/// refused
+fn disjoint(db: &dyn Db, edits: Vec<FileEdit>) -> Result<Vec<FileEdit>, String> {
+    let mut by_file: FxHashMap<File, Vec<Edit>> = FxHashMap::default();
+    let mut files: Vec<File> = Vec::new();
+    for edit in edits {
+        if !by_file.contains_key(&edit.file) {
+            files.push(edit.file);
+        }
+        by_file.entry(edit.file).or_default().push(edit.edit);
+    }
+    let mut disjoint = Vec::new();
+    for file in files {
+        let edits = by_file.remove(&file).unwrap_or_default();
+        let (removals, others): (Vec<Edit>, Vec<Edit>) = edits
+            .into_iter()
+            .partition(|edit| edit.content().is_none_or(str::is_empty) && !edit.range().is_empty());
+        let mut ranges: Vec<TextRange> = removals.iter().map(Ranged::range).collect();
+        ranges.sort_by_key(|range| (range.start(), range.end()));
+        let mut merged: Vec<TextRange> = Vec::new();
+        for range in ranges {
+            match merged.last_mut() {
+                Some(last) if range.start() < last.end() => *last = last.cover(range),
+                _ => merged.push(range),
+            }
+        }
+        let mut edits: Vec<Edit> = merged.into_iter().map(Edit::range_deletion).collect();
+        for edit in others {
+            let inside = edits.iter().find_map(|removal| {
+                (edit.range().is_empty()
+                    && removal.start() < edit.start()
+                    && edit.start() < removal.end())
+                .then(|| removal.start())
+            });
+            edits.push(match inside {
+                Some(start) => {
+                    Edit::insertion(edit.content().unwrap_or_default().to_string(), start)
+                }
+                None => edit,
+            });
+        }
+        let mut ranges: Vec<TextRange> = edits.iter().map(Ranged::range).collect();
+        ranges.sort_by_key(|range| (range.start(), range.end()));
+        if ranges
+            .windows(2)
+            .any(|pair| pair[0].end() > pair[1].start())
+        {
+            return Err(format!(
+                "the move would make edits to {} that overlap",
+                file.path(db)
+            ));
+        }
+        disjoint.extend(edits.into_iter().map(|edit| FileEdit { file, edit }));
+    }
+    Ok(disjoint)
 }
 
 /// The file and offset of the top-level declaration named at `offset`: `offset` itself when it is
@@ -474,16 +582,16 @@ impl<'a> Declaration<'a> {
 
 /// An import request whose strings it owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OwnedRequest {
-    module: String,
-    member: Option<String>,
-    asname: Option<String>,
+pub(super) struct OwnedRequest {
+    pub(super) module: String,
+    pub(super) member: Option<String>,
+    pub(super) asname: Option<String>,
     /// The name the import binds.
-    binds: String,
+    pub(super) binds: String,
 }
 
 impl OwnedRequest {
-    fn request(&self) -> ImportRequest<'_> {
+    pub(super) fn request(&self) -> ImportRequest<'_> {
         match (&self.member, &self.asname) {
             (Some(member), Some(asname)) => {
                 ImportRequest::import_from_as(&self.module, member, asname)
@@ -497,7 +605,7 @@ impl OwnedRequest {
 
 /// A name a definition reads from the top level of its module.
 #[derive(Debug)]
-enum Dependency {
+pub(super) enum Dependency {
     /// A name one of the module's imports binds, as the import that binds it.
     Imported {
         /// The start of the statement that imports it, or `None` for a star import, which binds
@@ -511,35 +619,19 @@ enum Dependency {
 }
 
 /// The names `statement` reads from the top level of `file`, other than `name`, which it defines.
-fn dependencies(
+pub(super) fn dependencies(
     db: &dyn Db,
     file: ProgramFile<'_>,
     parsed: &ParsedModuleRef,
     statement: &Stmt,
     name: &str,
 ) -> Vec<Dependency> {
-    struct Loads<'a> {
-        names: Vec<&'a ast::ExprName>,
-    }
-    impl<'a> SourceOrderVisitor<'a> for Loads<'a> {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Name(name) = expr
-                && name.ctx.is_load()
-            {
-                self.names.push(name);
-            }
-            walk_expr(self, expr);
-        }
-    }
-    let mut loads = Loads { names: Vec::new() };
-    loads.visit_stmt(statement);
-
     let index = semantic_index(db, file);
     let globals = index.place_table(FileScopeId::global());
     let importing_file = ImportingFile::File(file.file(db), file.resolver_environment(db));
     let mut seen = FxHashSet::default();
     let mut dependencies = Vec::new();
-    for load in loads.names {
+    for load in loads(statement) {
         let id = load.id.as_str();
         if id == name || !seen.insert(id) {
             continue;
@@ -616,9 +708,141 @@ fn dependencies(
     dependencies
 }
 
+/// the names `statement` reads
+fn loads(statement: &Stmt) -> Vec<&ast::ExprName> {
+    struct Loads<'a> {
+        names: Vec<&'a ast::ExprName>,
+    }
+    impl<'a> SourceOrderVisitor<'a> for Loads<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+            {
+                self.names.push(name);
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut loads = Loads { names: Vec::new() };
+    loads.visit_stmt(statement);
+    loads.names
+}
+
+/// the names `statement` reads that no scope of `file` binds, the builtins among them
+fn builtins_read(db: &dyn Db, file: ProgramFile<'_>, statement: &Stmt) -> Vec<String> {
+    let index = semantic_index(db, file);
+    let mut read: Vec<String> = Vec::new();
+    for load in loads(statement) {
+        let id = load.id.as_str();
+        if let Some(scope) = index.try_expression_scope_id(&ast::ExprRef::Name(load))
+            && resolving_scope(index, scope, id).is_none()
+            && !read.iter().any(|seen| seen == id)
+        {
+            read.push(id.to_string());
+        }
+    }
+    read
+}
+
+/// a name of the module's own that a `global` in a scope inside `range` assigns
+fn global_written_by(db: &dyn Db, index: &SemanticIndex<'_>, range: TextRange) -> Option<String> {
+    index
+        .use_def_map(FileScopeId::global())
+        .definitions_with_usage()
+        .find_map(|(_, definition, _)| match definition.kind(db) {
+            DefinitionKind::NestedBindings(nested) => nested
+                .nested_declarations
+                .iter()
+                .any(|declaration| {
+                    declaration.is_global()
+                        && declaration.is_bound
+                        && range.contains_range(declaration.range)
+                })
+                .then(|| nested.name.to_string()),
+            _ => None,
+        })
+}
+
+/// whether a module of the project other than `file` reads the name the import starting at
+/// `statement` binds, alias `alias_index`, from `file`'s module: imports it from there, reads it
+/// as an attribute of the module, or reads it through a star import of the module
+fn imported_from(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    parsed: &ParsedModuleRef,
+    model: &SemanticModel<'_>,
+    statement: TextSize,
+    alias_index: usize,
+    module: &ModuleName,
+) -> bool {
+    let Some(alias) = parsed
+        .suite()
+        .iter()
+        .find(|stmt| stmt.start() == statement)
+        .and_then(|stmt| match stmt {
+            Stmt::Import(import) => import.names.get(alias_index),
+            Stmt::ImportFrom(from) => from.names.get(alias_index),
+            _ => None,
+        })
+    else {
+        // what cannot be looked up is kept
+        return true;
+    };
+    let binding = alias.asname.as_ref().unwrap_or(&alias.name);
+    let Some(goto) = find_goto_target(model, parsed, binding.start()) else {
+        return true;
+    };
+    let file_id = file.file(db);
+    let mut reads_by_file: FxHashMap<File, Vec<TextRange>> = FxHashMap::default();
+    for reference in
+        references(db, file, &goto, ReferencesMode::RenameMultiFile).unwrap_or_default()
+    {
+        if reference.file() != file_id {
+            reads_by_file
+                .entry(reference.file())
+                .or_default()
+                .push(reference.range());
+        }
+    }
+    reads_by_file.into_iter().any(|(other, ranges)| {
+        let other = ProgramFile::new(db, other, file.program(db));
+        let parsed = parsed_module(db, other.python_file(db)).load(db);
+        let model = SemanticModel::new(db, other);
+        let importing_file = ImportingFile::File(other.file(db), other.resolver_environment(db));
+        let from_module = |from: &ast::StmtImportFrom| {
+            ModuleName::from_import_statement(db, importing_file, from)
+                .is_ok_and(|imported| &imported == module)
+        };
+        let star_imports_module = parsed.suite().iter().any(|stmt| {
+            matches!(stmt, Stmt::ImportFrom(from)
+                if from.names.iter().any(|alias| alias.name.as_str() == "*") && from_module(from))
+        });
+        ranges.iter().any(|range| {
+            let covering = covering_node(parsed.syntax().into(), *range);
+            if let Some(from) = covering.ancestors().find_map(|node| match node {
+                AnyNodeRef::StmtImportFrom(from) => Some(from),
+                _ => None,
+            }) {
+                return from_module(from);
+            }
+            match covering
+                .ancestors()
+                .find(|node| !matches!(node, AnyNodeRef::Identifier(_)))
+            {
+                Some(AnyNodeRef::ExprAttribute(attribute)) => matches!(
+                    attribute.value.inferred_type(&model),
+                    Some(Type::ModuleLiteral(literal)) if literal.module(db).name(db) == module
+                ),
+                Some(AnyNodeRef::ExprName(_)) => star_imports_module,
+                _ => false,
+            }
+        })
+    })
+}
+
 /// Whether `name` is private to its module by python's convention: it starts with an underscore
 /// and is not a dunder.
-fn is_private(name: &str) -> bool {
+pub(super) fn is_private(name: &str) -> bool {
     name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__"))
 }
 
@@ -651,7 +875,7 @@ fn target_imports_same(
 }
 
 /// Whether a top-level import of `file` imports `module`, or something from it.
-fn imports_module(
+pub(super) fn imports_module(
     db: &dyn Db,
     file: ProgramFile<'_>,
     parsed: &ParsedModuleRef,
@@ -711,16 +935,18 @@ fn used_elsewhere(parsed: &ParsedModuleRef, name: &str, except: TextRange) -> bo
 }
 
 /// The text a cut takes, and the range it removes from the module.
-struct Cut {
+pub(super) struct Cut {
     /// The definition with its decorators and the comments directly above it, ending in a line
     /// break.
-    text: String,
+    pub(super) text: String,
+    /// Where `text` starts in the module.
+    pub(super) start: TextSize,
     /// Its lines and the blank lines that separated it from the statement after it, or, when it is
     /// the last statement, from the one before.
-    removed: TextRange,
+    pub(super) removed: TextRange,
 }
 
-fn cut_range(source: &str, suite: &[Stmt], index: usize) -> Cut {
+pub(super) fn cut_range(source: &str, suite: &[Stmt], index: usize) -> Cut {
     let statement = &suite[index];
     let floor = index
         .checked_sub(1)
@@ -768,7 +994,8 @@ fn cut_range(source: &str, suite: &[Stmt], index: usize) -> Cut {
         }
         TextRange::new(start, removed_end)
     } else {
-        // the last statement takes the blank lines above it, and everything after it
+        // the last statement of its suite takes the blank lines above it, and at the end of the
+        // file the blank lines after it
         let mut removed_start = start;
         while removed_start > floor {
             let previous = source.line_start(removed_start - TextSize::from(1));
@@ -780,9 +1007,18 @@ fn cut_range(source: &str, suite: &[Stmt], index: usize) -> Cut {
             }
             removed_start = previous;
         }
-        TextRange::new(removed_start, TextSize::of(source))
+        let removed_end = if source[end.to_usize()..].trim().is_empty() {
+            TextSize::of(source)
+        } else {
+            end
+        };
+        TextRange::new(removed_start, removed_end)
     };
-    Cut { text, removed }
+    Cut {
+        text,
+        start,
+        removed,
+    }
 }
 
 /// The text appended to the end of the target: the definition, set apart from what is above it
@@ -961,7 +1197,7 @@ fn rewrite_references(
                     continue;
                 };
                 if from.names.len() == 1 {
-                    if let Some(module_range) = from_module_range(text, from) {
+                    if let Some(module_range) = from_module_range(&parsed, from) {
                         moved.edits.push(FileEdit {
                             file: file_id,
                             edit: Edit::range_replacement(target_module.to_string(), module_range),
@@ -989,23 +1225,46 @@ fn rewrite_references(
                         actions.push(importer.import(request, &MembersInScope::empty(from.end())));
                     } else {
                         // an import inside a function: the new one goes on the line after it
-                        let indentation =
-                            &text[TextRange::new(text.line_start(from.start()), from.start())];
+                        // when it is a line of its own, and after it on its line otherwise,
+                        // which keeps it in the same block and before anything after it
                         let statement = match &alias.asname {
                             Some(asname) => {
                                 format!("from {target_module} import {name} as {asname}")
                             }
                             None => format!("from {target_module} import {name}"),
                         };
-                        moved.edits.push(FileEdit {
-                            file: file_id,
-                            edit: Edit::insertion(
+                        let tokens = parsed.tokens();
+                        let starts_line = tokens.before(from.start()).last().is_none_or(|token| {
+                            matches!(
+                                token.kind(),
+                                TokenKind::Newline
+                                    | TokenKind::NonLogicalNewline
+                                    | TokenKind::Indent
+                                    | TokenKind::Dedent
+                            )
+                        });
+                        let ends_line = tokens.after(from.end()).first().is_none_or(|token| {
+                            matches!(
+                                token.kind(),
+                                TokenKind::Newline | TokenKind::Comment | TokenKind::EndOfFile
+                            )
+                        });
+                        let edit = if starts_line && ends_line {
+                            let indentation =
+                                &text[TextRange::new(text.line_start(from.start()), from.start())];
+                            Edit::insertion(
                                 format!(
                                     "{indentation}{statement}{}",
                                     stylist.line_ending().as_str()
                                 ),
                                 text.full_line_end(from.end()),
-                            ),
+                            )
+                        } else {
+                            Edit::insertion(format!("; {statement}"), from.end())
+                        };
+                        moved.edits.push(FileEdit {
+                            file: file_id,
+                            edit,
                         });
                     }
                 }
@@ -1073,30 +1332,33 @@ fn rewrite_references(
     );
 }
 
-/// The range of the module a `from` import names, its leading dots included.
-fn from_module_range(source: &str, from: &ast::StmtImportFrom) -> Option<TextRange> {
-    let start = from.start() + TextSize::try_from(source[from.range()].find("from")? + 4).ok()?;
-    let end = from.names.first()?.start();
-    let between = &source[TextRange::new(start, end)];
-    let keyword = between
-        .rfind(" import")
-        .or_else(|| between.rfind(" export"))?;
-    let module = &between[..keyword];
-    let leading = module.len() - module.trim_start().len();
-    let trailing = module.trim_end().len();
-    Some(TextRange::new(
-        start + TextSize::try_from(leading).ok()?,
-        start + TextSize::try_from(trailing).ok()?,
-    ))
+/// The range of the module a `from` import names, its leading dots included: from the token
+/// after `from` to the end of the module's name, or of its dots when it has none.
+fn from_module_range(parsed: &ParsedModuleRef, from: &ast::StmtImportFrom) -> Option<TextRange> {
+    let mut tokens = parsed.tokens().in_range(from.range()).iter();
+    let keyword = tokens.next()?;
+    if keyword.kind() != TokenKind::From {
+        return None;
+    }
+    let first = tokens.next()?;
+    let end = match &from.module {
+        Some(module) => module.end(),
+        None => std::iter::once(first)
+            .chain(tokens)
+            .take_while(|token| matches!(token.kind(), TokenKind::Dot | TokenKind::Ellipsis))
+            .last()?
+            .end(),
+    };
+    Some(TextRange::new(first.start(), end))
 }
 
 /// The one-based line `offset` is on.
-fn line_number(source: &str, offset: TextSize) -> usize {
+pub(super) fn line_number(source: &str, offset: TextSize) -> usize {
     source[..offset.to_usize()].matches('\n').count() + 1
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::fmt::Write as _;
 
     use insta::assert_snapshot;
@@ -1162,6 +1424,61 @@ X = os.sep
             .build()
     }
 
+    /// Every file `moved` changes, as it is afterwards, and its warnings; or why it refused.
+    pub(in crate::refactor) fn rendered(
+        db: &ty_project::TestDb,
+        moved: Result<super::SymbolMove, String>,
+    ) -> String {
+        let moved = match moved {
+            Ok(moved) => moved,
+            Err(reason) => return format!("refused: {reason}"),
+        };
+        let mut files: Vec<_> = moved.edits.iter().map(|edit| edit.file).collect();
+        files.sort_by_key(|file| file.path(db).as_str().to_string());
+        files.dedup();
+        let mut out = String::new();
+        for file in files {
+            let mut text = source_text(db, file).as_str().to_string();
+            let mut edits: Vec<_> = moved
+                .edits
+                .iter()
+                .filter(|edit| edit.file == file)
+                .enumerate()
+                .collect();
+            let mut ranges: Vec<_> = edits.iter().map(|(_, edit)| edit.edit.range()).collect();
+            ranges.sort_by_key(|range| (range.start(), range.end()));
+            for pair in ranges.windows(2) {
+                assert!(
+                    pair[0].end() <= pair[1].start(),
+                    "edits to {} overlap, which an editor refuses: {:?} and {:?}",
+                    file.path(db),
+                    pair[0],
+                    pair[1]
+                );
+            }
+            // applied from the end, a removal before an insertion where it starts; of two
+            // insertions at one place, the one listed first ends up first
+            edits.sort_by_key(|(order, edit)| {
+                (
+                    std::cmp::Reverse(edit.edit.start()),
+                    std::cmp::Reverse(edit.edit.end()),
+                    std::cmp::Reverse(*order),
+                )
+            });
+            for (_, edit) in edits {
+                text.replace_range(
+                    edit.edit.range().to_std_range(),
+                    edit.edit.content().unwrap_or_default(),
+                );
+            }
+            let _ = write!(out, "--- {}\n{text}", file.path(db));
+        }
+        for warning in moved.warnings {
+            let _ = writeln!(out, "warning: {warning}");
+        }
+        out
+    }
+
     impl CursorTest {
         /// Every module the move to `mv/dst.py` changes, as it is afterwards, or why it refuses.
         fn move_to_dst(&self) -> String {
@@ -1174,41 +1491,7 @@ X = os.sep
                     target,
                 )
             });
-            let moved = match moved {
-                Ok(moved) => moved,
-                Err(reason) => return format!("refused: {reason}"),
-            };
-            let mut files: Vec<_> = moved.edits.iter().map(|edit| edit.file).collect();
-            files.sort_by_key(|file| file.path(&self.db).as_str().to_string());
-            files.dedup();
-            let mut out = String::new();
-            for file in files {
-                let mut text = source_text(&self.db, file).as_str().to_string();
-                let mut edits: Vec<_> = moved
-                    .edits
-                    .iter()
-                    .filter(|edit| edit.file == file)
-                    .enumerate()
-                    .collect();
-                // applied from the end; of two at one place, the one listed first ends up first
-                edits.sort_by_key(|(order, edit)| {
-                    (
-                        std::cmp::Reverse(edit.edit.start()),
-                        std::cmp::Reverse(*order),
-                    )
-                });
-                for (_, edit) in edits {
-                    text.replace_range(
-                        edit.edit.range().to_std_range(),
-                        edit.edit.content().unwrap_or_default(),
-                    );
-                }
-                let _ = write!(out, "--- {}\n{text}", file.path(&self.db));
-            }
-            for warning in moved.warnings {
-                let _ = writeln!(out, "warning: {warning}");
-            }
-            out
+            rendered(&self.db, moved)
         }
     }
 
@@ -1401,5 +1684,217 @@ X = os.sep
             .source("mv/dst.py", "f = 1\n")
             .build();
         assert_snapshot!(test.move_to_dst(), @"refused: mv.dst has a `f` already");
+    }
+
+    /// a project of `mv/src.py`, `mv/dst.py` and the modules `others` names, by path and source
+    fn modules(src: &str, dst: &str, others: &[(&str, &str)]) -> CursorTest {
+        let mut builder = CursorTestBuilder::default();
+        builder
+            .source("mv/__init__.py", "")
+            .source("mv/src.py", src)
+            .source("mv/dst.py", dst);
+        for (path, source) in others {
+            builder.source(*path, source);
+        }
+        builder.build()
+    }
+
+    /// the import the definition takes with it and the definition itself are cut together, with
+    /// the blank lines between them, which both cuts would otherwise claim
+    #[test]
+    fn an_import_and_the_definition_after_it_are_cut_together() {
+        let test = modules(
+            "import math\n\n\ndef <CURSOR>area(r): return math.pi*r*r\n",
+            "",
+            &[],
+        );
+        assert_snapshot!(test.move_to_dst(), @"
+        --- /mv/dst.py
+        import math
+
+
+        def area(r): return math.pi*r*r
+        --- /mv/src.py
+        ");
+    }
+
+    /// another module imports the name from the old module, so the import stays
+    #[test]
+    fn an_import_another_module_imports_from_the_old_one_is_kept() {
+        let test = modules(
+            &SRC.replace("def free(x)", "def <CURSOR>free(x)"),
+            DST,
+            &[(
+                "mv/user.py",
+                "from mv.src import OrderedDict\n\nprint(OrderedDict())\n",
+            )],
+        );
+        assert_snapshot!(test.move_to_dst(), @r#"
+        --- /mv/dst.py
+        """Destination."""
+
+        import os
+        from collections import OrderedDict
+
+        X = os.sep
+
+
+        def free(x):
+            return OrderedDict(x=x)
+        --- /mv/src.py
+        import math
+        from collections import OrderedDict
+
+        __all__ = ["RATE", "area", "helper"]
+
+        RATE = 2
+        _SECRET = 3
+
+
+        def helper(x):
+            return x * RATE
+
+
+        @staticmethod
+        def area(r):
+            """Area of a circle."""
+            return math.pi * r * r * RATE
+
+
+        def uses_private(x):
+            return x + _SECRET
+        "#);
+    }
+
+    /// a module that imports the name from where the old module does needs nothing from the old
+    /// module, so the import goes
+    #[test]
+    fn an_import_another_module_makes_itself_is_dropped() {
+        let test = modules(
+            "from collections import OrderedDict\n\n\ndef <CURSOR>free(x):\n    return OrderedDict(x=x)\n",
+            "",
+            &[(
+                "mv/user.py",
+                "from collections import OrderedDict\n\nprint(OrderedDict())\n",
+            )],
+        );
+        assert_snapshot!(test.move_to_dst(), @"
+        --- /mv/dst.py
+        from collections import OrderedDict
+
+
+        def free(x):
+            return OrderedDict(x=x)
+        --- /mv/src.py
+        ");
+        let star = modules(
+            "from collections import OrderedDict\n\n\ndef <CURSOR>free(x):\n    return OrderedDict(x=x)\n",
+            "",
+            &[(
+                "mv/user.py",
+                "from mv.src import *\n\nprint(OrderedDict())\n",
+            )],
+        );
+        assert_snapshot!(star.move_to_dst(), @"
+        --- /mv/dst.py
+        from collections import OrderedDict
+
+
+        def free(x):
+            return OrderedDict(x=x)
+        --- /mv/src.py
+        from collections import OrderedDict
+        ");
+    }
+
+    /// moved, `global COUNT` would name the target's `COUNT`, not the one the old module reads
+    #[test]
+    fn a_definition_that_assigns_a_global_of_its_module_is_refused() {
+        let test = modules(
+            "COUNT = 0\n\n\ndef <CURSOR>bump():\n    global COUNT\n    COUNT += 1\n",
+            "",
+            &[],
+        );
+        assert_snapshot!(test.move_to_dst(), @"refused: `bump` assigns mv.src's `COUNT` through `global`, which would name mv.dst's once moved");
+    }
+
+    /// an import of a name the old module rebinds would keep the value it had when imported
+    #[test]
+    fn a_definition_that_reads_a_name_its_module_rebinds_is_refused() {
+        let test = modules(
+            "COUNT = 0\n\n\ndef bump():\n    global COUNT\n    COUNT += 1\n\n\ndef <CURSOR>show():\n    return COUNT\n",
+            "",
+            &[],
+        );
+        assert_snapshot!(test.move_to_dst(), @"refused: `show` uses `COUNT`, which mv.src binds more than once, and an import of it would keep only the value it had when imported");
+    }
+
+    /// the target's own `len` would be read in place of the builtin
+    #[test]
+    fn a_builtin_the_target_binds_is_refused() {
+        let test = modules(
+            "def <CURSOR>size(x):\n    return len(x)\n",
+            "len = 3\n",
+            &[],
+        );
+        assert_snapshot!(test.move_to_dst(), @"refused: `size` uses the builtin `len`, which mv.dst binds to something else");
+    }
+
+    /// the module of an import is found by its tokens, so a comment that says `import` is not
+    /// taken for the keyword
+    #[test]
+    fn an_import_with_a_comment_is_pointed_at_the_new_module() {
+        let test = modules(
+            "def <CURSOR>area(r):\n    return r * r\n",
+            "",
+            &[(
+                "mv/user.py",
+                "from mv.src import (  # import area\n    area,\n)\n\nprint(area(1))\n",
+            )],
+        );
+        assert_snapshot!(test.move_to_dst(), @"
+        --- /mv/dst.py
+        def area(r):
+            return r * r
+        --- /mv/src.py
+        --- /mv/user.py
+        from mv.dst import (  # import area
+            area,
+        )
+
+        print(area(1))
+        ");
+    }
+
+    /// an import inside a function that does not start its line gets the new import after it,
+    /// on the same line
+    #[test]
+    fn an_import_that_shares_its_line_is_followed_on_that_line() {
+        let test = modules(
+            "def <CURSOR>area(r):\n    return r * r\n\n\ndef helper():\n    return 1\n",
+            "",
+            &[(
+                "mv/user.py",
+                "def g():\n    x = 1; from mv.src import area, helper\n    return area(x) + helper()\n\n\ndef h():\n    from mv.src import area, helper\n    return area(helper())\n",
+            )],
+        );
+        assert_snapshot!(test.move_to_dst(), @"
+        --- /mv/dst.py
+        def area(r):
+            return r * r
+        --- /mv/src.py
+        def helper():
+            return 1
+        --- /mv/user.py
+        def g():
+            x = 1; from mv.src import helper; from mv.dst import area
+            return area(x) + helper()
+
+
+        def h():
+            from mv.src import helper
+            from mv.dst import area
+            return area(helper())
+        ");
     }
 }

@@ -249,6 +249,19 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::MoveSymbolRequestHandler::METHOD => background_document_request_task::<
             requests::MoveSymbolRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::PrepareMoveMembersRequestHandler::METHOD => background_document_request_task::<
+            requests::PrepareMoveMembersRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
+        requests::PullMembersUpRequestHandler::METHOD => background_document_request_task::<
+            requests::PullMembersUpRequestHandler,
+        >(req, BackgroundSchedule::Worker),
+        requests::PushMembersDownRequestHandler::METHOD => background_document_request_task::<
+            requests::PushMembersDownRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
