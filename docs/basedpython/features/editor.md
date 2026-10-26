@@ -682,6 +682,42 @@ name. a called class is the class, not the `__init__` the call runs, and a
 decorated `def` is the `def`. the answer is `null` where there is no name, and
 for a name whose definitions declare different things
 
+## type info
+
+an editor's *type info* shows the type of an expression, and which expression
+is meant depends on more than the name under the cursor: on `text` in
+`len(text) + 1`, a reader may be asking about `text`, about `len(text)` or about
+the sum. the editor asks `by/expressionTypes` with the selection, or an empty
+range at the caret:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "range": {
+    "start": { "line": 1, "character": 17 },
+    "end": { "line": 1, "character": 17 }
+  }
+}
+```
+
+and the answer is every expression of the statement that contains the whole
+range, innermost first, each with its `range` and its `type` as the document's
+language spells it:
+
+```json
+[
+  { "range": { "start": { "line": 1, "character": 15 }, "end": { "line": 1, "character": 19 } }, "type": "str" },
+  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 20 } }, "type": "int" },
+  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 24 } }, "type": "int" }
+]
+```
+
+with a selection the first is the smallest expression containing it, which is
+the selected one when the selection is exactly an expression. an expression ty
+has no type for, such as one inside a string annotation, is left out. the answer
+is an empty list where the range is in no expression, a `def`'s name or a
+keyword, and `null` when language services are off
+
 ## extend selection
 
 `textDocument/selectionRange` grows a selection the way a reader reads the

@@ -243,6 +243,13 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        // asked while a person waits on the popup, like hover
+        requests::ExpressionTypesRequestHandler::METHOD => {
+            background_document_request_task::<requests::ExpressionTypesRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         // asked while a person holds the mouse over a value, like hover
         requests::EvaluatableExpressionRequestHandler::METHOD => {
             background_document_request_task::<requests::EvaluatableExpressionRequestHandler>(

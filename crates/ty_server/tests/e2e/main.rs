@@ -43,6 +43,7 @@ mod declaration;
 mod diagnostic_snapshots;
 mod django_templates;
 mod evaluatable_expression;
+mod expression_types;
 mod file_watching;
 mod folding_range;
 mod goto_definition;
