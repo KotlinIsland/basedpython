@@ -769,7 +769,10 @@ jobs:
           version: "0.13.5"
           checksum: "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a"
           enable-cache: "true"
-          cache-python: true
+          # basedpython: the install below gives the interpreter a minor version link, a
+          # junction on windows, which the cache does not restore as one: every run after
+          # the one that saved it failed to replace it (`os error 267`)
+          cache-python: false
       - name: "Install uv (macOS)"
         if: runner.os == 'macOS'
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
