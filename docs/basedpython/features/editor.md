@@ -337,6 +337,14 @@ field of the class, listed after the members the class body declares. the first
 assignment is its declaration, and a name the class body declares already is not
 listed again
 
+a `def` decorated `@property`, `@cached_property` or `@functools.cached_property`
+is a property, and its `@diameter.setter` or `@diameter.deleter` is the same
+property given another accessor, not a second member. each document symbol's
+`detail` is what the source writes beside the name, on one line and printed
+from the syntax tree rather than copied from the source: a function's
+parameters and return annotation, `(self, radius: float) -> None`, and a class's
+bases, `(Shape)`
+
 ## workspace symbols
 
 `workspace/symbol` gives each python symbol the module and the classes it is

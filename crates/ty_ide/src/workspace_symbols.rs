@@ -8,13 +8,13 @@ use ty_project::{Db, parallel::ParallelIteratorExt};
 /// Get all workspace symbols matching the query string.
 /// Returns symbols from all files in the workspace, filtered by the query.
 ///
-/// A query with dots in it is a qualified name: its last part is matched against the symbol's
+/// a query with dots in it is a qualified name: its last part is matched against the symbol's
 /// name, and the parts before it against what the symbol is declared in, the module's dotted
 /// name and the classes around it. `Shape.describe` finds `describe` in the class `Shape`, and
-/// `base.Sq` the class `Square` of the module `shapes.base`. Each part matches as the whole query
+/// `base.Sq` the class `Square` of the module `shapes.base`. each part matches as the whole query
 /// would, as a subsequence of its letters; the last of the parts before the name matches what
-/// the symbol is directly in, and the rest match, in order, what that is in. A name with dots of
-/// its own, a django template's `base.html`, takes as many of the query's parts as it has.
+/// the symbol is directly in, and the rest match, in order, what that is in. a name with dots of
+/// its own, a django template's `base.html`, takes as many of the query's parts as it has
 pub fn workspace_symbols(db: &dyn Db, query: &str) -> Vec<WorkspaceSymbolInfo> {
     // If the query is empty, return immediately to avoid expensive file scanning
     if query.is_empty() {
@@ -96,9 +96,9 @@ pub fn workspace_symbols(db: &dyn Db, query: &str) -> Vec<WorkspaceSymbolInfo> {
     found
 }
 
-/// Whether the parts of a qualified query before the name match `containers`, what a symbol is
+/// whether the parts of a qualified query before the name match `containers`, what a symbol is
 /// declared in, outermost first: the last part matches the innermost container, and each part
-/// before it a container further out than the one the part after it matched.
+/// before it a container further out than the one the part after it matched
 fn containers_match(query: &[QueryPattern], containers: &[&str]) -> bool {
     let Some((innermost, outer)) = query.split_last() else {
         return true;
@@ -128,9 +128,9 @@ pub struct WorkspaceSymbolInfo {
     pub symbol: SymbolInfo<'static>,
     /// The file containing the symbol
     pub file: File,
-    /// What a python symbol is declared in: the module's dotted name and the classes around it,
+    /// what a python symbol is declared in: the module's dotted name and the classes around it,
     /// `shapes.base.Circle` for a method of `Circle`. `None` for a symbol of a file no module is
-    /// imported from, and for a symbol django contributed.
+    /// imported from, and for a symbol django contributed
     pub declared_in: Option<String>,
     /// what kind of django thing this is, for a symbol django contributed
     ///

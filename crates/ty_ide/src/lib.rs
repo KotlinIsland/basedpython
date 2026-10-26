@@ -80,7 +80,7 @@ pub use django_template::{
     django_template_semantic_tokens, django_template_signature_help, is_django_template_path,
 };
 pub use doc_highlights::document_highlights;
-pub use document_symbols::document_symbols;
+pub use document_symbols::{document_symbols, symbol_detail};
 pub use evaluatable_expression::evaluatable_expression;
 pub use find_references::find_references;
 pub use folding_range::{FoldingRange, FoldingRangeKind, folding_ranges};

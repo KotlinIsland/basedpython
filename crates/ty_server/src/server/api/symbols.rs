@@ -29,7 +29,7 @@ pub(crate) fn convert_symbol_kind(kind: ty_ide::SymbolKind) -> SymbolKind {
 ///
 /// `container` is what the symbol belongs to: for a python symbol the module and the classes it
 /// is declared in, `shapes.base.Circle`, and for a django route or model what it is, which is
-/// how it says so beside the python symbol of the same name.
+/// how it says so beside the python symbol of the same name
 ///
 /// Returns `None` if the symbol's range cannot be converted to a location
 /// (e.g., if the file cannot be converted to a URI).

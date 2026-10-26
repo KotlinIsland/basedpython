@@ -17,6 +17,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ImportingFile, ModuleName, resolve_module};
 use ty_project::Db;
 use ty_python_core::ProgramFile;
+use ty_python_semantic::types::MethodDecorator;
+use ty_python_semantic::types::ide_support::decorated_function;
+use ty_python_semantic::{HasDefinition, SemanticModel};
 
 use crate::completion::CompletionKind;
 
@@ -158,8 +161,8 @@ impl FlatSymbols {
             .filter(|(_, symbol)| query.is_match_symbol(symbol))
     }
 
-    /// The names of the symbols the symbol `id` is nested in, outermost first: `["Circle"]` for
-    /// a method of `Circle`.
+    /// the names of the symbols the symbol `id` is nested in, outermost first: `["Circle"]` for
+    /// a method of `Circle`
     pub(crate) fn container_names(&self, id: SymbolId) -> Vec<&str> {
         let mut names = Vec::new();
         let mut parent = self.symbols.get(id).and_then(|symbol| symbol.parent);
@@ -1255,10 +1258,12 @@ impl<'db> SymbolVisitor<'db> {
         name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
     }
 
-    /// Adds the attributes `class_def`'s methods assign on their receiver, `self.radius` in
+    /// adds the attributes `class_def`'s methods assign on their receiver, `self.radius` in
     /// `self.radius = radius`, as fields of the class: a reader looks for them among its members,
-    /// where the class body itself never declares them. The first assignment of each is the
-    /// declaration, and a name the class body declares is its own already.
+    /// where the class body itself never declares them. a classmethod's receiver is the class,
+    /// and what it assigns is a class attribute, a field as one the class body assigns is; a
+    /// static method has no receiver. the first assignment of each is the declaration, and a
+    /// name the class body declares is its own already
     fn add_instance_attributes(&mut self, class_id: SymbolId, class_def: &'db ast::StmtClassDef) {
         let mut seen: FxHashSet<String> = self
             .symbols
@@ -1283,14 +1288,6 @@ impl<'db> SymbolVisitor<'db> {
             {
                 continue;
             }
-            // a static method's first parameter is not the instance
-            let is_static = method.decorator_list.iter().any(|decorator| {
-                UnqualifiedName::from_expr(&decorator.expression)
-                    .is_some_and(|name| name.segments().last() == Some(&"staticmethod"))
-            });
-            if is_static {
-                continue;
-            }
             let Some(receiver) = method
                 .parameters
                 .posonlyargs
@@ -1305,6 +1302,13 @@ impl<'db> SymbolVisitor<'db> {
                 found: Vec::new(),
             };
             collector.visit_body(&method.body);
+            // the semantic model is asked for the method's kind only when its body assigns on
+            // its first parameter: a method that assigns nothing adds nothing whatever its kind
+            if collector.found.is_empty()
+                || matches!(self.method_kind(method), MethodDecorator::StaticMethod)
+            {
+                continue;
+            }
             for (name, name_range, full_range) in collector.found {
                 if seen.insert(name.to_string()) {
                     self.add_symbol(SymbolTree {
@@ -1319,6 +1323,45 @@ impl<'db> SymbolVisitor<'db> {
                 }
             }
         }
+    }
+
+    /// whether `method` is an instance method, a classmethod or a static method, as the semantic
+    /// model reads its decorators, `@staticmethod`, basedpython's `static def`, or an implicit
+    /// one such as `__new__`'s. A method the model calls both is read as an instance method
+    fn method_kind(&self, method: &ast::StmtFunctionDef) -> MethodDecorator {
+        let model = SemanticModel::new(self.db, self.file);
+        decorated_function(self.db, method.definition(&model))
+            .and_then(|function| function.undecorated.as_function_literal())
+            .and_then(|function| MethodDecorator::try_from_fn_type(self.db, function))
+            .unwrap_or_default()
+    }
+
+    /// what a `property` decorator among `decorator_list` makes of the `def`: a property, as
+    /// `@property` and `@functools.cached_property` do, or another accessor of one, as
+    /// `@radius.setter` does
+    fn property_decorator(decorator_list: &[ast::Decorator]) -> Option<PropertyDecorator<'_>> {
+        decorator_list.iter().find_map(|decorator| {
+            let name = UnqualifiedName::from_expr(&decorator.expression)?;
+            match name.segments() {
+                [.., "property" | "cached_property"] => Some(PropertyDecorator::Property),
+                [property, "setter" | "getter" | "deleter"] => {
+                    Some(PropertyDecorator::Accessor(property))
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// whether the class being walked has listed a property named `name`
+    fn class_lists_property(&self, name: &str) -> bool {
+        let Some(&class) = self.symbol_stack.last() else {
+            return false;
+        };
+        self.symbols.iter().any(|symbol| {
+            symbol.parent == Some(class)
+                && symbol.kind == SymbolKind::Property
+                && symbol.name == name
+        })
     }
 
     fn has_deprecated_decorator(decorator_list: &[ast::Decorator]) -> bool {
@@ -1398,12 +1441,23 @@ impl<'db> SymbolVisitor<'db> {
                     });
                     return;
                 }
-                let kind = SymbolKind::function_kind(
-                    &func_def.name,
-                    self.iter_symbol_stack()
-                        .last()
-                        .is_some_and(|tree| tree.kind == SymbolKind::Class),
-                );
+                let in_class = self
+                    .iter_symbol_stack()
+                    .last()
+                    .is_some_and(|tree| tree.kind == SymbolKind::Class);
+                let kind = match Self::property_decorator(&func_def.decorator_list) {
+                    Some(PropertyDecorator::Property) if in_class => SymbolKind::Property,
+                    // `@radius.setter` declares no member of its own: it is the property
+                    // `radius` the class has already listed, given another accessor
+                    Some(PropertyDecorator::Accessor(property))
+                        if in_class
+                            && property == func_def.name.as_str()
+                            && self.class_lists_property(property) =>
+                    {
+                        return;
+                    }
+                    _ => SymbolKind::function_kind(&func_def.name, in_class),
+                };
 
                 let symbol = SymbolTree {
                     parent: None,
@@ -1774,8 +1828,15 @@ fn create_all_name(expr: &ast::Expr) -> Option<Name> {
     Some(expr.as_string_literal_expr()?.value.to_str().into())
 }
 
-/// The attributes a method assigns on its receiver, each with the statement that assigns it, in
-/// the order they are assigned. A nested function or class has receivers of its own.
+/// what a decorator makes of the `def` it decorates, when it is a property's
+enum PropertyDecorator<'a> {
+    Property,
+    /// another accessor of the property with this name
+    Accessor(&'a str),
+}
+
+/// the attributes a method assigns on its receiver, each with the statement that assigns it, in
+/// the order they are assigned. a nested function or class has receivers of its own
 struct ReceiverAttributes<'a> {
     receiver: &'a str,
     current_stmt: Option<TextRange>,

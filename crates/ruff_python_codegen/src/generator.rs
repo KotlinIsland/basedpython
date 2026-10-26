@@ -183,6 +183,24 @@ impl<'a> Generator<'a> {
         self.generate()
     }
 
+    /// basedpython: generate the parameter list and return annotation of a `def`,
+    /// `(self, radius: float) -> None`, as its header writes them
+    pub fn signature(mut self, function: &ast::StmtFunctionDef) -> String {
+        self.unparse_signature(
+            &function.parameters,
+            function.returns.as_deref(),
+            function.is_asserts_return,
+        );
+        self.generate()
+    }
+
+    /// basedpython: generate a class's bases and keywords, `(Shape, metaclass=Meta)`, as its
+    /// header writes them
+    pub fn class_arguments(mut self, arguments: &ast::Arguments) -> String {
+        self.unparse_class_arguments(arguments);
+        self.generate()
+    }
+
     fn newline(&mut self) {
         if !self.initial {
             self.num_newlines = std::cmp::max(self.num_newlines, 1);
@@ -405,21 +423,7 @@ impl<'a> Generator<'a> {
                     if let Some(type_params) = type_params {
                         self.unparse_type_params(type_params);
                     }
-                    self.p("(");
-                    self.unparse_parameters(parameters);
-                    self.p(")");
-                    if *is_asserts_return {
-                        // basedpython: `-> asserts x` names a place, not a type. the
-                        // generator emits python, and such a function returns `None`
-                        self.p(" -> None");
-                    } else if let Some(returns) = returns {
-                        self.p(" -> ");
-                        // render at the same precedence as a variable annotation
-                        // so a union return type stays unparenthesised
-                        // (`-> int | None`) while a bare tuple still groups
-                        // (`-> (int, str)`)
-                        self.unparse_expr(returns, precedence::COMMA);
-                    }
+                    self.unparse_signature(parameters, returns.as_deref(), *is_asserts_return);
                     self.p(":");
                 });
                 self.body(body);
@@ -450,27 +454,7 @@ impl<'a> Generator<'a> {
                         self.unparse_type_params(type_params);
                     }
                     if let Some(arguments) = arguments {
-                        self.p("(");
-                        let mut first = true;
-                        for arg_or_keyword in arguments.iter_source_order() {
-                            match arg_or_keyword {
-                                ArgOrKeyword::Arg(arg) => {
-                                    self.p_delim(&mut first, ", ");
-                                    self.unparse_expr(arg, precedence::MAX);
-                                }
-                                ArgOrKeyword::Keyword(keyword) => {
-                                    self.p_delim(&mut first, ", ");
-                                    if let Some(arg) = &keyword.arg {
-                                        self.p_keyword_name(arg, keyword.key);
-                                        self.p("=");
-                                    } else {
-                                        self.p("**");
-                                    }
-                                    self.unparse_expr(&keyword.value, precedence::MAX);
-                                }
-                            }
-                        }
-                        self.p(")");
+                        self.unparse_class_arguments(arguments);
                     }
                     self.p(":");
                 });
@@ -1914,6 +1898,55 @@ impl<'a> Generator<'a> {
             Singleton::True => self.p("True"),
             Singleton::False => self.p("False"),
         }
+    }
+
+    /// a `def`'s parameter list and return annotation, `(self, radius: float) -> None`
+    fn unparse_signature(
+        &mut self,
+        parameters: &Parameters,
+        returns: Option<&Expr>,
+        is_asserts_return: bool,
+    ) {
+        self.p("(");
+        self.unparse_parameters(parameters);
+        self.p(")");
+        if is_asserts_return {
+            // basedpython: `-> asserts x` names a place, not a type. the
+            // generator emits python, and such a function returns `None`
+            self.p(" -> None");
+        } else if let Some(returns) = returns {
+            self.p(" -> ");
+            // render at the same precedence as a variable annotation
+            // so a union return type stays unparenthesised
+            // (`-> int | None`) while a bare tuple still groups
+            // (`-> (int, str)`)
+            self.unparse_expr(returns, precedence::COMMA);
+        }
+    }
+
+    /// a class's bases and keywords, `(Shape, metaclass=Meta)`
+    fn unparse_class_arguments(&mut self, arguments: &ast::Arguments) {
+        self.p("(");
+        let mut first = true;
+        for arg_or_keyword in arguments.iter_source_order() {
+            match arg_or_keyword {
+                ArgOrKeyword::Arg(arg) => {
+                    self.p_delim(&mut first, ", ");
+                    self.unparse_expr(arg, precedence::MAX);
+                }
+                ArgOrKeyword::Keyword(keyword) => {
+                    self.p_delim(&mut first, ", ");
+                    if let Some(arg) = &keyword.arg {
+                        self.p_keyword_name(arg, keyword.key);
+                        self.p("=");
+                    } else {
+                        self.p("**");
+                    }
+                    self.unparse_expr(&keyword.value, precedence::MAX);
+                }
+            }
+        }
+        self.p(")");
     }
 
     fn unparse_parameters(&mut self, parameters: &Parameters) {

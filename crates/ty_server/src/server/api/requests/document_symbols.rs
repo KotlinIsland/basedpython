@@ -5,7 +5,7 @@ use lsp_types::{DocumentSymbol, DocumentSymbolParams, Uri};
 use ruff_db::files::File;
 use ty_ide::{
     HierarchicalSymbols, SymbolId, SymbolInfo, TemplateSymbol, django_template_document_symbols,
-    document_symbols,
+    document_symbols, symbol_detail,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
@@ -192,10 +192,11 @@ fn convert_to_lsp_document_symbol(
     encoding: PositionEncoding,
 ) -> Option<DocumentSymbol> {
     let symbol_kind = convert_symbol_kind(symbol.kind);
+    let detail = symbol_detail(db, db.program_file(file), &symbol);
 
     Some(DocumentSymbol {
         name: symbol.name.into_owned(),
-        detail: None,
+        detail,
         kind: symbol_kind,
         tags: None,
         #[allow(deprecated)]

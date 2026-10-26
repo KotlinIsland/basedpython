@@ -1,10 +1,47 @@
-use crate::symbols::{FlatSymbols, symbols_for_file};
+use crate::symbols::{FlatSymbols, SymbolInfo, symbols_for_file};
+use ruff_db::parsed::parsed_module;
+use ruff_db::source::source_text;
+use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::find_node::covering_node;
+use ruff_python_codegen::{Generator, Mode, Stylist};
+use ruff_text_size::Ranged;
 use ty_project::Db;
 use ty_python_core::ProgramFile;
 
 /// Get all document symbols for a file with the given options.
 pub fn document_symbols<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> &'db FlatSymbols {
     symbols_for_file(db, file)
+}
+
+/// what an outline shows beside a symbol's name: a function's parameters and return annotation,
+/// `(self, radius: float) -> None`, and a class's bases, `(Shape)`, each printed from the syntax
+/// tree on one line, a `.by` file's in basedpython's syntax. `None` for any other symbol, and for
+/// a class without bases
+pub fn symbol_detail(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    symbol: &SymbolInfo<'_>,
+) -> Option<String> {
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let source = source_text(db, file.file(db));
+    let stylist = Stylist::from_tokens(module.tokens(), source.as_str());
+    let mode = if file.file(db).source_type(db).is_basedpython() {
+        Mode::BasedPython
+    } else {
+        Mode::Default
+    };
+    let generator = || Generator::from(&stylist).with_mode(mode);
+    let covering = covering_node(module.syntax().into(), symbol.name_range);
+    covering.ancestors().find_map(|node| match node {
+        AnyNodeRef::StmtFunctionDef(function) if function.name.range() == symbol.name_range => {
+            Some(generator().signature(function))
+        }
+        AnyNodeRef::StmtClassDef(class) if class.name.range() == symbol.name_range => class
+            .arguments
+            .as_ref()
+            .map(|arguments| generator().class_arguments(arguments)),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -18,6 +55,7 @@ mod tests {
         SubDiagnosticSeverity,
     };
     use ruff_db::files::File;
+    use std::fmt::Write as _;
 
     /// basedpython: an accessor property is one member in the source, so it is
     /// one symbol in the outline — not the getter, backing field and setter the
@@ -69,6 +107,42 @@ class P:
                 "Property x",
             ]
         );
+    }
+
+    /// basedpython: the attributes a method assigns on its first parameter are members of the
+    /// class only when that parameter is the receiver, which a `static def`'s is not; a
+    /// classmethod's receiver is the class, so what it assigns is a class attribute
+    #[test]
+    fn receiver_attributes_follow_the_method_kind() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "\
+class Seed:
+    pass
+
+class Counter:
+    def __init__(self, start: int) -> None:
+        self.value = start
+
+    static def make(seed: Seed) -> None:
+        seed.planted = True
+
+    class def reset(cls) -> None:
+        cls.total = 0
+<CURSOR>",
+            )
+            .build();
+
+        assert_snapshot!(test.outline_with_details(), @"
+        Class Seed
+        Class Counter
+            Constructor __init__(self, start: int) -> None
+            Method make(seed: Seed) -> None
+            Method reset(cls) -> None
+            Field value
+            Field total
+        ");
     }
 
     #[test]
@@ -656,7 +730,108 @@ class Example((class_base := Base)):
         );
     }
 
+    /// a function's outline entry carries its signature as written and a class's its bases, a
+    /// `@property` is a property, and its setter is the same property rather than a second member
+    #[test]
+    fn details_and_properties() {
+        let test = cursor_test(
+            "
+class Shape(ABC, metaclass=Meta):
+    def shifted(
+        self,
+        dx: int,
+        dy: int,
+    ) -> 'Shape':
+        return self
+
+    @property
+    def diameter(self) -> float:
+        return self._d
+
+    @diameter.setter
+    def diameter(self, value: float) -> None:
+        self._d = value
+
+    @functools.cached_property
+    def area(self):
+        return 1
+
+class Plain:
+    pass
+<CURSOR>",
+        );
+
+        assert_snapshot!(test.outline_with_details(), @"
+        Class Shape(ABC, metaclass=Meta)
+            Method shifted(self, dx: int, dy: int) -> 'Shape'
+            Property diameter(self) -> float
+            Property area(self)
+            Field _d
+        Class Plain
+        ");
+    }
+
+    /// a detail is printed from the syntax tree, so a comment in a signature written over several
+    /// lines is left out, and a string default keeps the spaces inside it
+    #[test]
+    fn details_are_printed_from_the_syntax_tree() {
+        let test = cursor_test(
+            "
+def greet(
+    name: str = 'a  b',  # who to greet
+    *,
+    loud: bool,
+) -> str:
+    return name
+
+class Loud(  # the base
+    str,
+):
+    pass
+<CURSOR>",
+        );
+
+        assert_snapshot!(test.outline_with_details(), @"
+        Function greet(name: str='a  b', *, loud: bool) -> str
+        Class Loud(str)
+        ");
+    }
+
     impl CursorTest {
+        /// the outline as one line per symbol: its kind, its name and its detail, indented
+        /// under what it is in
+        fn outline_with_details(&self) -> String {
+            fn walk(
+                test: &CursorTest,
+                symbols: &HierarchicalSymbols,
+                id: SymbolId,
+                symbol: &SymbolInfo<'_>,
+                depth: usize,
+                out: &mut String,
+            ) {
+                let file = test.program_file(test.cursor.file);
+                let detail = symbol_detail(&test.db, file, symbol).unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "{}{} {}{}",
+                    "    ".repeat(depth),
+                    symbol.kind.to_string(),
+                    symbol.name,
+                    detail
+                );
+                for (child_id, child) in symbols.children(id) {
+                    walk(test, symbols, child_id, &child, depth + 1, out);
+                }
+            }
+            let symbols =
+                document_symbols(&self.db, self.program_file(self.cursor.file)).to_hierarchical();
+            let mut out = String::new();
+            for (id, symbol) in symbols.iter() {
+                walk(self, &symbols, id, &symbol, 0, &mut out);
+            }
+            out
+        }
+
         fn document_symbols(&self) -> String {
             let symbols =
                 document_symbols(&self.db, self.program_file(self.cursor.file)).to_hierarchical();
