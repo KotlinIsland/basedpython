@@ -81,10 +81,14 @@ If both `VIRTUAL_ENV` and `CONDA_PREFIX` are present, `VIRTUAL_ENV` will be pref
 
 ### `PYTHON`
 
-The interpreter `by run` executes the transpiled program on.
+the interpreter `by run` executes the transpiled program on, and the
+version `by init` targets a new project at, where the project has no
+environment of its own
 
-Overrides the project environment, and is itself overridden by
-`by run --python`.
+the project's environment — its `environment.python`, an activated
+virtual or Conda environment, or a `.venv` beside its `pyproject.toml` —
+wins over it, and it wins over a bare `python3` on `PATH`. the
+`--python` of `by run` overrides both
 
 ### `PYTHONPATH`
 

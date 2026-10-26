@@ -7555,25 +7555,6 @@ fn interpreter_version(python: &Path) -> (u8, u8) {
     (major, minor)
 }
 
-/// the version of the interpreter `by run` would pick, so a test can name one
-/// that is definitely newer. outside an environment that is `$PYTHON`, and
-/// `python3` when nothing pins one
-fn running_python_version() -> (u8, u8) {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let output = Command::new(python)
-        .args([
-            "-c",
-            "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')",
-        ])
-        .output()
-        .expect("an interpreter is needed to run this test");
-    let rendered = String::from_utf8_lossy(&output.stdout);
-    let mut parts = rendered.split_whitespace();
-    let major = parts.next().unwrap().parse().unwrap();
-    let minor = parts.next().unwrap().parse().unwrap();
-    (major, minor)
-}
-
 /// the project environment is the environment the project *is* — `by check`
 /// resolved this project's imports against it, so running against a different
 /// python answers a question nobody asked
@@ -8006,10 +7987,16 @@ fn build_does_not_carry_a_compilers_output_directory() {
 
 /// what `by init` writes has to be a project the rest of the toolchain accepts,
 /// or it is a template for a thing that does not work
+///
+/// the new project has no environment of its own, so `by run` runs it on the
+/// python `PYTHON` names. the test names that interpreter itself, and targets
+/// the project at its version, rather than leaving an activated environment or
+/// whichever `python3` comes first on `PATH` to decide either
 #[test]
 fn init_writes_a_project_that_builds_and_runs() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (major, minor) = running_python_version();
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let (major, minor) = interpreter_version(Path::new(&python));
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -8032,6 +8019,9 @@ fn init_writes_a_project_that_builds_and_runs() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env_remove("VIRTUAL_ENV")
+        .env_remove("CONDA_PREFIX")
+        .env("PYTHON", &python)
         .arg("run")
         .current_dir(&project)
         .output()
