@@ -132,6 +132,17 @@ pub(crate) enum Command {
         /// the interpreter the program runs on.
         #[arg(long, value_name = "PATH", conflicts_with = "compiled")]
         coverage: Option<PathBuf>,
+        /// profile the program with cProfile and write the snapshot to PATH, as
+        /// the `pstats` file `cProfile` writes (`.pstat`)
+        ///
+        /// every function of a transpiled module is named by its `.by` file and
+        /// the `.by` line it starts at, and one of a `.py` the project carries over
+        /// by the file in the project rather than the staged copy that ran, so a
+        /// profile viewer's way to a function's source leads to the file it was
+        /// written in. The profile starts at the program's first line and ends
+        /// after its last `atexit` handler.
+        #[arg(long, value_name = "PATH", conflicts_with = "coverage")]
+        profile: Option<PathBuf>,
     },
 
     /// Start a new project.

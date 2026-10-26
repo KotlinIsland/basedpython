@@ -1611,6 +1611,200 @@ fn run_coverage_maps_a_module_a_test_runner_compiled() {
     );
 }
 
+/// one function of a `pstats` snapshot: where it is, how often it was called (the
+/// calls that were not recursive first), and where it was called from
+#[derive(Debug)]
+struct Profiled {
+    file: String,
+    line: u32,
+    name: String,
+    primitive_calls: u64,
+    calls: u64,
+    callers: Vec<ProfiledFunction>,
+}
+
+/// a function as a `pstats` snapshot names it: its file, first line and name
+type ProfiledFunction = (String, u32, String);
+
+/// the functions of the `pstats` snapshot at `snapshot`, as python's `pstats` reads
+/// them
+fn profiled_functions(python: &str, snapshot: &Path) -> Vec<Profiled> {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import json, pstats, sys\n\
+             stats = pstats.Stats(sys.argv[1]).stats\n\
+             print(json.dumps([[function, cc, nc, list(callers)] \
+             for function, (cc, nc, _, _, callers) in stats.items()]))",
+        ])
+        .arg(snapshot)
+        .output()
+        .expect("python runs");
+    assert!(
+        output.status.success(),
+        "pstats could not read {}:\n{}",
+        snapshot.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows: Vec<(ProfiledFunction, u64, u64, Vec<ProfiledFunction>)> =
+        serde_json::from_slice(&output.stdout).expect("json");
+    rows.into_iter()
+        .map(
+            |((file, line, name), primitive_calls, calls, callers)| Profiled {
+                file,
+                line,
+                name,
+                primitive_calls,
+                calls,
+                callers,
+            },
+        )
+        .collect()
+}
+
+/// a profile viewer finds a function's source by the file and line the snapshot
+/// names it by, so a function of a transpiled module is named by its `.by` and the
+/// line it starts at there, and one of a carried-over `.py` by the project's file
+/// rather than the staged copy that ran, which is gone once the run ends
+#[test]
+fn run_profile_names_functions_by_their_project_files() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    fs::write(
+        package.join("calc.by"),
+        "def fib(n: int) -> int:\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("plain.py"),
+        "def helper() -> int:\n    return 3\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from pkg.calc import fib\nfrom pkg.plain import helper\n\n\nclass Worker:\n    def work(self, n: int) -> int:\n        return fib(n) + helper()\n\n\nprint(Worker().work(10))\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let file = |relative: &str| project.join(relative).display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args([
+            "run",
+            "--python",
+            &python,
+            "--profile",
+            "out/run.pstat",
+            "main",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "by run --profile failed:\n{stderr}"
+    );
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        "58\n",
+        "{stderr}"
+    );
+    let functions = profiled_functions(&python, &dir.path().join("out/run.pstat"));
+    let find = |file: &str, name: &str| {
+        functions
+            .iter()
+            .find(|function| function.file == file && function.name == name)
+            .unwrap_or_else(|| panic!("no {name} in {file}: {functions:#?}"))
+    };
+
+    let fib = find(&file("pkg/calc.by"), "fib");
+    assert_eq!(fib.line, 1);
+    assert_eq!((fib.primitive_calls, fib.calls), (1, 177));
+    let work = find(&file("main.by"), "work");
+    assert_eq!(work.line, 6);
+    assert!(
+        fib.callers
+            .contains(&(file("main.by"), 6, "work".to_owned()))
+            && fib
+                .callers
+                .contains(&(file("pkg/calc.by"), 1, "fib".to_owned())),
+        "fib is called by work and by itself: {:?}",
+        fib.callers
+    );
+    let helper = find(&file("pkg/plain.py"), "helper");
+    assert_eq!(helper.line, 1);
+    assert_eq!(
+        helper.callers,
+        [(file("main.by"), 6, "work".to_owned())],
+        "the caller is named the same way"
+    );
+    let staged: Vec<&String> = functions
+        .iter()
+        .flat_map(|function| {
+            std::iter::once(&function.file).chain(function.callers.iter().map(|(file, ..)| file))
+        })
+        .filter(|named| {
+            ["main.py", "calc.py", "plain.py"]
+                .iter()
+                .any(|copy| named.ends_with(copy))
+                && **named != file("pkg/plain.py")
+        })
+        .collect();
+    assert!(staged.is_empty(), "a staged copy is named: {staged:?}");
+}
+
+/// a test runner compiles a test module itself, so the module's own top level runs
+/// as the staged `.py`, at the generated python's lines, and is still named by the
+/// `.by`
+#[test]
+fn run_profile_maps_a_module_a_test_runner_compiled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    let project = dir.path().canonicalize().unwrap();
+    let snapshot = project.join("tests.pstat");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("run")
+        .args(["--python", &python, "--in-build", "--profile"])
+        .arg(&snapshot)
+        .args(["pytest", "-q", "-p", "no:cacheprovider"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    // the project's tests fail on purpose; the profile is written all the same
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let functions = profiled_functions(&python, &snapshot);
+    let test_module = project.join("tests/test_calc.by").display().to_string();
+    for name in ["<module>", "test_sum"] {
+        assert!(
+            functions
+                .iter()
+                .any(|function| function.file == test_module && function.name == name),
+            "no {name} in {test_module}: {functions:#?}"
+        );
+    }
+    assert!(
+        !functions
+            .iter()
+            .any(|function| function.file.ends_with("test_calc.py")),
+        "the staged test module is named: {functions:#?}"
+    );
+}
+
 /// A project of `.by` tests for pytest to run, with a module they test, checked
 /// against the environment the tests run in: the `conftest` imports pytest, which
 /// `--python` does not configure. `None`, having said why, when `$PYTHON` (or

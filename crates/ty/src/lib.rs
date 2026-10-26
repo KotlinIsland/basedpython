@@ -127,6 +127,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             compiled,
             in_build,
             coverage,
+            profile,
         } => by_commands::cmd_run(
             module.as_deref(),
             &args,
@@ -138,6 +139,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 python: python.as_deref(),
                 launcher: launcher.as_deref(),
                 coverage: coverage.as_deref(),
+                profile: profile.as_deref(),
             },
         ),
         Command::Init {

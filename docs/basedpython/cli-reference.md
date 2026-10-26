@@ -125,6 +125,35 @@ leaves without returning to `by run` — `os._exit` — leaves no report, and
 `--compiled` cannot be combined with it, since a native module runs no python
 lines to measure
 
+`--profile PATH` profiles the program with cProfile and writes the snapshot to
+`PATH`, in the `pstats` format `cProfile` writes — the `.pstat` file python's
+`pstats` module and PyCharm's profiler viewer open. a profiler names each
+function by the file and first line of its code, so the snapshot is mapped back
+before it is written, as a coverage report is: a function of a transpiled module
+is named by its `.by` file and the `.by` line it starts at, and one of a `.py`
+the build carries over by the file in the project rather than the staged copy
+that ran. a viewer's way from a function to its source then leads to the file it
+was written in. that holds for a module a test runner compiled itself too, and
+two functions that turn out to be one — the same name at the same `.by` line —
+are added up as one, as `pstats` adds two profiles. a function the transpiler
+wrote on its own, such as a helper pasted into a module, has no `.by` line, and
+is named by its module's `.by` at line 0
+
+```console
+$ by run --profile run.pstat main
+$ python -m pstats run.pstat
+```
+
+the profile starts at the program's first line and ends after its last `atexit`
+handler, so it holds the program and not `by run`'s search for it. what `by run`
+does to load a module — finding it, and compiling it under its `.by` lines — is
+time the program spends, and is named by the runner's file in the staged tree.
+cProfile measures every thread on python 3.12 and later, and only the thread the
+program starts on before that, as `python -m cProfile` does. a program that leaves
+without returning to `by run` — on `os._exit`, an `os.exec*` or a signal — leaves no snapshot, and `--coverage`
+cannot be combined with it, since a profile taken under coverage.py's tracer
+measures the tracer
+
 the emitted code targets that interpreter's version by default. an explicit
 `--min-version` wins, but must not exceed the interpreter — `by run` refuses
 rather than emit code the interpreter cannot parse. an interpreter *older* than

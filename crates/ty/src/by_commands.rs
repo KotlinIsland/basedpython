@@ -144,6 +144,8 @@ pub(crate) struct RunFlags<'a> {
     pub(crate) launcher: Option<&'a Path>,
     /// `--coverage`: where to write an LCOV report of what ran.
     pub(crate) coverage: Option<&'a Path>,
+    /// `--profile`: where to write a `pstats` snapshot of where the time went
+    pub(crate) profile: Option<&'a Path>,
 }
 
 #[allow(clippy::exit, clippy::print_stderr)]
@@ -160,6 +162,7 @@ pub(crate) fn cmd_run(
         python: python_flag,
         launcher,
         coverage,
+        profile,
     } = flags;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     // one resolution of the project, for the environment and the target version
@@ -398,6 +401,29 @@ pub(crate) fn cmd_run(
         }
         None => None,
     };
+    // the runner writes the snapshot itself, every function already named by its
+    // project file: the program can run somewhere else, so the path is settled here
+    let snapshot = match profile {
+        Some(snapshot) => {
+            let snapshot = cwd.join(snapshot);
+            if let Some(parent) = snapshot.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("could not create {}", parent.display()))?;
+            }
+            // a snapshot left from an earlier run would read as this run's when
+            // this one leaves none
+            match fs::remove_file(&snapshot) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    return Err(error)
+                        .with_context(|| format!("could not replace {}", snapshot.display()));
+                }
+                _ => {}
+            }
+            command.arg("--profile").arg(&snapshot);
+            Some(snapshot)
+        }
+        None => None,
+    };
     let status = command
         .arg(&module)
         .args(args)
@@ -435,6 +461,15 @@ pub(crate) fn cmd_run(
                  to `by run`, as `os._exit` does"
             );
         }
+    }
+    if let Some(snapshot) = &snapshot
+        && !snapshot.is_file()
+    {
+        eprintln!(
+            "note: no profile was written: the program ended without returning to `by run`, \
+             as one that calls `os._exit`, replaces itself with `os.exec*` or is killed by a \
+             signal does"
+        );
     }
     drop(measured);
     // drop the temp dir explicitly: `process::exit` skips destructors, so
@@ -2307,6 +2342,7 @@ import importlib.machinery
 import importlib.util
 import json
 import linecache
+import marshal
 import os
 import sys
 import traceback
@@ -2904,8 +2940,9 @@ def _entry_spec(module):
     return module, spec
 
 
-def _run_as_main(module):
-    """Run `module` as `__main__`, with `.by` paths for `__file__` and `argv[0]`.
+def _run_as_main(module, profiler=None):
+    """Run `module` as `__main__`, with `.by` paths for `__file__` and `argv[0]`,
+    measured by `profiler` from its first line when there is one.
 
     `runpy.run_module` fetches the entry module's code straight from its loader
     rather than executing it through one, so the loader wrapper that fixes every
@@ -2931,6 +2968,10 @@ def _run_as_main(module):
     # leaving this unset broke every spawned child
     main_module.__spec__ = spec
     sys.modules["__main__"] = main_module
+    if profiler is not None:
+        # here rather than before the module was found, so the profile is the
+        # program's and not the runner's search for it
+        profiler.enable()
     exec(code, main_module.__dict__)
 
 
@@ -3065,24 +3106,92 @@ def _write_coverage(measurement, report):
         json.dump({"files": files}, handle)
 
 
+def _start_profile(snapshot):
+    """A profiler for the program, which writes what it measured to `snapshot` once
+    the program has ended: after its other threads and its own `atexit` handlers,
+    which python runs before the ones registered ahead of them."""
+    import cProfile
+
+    profiler = cProfile.Profile()
+    atexit.register(_write_profile, profiler, snapshot)
+    return profiler
+
+
+def _summed(left, right):
+    """Two measurements of one function added up, as `pstats` adds two profiles: the
+    call counts and times, and for a function's own row the callers after them, each
+    caller's added up the same way."""
+    counts = tuple(a + b for a, b in zip(left[:4], right[:4]))
+    if len(left) == 4:
+        return counts
+    callers = dict(left[4])
+    for caller, timing in right[4].items():
+        callers[caller] = _summed(callers[caller], timing) if caller in callers else timing
+    return (*counts, callers)
+
+
+def _write_profile(profiler, snapshot):
+    """What `profiler` measured, as the `pstats` file `cProfile` writes, with every
+    function of a staged module named by the project file and line it was written at.
+
+    A function is the file, first line and name of its code object. One `_by_code`
+    compiled is the `.by` already; one another loader compiled — a test module's own
+    top level, which pytest compiles — is the staged `.py`, at the generated python's
+    lines, and moves to its `.by` here, as a staged copy of a hand-written `.py` moves
+    to the project file. The two can then name one function, and are added up as one.
+    A line the transpiler wrote on its own has no `.by` line, and is line 0.
+    """
+    profiler.disable()
+    profiler.create_stats()
+    located = {}
+
+    def project_function(function):
+        filename, line, name = function
+        if function not in located:
+            real = os.path.realpath(filename)
+            if real in _BY_MAP or real in _CARRIED:
+                path, line = project_location(filename, line)
+                located[function] = (path, line or 0, name)
+            else:
+                located[function] = function
+        return located[function]
+
+    stats = {}
+    for function, (*counts, callers) in profiler.stats.items():
+        by_caller = {}
+        for caller, timing in callers.items():
+            caller = project_function(caller)
+            by_caller[caller] = (
+                _summed(by_caller[caller], timing) if caller in by_caller else timing
+            )
+        row = (*counts, by_caller)
+        key = project_function(function)
+        stats[key] = _summed(stats[key], row) if key in stats else row
+    with open(snapshot, "wb") as handle:
+        marshal.dump(stats, handle)
+
+
 def main():
     # the plugins `by run` puts in the tree reach this module by name; it is running
     # as `__main__`, which the program's own module takes over below
     sys.modules["_by_runner"] = sys.modules[__name__]
     sys.excepthook = _excepthook
     sys.meta_path.insert(0, _ByFinder())
-    # `by run --coverage` names where to write what ran in front of the module,
-    # where no module name can be
-    report = None
-    if sys.argv[1] == "--coverage":
-        report = sys.argv[2]
+    # `by run --coverage` and `--profile` name where to write what was measured in
+    # front of the module, where no module name can be
+    written = {}
+    while sys.argv[1] in ("--coverage", "--profile"):
+        written[sys.argv[1]] = sys.argv[2]
         del sys.argv[1:3]
     module = sys.argv[1]
     sys.argv = sys.argv[1:]
-    if report is not None:
-        _start_coverage(report)
+    if "--coverage" in written:
+        _start_coverage(written["--coverage"])
+    profiler = None
+    if "--profile" in written:
+        profiler = _start_profile(written["--profile"])
     try:
-        _run_as_main(module)
+        _run_as_main(module, profiler)
     except SystemExit:
         raise
     except BaseException:
