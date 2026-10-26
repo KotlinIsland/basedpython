@@ -680,6 +680,54 @@ names to move, and `target`, a superclass's `qualifiedName`; `by/pushMembersDown
 takes the position and `members`. both answer as `by/moveSymbol` does,
 `{edit, warnings}` or `{refused, warnings}`
 
+### changing a signature
+
+`by/changeSignature` gives a function a new parameter list — parameters added,
+removed, reordered, renamed, given or stripped of defaults, moved between kinds —
+and rewrites every call of it in the project to pass them. each call is bound the
+way python binds it, its positional arguments to the positional parameters and its
+keywords by name, and written again for the new list: by position while the
+parameters still line up, by keyword after that, a keyword staying a keyword, and
+keywords in the order the call wrote them. a new parameter is passed the `value`
+given, or left to its default. a renamed parameter is renamed where the body reads
+it and where calls pass it by keyword, and a method's calls through an instance and
+through its class keep their receiver. calls through a name an import gives the
+function, `from m import area as a`, are rewritten too. where the new order would
+evaluate an argument before one written before it and either could change what
+the other does, the call passes them by keyword in the order it wrote them
+
+```py
+def area(width, height=1, *, scale=1.0): ...      # (height, width, *, scale=1.0)
+
+area(2, 3)                                        # area(3, 2)
+area(2, height=3, scale=2.0)                      # area(width=2, height=3, scale=2.0)
+```
+
+it is refused, with the file and line, where a call cannot be rewritten to mean what
+it meant: a call that unpacks `*args` or `**kwargs` into the function, unless every
+existing call stays valid as it is (a parameter added with a default after the others
+leaves them all alone; one added before `**kwargs` does not, since it could take a
+keyword); an argument the change would drop when evaluating it could have an
+effect; an argument whose order of evaluation cannot be kept because it is only
+taken by position; a keyword a call passes into `**kwargs` that a parameter of the
+new list would take; a call with nothing to pass for a
+parameter without a default; the function used other than called, unless every call
+stays valid. and where the result would not be python, or not the same program: a
+removed parameter the body still reads, a parameter without a default after one with
+a default, two of one name, kinds out of order, or a method another class of the
+project overrides or that overrides another's, whose signatures would part
+
+`by/prepareChangeSignature` takes `textDocument` and `position` — in a function's
+name or parameters, or in a name that refers to it — and answers `{name, uri, range, parameters}`, its parameters each `{name, kind, default, annotation}` with `kind`
+one of `positionalOnly`, `positionalOrKeyword`, `variadic` (`*args`), `keywordOnly`
+and `variadicKeyword` (`**kwargs`), and `default` and `annotation` as the source
+writes them; a method's `self` or `cls` is not listed and stays as it is.
+`by/changeSignature` takes the same position and `parameters`, the whole new list
+in order, each `{name, oldName?, kind, default?, value?}`: `oldName` the parameter it
+was, absent for a new one; `default` written as source, absent for none; `value` what
+each call passes a new one. it answers as `by/moveSymbol` does, `{edit, warnings}` or
+`{refused, warnings}`
+
 ## unwrap and remove
 
 `by/unwrap` answers what an editor's *unwrap/remove* offers around a range, innermost

@@ -15,6 +15,7 @@
 //! hands its edits back rather than throwing them away, and the caller tells it
 //! which refactorings to consider rather than being given all of them.
 
+mod change_signature;
 mod class_members;
 mod data_class;
 mod evaluation;
@@ -41,6 +42,10 @@ use ty_python_semantic::SemanticModel;
 
 use crate::FileEdit;
 
+pub use change_signature::{
+    FunctionSignature, NewParameter, ParameterKind, SignatureParameter, change_signature,
+    function_signature,
+};
 pub use class_members::{
     ClassMember, HierarchyClass, MemberKind, MovableMembers, movable_members, pull_members_up,
     push_members_down,

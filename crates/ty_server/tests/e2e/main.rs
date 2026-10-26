@@ -31,6 +31,7 @@ mod alignment_groups;
 mod build_output;
 mod build_trees;
 mod call_hierarchy;
+mod change_signature;
 mod check_workspace;
 mod closed_documents;
 mod code_actions;

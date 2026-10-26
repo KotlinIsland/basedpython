@@ -114,6 +114,10 @@ pub use refactor::{
     RefactorKind, RefactorOffer, SymbolMove, movable_members, movable_symbol, move_symbol,
     pull_members_up, push_members_down, refactor, refactors,
 };
+pub use refactor::{
+    FunctionSignature, NewParameter, ParameterKind, SignatureParameter, change_signature,
+    function_signature,
+};
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};
 pub use selection_range::selection_range;

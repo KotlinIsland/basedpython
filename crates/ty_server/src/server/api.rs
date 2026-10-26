@@ -262,6 +262,17 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::PrepareChangeSignatureRequestHandler::METHOD => {
+            background_document_request_task::<requests::PrepareChangeSignatureRequestHandler>(
+                req,
+                BackgroundSchedule::Worker,
+            )
+        }
+        requests::ChangeSignatureRequestHandler::METHOD => background_document_request_task::<
+            requests::ChangeSignatureRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
