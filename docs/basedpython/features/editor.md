@@ -584,6 +584,17 @@ the caret goes in the document as the edits leave it:
 like the other document requests it takes `textHash`, and it is `null` when
 language services are off
 
+## go to declaration
+
+`textDocument/definition` and `textDocument/declaration` on the name of a
+called class go to the constructor the call runs: on `Circle` in `Circle(3)`,
+the `__init__` (or `__new__`) that `Circle` writes, or that the base it
+inherits one from writes. a call of a class is a call of its constructor, and
+the constructor is where its parameters are. a class that writes none, and so
+runs `object`'s, goes to the class. the class itself is always a
+`textDocument/typeDefinition` away, and a rename or a search for references
+from the same name is about the class
+
 ## go to super
 
 `textDocument/implementation` on a method goes down, to the methods that

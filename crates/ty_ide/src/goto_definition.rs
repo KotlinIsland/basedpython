@@ -742,10 +742,10 @@ class MyOtherClass:
         3 | x = MyClass(0)
           |     ^^^^^^^ Clicking here
         info: Found 1 definition
-         --> mymodule.py:2:7
+         --> mymodule.py:3:9
           |
-        2 | class MyClass:
-          |       -------
+        3 |     def __init__(self, val):
+          |         --------
         ");
     }
 
@@ -2545,6 +2545,97 @@ Traceb<CURSOR>ackType
             .build();
 
         assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    /// goto-definition on the name of a called class goes to the constructor
+    /// the call runs, as a call of the class is a call of its constructor
+    #[test]
+    fn goto_definition_class_call_name_goes_to_init() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+class MyClass:
+    def __init__(self, val):
+        self.val = val
+x = My<CURSOR>Class(1)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.py:5:5
+          |
+        5 | x = MyClass(1)
+          |     ^^^^^^^ Clicking here
+        info: Found 1 definition
+         --> main.py:3:9
+          |
+        3 |     def __init__(self, val):
+          |         --------
+        ");
+    }
+
+    /// a class that writes no constructor of its own runs the one its base
+    /// writes
+    #[test]
+    fn goto_definition_class_call_name_goes_to_inherited_init() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+class Base:
+    def __init__(self, val):
+        self.val = val
+class Sub(Base):
+    pass
+x = S<CURSOR>ub(1)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.py:7:5
+          |
+        7 | x = Sub(1)
+          |     ^^^ Clicking here
+        info: Found 1 definition
+         --> main.py:3:9
+          |
+        3 |     def __init__(self, val):
+          |         --------
+        ");
+    }
+
+    /// `object`'s constructor says nothing about a class that writes none, so
+    /// the class is where its call's name goes
+    #[test]
+    fn goto_definition_class_call_name_without_constructor_goes_to_class() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+class MyClass:
+    pass
+x = My<CURSOR>Class()
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.py:4:5
+          |
+        4 | x = MyClass()
+          |     ^^^^^^^ Clicking here
+        info: Found 1 definition
+         --> main.py:2:7
+          |
+        2 | class MyClass:
+          |       -------
+        ");
     }
 
     /// goto-definition on a class init opening parenthesis should go to constructor

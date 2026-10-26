@@ -11,7 +11,7 @@
 pub(crate) mod incoming_calls;
 pub(crate) mod outgoing_calls;
 
-use crate::goto::{GotoTarget, find_goto_target};
+use crate::goto::{ClassCallName, GotoTarget, find_goto_target};
 use crate::{Db, SymbolKind};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -42,7 +42,7 @@ pub fn prepare_call_hierarchy(
     let goto_target = find_goto_target(&model, &module, offset)?;
     let definitions = goto_target
         .definitions(&model, ImportAliasResolution::ResolveAliases)?
-        .goto_declaration(&model, &goto_target)?;
+        .goto_declaration(&model, &goto_target, ClassCallName::Class)?;
 
     let mut items = Vec::new();
     for resolved in &definitions {

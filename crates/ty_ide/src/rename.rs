@@ -1,4 +1,4 @@
-use crate::goto::{GotoTarget, find_goto_target};
+use crate::goto::{ClassCallName, GotoTarget, find_goto_target};
 use crate::references::{ReferencesMode, references};
 use crate::{Db, ReferenceTarget};
 use ruff_db::files::File;
@@ -84,7 +84,9 @@ pub fn prepare_rename(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> P
 
     let Some(declarations) = goto_target
         .definitions(&model, ReferencesMode::Rename.to_import_alias_resolution())
-        .and_then(|definitions| definitions.goto_declaration(&model, &goto_target))
+        .and_then(|definitions| {
+            definitions.goto_declaration(&model, &goto_target, ClassCallName::Class)
+        })
     else {
         // with no declaration there is nothing to rename, and renaming every
         // other use of the same spelling would be a guess

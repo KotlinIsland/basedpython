@@ -1,4 +1,4 @@
-use crate::goto::{django_lookup_definitions, find_goto_target};
+use crate::goto::{ClassCallName, django_lookup_definitions, find_goto_target};
 use crate::{Db, NavigationTargets, RangedValue};
 use ruff_db::files::FileRange;
 use ruff_db::parsed::parsed_module;
@@ -26,7 +26,7 @@ pub fn goto_declaration(
         // basedpython: a django lookup path's leading name declares no binding, so
         // the field it names is the only declaration there is
         .or_else(|| django_lookup_definitions(&model, &module, &goto_target))?
-        .goto_declaration(&model, &goto_target)?
+        .goto_declaration(&model, &goto_target, ClassCallName::Constructor)?
         .into_navigation_targets(model.db());
 
     Some(RangedValue {
@@ -137,10 +137,10 @@ mod tests {
         6 | instance = MyClass()
           |            ^^^^^^^ Clicking here
         info: Found 1 declaration
-         --> main.py:2:7
+         --> main.py:3:9
           |
-        2 | class MyClass:
-          |       -------
+        3 |     def __init__(self):
+          |         --------
         ");
     }
 

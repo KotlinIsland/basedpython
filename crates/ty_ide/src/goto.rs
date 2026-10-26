@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use crate::NavigationTarget;
 use crate::stub_mapping::StubMapper;
-use ruff_db::parsed::ParsedModuleRef;
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast::find_node::{CoveringNode, covering_node};
 use ruff_python_ast::token::{Token, TokenAt, TokenKind, Tokens};
 use ruff_python_ast::{self as ast, AnyNodeRef, ExprRef};
@@ -16,12 +16,12 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
-use ty_python_semantic::types::Type;
 use ty_python_semantic::types::ide_support::{
     call_signature_details, call_type_simplified_by_overloads, constructor_signature,
     definitions_and_overloads_for_function, definitions_for_keyword_argument,
     typed_dict_key_definition,
 };
+use ty_python_semantic::types::{KnownClass, Type, TypeDefinition};
 use ty_python_semantic::{Db as SemanticDb, ResolvedDefinition};
 use ty_python_semantic::{
     HasDefinition, HasType, ImportAliasResolution, ProgramEnvironment, SemanticModel,
@@ -244,6 +244,41 @@ pub(crate) enum GotoTarget<'a> {
     },
 }
 
+/// where a goto on the name of a called class lands, `Circle` in `Circle(3)`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClassCallName {
+    /// the class. what a rename or a search for references is about: the name
+    /// is the class's, whatever the call goes on to run
+    Class,
+    /// the constructor the call runs, the `__init__` or `__new__` the class or
+    /// one of its bases writes, as an editor's *go to declaration* takes a
+    /// class's call to be a call of its constructor. the class when it writes
+    /// none, since `object`'s says nothing about it
+    Constructor,
+}
+
+/// whether `definition` is a member of `object`, the class every class inherits from: the class
+/// whose body declares it is the one `object` resolves to
+fn is_declared_by_object(model: &SemanticModel<'_>, definition: Definition<'_>) -> bool {
+    let db = model.db();
+    let Some(class) = definition.scope(db).node(db).as_class() else {
+        return false;
+    };
+    let env = model.program_environment();
+    let Some(TypeDefinition::StaticClass(object)) = KnownClass::Object
+        .to_instance(db, &env)
+        .definition(db, &env)
+    else {
+        return false;
+    };
+    let file = definition.program_file(db);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    class
+        .node(&module)
+        .definition(&SemanticModel::new(db, file))
+        == object
+}
+
 /// The resolved definitions for a `GotoTarget`
 #[derive(Debug)]
 pub(crate) struct Definitions<'db>(Vec<ResolvedDefinition<'db>>);
@@ -284,36 +319,48 @@ impl<'db> Definitions<'db> {
     }
 
     /// Apply the "goto declaration" interpretation to these definitions.
+    ///
+    /// `class_call` says where the name of a called class, `Circle` in `Circle(3)`, lands
     pub(crate) fn goto_declaration(
         self,
         model: &SemanticModel<'db>,
         goto_target: &GotoTarget<'_>,
+        class_call: ClassCallName,
     ) -> Option<Definitions<'db>> {
         let mut definitions = self.0;
 
-        // When our target is a class constructor, we want to exclude
-        // navigation targets to its `__init__` or `__new__` methods.
+        // a class's call is both a reference to the class and a call of its
+        // constructor, and the definitions found for it hold both: the class,
+        // and the `__init__` or `__new__` the call runs
         //
-        // ... unless the cursor is on the parenthesis of the call,
-        // in which case we want to prefer the constructor methods
-        // if available.
-        //
-        // See: https://github.com/astral-sh/ty/issues/2218
+        // on the parenthesis the constructor methods are preferred, when there
+        // are any. on the name it depends on `class_call` (see
+        // https://github.com/astral-sh/ty/issues/2218 for why a client may want
+        // the class there)
         if let GotoTarget::Call { on_parenthesis, .. } = *goto_target
             && goto_target
                 .inferred_type(model)
                 .is_some_and(|ty| ty.is_class_literal())
         {
+            let db = model.db();
             let is_constructor_method =
                 |resolved_def: &ty_python_semantic::ResolvedDefinition<'_>| {
                     let Some(def) = resolved_def.definition() else {
                         return false;
                     };
-                    if !matches!(*def.kind(model.db()), DefinitionKind::Function(_)) {
+                    if !matches!(*def.kind(db), DefinitionKind::Function(_)) {
                         return false;
                     }
-                    def.name(model.db())
+                    def.name(db)
                         .is_some_and(|name| name == "__init__" || name == "__new__")
+                };
+            // the constructor every class has, which says nothing about this one
+            let is_written_constructor =
+                |resolved_def: &ty_python_semantic::ResolvedDefinition<'_>| {
+                    is_constructor_method(resolved_def)
+                        && !resolved_def
+                            .definition()
+                            .is_some_and(|def| is_declared_by_object(model, def))
                 };
 
             if on_parenthesis {
@@ -324,6 +371,10 @@ impl<'db> Definitions<'db> {
                 if definitions.iter().any(is_constructor_method) {
                     definitions.retain(|resolved_def| is_constructor_method(resolved_def));
                 }
+            } else if class_call == ClassCallName::Constructor
+                && definitions.iter().any(is_written_constructor)
+            {
+                definitions.retain(|resolved_def| is_written_constructor(resolved_def));
             } else {
                 definitions.retain(|resolved_def| !is_constructor_method(resolved_def));
             }
@@ -363,7 +414,7 @@ impl<'db> Definitions<'db> {
 
         Some(
             definitions
-                .goto_declaration(model, goto_target)?
+                .goto_declaration(model, goto_target, ClassCallName::Constructor)?
                 .map_stubs(model.db()),
         )
     }

@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::call_hierarchy::CalleeLeaf;
-use crate::goto::find_goto_target;
+use crate::goto::{ClassCallName, find_goto_target};
 use crate::{CallHierarchyItem, Db};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -38,7 +38,7 @@ pub fn outgoing_calls(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> V
     };
     let Some(definitions) = goto_target
         .definitions(&model, ImportAliasResolution::ResolveAliases)
-        .and_then(|d| d.goto_declaration(&model, &goto_target))
+        .and_then(|d| d.goto_declaration(&model, &goto_target, ClassCallName::Class))
     else {
         return Vec::new();
     };
@@ -135,7 +135,7 @@ impl<'a> OutgoingCallsFinder<'a, '_> {
 
         let Some(definitions) = goto_target
             .definitions(self.model, ImportAliasResolution::ResolveAliases)
-            .and_then(|d| d.goto_declaration(self.model, &goto_target))
+            .and_then(|d| d.goto_declaration(self.model, &goto_target, ClassCallName::Class))
         else {
             return;
         };
