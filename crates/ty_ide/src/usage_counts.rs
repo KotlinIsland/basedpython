@@ -17,10 +17,15 @@
 //! the declarations counted are the document's outline ([`crate::document_symbols()`])
 //! at the depth a reader scans a module at: its classes and functions, and the
 //! methods and properties of those classes. a dunder method is counted for its
-//! overrides alone, as PyCharm marks `__init__` overridden: its usages are not
-//! counted, since the language calls it rather than its name. a module's dunder
-//! function is left out, and so is an `extension` block, which names a class it
-//! does not declare. a nested function or a class inside a class is not counted
+//! overrides alone, `__eq__` overridden like any method: its usages are not
+//! counted, since the language calls it rather than its name. a constructor and
+//! the methods it calls (`__init__`, `__new__`, `__post_init__`,
+//! `__init_subclass__`) are left out, since a subclass's is no override of its
+//! base's: it takes what its own class needs, and neither the override checks
+//! nor `by/documentSuperMembers` hold it to the one it replaces. a module's
+//! dunder function is left out, and so is an `extension` block, which names a
+//! class it does not declare. a nested function or a class inside a class is not
+//! counted
 
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::AnyNodeRef;
@@ -28,7 +33,9 @@ use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_text_size::TextRange;
 use ty_python_core::ProgramFile;
-use ty_python_semantic::types::ide_support::{class_member_definitions, overridden_members};
+use ty_python_semantic::types::ide_support::{
+    class_member_definitions, is_constructor_like_method, overridden_members,
+};
 
 use crate::declaration::ClassName;
 use crate::find_references::find_references_to_each;
@@ -173,8 +180,13 @@ fn counted_declarations(db: &dyn Db, file: ProgramFile<'_>) -> Vec<DeclarationUs
     let mut declarations = Vec::new();
 
     let mut add = |name: &str, kind, full_range, name_range| {
-        // a dunder is only counted for its overrides, which a function has none of
-        if kind == DeclarationKind::Method || !is_dunder(name) {
+        // a dunder is only counted for its overrides, which a function has none of, and a
+        // constructor overrides nothing
+        let counted = match kind {
+            DeclarationKind::Method => !is_constructor_like_method(name),
+            DeclarationKind::Class | DeclarationKind::Function => !is_dunder(name),
+        };
+        if counted {
             declarations.push(DeclarationUsages {
                 name: name.to_string(),
                 kind,
@@ -437,15 +449,21 @@ def __getattr__(name: str) -> int:
         ");
     }
 
-    /// A dunder method is counted for the methods overriding it, as PyCharm marks a base's
-    /// `__init__` overridden, but not for its usages: the language calls it, not its name.
+    /// a dunder method is counted for the methods overriding it, but not for its usages: the
+    /// language calls it, not its name. a constructor, and a method it calls, is not counted at
+    /// all: a subclass's is no override of its base's
     #[test]
-    fn a_dunder_method_is_counted_for_its_overrides_alone() {
+    fn a_dunder_method_is_counted_for_its_overrides_alone_and_a_constructor_not_at_all() {
         let test = cursor_test(
             "<CURSOR>
 class Shape:
     def __init__(self, name: str) -> None:
         self.name = name
+
+    def __new__(cls, *args: object) -> 'Shape':
+        return super().__new__(cls)
+
+    def __init_subclass__(cls) -> None: ...
 
     def __eq__(self, other: object) -> bool:
         return False
@@ -454,15 +472,20 @@ class Circle(Shape):
     def __init__(self) -> None:
         super().__init__('circle')
 
+    def __new__(cls, *args: object) -> 'Circle':
+        return super().__new__(cls)
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
 Circle() == Shape('shape')
 ",
         );
         assert_snapshot!(test.usage_counts(), @"
-        class Shape 2 refs=2 impls=1 <main.Circle /main.py:9>
-        method __init__ 3 impls=1 <main.Circle /main.py:10>
-        method __eq__ 6 impls=0
-        class Circle 9 refs=1 impls=0
-        method __init__ 10 impls=0
+        class Shape 2 refs=3 impls=1 <main.Circle /main.py:14>
+        method __eq__ 11 impls=1 <main.Circle /main.py:21>
+        class Circle 14 refs=2 impls=0
+        method __eq__ 21 impls=0
         ");
     }
 }

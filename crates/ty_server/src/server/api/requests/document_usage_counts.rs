@@ -148,7 +148,9 @@ impl BackgroundDocumentRequestHandler for DocumentUsageCountsRequestHandler {
     /// `null` when language services are off, or for a document whose declarations are not
     /// counted here: a notebook, whose ranges are per cell, or a template. otherwise the
     /// declarations in source order: the document's classes and functions, and the methods and
-    /// properties of those classes, less `extension` blocks and a module's dunder functions
+    /// properties of those classes, less `extension` blocks, a module's dunder functions and a
+    /// class's constructors and the methods they call (`__init__`, `__new__`, `__post_init__`,
+    /// `__init_subclass__`), which override nothing
     fn run_with_snapshot(
         db: &ProjectDatabase,
         snapshot: &DocumentSnapshot,
