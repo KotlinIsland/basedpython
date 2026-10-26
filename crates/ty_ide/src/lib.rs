@@ -120,13 +120,13 @@ pub use override_members::{
 };
 pub use pasted_imports::{CopiedCode, CopiedImport, PastedImports, copied_imports, pasted_imports};
 pub use refactor::{
+    AnnotationChange, FunctionSignature, NewParameter, ParameterKind, SignatureChange,
+    SignatureParameter, change_signature, function_signature,
+};
+pub use refactor::{
     ClassMember, HierarchyClass, MemberKind, MovableKind, MovableMembers, MovableSymbol, Refactor,
     RefactorKind, RefactorOffer, SymbolMove, extract_superclass, movable_members, movable_symbol,
     move_symbol, pull_members_up, push_members_down, refactor, refactors,
-};
-pub use refactor::{
-    FunctionSignature, NewParameter, ParameterKind, SignatureParameter, change_signature,
-    function_signature,
 };
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};

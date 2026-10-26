@@ -155,7 +155,7 @@ pub(crate) fn rebound_from_nested_scope(
 }
 
 /// The scopes nested, at any depth, inside `scope`.
-fn descendants<'a>(
+pub(crate) fn descendants<'a>(
     index: &'a SemanticIndex<'_>,
     scope: FileScopeId,
 ) -> impl Iterator<Item = FileScopeId> + 'a {

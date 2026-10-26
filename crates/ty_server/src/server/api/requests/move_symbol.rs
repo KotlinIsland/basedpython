@@ -10,9 +10,9 @@ use lsp_types::{
     LspRequestMethod, MessageDirection, Position, Range, Request, TextDocumentIdentifier, TextEdit,
     Uri, WorkspaceEdit,
 };
-use ruff_db::files::{FileRange, system_path_to_file};
+use ruff_db::files::{File, FileRange, system_path_to_file};
 use ruff_db::system::SystemPathBuf;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextSize};
 use rustc_hash::FxHashMap;
 use ty_ide::{MovableKind, SymbolMove, movable_symbol, move_symbol};
 use ty_project::{ProjectDatabase, SemanticDb as _};
@@ -77,24 +77,7 @@ impl BackgroundDocumentRequestHandler for PrepareMoveSymbolRequestHandler {
         _client: &Client,
         params: PrepareMoveSymbolParams,
     ) -> crate::server::Result<Option<MovableSymbol>> {
-        if snapshot
-            .workspace_settings()
-            .is_language_services_disabled()
-            || snapshot.is_django_template()
-        {
-            return Ok(None);
-        }
-        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
-            return Ok(None);
-        };
-        if !file.source_type(db).is_py_file() {
-            return Ok(None);
-        }
-        let Some(offset) =
-            params
-                .position
-                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
-        else {
+        let Some((file, offset)) = position(db, snapshot, params.position) else {
             return Ok(None);
         };
         let Some(symbol) = movable_symbol(db, db.program_file(file), offset) else {
@@ -177,24 +160,7 @@ impl BackgroundDocumentRequestHandler for MoveSymbolRequestHandler {
         _client: &Client,
         params: MoveSymbolParams,
     ) -> crate::server::Result<Option<MoveSymbolAnswer>> {
-        if snapshot
-            .workspace_settings()
-            .is_language_services_disabled()
-            || snapshot.is_django_template()
-        {
-            return Ok(None);
-        }
-        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
-            return Ok(None);
-        };
-        if !file.source_type(db).is_py_file() {
-            return Ok(None);
-        }
-        let Some(offset) =
-            params
-                .position
-                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
-        else {
+        let Some((file, offset)) = position(db, snapshot, params.position) else {
             return Ok(None);
         };
         let Some(target) = params
@@ -262,4 +228,27 @@ impl MoveSymbolAnswer {
 impl RetriableRequestHandler for MoveSymbolRequestHandler {
     /// the user is waiting on the move they asked for
     const RETRY_ON_CANCELLATION: bool = true;
+}
+
+/// the file and offset of a position in the snapshot's document, `None` where a refactoring of a
+/// definition is not answered: when language services are off, and for a template, a notebook or
+/// a file that is not source code
+pub(super) fn position(
+    db: &ProjectDatabase,
+    snapshot: &DocumentSnapshot,
+    position: Position,
+) -> Option<(File, TextSize)> {
+    if snapshot
+        .workspace_settings()
+        .is_language_services_disabled()
+        || snapshot.is_django_template()
+    {
+        return None;
+    }
+    let file = snapshot.document().to_notebook_or_file(db)?;
+    if !file.source_type(db).is_py_file() {
+        return None;
+    }
+    let offset = position.to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())?;
+    Some((file, offset))
 }

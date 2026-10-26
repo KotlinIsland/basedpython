@@ -848,8 +848,10 @@ and answers as `by/moveSymbol` does
 ### changing a signature
 
 `by/changeSignature` gives a function a new parameter list — parameters added,
-removed, reordered, renamed, given or stripped of defaults, moved between kinds —
-and rewrites every call of it in the project to pass them. each call is bound the
+removed, reordered, renamed, given or stripped of defaults or annotations, moved
+between kinds — and rewrites every call of it in the project to pass them. it can
+rename the function too, wherever the project refers to it, imports included, and
+give it a new return annotation. each call is bound the
 way python binds it, its positional arguments to the positional parameters and its
 keywords by name, and written again for the new list: by position while the
 parameters still line up, by keyword after that, a keyword staying a keyword, and
@@ -880,17 +882,26 @@ parameter without a default; the function used other than called, unless every c
 stays valid. and where the result would not be python, or not the same program: a
 removed parameter the body still reads, a parameter without a default after one with
 a default, two of one name, kinds out of order, or a method another class of the
-project overrides or that overrides another's, whose signatures would part
+project overrides or that overrides another's, whose signatures would part. a new
+name that is not an identifier, is a keyword or is bound already in the scope the
+function is defined in is refused, and so is a default, a value or an annotation that is not one expression
+where it is written. also refused are a new parameter name the body already binds
+or reads from outside the function, a function its decorators bind to something
+other than itself, and one defined more than once where it is defined, as an
+`@overload` set is
 
 `by/prepareChangeSignature` takes `textDocument` and `position` — in a function's
-name or parameters, or in a name that refers to it — and answers `{name, uri, range, parameters}`, its parameters each `{name, kind, default, annotation}` with `kind`
+name or parameters, or in a name that refers to it — and answers `{name, uri, range, parameters, returns}`, `returns` its return annotation as the source writes it or `null`, and its parameters each `{name, kind, default, annotation}` with `kind`
 one of `positionalOnly`, `positionalOrKeyword`, `variadic` (`*args`), `keywordOnly`
 and `variadicKeyword` (`**kwargs`), and `default` and `annotation` as the source
 writes them; a method's `self` or `cls` is not listed and stays as it is.
-`by/changeSignature` takes the same position and `parameters`, the whole new list
-in order, each `{name, oldName?, kind, default?, value?}`: `oldName` the parameter it
-was, absent for a new one; `default` written as source, absent for none; `value` what
-each call passes a new one. it answers as `by/moveSymbol` does, `{edit, warnings}` or
+`by/changeSignature` takes the same position, `name?`, the function's new name, absent
+to keep it, `parameters`, the whole new list in order, each
+`{name, oldName?, kind, default?, annotation?, value?}`, and `returns?`: `oldName` the
+parameter it was, absent for a new one; `default` written as source, absent for
+none; `annotation` and `returns` written as source, `null` to remove the one there
+is, and absent to keep it (none, for a new parameter); `value` what each call passes
+a new one. it answers as `by/moveSymbol` does, `{edit, warnings}` or
 `{refused, warnings}`
 
 ## unwrap and remove

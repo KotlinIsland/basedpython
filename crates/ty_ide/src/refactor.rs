@@ -44,8 +44,8 @@ use ty_python_semantic::SemanticModel;
 use crate::FileEdit;
 
 pub use change_signature::{
-    FunctionSignature, NewParameter, ParameterKind, SignatureParameter, change_signature,
-    function_signature,
+    AnnotationChange, FunctionSignature, NewParameter, ParameterKind, SignatureChange,
+    SignatureParameter, change_signature, function_signature,
 };
 pub use class_members::{
     ClassMember, HierarchyClass, MemberKind, MovableMembers, extract_superclass, movable_members,

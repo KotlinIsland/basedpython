@@ -8,11 +8,14 @@ use lsp_types::{
     LspRequestMethod, MessageDirection, Position, Range, Request, TextDocumentIdentifier, Uri,
 };
 use ruff_db::files::FileRange;
-use ty_ide::{NewParameter, ParameterKind, change_signature, function_signature};
+use ty_ide::{
+    AnnotationChange, NewParameter, ParameterKind, SignatureChange, change_signature,
+    function_signature,
+};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
-use super::move_symbol::MoveSymbolAnswer;
-use crate::document::{FileRangeExt, PositionExt};
+use super::move_symbol::{MoveSymbolAnswer, position};
+use crate::document::FileRangeExt;
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -87,6 +90,8 @@ pub(crate) struct Signature {
     range: Range,
     /// its parameters, without the `self` or `cls` of a method, which stays as it is
     parameters: Vec<SignatureParameter>,
+    /// its return annotation, as the source writes it
+    returns: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -145,6 +150,7 @@ impl BackgroundDocumentRequestHandler for PrepareChangeSignatureRequestHandler {
                     annotation: parameter.annotation,
                 })
                 .collect(),
+            returns: signature.returns,
         }))
     }
 }
@@ -167,7 +173,40 @@ impl Request for ChangeSignatureRequest {
 pub(crate) struct ChangeSignatureParams {
     text_document: TextDocumentIdentifier,
     position: Position,
+    /// its new name; absent keeps the one it has
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     parameters: Vec<ChangedParameter>,
+    /// its return annotation
+    #[serde(default, skip_serializing_if = "WrittenAnnotation::is_kept")]
+    returns: WrittenAnnotation,
+}
+
+/// an annotation written as source, where `null` removes the one there is and a field left out
+/// keeps it: the field's absence and its `null` say different things, so it is not an `Option`
+#[derive(Debug, Default)]
+pub(crate) struct WrittenAnnotation(AnnotationChange);
+
+impl WrittenAnnotation {
+    fn is_kept(&self) -> bool {
+        self.0 == AnnotationChange::Keep
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WrittenAnnotation {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <Option<String> as serde::Deserialize>::deserialize(deserializer)
+            .map(|annotation| Self(AnnotationChange::Set(annotation)))
+    }
+}
+
+impl serde::Serialize for WrittenAnnotation {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.0 {
+            AnnotationChange::Keep => serializer.serialize_unit(),
+            AnnotationChange::Set(annotation) => annotation.serialize(serializer),
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -181,6 +220,9 @@ pub(crate) struct ChangedParameter {
     /// its default, written as source; absent for none
     #[serde(default)]
     default: Option<String>,
+    /// its annotation; absent keeps the one it has, none for a new parameter
+    #[serde(default, skip_serializing_if = "WrittenAnnotation::is_kept")]
+    annotation: WrittenAnnotation,
     /// for a new parameter, what each call passes it, written as source; absent leaves it to its
     /// default
     #[serde(default)]
@@ -208,21 +250,26 @@ impl BackgroundDocumentRequestHandler for ChangeSignatureRequestHandler {
         let Some((file, offset)) = position(db, snapshot, params.position) else {
             return Ok(None);
         };
-        let parameters: Vec<NewParameter> = params
-            .parameters
-            .into_iter()
-            .map(|parameter| NewParameter {
-                name: parameter.name,
-                old_name: parameter.old_name,
-                kind: parameter.kind.into(),
-                default: parameter.default,
-                value: parameter.value,
-            })
-            .collect();
+        let change = SignatureChange {
+            name: params.name,
+            parameters: params
+                .parameters
+                .into_iter()
+                .map(|parameter| NewParameter {
+                    name: parameter.name,
+                    old_name: parameter.old_name,
+                    kind: parameter.kind.into(),
+                    default: parameter.default,
+                    annotation: parameter.annotation.0,
+                    value: parameter.value,
+                })
+                .collect(),
+            returns: params.returns.0,
+        };
         Ok(Some(MoveSymbolAnswer::of(
             db,
             snapshot,
-            change_signature(db, db.program_file(file), offset, &parameters),
+            change_signature(db, db.program_file(file), offset, &change),
         )))
     }
 }
@@ -230,26 +277,4 @@ impl BackgroundDocumentRequestHandler for ChangeSignatureRequestHandler {
 impl RetriableRequestHandler for ChangeSignatureRequestHandler {
     /// the user is waiting on the change they asked for
     const RETRY_ON_CANCELLATION: bool = true;
-}
-
-/// the file and offset of a position in the snapshot's document, `None` where the request is not
-/// answered
-fn position(
-    db: &ProjectDatabase,
-    snapshot: &DocumentSnapshot,
-    position: Position,
-) -> Option<(ruff_db::files::File, ruff_text_size::TextSize)> {
-    if snapshot
-        .workspace_settings()
-        .is_language_services_disabled()
-        || snapshot.is_django_template()
-    {
-        return None;
-    }
-    let file = snapshot.document().to_notebook_or_file(db)?;
-    if !file.source_type(db).is_py_file() {
-        return None;
-    }
-    let offset = position.to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())?;
-    Some((file, offset))
 }
