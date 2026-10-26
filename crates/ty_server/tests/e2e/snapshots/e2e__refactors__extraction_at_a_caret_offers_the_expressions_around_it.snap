@@ -1,0 +1,36 @@
+---
+source: crates/ty_server/tests/e2e/refactors.rs
+expression: resolved.edit
+---
+{
+  "changes": {
+    "file://<temp_dir>/src/main.py": [
+      {
+        "range": {
+          "start": {
+            "line": 1,
+            "character": 0
+          },
+          "end": {
+            "line": 1,
+            "character": 0
+          }
+        },
+        "newText": "    compute_1 = compute()\n"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1,
+            "character": 8
+          },
+          "end": {
+            "line": 1,
+            "character": 17
+          }
+        },
+        "newText": "compute_1"
+      }
+    ]
+  }
+}

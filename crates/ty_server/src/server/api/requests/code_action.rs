@@ -190,8 +190,25 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                     .range
                     .to_text_range(db, file, snapshot.document().uri(), snapshot.encoding())
         {
-            for offer in refactors(db, program_file, range, &wanted) {
+            // a client asking for refactorings by kind, on purpose, is asking what it can extract
+            // around a caret too; one asking while the caret moves would be offered every
+            // expression the caret is in
+            let around_caret = invoked && only.is_some();
+            for offer in refactors(db, program_file, range, &wanted, around_caret) {
                 let kind = CodeActionKind::new(offer.kind.code_action_kind());
+                let offered_for = if offer.range == range {
+                    Some(params.range)
+                } else {
+                    offer
+                        .range
+                        .to_lsp_range(db, program_file.file(db), snapshot.encoding())
+                        .map(|range| range.local_range())
+                };
+                let Some(offered_for) = offered_for else {
+                    continue;
+                };
+                // an action about another range than the one asked about says which
+                let elsewhere = offered_for != params.range;
                 let action = match offer.availability {
                     Ok(edits) => Some(refactor_action(
                         db,
@@ -199,7 +216,8 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         offer.kind,
                         offer.title,
                         edits,
-                        params.range,
+                        offered_for,
+                        elsewhere,
                     )),
                     // a refactoring that cannot be applied is only worth showing to a
                     // user who asked for refactorings, who is owed the reason
@@ -207,6 +225,16 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         title: offer.title,
                         kind: Some(kind),
                         disabled: Some(types::CodeActionDisabled { reason }),
+                        data: elsewhere
+                            .then(|| {
+                                serde_json::to_value(RefactorData::new(
+                                    snapshot,
+                                    offer.kind,
+                                    offered_for,
+                                ))
+                                .ok()
+                            })
+                            .flatten(),
                         ..lsp_types::CodeAction::default()
                     }),
                     Err(_) => None,
@@ -258,7 +286,9 @@ pub(crate) fn to_lsp_edits(
 /// A client that can resolve an action's edit is sent the action without one, carrying what
 /// `codeAction/resolve` needs to spell it again; any other client is sent `edits` up front. That
 /// saves serialising a rewrite nobody chose, not working it out — the rewrite in hand is how this
-/// refactoring was known to apply at all.
+/// refactoring was known to apply at all. An action about another range than the one asked
+/// about — an extraction offered around a caret — carries its [`RefactorData`] either way, for
+/// its `range` to tell a client which expression it extracts.
 fn refactor_action(
     db: &ProjectDatabase,
     snapshot: &DocumentSnapshot,
@@ -266,38 +296,30 @@ fn refactor_action(
     title: String,
     edits: Vec<FileEdit>,
     lsp_range: types::Range,
+    elsewhere: bool,
 ) -> lsp_types::CodeAction {
-    let action_kind = CodeActionKind::new(kind.code_action_kind());
-    if snapshot
+    let resolvable = snapshot
         .resolved_client_capabilities()
-        .supports_code_action_edit_resolve()
-    {
-        let data = RefactorData {
-            uri: snapshot.document().uri().clone(),
-            version: snapshot.document().version(),
-            refactor: kind.id().to_string(),
-            range: lsp_range,
-        };
-        return lsp_types::CodeAction {
-            title,
-            kind: Some(action_kind),
-            data: serde_json::to_value(data).ok(),
-            ..lsp_types::CodeAction::default()
-        };
-    }
+        .supports_code_action_edit_resolve();
     lsp_types::CodeAction {
         title,
-        kind: Some(action_kind),
-        edit: Some(lsp_types::WorkspaceEdit {
+        kind: Some(CodeActionKind::new(kind.code_action_kind())),
+        edit: (!resolvable).then(|| lsp_types::WorkspaceEdit {
             changes: to_lsp_edits(db, snapshot.encoding(), edits),
             ..lsp_types::WorkspaceEdit::default()
         }),
+        data: (resolvable || elsewhere)
+            .then(|| serde_json::to_value(RefactorData::new(snapshot, kind, lsp_range)).ok())
+            .flatten(),
         ..lsp_types::CodeAction::default()
     }
 }
 
 /// What a refactoring's code action carries for `codeAction/resolve` to compute
 /// its edit: the refactoring, and the document and range it was offered for.
+///
+/// `range` is the range the refactoring is about: the range the client asked about, or, for
+/// an extraction offered around a caret, the expression it extracts.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct RefactorData {
     pub(crate) uri: Uri,
@@ -306,6 +328,17 @@ pub(crate) struct RefactorData {
     pub(crate) version: crate::document::DocumentVersion,
     pub(crate) refactor: String,
     pub(crate) range: types::Range,
+}
+
+impl RefactorData {
+    fn new(snapshot: &DocumentSnapshot, kind: ty_ide::RefactorKind, range: types::Range) -> Self {
+        Self {
+            uri: snapshot.document().uri().clone(),
+            version: snapshot.document().version(),
+            refactor: kind.id().to_string(),
+            range,
+        }
+    }
 }
 
 /// What a quick fix's `data` tells a client about it, beyond what the protocol's own

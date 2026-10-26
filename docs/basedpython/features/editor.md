@@ -445,6 +445,38 @@ while queue.pending():  # extracting `queue.pending()` is refused: it runs every
     queue.pop()
 ```
 
+what could observe the move is asked of the checker rather than read off the
+spelling. an operator of python's own over builtin numbers and strings — `+`, `-`
+and `*` over numbers python does not convert to compute them, `+` joining strings,
+the bitwise operators over integers, comparisons — runs no code of the program's
+and cannot raise, and nor does reading a module's attribute. an operand counts as
+a builtin number or string only where the checker knows it is exactly one: a
+literal, a `final` type such as `final int`, or a `bool`. a plain `int` or `str`
+may be an instance of a subclass, whose operators are the program's own, so a
+declared `int` is not enough. so in `scale * math.pi * radius ** 2` the power can
+be extracted where `scale` is a `final float` in a `.by` file. in python a `float`
+also admits an `int`, and an `int` meeting a `float` or a `complex` is not taken
+to be quiet, since one too large for it raises `OverflowError` (`10**400 + 0.5`);
+nor is repeating a string, which raises it for a count too large for an index.
+reading an attribute of an instance is not taken to be quiet, since it may be a
+property; nor are `/`, `//`, `%` and `**`, which raise for some operands
+
+a selection may be a run of operands that python groups otherwise: `a + b + c` is
+`(a + b) + c`, so `b + c` is no expression of it, and extracting it evaluates
+`a + (b + c)`. that is offered when the operator is associative over what the
+operands are — `+`, `*` and the bitwise operators over integers, `+` over strings
+or over byte strings — and not over floats, which round differently grouped the
+other way
+
+with nothing selected, a client that asks for `refactor.extract` kinds explicitly
+(`triggerKind: Invoked` and `only` given) is offered an extraction for each
+expression around the caret, innermost first, the same expressions
+[type info](#type-info) lists less a bare name. each action's title names the
+expression — `` Extract variable `value` from `len(items) + 1` `` — and its
+`data.range` is the expression's range, for an editor that lets its user pick one
+and highlights it; when none can be extracted, the innermost one's refusal is the
+answer. a client asking as the caret moves is offered no extraction at a caret
+
 adding a return annotation writes the return type the checker infers, importing
 what it names. it is refused when that type is partly `Unknown` — `x + y` of two
 unannotated parameters — since `Unknown` is no type a program can name, and the

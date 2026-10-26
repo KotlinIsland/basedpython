@@ -15,12 +15,15 @@
 //! anything mutable, and cannot raise; see [`is_constant`].
 
 use ruff_diagnostics::Edit;
+use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal, walk_node};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt, UnaryOp};
 use ruff_python_trivia::PythonWhitespace;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::types::ide_support::folds_to_a_literal;
+use ty_python_semantic::types::ide_support::{
+    BuiltinScalar, builtin_scalar_kinds, folds_to_a_literal,
+};
 
 use super::evaluation::{NotOnce, Placement, placement_in_statement};
 use super::hazards::{contains_named_expression, context_dependent_construct};
@@ -42,46 +45,126 @@ pub(super) fn plan(
     let Some(selection) = selected_expression(context, range) else {
         return Err(Refusal::NotApplicable);
     };
-    let expr = selection.expr;
-    if target == Target::Constant && !is_constant(context, expr) {
+    plan_selection(context, &selection, target, Title::Plain)
+}
+
+/// What extracting does at a caret rather than a selection: each expression of the statement
+/// around `offset`, innermost first, with the range a client selects to extract it and the
+/// rewrite — the expressions `by/expressionTypes` answers at the same caret, less a bare name
+/// and those that cannot be bound to a name. When none of them can be extracted, the innermost one's refusal is
+/// the answer, so an editor asking about a caret is told why rather than nothing.
+pub(super) fn around_caret(
+    context: &RefactorContext<'_>,
+    offset: TextSize,
+    target: Target,
+) -> Vec<(TextRange, Result<Plan, Refusal>)> {
+    let covering = covering_node(context.parsed.syntax().into(), TextRange::empty(offset));
+    let mut ranges: Vec<TextRange> = Vec::new();
+    for node in covering.ancestors() {
+        if node.is_statement() {
+            break;
+        }
+        if node.as_expr_ref().is_some() && ranges.last() != Some(&node.range()) {
+            ranges.push(node.range());
+        }
+    }
+
+    let mut available = Vec::new();
+    let mut first_refusal = None;
+    for range in ranges {
+        let Some(selection) = selected_expression(context, range) else {
+            continue;
+        };
+        // a name is already a name
+        if matches!(selection.extracted, Extracted::Expr(Expr::Name(_))) {
+            continue;
+        }
+        match plan_selection(context, &selection, target, Title::Naming) {
+            Ok(plan) => available.push((range, Ok(plan))),
+            Err(Refusal::NotApplicable) => {}
+            Err(refusal) => {
+                if first_refusal.is_none() {
+                    first_refusal = Some((range, Err(refusal)));
+                }
+            }
+        }
+    }
+    if available.is_empty() {
+        available.extend(first_refusal);
+    }
+    available
+}
+
+/// Whether a title names the expression it extracts, which it must when several are offered at
+/// once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Title {
+    Plain,
+    Naming,
+}
+
+fn plan_selection(
+    context: &RefactorContext<'_>,
+    selection: &Selection<'_>,
+    target: Target,
+    title_kind: Title,
+) -> Result<Plan, Refusal> {
+    if target == Target::Constant
+        && !selection
+            .operands()
+            .iter()
+            .all(|operand| is_constant(context, operand))
+    {
         return Err(Refusal::NotApplicable);
     }
     let module = context.parsed.suite();
-    let ancestors = statement_ancestors(module, expr.range());
+    let ancestors = statement_ancestors(module, selection.replaced);
     let Some(&statement) = ancestors.last() else {
         return Err(Refusal::NotApplicable);
     };
     // the statement already is the expression on its own
-    if matches!(statement, Stmt::Expr(stmt) if stmt.value.range() == expr.range()) {
+    if let Extracted::Expr(expr) = selection.extracted
+        && matches!(statement, Stmt::Expr(stmt) if stmt.value.range() == expr.range())
+    {
         return Err(Refusal::NotApplicable);
     }
 
     let names = names_in_file(context);
     let version = context.file.python_version(context.db);
-    let base = suggest_for_expression(expr, version.minor);
-    let (name, title) = match target {
-        Target::Variable => {
-            let name = fresh_name(&base, &names);
-            let title = format!("Extract variable `{name}`");
-            (name, title)
-        }
-        Target::Constant => {
-            let name = fresh_name(&base.to_uppercase(), &names);
-            let title = format!("Introduce constant `{name}`");
-            (name, title)
-        }
+    let base = selection.suggested_name(version.minor);
+    let name = match target {
+        Target::Variable => fresh_name(&base, &names),
+        Target::Constant => fresh_name(&base.to_uppercase(), &names),
     };
+    let mut title = match target {
+        Target::Variable => format!("Extract variable `{name}`"),
+        Target::Constant => format!("Introduce constant `{name}`"),
+    };
+    if title_kind == Title::Naming {
+        title = format!(
+            "{title} from `{}`",
+            abbreviated(&context.source()[selection.replaced])
+        );
+    }
     let refuse = |reason: String| Refusal::refused(title.clone(), reason);
 
-    if let Some(reason) = context_dependent_construct(context, AnyNodeRef::from(expr)) {
-        return Err(refuse(format!("the expression can't be moved: {reason}")));
-    }
-    if contains_named_expression(expr) {
-        return Err(refuse("the expression binds a name with `:=`".to_string()));
+    for operand in selection.operands() {
+        if let Some(reason) = context_dependent_construct(context, AnyNodeRef::from(operand)) {
+            return Err(refuse(format!("the expression can't be moved: {reason}")));
+        }
+        if contains_named_expression(operand) {
+            return Err(refuse("the expression binds a name with `:=`".to_string()));
+        }
     }
 
-    let placement = placement_in_statement(statement, AnyNodeRef::from(expr));
-    let expression_text = expression_source(context, expr);
+    // a run of operands is evaluated where its first operand was, so it is that operand's place
+    // in the statement that decides whether the run can be evaluated before the statement
+    let placement = placement_in_statement(
+        &context.model,
+        statement,
+        AnyNodeRef::from(selection.first()),
+    );
+    let expression_text = expression_source(context, selection);
     let line_ending = context.line_ending();
 
     let insertion = match target {
@@ -159,15 +242,63 @@ pub(super) fn plan(
     })
 }
 
+/// `text` on one line and at most a few dozen characters, for a title to name it by.
+fn abbreviated(text: &str) -> String {
+    const MOST: usize = 40;
+    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= MOST {
+        return one_line;
+    }
+    let mut shortened: String = one_line.chars().take(MOST - 1).collect();
+    shortened.push('…');
+    shortened
+}
+
+/// What a selection extracts.
+enum Extracted<'a> {
+    /// An expression of the tree.
+    Expr(&'a Expr),
+    /// Consecutive operands of a chain of one associative operator, `b + c` in `a + b + c`,
+    /// which python groups as `(a + b) + c` and so has no node of its own.
+    Run { operands: Vec<&'a Expr> },
+}
+
 struct Selection<'a> {
-    expr: &'a Expr,
+    extracted: Extracted<'a>,
     /// The range the name replaces: the expression, with the parentheses the
     /// selection included.
     replaced: TextRange,
 }
 
+impl<'a> Selection<'a> {
+    /// The expressions the selection is made of, evaluated in this order.
+    fn operands(&self) -> Vec<&'a Expr> {
+        match &self.extracted {
+            Extracted::Expr(expr) => vec![*expr],
+            Extracted::Run { operands, .. } => operands.clone(),
+        }
+    }
+
+    /// The first expression of the selection to be evaluated.
+    fn first(&self) -> &'a Expr {
+        match &self.extracted {
+            Extracted::Expr(expr) => expr,
+            Extracted::Run { operands, .. } => operands[0],
+        }
+    }
+
+    /// A name that says what the selection evaluates to.
+    fn suggested_name(&self, python_version_minor: u8) -> String {
+        match &self.extracted {
+            Extracted::Expr(expr) => suggest_for_expression(expr, python_version_minor),
+            Extracted::Run { .. } => "value".to_string(),
+        }
+    }
+}
+
 /// The expression the selection covers exactly, ignoring surrounding
-/// whitespace and allowing parentheses around it.
+/// whitespace and allowing parentheses around it — or, when the selection
+/// covers consecutive operands of an associative chain, those operands.
 fn selected_expression<'a>(
     context: &'a RefactorContext<'_>,
     range: TextRange,
@@ -176,7 +307,7 @@ fn selected_expression<'a>(
         context: &'c RefactorContext<'db>,
         range: TextRange,
         parents: Vec<AnyNodeRef<'a>>,
-        found: Option<Selection<'a>>,
+        found: Option<&'a Expr>,
     }
     impl<'a> SourceOrderVisitor<'a> for Finder<'a, '_, '_> {
         fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
@@ -205,10 +336,7 @@ fn selected_expression<'a>(
                 && (expr.range() == self.range
                     || self.context.parenthesized_range(expr, parent) == self.range)
             {
-                self.found = Some(Selection {
-                    expr,
-                    replaced: self.range,
-                });
+                self.found = Some(expr);
                 return;
             }
             ruff_python_ast::visitor::source_order::walk_expr(self, expr);
@@ -232,10 +360,101 @@ fn selected_expression<'a>(
         found: None,
     };
     walk_node(&mut finder, context.parsed.syntax().into());
-    let selection = finder.found?;
-    is_extractable(selection.expr).then_some(selection)
+    if let Some(expr) = finder.found {
+        return is_extractable(expr).then_some(Selection {
+            extracted: Extracted::Expr(expr),
+            replaced: trimmed,
+        });
+    }
+    selected_run(context, trimmed)
 }
 
+/// Consecutive operands of an associative chain that `range` covers exactly, from the first
+/// one's opening parenthesis, if it has one, to the last one's closing parenthesis.
+///
+/// `a + b + c` is `(a + b) + c`, so `b + c` is no expression of it. Binding `b + c` to a name
+/// and reading `a + value` instead evaluates `a + (b + c)`, which is the same value exactly when
+/// the operator is associative over the operands' types — which the checker is asked, not the
+/// spelling: `+` over integers or over strings is, `+` over floats rounds differently grouped
+/// the other way, and an operator a class defines is anything it likes.
+fn selected_run<'a>(context: &'a RefactorContext<'_>, range: TextRange) -> Option<Selection<'a>> {
+    let covering = covering_node(context.parsed.syntax().into(), range);
+    let chain = covering.ancestors().find_map(|node| match node {
+        AnyNodeRef::ExprBinOp(bin_op) => Some(bin_op),
+        _ => None,
+    })?;
+    // the operands of the chain, each with the range it has in it, parentheses included
+    let mut operands: Vec<(&Expr, TextRange)> = Vec::new();
+    let mut node = chain;
+    loop {
+        let parent = AnyNodeRef::from(node);
+        operands.push((
+            &node.right,
+            context.parenthesized_range(&node.right, parent),
+        ));
+        let left_range = context.parenthesized_range(&node.left, parent);
+        match &*node.left {
+            Expr::BinOp(left) if left.op == chain.op && left_range == left.range() => node = left,
+            left => {
+                operands.push((left, left_range));
+                break;
+            }
+        }
+    }
+    operands.reverse();
+
+    let first = operands
+        .iter()
+        .position(|(_, operand_range)| operand_range.start() == range.start())?;
+    let last = operands
+        .iter()
+        .position(|(_, operand_range)| operand_range.end() == range.end())?;
+    // a run starting at the first operand is an expression of the tree, found already, and a
+    // single operand is not a run
+    if first == 0 || last <= first {
+        return None;
+    }
+    let all: Vec<&Expr> = operands.iter().map(|(operand, _)| *operand).collect();
+    if !is_associative(context, chain.op, &all[..=last]) {
+        return None;
+    }
+    Some(Selection {
+        extracted: Extracted::Run {
+            operands: all[first..=last].to_vec(),
+        },
+        replaced: range,
+    })
+}
+
+/// Whether `op` is associative over the values `operands` evaluate to, as the checker reads
+/// them: integers under `+`, `*` and the bitwise operators, and strings or byte strings — all of
+/// one kind — under `+`.
+fn is_associative(context: &RefactorContext<'_>, op: ast::Operator, operands: &[&Expr]) -> bool {
+    let Some(kinds) = operands
+        .iter()
+        .map(|operand| builtin_scalar_kinds(&context.model, operand))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let integers = || {
+        kinds
+            .iter()
+            .flatten()
+            .all(|kind| matches!(kind, BuiltinScalar::Int | BuiltinScalar::Bool))
+    };
+    let all_one = |wanted: BuiltinScalar| kinds.iter().all(|kinds| kinds.as_slice() == [wanted]);
+    match op {
+        ast::Operator::Add => {
+            integers() || all_one(BuiltinScalar::Str) || all_one(BuiltinScalar::Bytes)
+        }
+        ast::Operator::Mult
+        | ast::Operator::BitAnd
+        | ast::Operator::BitOr
+        | ast::Operator::BitXor => integers(),
+        _ => false,
+    }
+}
 /// Whether `expr` is a value that can be bound to a name: it is read rather
 /// than assigned, and it means something outside its position.
 fn is_extractable(expr: &Expr) -> bool {
@@ -256,9 +475,17 @@ fn is_extractable(expr: &Expr) -> bool {
     }
 }
 
-/// The source of `expr` as the value of an assignment, parenthesized where its
-/// text would not parse there on its own.
-fn expression_source(context: &RefactorContext<'_>, expr: &Expr) -> String {
+/// The source of the selection as the value of an assignment, parenthesized where its text
+/// would not parse there on its own.
+fn expression_source(context: &RefactorContext<'_>, selection: &Selection<'_>) -> String {
+    let Extracted::Expr(expr) = selection.extracted else {
+        let text = &context.source()[selection.replaced];
+        return if context.is_multiline(selection.replaced) {
+            format!("({text})")
+        } else {
+            text.to_string()
+        };
+    };
     let text = context.expression_text(expr);
     let bracketed = matches!(
         expr,
@@ -509,6 +736,164 @@ mod tests {
                 return a + <START>b + c<END>
             ",
         ), @"not offered");
+    }
+
+    /// `a + b + c` is `(a + b) + c`; extracting `b + c` evaluates `a + (b + c)`, which is
+    /// the same value because adding integers is associative.
+    #[test]
+    fn operands_of_an_associative_chain() {
+        assert_snapshot!(extract(
+            "
+            def f(a: int, b: int, c: int, d: int):
+                return a + <START>b + c<END> + d
+            ",
+        ), @"
+        Extract variable `value`
+        ---
+
+        def f(a: int, b: int, c: int, d: int):
+            value = b + c
+            return a + value + d
+        ");
+    }
+
+    #[test]
+    fn operands_of_a_string_concatenation() {
+        assert_snapshot!(extract(
+            "
+            def f(name: str):
+                return 'hello ' + <START>name + '!'<END>
+            ",
+        ), @"
+        Extract variable `value`
+        ---
+
+        def f(name: str):
+            value = name + '!'
+            return 'hello ' + value
+        ");
+    }
+
+    /// floats round, so `(a + b) + c` and `a + (b + c)` can differ
+    #[test]
+    fn operands_of_a_float_chain_are_not_offered() {
+        assert_snapshot!(extract(
+            "
+            def f(a: float, b: float, c: float):
+                return a + <START>b + c<END>
+            ",
+        ), @"not offered");
+    }
+
+    #[test]
+    fn operands_under_another_operator_are_not_offered() {
+        assert_snapshot!(extract(
+            "
+            def f(a: int, b: int, c: int):
+                return a * <START>b + c<END>
+            ",
+        ), @"not offered");
+    }
+
+    #[test]
+    fn operands_after_a_call_are_refused() {
+        assert_snapshot!(extract(
+            "
+            def f(b: int, c: int):
+                return g() + <START>b + c<END>
+
+            def g() -> int: ...
+            ",
+        ), @"refused: Extract variable `value` (something with effects is evaluated before the expression, which would now run after it)");
+    }
+
+    /// reading a module's attribute and multiplying two numbers run nothing of the program's,
+    /// so evaluating the power first changes nothing
+    #[test]
+    fn after_a_module_attribute_and_arithmetic() {
+        assert_snapshot!(extract(
+            "
+            import math
+
+            def f(radius: float, scale: int):
+                return scale * math.pi * <START>radius ** 2<END>
+            ",
+        ), @"
+        Extract variable `value`
+        ---
+
+        import math
+
+        def f(radius: float, scale: int):
+            value = radius ** 2
+            return scale * math.pi * value
+        ");
+    }
+
+    /// `self.price` may be a property, which could see the program differently once the
+    /// expression after it is evaluated first
+    #[test]
+    fn after_an_instance_attribute_is_refused() {
+        assert_snapshot!(extract(
+            "
+            class Item:
+                price: float
+                quantity: int
+
+                def total(self):
+                    return self.price * <START>self.quantity<END>
+            ",
+        ), @"refused: Extract variable `quantity_1` (something with effects is evaluated before the expression, which would now run after it)");
+    }
+
+    #[test]
+    fn around_a_caret_every_enclosing_expression() {
+        assert_snapshot!(
+            RefactorTest::python(
+                "
+                def f(items: list[int], tax: int):
+                    print(len(it<CURSOR>ems) + tax)
+                ",
+            )
+            .around_caret(RefactorKind::ExtractVariable),
+            @"
+        len(items): Extract variable `value` from `len(items)`
+        len(items) + tax: Extract variable `value` from `len(items) + tax`
+        "
+        );
+    }
+
+    #[test]
+    fn around_a_caret_the_innermost_refusal_when_nothing_applies() {
+        assert_snapshot!(
+            RefactorTest::python(
+                "
+                def f(queue):
+                    while queue.pen<CURSOR>ding():
+                        queue.pop()
+                ",
+            )
+            .around_caret(RefactorKind::ExtractVariable),
+            @"queue.pending: refused: Extract variable `pending` from `queue.pending` (the expression can't be evaluated before its statement: it is evaluated again on every iteration of the loop)"
+        );
+    }
+
+    #[test]
+    fn around_a_caret_constants_are_the_literal_expressions() {
+        assert_snapshot!(
+            RefactorTest::python(
+                "
+                def f(seconds: int):
+                    return seconds / (60 * 6<CURSOR>0 * 24)
+                ",
+            )
+            .around_caret(RefactorKind::IntroduceConstant),
+            @"
+        60: Introduce constant `NUMBER` from `60`
+        60 * 60: Introduce constant `VALUE` from `60 * 60`
+        60 * 60 * 24: Introduce constant `VALUE` from `60 * 60 * 24`
+        "
+        );
     }
 
     #[test]

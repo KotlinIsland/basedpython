@@ -197,3 +197,49 @@ fn resolve_after_an_edit_is_content_modified() -> Result<()> {
 
     Ok(())
 }
+
+/// Asked explicitly for extractions with nothing selected, the server offers one for each
+/// expression around the caret, each naming the expression and carrying its range; asked as
+/// the caret moves, it offers none.
+#[test]
+fn extraction_at_a_caret_offers_the_expressions_around_it() -> Result<()> {
+    let (mut server, file) = server(true)?;
+    let only = Some(vec![CodeActionKind::new("refactor.extract")]);
+
+    let moving = request(
+        &mut server,
+        file,
+        caret(1, 10),
+        only.clone(),
+        Some(CodeActionTriggerKind::Automatic),
+    );
+    assert_eq!(moving, Vec::new());
+
+    let actions = request(
+        &mut server,
+        file,
+        caret(1, 10),
+        only,
+        Some(CodeActionTriggerKind::Invoked),
+    );
+    let [action] = actions.as_slice() else {
+        panic!("expected the call to be offered, got {actions:#?}");
+    };
+    assert_eq!(
+        action.title,
+        "Extract variable `compute_1` from `compute()`"
+    );
+    let data = action.data.as_ref().expect("the action to carry its range");
+    assert_eq!(
+        data["range"],
+        serde_json::json!({
+            "start": { "line": 1, "character": 8 },
+            "end": { "line": 1, "character": 17 },
+        })
+    );
+
+    let resolved = server.send_request_await::<CodeActionResolveRequest>(action.clone());
+    insta::assert_json_snapshot!(resolved.edit);
+
+    Ok(())
+}

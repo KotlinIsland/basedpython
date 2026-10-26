@@ -18,6 +18,7 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, ScopeKind};
 use ty_python_core::{SemanticIndex, semantic_index};
+use ty_python_semantic::SemanticModel;
 
 use super::evaluation::{NotOnce, Placement, is_pure, placement_in_statement};
 use super::flow::{
@@ -156,7 +157,8 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         check_pure_value_is_stable(context, index, scope, &assignment, &reads, &in_suite)
             .map_err(|reason| refuse(&reason))?;
     } else {
-        check_single_immediate_read(&reads, scope, &in_suite).map_err(|reason| refuse(&reason))?;
+        check_single_immediate_read(&context.model, &reads, scope, &in_suite)
+            .map_err(|reason| refuse(&reason))?;
     }
 
     let value_text = context.expression_text(value);
@@ -563,6 +565,7 @@ fn collect_names<'a>(expr: &'a Expr, names: &mut Vec<&'a ast::ExprName>) {
 /// single read, in the statement right after the assignment, with nothing that
 /// could observe the difference evaluated before the read.
 fn check_single_immediate_read(
+    model: &SemanticModel<'_>,
     reads: &[Read<'_>],
     scope: FileScopeId,
     in_suite: &super::text::InSuite<'_>,
@@ -588,7 +591,7 @@ fn check_single_immediate_read(
                 .to_string(),
         );
     }
-    match placement_in_statement(next, AnyNodeRef::from(read.name)) {
+    match placement_in_statement(model, next, AnyNodeRef::from(read.name)) {
         Placement::Once {
             effects_before: false,
         } => Ok(()),

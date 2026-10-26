@@ -6,8 +6,12 @@
 //! its statement runs, and when nothing evaluated before it could observe the
 //! move. This module answers both, following python's evaluation order.
 
-use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt, UnaryOp};
+use ruff_python_ast::{self as ast, AnyNodeRef, CmpOp, Expr, Operator, Stmt, UnaryOp};
 use ruff_text_size::Ranged;
+use ty_python_semantic::SemanticModel;
+use ty_python_semantic::types::ide_support::{
+    BuiltinScalar, builtin_scalar_kinds, is_module_value,
+};
 
 /// Where a target expression sits in the evaluation of its statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,8 +89,13 @@ pub(crate) fn is_pure(expr: &Expr) -> bool {
 
 /// Where the expression `target` sits in the evaluation of `statement`. `target`
 /// must be a node of `statement`'s tree, since it is found by identity.
-pub(crate) fn placement_in_statement(statement: &Stmt, target: AnyNodeRef<'_>) -> Placement {
+pub(crate) fn placement_in_statement(
+    model: &SemanticModel<'_>,
+    statement: &Stmt,
+    target: AnyNodeRef<'_>,
+) -> Placement {
     let mut walk = Walk {
+        model,
         target,
         effects: false,
     };
@@ -94,14 +103,157 @@ pub(crate) fn placement_in_statement(statement: &Stmt, target: AnyNodeRef<'_>) -
         .unwrap_or(Placement::NotOnce(NotOnce::Opaque))
 }
 
-struct Walk<'a> {
+/// Whether evaluating `expr` has no effect at all: it runs no code of the program's,
+/// binds nothing and raises nothing, so evaluating something else before it or after it
+/// cannot tell the difference.
+///
+/// Wider than [`is_pure`], because it asks the checker what the operands are: `a + b`
+/// over two `int`s is python's own addition, and `math.pi` looks a name up in a
+/// module, where the same spelling over values of a class the program wrote could
+/// run any `__add__` or property.
+pub(crate) fn is_effect_free(model: &SemanticModel<'_>, expr: &Expr) -> bool {
+    if is_pure(expr) {
+        return true;
+    }
+    let effect_free = |expr: &Expr| is_effect_free(model, expr);
+    match expr {
+        Expr::BinOp(bin_op) => {
+            effect_free(&bin_op.left)
+                && effect_free(&bin_op.right)
+                && operation_is_quiet(model, expr)
+        }
+        Expr::UnaryOp(unary) => effect_free(&unary.operand) && operation_is_quiet(model, expr),
+        Expr::Compare(compare) => {
+            compare.operands.iter().all(effect_free) && operation_is_quiet(model, expr)
+        }
+        Expr::BoolOp(bool_op) => {
+            // `and` and `or` ask each operand's truth, which a builtin scalar answers itself
+            bool_op
+                .values
+                .iter()
+                .all(|value| effect_free(value) && builtin_scalar_kinds(model, value).is_some())
+        }
+        Expr::If(if_expr) => {
+            effect_free(&if_expr.test)
+                && builtin_scalar_kinds(model, &if_expr.test).is_some()
+                && effect_free(&if_expr.body)
+                && effect_free(&if_expr.orelse)
+        }
+        Expr::Attribute(attribute) => {
+            effect_free(&attribute.value) && operation_is_quiet(model, expr)
+        }
+        Expr::Tuple(tuple) => {
+            tuple.ctx.is_load()
+                && !tuple.is_anon_named_tuple
+                && !tuple.is_anon_named_tuple_value
+                && tuple.callable_shape.is_none()
+                && !tuple.is_parameter_shape
+                && tuple.elts.iter().all(effect_free)
+        }
+        _ => false,
+    }
+}
+
+/// Whether the operation `expr` performs on its operands — not the evaluation of the
+/// operands themselves — runs no code of the program's and cannot raise.
+///
+/// That is an operator of python's own over builtin scalars that is defined for every
+/// pair of values it is given: `+`, `-` and `*` over numbers, `+` joining two strings
+/// or two byte strings and `*` repeating one, the bitwise operators over integers,
+/// equality, and ordering among numbers that are not complex or among strings. `/`,
+/// `//`, `%`, `**` and the shifts are left out because each raises for some operands,
+/// and something that may raise before an expression decides whether it runs. Reading
+/// an attribute of a module is quiet too.
+fn operation_is_quiet(model: &SemanticModel<'_>, expr: &Expr) -> bool {
+    use BuiltinScalar::{Bool, Bytes, Complex, Float, Int, Str};
+    const NUMBERS: &[BuiltinScalar] = &[Bool, Int, Float, Complex];
+    const INTEGERS: &[BuiltinScalar] = &[Bool, Int];
+    const ORDERED_NUMBERS: &[BuiltinScalar] = &[Bool, Int, Float];
+
+    let kinds = |expr: &Expr| builtin_scalar_kinds(model, expr);
+    let all_in = |kinds: &[BuiltinScalar], allowed: &[BuiltinScalar]| {
+        kinds.iter().all(|kind| allowed.contains(kind))
+    };
+
+    match expr {
+        Expr::BinOp(bin_op) => {
+            let (Some(left), Some(right)) = (kinds(&bin_op.left), kinds(&bin_op.right)) else {
+                return false;
+            };
+            match bin_op.op {
+                Operator::Add => {
+                    (all_in(&left, NUMBERS) && all_in(&right, NUMBERS))
+                        || (left == [Str] && right == [Str])
+                        || (left == [Bytes] && right == [Bytes])
+                }
+                Operator::Sub => all_in(&left, NUMBERS) && all_in(&right, NUMBERS),
+                Operator::Mult => {
+                    (all_in(&left, NUMBERS) && all_in(&right, NUMBERS))
+                        || ((left == [Str] || left == [Bytes]) && all_in(&right, INTEGERS))
+                        || (all_in(&left, INTEGERS) && (right == [Str] || right == [Bytes]))
+                }
+                Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
+                    all_in(&left, INTEGERS) && all_in(&right, INTEGERS)
+                }
+                _ => false,
+            }
+        }
+        Expr::UnaryOp(unary) => {
+            let Some(operand) = kinds(&unary.operand) else {
+                return false;
+            };
+            match unary.op {
+                UnaryOp::Not => true,
+                UnaryOp::USub | UnaryOp::UAdd => all_in(&operand, NUMBERS),
+                UnaryOp::Invert => all_in(&operand, INTEGERS),
+                UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force => false,
+            }
+        }
+        Expr::Compare(compare) => {
+            let [first, comparators @ ..] = &*compare.operands else {
+                return false;
+            };
+            let Some(mut left) = kinds(first) else {
+                return false;
+            };
+            for (op, comparator) in compare.ops.iter().zip(comparators) {
+                let Some(right) = kinds(comparator) else {
+                    return false;
+                };
+                let quiet = match op {
+                    CmpOp::Eq | CmpOp::NotEq | CmpOp::Is | CmpOp::IsNot => true,
+                    CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE => {
+                        (all_in(&left, ORDERED_NUMBERS) && all_in(&right, ORDERED_NUMBERS))
+                            || (left == [Str] && right == [Str])
+                            || (left == [Bytes] && right == [Bytes])
+                    }
+                    CmpOp::In | CmpOp::NotIn => {
+                        (left == [Str] && right == [Str]) || (left == [Bytes] && right == [Bytes])
+                    }
+                };
+                if !quiet {
+                    return false;
+                }
+                left = right;
+            }
+            true
+        }
+        Expr::Attribute(attribute) => {
+            !attribute.optional && is_module_value(model, &attribute.value)
+        }
+        _ => false,
+    }
+}
+
+struct Walk<'a, 'm> {
+    model: &'m SemanticModel<'m>,
     target: AnyNodeRef<'a>,
     effects: bool,
 }
 
 type Found = Option<Placement>;
 
-impl Walk<'_> {
+impl Walk<'_, '_> {
     fn contains(&self, node: impl Ranged) -> bool {
         node.range().contains_range(self.target.range())
     }
@@ -122,7 +274,7 @@ impl Walk<'_> {
         if self.contains(expr) {
             return Some(Placement::NotOnce(reason));
         }
-        if !is_pure(expr) {
+        if !is_effect_free(self.model, expr) {
             self.effects = true;
         }
         None
@@ -152,6 +304,14 @@ impl Walk<'_> {
 
     fn effect(&mut self) {
         self.effects = true;
+    }
+
+    /// The operation `expr` performs once its operands are evaluated, which is an
+    /// effect unless the checker shows it to be one of python's own quiet ones.
+    fn operation(&mut self, expr: &Expr) {
+        if !operation_is_quiet(self.model, expr) {
+            self.effect();
+        }
     }
 
     fn statement(&mut self, statement: &Stmt) -> Found {
@@ -341,7 +501,7 @@ impl Walk<'_> {
             });
         }
         if !self.contains(expr) {
-            if !is_pure(expr) {
+            if !is_effect_free(self.model, expr) {
                 self.effect();
             }
             return None;
@@ -372,7 +532,7 @@ impl Walk<'_> {
                     if let Some(found) = self.exprs([&*bin_op.left, &*bin_op.right]) {
                         return Some(found);
                     }
-                    self.effect();
+                    self.operation(expr);
                     None
                 }
             },
@@ -382,7 +542,7 @@ impl Walk<'_> {
                 }
                 UnaryOp::Not | UnaryOp::Invert | UnaryOp::UAdd | UnaryOp::USub => {
                     let found = self.expr(&unary.operand);
-                    self.effect();
+                    self.operation(expr);
                     found
                 }
             },
@@ -448,7 +608,7 @@ impl Walk<'_> {
                 if let Some(found) = self.expr(first) {
                     return Some(found);
                 }
-                self.effect();
+                self.operation(expr);
                 // a chained comparison stops at the first comparison that fails
                 self.not_once_all(rest, NotOnce::Conditional)
             }
@@ -475,7 +635,7 @@ impl Walk<'_> {
                     return self.opaque(expr, NotOnce::OptionalChain);
                 }
                 let found = self.expr(&attribute.value);
-                self.effect();
+                self.operation(expr);
                 found
             }
             Expr::Subscript(subscript) => {

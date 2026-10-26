@@ -107,6 +107,9 @@ impl RefactorKind {
 pub struct RefactorOffer {
     pub kind: RefactorKind,
     pub title: String,
+    /// The range to ask about to have this rewrite again: the range the offer was asked for,
+    /// or, for one of the expressions offered around a caret, that expression.
+    pub range: TextRange,
     /// `Ok` holds the rewrite and `Err` why there is none.
     ///
     /// The edits come with the offer because working them out is how the question was answered:
@@ -221,11 +224,18 @@ impl<'db> RefactorContext<'db> {
 /// `kinds` is asked for rather than assumed because answering for one costs working its rewrite
 /// out, so a caller that will not offer a refactoring should not name it — a client narrowing a
 /// `textDocument/codeAction` with `only` then pays for nothing it asked no question about.
+///
+/// With `around_caret`, an empty `range` is answered for extracting a variable or a constant
+/// with one offer for each expression around the caret, innermost first, each carrying the
+/// expression's range: what an editor offers to choose from when extract is asked for with
+/// nothing selected. Without it a caret extracts nothing, which is what a client asking while
+/// the caret moves wants, rather than an offer for every expression the caret is in.
 pub fn refactors(
     db: &dyn Db,
     file: ProgramFile<'_>,
     range: TextRange,
     kinds: &[RefactorKind],
+    around_caret: bool,
 ) -> Vec<RefactorOffer> {
     if kinds.is_empty() || !is_refactorable(db, file) {
         return Vec::new();
@@ -235,23 +245,36 @@ pub fn refactors(
         return Vec::new();
     }
 
-    kinds
-        .iter()
-        .copied()
-        .filter_map(|kind| match context.plan(kind, range) {
+    let mut offers = Vec::new();
+    for &kind in kinds {
+        let extracted = match kind {
+            RefactorKind::ExtractVariable => Some(extract_variable::Target::Variable),
+            RefactorKind::IntroduceConstant => Some(extract_variable::Target::Constant),
+            _ => None,
+        };
+        let plans = match extracted {
+            Some(target) if around_caret && range.is_empty() => {
+                extract_variable::around_caret(&context, range.start(), target)
+            }
+            _ => vec![(range, context.plan(kind, range))],
+        };
+        offers.extend(plans.into_iter().filter_map(|(range, plan)| match plan {
             Ok(plan) => Some(RefactorOffer {
                 kind,
                 title: plan.title,
+                range,
                 availability: Ok(context.file_edits(plan.edits)),
             }),
             Err(Refusal::NotApplicable) => None,
             Err(Refusal::Refused { title, reason }) => Some(RefactorOffer {
                 kind,
                 title,
+                range,
                 availability: Err(reason),
             }),
-        })
-        .collect()
+        }));
+    }
+    offers
 }
 
 /// The edits of the refactoring `kind` at `range`, or why it cannot be applied.
@@ -341,10 +364,41 @@ pub(crate) mod test_support {
             Self { db, file, range }
         }
 
+        /// What `kind` offers around the test's caret, one line for each offer: the text it
+        /// is about, its title, and why it is refused when it is. Each offer that applies is
+        /// checked to be the rewrite asking about its own range gives.
+        pub(crate) fn around_caret(&self, kind: RefactorKind) -> String {
+            let program_file = self.db.program_file(self.file);
+            let source = ruff_db::source::source_text(&self.db, self.file);
+            refactors(&self.db, program_file, self.range, &[kind], true)
+                .into_iter()
+                .map(|offer| {
+                    let text = &source.as_str()[offer.range];
+                    match offer.availability {
+                        Ok(edits) => {
+                            let again = refactor(&self.db, program_file, kind, offer.range)
+                                .expect("an offer's range to give its rewrite again");
+                            assert_eq!(
+                                edits.iter().map(|edit| &edit.edit).collect::<Vec<_>>(),
+                                again
+                                    .edits
+                                    .iter()
+                                    .map(|edit| &edit.edit)
+                                    .collect::<Vec<_>>(),
+                            );
+                            format!("{text}: {}", offer.title)
+                        }
+                        Err(reason) => format!("{text}: refused: {} ({reason})", offer.title),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
         /// The file after applying `kind`, or why it was not offered or refused.
         pub(crate) fn apply(&self, kind: RefactorKind) -> String {
             let program_file = self.db.program_file(self.file);
-            let offers = refactors(&self.db, program_file, self.range, RefactorKind::ALL);
+            let offers = refactors(&self.db, program_file, self.range, RefactorKind::ALL, false);
             let Some(offer) = offers.iter().find(|offer| offer.kind == kind) else {
                 return "not offered".to_string();
             };

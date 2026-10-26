@@ -2820,6 +2820,128 @@ pub fn folds_to_a_literal(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
     )
 }
 
+/// One of the builtin types whose operators are python's own: none of them runs code of the
+/// program's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinScalar {
+    Bool,
+    Int,
+    Float,
+    Complex,
+    Str,
+    Bytes,
+}
+
+/// The builtin scalar types `expr` evaluates to, one for each kind a union of them holds, or
+/// `None` when it can evaluate to anything else.
+///
+/// A literal is of its own type exactly, and so is an instance of `final int`, or of a class no
+/// class can subclass, as `bool`. A plain `int` may be an instance of a subclass, whose operators
+/// are the program's own, so it is not one. An operator python applies to values of exactly
+/// builtin scalar types is python's own, and makes a value of exactly the builtin type it is
+/// declared to give, as `a + b` of two `final int`s is exactly an `int`, and `not x` is always
+/// exactly a `bool`.
+pub fn builtin_scalar_kinds(
+    model: &SemanticModel<'_>,
+    expr: &ast::Expr,
+) -> Option<Vec<BuiltinScalar>> {
+    /// the scalar an instance of exactly `instance`'s class is
+    fn scalar(
+        db: &dyn Db,
+        instance: crate::types::NominalInstanceType<'_>,
+    ) -> Option<BuiltinScalar> {
+        match instance.known_class(db)? {
+            KnownClass::Bool => Some(BuiltinScalar::Bool),
+            KnownClass::Int => Some(BuiltinScalar::Int),
+            KnownClass::Float => Some(BuiltinScalar::Float),
+            KnownClass::Complex => Some(BuiltinScalar::Complex),
+            KnownClass::Str => Some(BuiltinScalar::Str),
+            KnownClass::Bytes => Some(BuiltinScalar::Bytes),
+            _ => None,
+        }
+    }
+
+    /// whether `expr` is an operation python carries out itself on values of exactly builtin
+    /// scalar types, whose value is then exactly of the builtin type the operation declares
+    fn is_builtin_operation(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
+        let exact = |operand: &ast::Expr| builtin_scalar_kinds(model, operand).is_some();
+        match expr {
+            ast::Expr::BinOp(bin_op) => exact(&bin_op.left) && exact(&bin_op.right),
+            ast::Expr::UnaryOp(unary) => unary.op == ast::UnaryOp::Not || exact(&unary.operand),
+            ast::Expr::Compare(compare) => compare.operands.iter().all(exact),
+            ast::Expr::BoolOp(bool_op) => bool_op.values.iter().all(exact),
+            ast::Expr::If(if_expr) => exact(&if_expr.body) && exact(&if_expr.orelse),
+            ast::Expr::Named(named) => exact(&named.value),
+            _ => false,
+        }
+    }
+
+    /// `exact` says whether an instance of a builtin scalar class is known to be of exactly that
+    /// class, rather than of one that may be a subclass
+    fn collect(
+        db: &dyn Db,
+        env: &ProgramEnvironment<'_>,
+        ty: Type<'_>,
+        exact: bool,
+        kinds: &mut Vec<BuiltinScalar>,
+    ) -> bool {
+        let kind = match ty.resolve_type_alias(db) {
+            Type::Union(union) => {
+                return union
+                    .elements(db)
+                    .iter()
+                    .all(|element| collect(db, env, *element, exact, kinds));
+            }
+            Type::NominalInstance(instance)
+                if exact || instance.class(db, env).class_literal(db).is_final(db) =>
+            {
+                scalar(db, instance)
+            }
+            Type::Restricted(restricted)
+                if restricted.modifier(db) == ast::helpers::TypeModifier::Final =>
+            {
+                match restricted.type_argument(db) {
+                    Type::NominalInstance(instance) => scalar(db, instance),
+                    _ => None,
+                }
+            }
+            Type::NominalInstance(_) => None,
+            ty => match ty.as_literal_value_kind() {
+                Some(LiteralValueTypeKind::Bool(_)) => Some(BuiltinScalar::Bool),
+                Some(LiteralValueTypeKind::Int(_)) => Some(BuiltinScalar::Int),
+                Some(LiteralValueTypeKind::Float(_)) => Some(BuiltinScalar::Float),
+                Some(LiteralValueTypeKind::Complex(_)) => Some(BuiltinScalar::Complex),
+                Some(
+                    LiteralValueTypeKind::String(_)
+                    | LiteralValueTypeKind::LiteralString
+                    | LiteralValueTypeKind::Template(_),
+                ) => Some(BuiltinScalar::Str),
+                Some(LiteralValueTypeKind::Bytes(_)) => Some(BuiltinScalar::Bytes),
+                Some(LiteralValueTypeKind::Enum(_)) | None => None,
+            },
+        };
+        let Some(kind) = kind else {
+            return false;
+        };
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+        true
+    }
+
+    let ty = expr.inferred_type(model)?;
+    let env = model.program_environment();
+    let exact = is_builtin_operation(model, expr);
+    let mut kinds = Vec::new();
+    (collect(model.db(), &env, ty, exact, &mut kinds) && !kinds.is_empty()).then_some(kinds)
+}
+
+/// Whether `expr` evaluates to a module, so that reading an attribute of it looks the name up
+/// in the module's namespace and runs nothing.
+pub fn is_module_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
+    matches!(expr.inferred_type(model), Some(Type::ModuleLiteral(_)))
+}
+
 pub fn inferred_raises<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -4725,7 +4847,76 @@ mod tests {
     use ruff_db::parsed::parsed_module;
     use ruff_db::testing::assert_function_query_was_not_run_by_name;
     use ruff_python_ast as ast;
+    use ruff_text_size::Ranged;
     use ty_python_core::ProgramFile;
+
+    #[test]
+    fn only_a_value_of_exactly_a_builtin_scalar_type_has_a_scalar_kind() -> anyhow::Result<()> {
+        let source = r#"
+class Number(int): ...
+
+def f(declared: int, text: str, flag: bool, subclass: Number, either: int | str):
+    1
+    "a"
+    flag
+    declared
+    text
+    subclass
+    either
+    int("1")
+    declared + 1
+    final_int: final int = declared
+    final_int + 1
+    final_int / 2
+    not declared
+    declared < 1
+    final_int < 1
+"#;
+        let db = TestDbBuilder::new()
+            .with_file("/src/foo.by", source)
+            .build()?;
+        let file = system_path_to_file(&db, "/src/foo.by")?;
+        let file = ProgramFile::new(&db, file, db.program_environment().program(&db));
+        let parsed = parsed_module(&db, file.python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, file);
+        let function = parsed
+            .suite()
+            .iter()
+            .find_map(ast::Stmt::as_function_def_stmt)
+            .context("expected a function")?;
+        let kinds: Vec<String> = function
+            .body
+            .iter()
+            .filter_map(ast::Stmt::as_expr_stmt)
+            .map(|statement| {
+                format!(
+                    "{}: {:?}",
+                    &source[statement.value.range()],
+                    super::builtin_scalar_kinds(&model, &statement.value)
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "1: Some([Int])",
+                "\"a\": Some([Str])",
+                "flag: Some([Bool])",
+                "declared: None",
+                "text: None",
+                "subclass: None",
+                "either: None",
+                "int(\"1\"): Some([Int])",
+                "declared + 1: None",
+                "final_int + 1: Some([Int])",
+                "final_int / 2: Some([Float])",
+                "not declared: Some([Bool])",
+                "declared < 1: Some([Bool])",
+                "final_int < 1: Some([Bool])",
+            ]
+        );
+        Ok(())
+    }
 
     #[test]
     fn builtin_definition_lookup_does_not_infer_scope() -> anyhow::Result<()> {
