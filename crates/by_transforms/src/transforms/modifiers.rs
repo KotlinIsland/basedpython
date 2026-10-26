@@ -38,7 +38,7 @@ use ruff_python_ast::{
 use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{AstPass, PassContext};
+use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
 use crate::{Config, PythonVersion};
 
@@ -932,10 +932,14 @@ impl AstPass for ModifiersPass<'_> {
             let assignment = format!("{sealed}.__sealed_members__ = {tuple}");
             // Insert at the start of the line after the anchor statement so the
             // edit never collides with `empty_declarations`' mid-line `: ...`.
+            // Without a blank line in between, that is where the next statement
+            // starts, so the insert is anchored to the statement boundary: a
+            // rewrite of that statement's first expression — a soundness check
+            // wrapping it — would otherwise absorb the assignment into itself.
             if let Some(rel) = self.source[anchor_end..].find('\n') {
                 let pos = TextSize::try_from(anchor_end + rel + 1).expect("offset fits u32");
-                ctx.text_edits
-                    .push((TextRange::empty(pos), format!("{assignment}\n")));
+                ctx.statement_inserts
+                    .push((pos, vec![Fragment::Lit(format!("{assignment}\n"))]));
             } else {
                 let pos = TextSize::try_from(self.source.len()).expect("offset fits u32");
                 ctx.text_edits
@@ -2392,6 +2396,34 @@ mod tests {
                 class B(A): ...
                 A.__sealed_members__ = (B,)
             "},
+        );
+    }
+
+    /// with no blank line after the last subclass, the members tuple is assigned
+    /// where the next statement starts, and a soundness check wrapping that
+    /// statement's expression keeps it out of the call it opens there
+    #[test]
+    fn sealed_members_ahead_of_a_checked_statement() {
+        let out = transpile(
+            indoc! {"
+                xs: list[str] = []
+                sealed class A
+                class B(A)
+                xs[0]
+            "},
+            &Config {
+                soundness: crate::SoundnessPositions::defaults(),
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains(indoc! {"
+                class B(A): ...
+                A.__sealed_members__ = (B,)
+                _soundness_check(xs[0], str)
+            "}),
+            "got:\n{out}"
         );
     }
 
