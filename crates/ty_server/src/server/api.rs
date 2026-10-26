@@ -138,6 +138,9 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::ExplainRuleHandler::METHOD => {
             background_request_task::<requests::ExplainRuleHandler>(req, BackgroundSchedule::Worker)
         }
+        requests::RulesHandler::METHOD => {
+            background_request_task::<requests::RulesHandler>(req, BackgroundSchedule::Worker)
+        }
         // The program model a run configuration is built from. Asked by URI rather than by open
         // document, because the module a configuration names is usually not open, and asked off
         // an editor's own schedule, so none of the three is latency sensitive.

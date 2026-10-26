@@ -1042,6 +1042,26 @@ writes by default, when none of them says. the answer is `null` anywhere that is
 not inside a triple-quoted docstring of a function holding nothing but whitespace
 on a line of its own
 
+## rules
+
+each diagnostic names the rule it is reported under as its `code`,
+`unresolved-reference`. an editor that gives every rule an entry of its own, an
+inspection whose severity its user can change, asks `by/rules`, with no
+parameters, for the rules before any diagnostic arrives. the answer is every
+rule, by name, each with its one-line `summary`, its `defaultLevel` (`ignore`,
+`warn` or `error`), the level it has when the configuration names no other, and
+its `status` (`stable`, `preview` or `deprecated`):
+
+```json
+[
+  { "name": "unresolved-reference", "summary": "detects references to names that are not defined", "defaultLevel": "error", "status": "stable" }
+]
+```
+
+a removed rule is left out. `by/explainRule` gives a rule's whole
+documentation, and the linter's rules, `F401` among them, are `buff`'s. rules
+have no categories
+
 ## suppressing a diagnostic
 
 every diagnostic has two quick fixes that silence it rather than fix it.
