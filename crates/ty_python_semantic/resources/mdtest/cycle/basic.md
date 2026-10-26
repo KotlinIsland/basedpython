@@ -756,6 +756,28 @@ def holder():
 reveal_type(holder())  # revealed: Box[Literal[1]]
 ```
 
+## a string built in a loop inside a larger cycle widens rather than diverging
+
+A loop that prepends to a string is a different literal on every trip. On its own the loop is a
+cycle, and its literals widen to `str`. Here it is part of a larger one: the bound of `many`'s
+unannotated parameter `x` is read off `many`'s body, and checking the call `one(x)` in that body
+consults the bound. Each round of that cycle used to add one more literal — `" "`, then `"  "` —
+until salsa gave up on the iteration and the checker panicked. A kind of literal that keeps growing
+from round to round is widened, as it would be in the loop alone.
+
+```py
+def one(x):
+    if x:
+        return x
+    return ""
+
+def many(x):
+    result = ""
+    while x:
+        result = one(x) + " " + result
+    reveal_type(result)  # revealed: str | Unknown
+```
+
 ## the recursive `defaultdict` factory converges
 
 The same shape reaches ty through the standard library, where it is a common idiom for a tree of

@@ -2850,6 +2850,7 @@ impl<'db> Type<'db> {
             // would normalize it, and the widened and marked forms would alternate without
             // either being reached
             .without_growing_tuple_lengths(db, env, previous)
+            .without_growing_literals(db, env, previous)
             .without_growing_self_nesting(db, env, previous, cycle)
             .recursive_type_normalized_impl_with_cycle(db, env, cycle)
     }
@@ -3063,6 +3064,82 @@ impl<'db> Type<'db> {
             UnionType::from_elements_cycle_recovery(db, env, elements),
         ));
         UnionType::from_elements_cycle_recovery(db, env, rest)
+    }
+
+    /// basedpython: `self`, with a family of literals the fixed-point iteration is growing
+    /// widened to the class they are instances of.
+    ///
+    /// A string built up in a loop is a different literal every time round:
+    ///
+    /// ```python
+    /// result = ""
+    /// while x:
+    ///     result = " " + result
+    /// ```
+    ///
+    /// The loop is ordinarily a cycle of its own, and the union builder widens it: its values
+    /// carry the cycle's `Divergent` marker, which marks the literals built from them as
+    /// recursively defined, and a union holding [`MAX_RECURSIVE_UNION_LITERALS`] of those is
+    /// widened to `str`. But a loop can also sit inside a larger cycle — a body whose inference
+    /// depends on itself, as one does when an unannotated parameter's bound is read off that very
+    /// body — and then the loop is no cycle of its own: the marker belongs to the outer cycle, is
+    /// gone after its first round, and each round adds one more literal, `" "`, then `"  "`, until
+    /// salsa gives up on the iteration.
+    ///
+    /// So the growth is recognized where it shows, in the rounds themselves: a kind of literal
+    /// that already had as many members as the union builder lets a recursively defined union
+    /// hold, and gains more past the rounds [`crate::TAINTED_CYCLES`] leaves alone, is the
+    /// iteration enumerating values rather than the program naming them. That kind is widened,
+    /// which is what the same loop infers on its own. A kind that stopped growing is left as it
+    /// is, and so is one that arrives whole: `Literal["a", "b", "c", "d", "e", "f"]` written in an
+    /// annotation can arrive in a single round, after rounds that held fewer of its members.
+    ///
+    /// [`MAX_RECURSIVE_UNION_LITERALS`]: crate::types::set_theoretic::builder::MAX_RECURSIVE_UNION_LITERALS
+    fn without_growing_literals(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        previous: Self,
+    ) -> Self {
+        let literal_counts = |ty: Self| {
+            let mut counts: FxHashMap<Type<'db>, usize> = FxHashMap::default();
+            for element in ty.union_elements(db) {
+                if let Type::LiteralValue(literal) = element {
+                    *counts
+                        .entry(literal.fallback_instance(db, env))
+                        .or_default() += 1;
+                }
+            }
+            counts
+        };
+        let after = literal_counts(self);
+        if after.is_empty() {
+            return self;
+        }
+        let before = literal_counts(previous);
+        let is_growing = |class: &Type<'db>| {
+            let before = before.get(class).copied().unwrap_or(0);
+            before >= set_theoretic::builder::MAX_RECURSIVE_UNION_LITERALS && after[class] > before
+        };
+        if !after.keys().any(is_growing) {
+            return self;
+        }
+        // each growing kind takes the place of its first literal, so the union keeps its order
+        let mut widened: FxHashSet<Type<'db>> = FxHashSet::default();
+        let elements = self.union_elements(db).filter_map(|element| match element {
+            Type::LiteralValue(literal) => {
+                let class = literal.fallback_instance(db, env);
+                if !is_growing(&class) {
+                    Some(element)
+                } else if widened.insert(class) {
+                    Some(class)
+                } else {
+                    None
+                }
+            }
+            _ => Some(element),
+        });
+        UnionType::from_elements_cycle_recovery(db, env, elements.collect::<Vec<_>>())
     }
 
     /// collapse a union that is accumulating one tuple per *length* into a single
