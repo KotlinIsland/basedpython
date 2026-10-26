@@ -1,7 +1,9 @@
 use anyhow::Result;
 use insta::assert_json_snapshot;
 use lsp_types::Request as _;
-use lsp_types::{DocumentFormattingRequest, DocumentRangeFormattingRequest, RegistrationRequest};
+use lsp_types::{
+    DocumentFormattingRequest, DocumentRangeFormattingRequest, Position, Range, RegistrationRequest,
+};
 
 use crate::TestServerBuilder;
 
@@ -39,7 +41,8 @@ fn statically_registers_formatting_when_dynamic_registration_is_unsupported() ->
 }
 
 #[test]
-fn dynamically_registers_formatting_and_range_formatting_for_python_and_markdown() -> Result<()> {
+fn dynamically_registers_formatting_and_range_formatting_for_python_basedpython_and_markdown()
+-> Result<()> {
     let mut server = TestServerBuilder::new()?
         .enable_formatting_dynamic_registration(true)
         .enable_range_formatting_dynamic_registration(true)
@@ -74,6 +77,9 @@ fn dynamically_registers_formatting_and_range_formatting_for_python_and_markdown
           "language": "python"
         },
         {
+          "language": "basedpython"
+        },
+        {
           "language": "markdown"
         },
         {
@@ -88,6 +94,53 @@ fn dynamically_registers_formatting_and_range_formatting_for_python_and_markdown
         range_formatting.register_options,
         formatting.register_options
     );
+
+    Ok(())
+}
+
+/// a `.by` document is range-formatted as python is: only the statements the range covers are laid
+/// out again
+#[test]
+fn range_formats_a_basedpython_document() -> Result<()> {
+    let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
+    server.open_text_document_with_language_id(
+        "test.by",
+        "basedpython",
+        "x=[1,2]\ny   =   {'a':1}\n",
+        1,
+    );
+
+    let edits = server.format_range_request(
+        "test.by",
+        Range {
+            start: Position {
+                line: 1,
+                character: 0,
+            },
+            end: Position {
+                line: 1,
+                character: 15,
+            },
+        },
+    );
+
+    assert_json_snapshot!(edits, @r#"
+    [
+      {
+        "range": {
+          "start": {
+            "line": 1,
+            "character": 0
+          },
+          "end": {
+            "line": 1,
+            "character": 15
+          }
+        },
+        "newText": "y = {\"a\": 1}"
+      }
+    ]
+    "#);
 
     Ok(())
 }

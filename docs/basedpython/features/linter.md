@@ -56,6 +56,17 @@ into
 result = a ?? b
 ```
 
+## formatting in an editor
+
+`buff server` formats a `.by` document as it formats python, the whole of it
+with `textDocument/formatting` and a selection with
+`textDocument/rangeFormatting`, which lays out again only the statements the
+range covers. to a client that registers formatting dynamically it registers
+both for the `basedpython` language as well as `python`, so a client that names
+`.by` documents `basedpython` is offered them. the server reports its name as
+`buff` in the `serverInfo` of its `initialize` answer, and `buff` is the source of
+its diagnostics
+
 ## what the linter does not check
 
 the linter reads one file at a time and has no types. anything that takes a type

@@ -195,6 +195,13 @@ impl Server {
                         pattern: None,
                     })
                     .into(),
+                    // a `.by` file, which buff formats as it does python
+                    types::TextDocumentFilter::Language(types::TextDocumentFilterLanguage {
+                        language: "basedpython".to_string(),
+                        scheme: None,
+                        pattern: None,
+                    })
+                    .into(),
                     types::TextDocumentFilter::Language(types::TextDocumentFilterLanguage {
                         language: "markdown".to_string(),
                         scheme: None,
