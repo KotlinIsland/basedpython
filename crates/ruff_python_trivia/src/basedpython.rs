@@ -1,5 +1,7 @@
 //! basedpython-specific trivia analysis.
 
+use ruff_text_size::{TextRange, TextSize};
+
 /// How a triple-quoted basedpython string's body is auto-dedented.
 ///
 /// See [`dedent_triple_quoted_body`].
@@ -57,6 +59,51 @@ pub fn dedent_triple_quoted_body(body: &str) -> TripleQuotedDedent<'_> {
     TripleQuotedDedent::Dedents { content, indent }
 }
 
+impl TripleQuotedDedent<'_> {
+    /// The runs of the body this was read from that the dedent keeps, as ranges
+    /// of the body in order, or `None` when the body is not dedented.
+    ///
+    /// The text the string holds is these runs read one after another: each line
+    /// after the indent the lines share, with the newline that ends it, except
+    /// that a blank line keeps only its newline, the opening newline is dropped,
+    /// and so is the line the closing quotes sit on together with the newline
+    /// before it. A run is never empty. What is dropped is whitespace and nothing
+    /// else, so an escape sequence never straddles two runs.
+    pub fn runs(&self) -> Option<Vec<TextRange>> {
+        let Self::Dedents { content, indent } = self else {
+            return None;
+        };
+
+        // `content` is the body without its opening newline and without the line
+        // the closing quotes sit on, so it starts one character in
+        let mut offset = TextSize::new(1);
+        let mut runs = Vec::new();
+        let mut lines = content.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            // a blank line is erased entirely; what is left of it is the newline
+            // that ends it
+            let stripped = if line.trim().is_empty() {
+                TextSize::of(line)
+            } else {
+                TextSize::of(*indent)
+            };
+            let line_end = offset + TextSize::of(line);
+            // the newline between two lines is part of the text; the last line
+            // has none, its newline being the one before the closing line
+            let end = if lines.peek().is_some() {
+                line_end + TextSize::new(1)
+            } else {
+                line_end
+            };
+            if offset + stripped < end {
+                runs.push(TextRange::new(offset + stripped, end));
+            }
+            offset = line_end + TextSize::new(1);
+        }
+        Some(runs)
+    }
+}
+
 fn leading_whitespace(line: &str) -> &str {
     let end = line
         .find(|c: char| c != ' ' && c != '\t')
@@ -76,6 +123,44 @@ fn common_prefix<'a>(a: &'a str, b: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::{TripleQuotedDedent, dedent_triple_quoted_body};
+
+    /// the text `body` holds once it is dedented, read off its runs
+    fn dedented(body: &str) -> Option<String> {
+        let runs = dedent_triple_quoted_body(body).runs()?;
+        Some(runs.iter().map(|run| &body[*run]).collect())
+    }
+
+    #[test]
+    fn runs_hold_each_line_after_the_indent() {
+        assert_eq!(
+            dedented("\n    a\n      (b\n    ").as_deref(),
+            Some("a\n  (b")
+        );
+    }
+
+    #[test]
+    fn runs_keep_only_the_newline_of_a_blank_line() {
+        assert_eq!(
+            dedented("\n    a\n  \n\n    b\n  ").as_deref(),
+            Some("a\n\n\nb")
+        );
+    }
+
+    #[test]
+    fn runs_are_never_empty() {
+        let body = "\n    a\n\n    b\n";
+        let runs = dedent_triple_quoted_body(body)
+            .runs()
+            .expect("a dedented body");
+        assert!(runs.iter().all(|run| !run.is_empty()), "{runs:?}");
+    }
+
+    #[test]
+    fn an_undedented_body_has_no_runs() {
+        assert_eq!(dedented("\nhello\n"), None);
+        assert_eq!(dedented("one line"), None);
+        assert_eq!(dedented("\n  asdf\n    "), None);
+    }
 
     #[test]
     fn dedents_indented_body() {

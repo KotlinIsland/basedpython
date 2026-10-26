@@ -57,6 +57,19 @@ greet = f"""
     hello {name}
     """
 # → f"""\
-# hello {name}
+# hello {name}\
+# """
+```
+
+a raw string holds its backslashes, so a line continuation can't drop its
+opening and closing newlines: it is written as the plain string that holds the
+same text instead, with the backslashes and quotes of its literal text escaped
+
+```by
+pattern = r"""
+    \d+ "units"
+    """
+# → """\
+# \\d+ \"units\"\
 # """
 ```

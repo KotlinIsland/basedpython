@@ -1,9 +1,12 @@
 //! strips common indentation from triple-quoted multiline strings
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ModModule, Stmt, StringFlags};
+use ruff_python_ast::{
+    AnyStringFlags, Expr, InterpolatedStringElement, InterpolatedStringElements, ModModule, Stmt,
+    StringFlags,
+};
 use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
 
@@ -39,13 +42,20 @@ struct State<'src> {
 }
 
 impl State<'_> {
-    fn dedent(&mut self, string_expr: &dyn Ranged) {
-        let start = usize::from(string_expr.range().start());
-        let end = usize::from(string_expr.range().end());
-        let raw = &self.source[start..end];
-        match dedent_triple_string(raw) {
+    /// dedent the lone triple-quoted literal `string`, whose literal text — the
+    /// text that is not a replacement field — is `literals`, or all of its body
+    /// when that is `None`
+    fn dedent(&mut self, string: TextRange, flags: AnyStringFlags, literals: Option<&[TextRange]>) {
+        let raw = &self.source[string];
+        let literals = literals.map(|literals| {
+            literals
+                .iter()
+                .map(|literal| *literal - string.start())
+                .collect::<Vec<_>>()
+        });
+        match dedent_triple_string(raw, flags, literals.as_deref()) {
             DedentOutcome::Transformed(out) => {
-                self.edits.push((string_expr.range(), out));
+                self.edits.push((string, out));
             }
             DedentOutcome::Error(msg) => self.errors.push(msg),
             DedentOutcome::Unchanged => {}
@@ -61,25 +71,26 @@ impl<'ast> Visitor<'ast> for State<'_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         match expr {
             Expr::StringLiteral(string_expr) => {
-                if let Some(part) = string_expr.as_single_part_string() {
-                    let flags = part.flags;
-                    if flags.is_triple_quoted() {
-                        self.dedent(string_expr);
-                    }
+                if let Some(part) = string_expr.as_single_part_string()
+                    && part.flags.is_triple_quoted()
+                {
+                    self.dedent(part.range(), part.flags.into(), None);
                 }
             }
             Expr::FString(string_expr) => {
-                if let Some(fstring) = string_expr.as_single_part_fstring() {
-                    if fstring.flags.is_triple_quoted() {
-                        self.dedent(string_expr);
-                    }
+                if let Some(fstring) = string_expr.as_single_part_fstring()
+                    && fstring.flags.is_triple_quoted()
+                {
+                    let literals = literal_ranges(&fstring.elements);
+                    self.dedent(fstring.range(), fstring.flags.into(), Some(&literals));
                 }
             }
             Expr::TString(string_expr) => {
-                if let Some(tstring) = string_expr.as_single_part_tstring() {
-                    if tstring.flags.is_triple_quoted() {
-                        self.dedent(string_expr);
-                    }
+                if let Some(tstring) = string_expr.as_single_part_tstring()
+                    && tstring.flags.is_triple_quoted()
+                {
+                    let literals = literal_ranges(&tstring.elements);
+                    self.dedent(tstring.range(), tstring.flags.into(), Some(&literals));
                 }
             }
             _ => {}
@@ -88,51 +99,94 @@ impl<'ast> Visitor<'ast> for State<'_> {
     }
 }
 
-pub(crate) enum DedentOutcome {
+/// the ranges of an f- or t-string's literal text, including the literal text of
+/// its format specs, which a raw prefix makes raw too
+fn literal_ranges(elements: &InterpolatedStringElements) -> Vec<TextRange> {
+    let mut ranges = Vec::new();
+    let mut pending = vec![elements];
+    while let Some(elements) = pending.pop() {
+        for element in elements {
+            match element {
+                InterpolatedStringElement::Literal(literal) => ranges.push(literal.range()),
+                InterpolatedStringElement::Interpolation(interpolation) => {
+                    if let Some(spec) = &interpolation.format_spec {
+                        pending.push(&spec.elements);
+                    }
+                }
+            }
+        }
+    }
+    ranges
+}
+
+enum DedentOutcome {
     Unchanged,
     Transformed(String),
     Error(String),
 }
 
-fn dedent_triple_string(raw: &str) -> DedentOutcome {
-    let Some(quote_start) = raw.find("\"\"\"").or_else(|| raw.find("'''")) else {
+/// dedent the triple-quoted literal `raw`, prefix and quotes included
+///
+/// the dedented text is written between a quote ending in a line continuation
+/// and a line continuation before the closing quote, so the literal keeps the
+/// lines it was written on. a raw literal has no line continuation — its
+/// backslash and newline are both text — so it is written as the plain literal
+/// that holds the same text instead: every backslash and quote of its literal
+/// text, `literals` (relative to `raw`, or all of the body when `None`), escaped
+fn dedent_triple_string(
+    raw: &str,
+    flags: AnyStringFlags,
+    literals: Option<&[TextRange]>,
+) -> DedentOutcome {
+    if flags.is_unclosed() {
+        return DedentOutcome::Unchanged;
+    }
+    let opener = flags.opener_len().to_usize();
+    let Some(body) = raw.get(opener..raw.len() - flags.closer_len().to_usize()) else {
         return DedentOutcome::Unchanged;
     };
-    let prefix = &raw[..quote_start];
-    let quote = &raw[quote_start..quote_start + 3];
-    let after_open = &raw[quote_start + 3..];
+    let quote = flags.quote_str();
 
-    if !after_open.ends_with(quote) {
-        return DedentOutcome::Unchanged;
-    }
-    let body = &after_open[..after_open.len() - 3];
-
-    match dedent_triple_quoted_body(body) {
-        TripleQuotedDedent::Unchanged => DedentOutcome::Unchanged,
-        TripleQuotedDedent::ClosingOverIndented => DedentOutcome::Error(format!(
+    let dedent = dedent_triple_quoted_body(body);
+    if dedent == TripleQuotedDedent::ClosingOverIndented {
+        return DedentOutcome::Error(format!(
             "closing `{quote}` is indented more than the content of the triple-quoted string"
-        )),
-        TripleQuotedDedent::Dedents { content, indent } => {
-            let deindented: Vec<&str> = content
-                .split('\n')
-                .map(|line| {
-                    if line.trim().is_empty() {
-                        ""
-                    } else {
-                        &line[indent.len()..]
-                    }
-                })
-                .collect();
+        ));
+    }
+    let Some(runs) = dedent.runs() else {
+        return DedentOutcome::Unchanged;
+    };
 
-            let content = deindented.join("\n");
-            DedentOutcome::Transformed(format!("{prefix}{quote}\\\n{content}\\\n{quote}"))
+    let raw_prefix = flags.prefix().is_raw();
+    let mut prefix = raw[..opener - quote.len()].to_string();
+    if raw_prefix {
+        prefix.retain(|c| !matches!(c, 'r' | 'R'));
+    }
+    let body_start = TextSize::try_from(opener).unwrap_or_default();
+    let is_literal = |offset: TextSize| {
+        literals.is_none_or(|literals| literals.iter().any(|literal| literal.contains(offset)))
+    };
+    let quote_char = flags.quote_style().as_char();
+
+    let mut content = String::with_capacity(body.len());
+    for run in runs {
+        if !raw_prefix {
+            content.push_str(&body[run]);
+            continue;
+        }
+        for (index, c) in body[run].char_indices() {
+            let offset = body_start + run.start() + TextSize::try_from(index).unwrap_or_default();
+            if (c == '\\' || c == quote_char) && is_literal(offset) {
+                content.push('\\');
+            }
+            content.push(c);
         }
     }
+    DedentOutcome::Transformed(format!("{prefix}{quote}\\\n{content}\\\n{quote}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DedentOutcome, dedent_triple_string};
     use crate::python_passthrough::unchanged;
     use crate::{Config, transpile};
     use indoc::indoc;
@@ -212,20 +266,59 @@ mod tests {
         );
     }
 
+    /// a raw literal has no line continuation, its backslash and newline both
+    /// being text, so it is written as the plain literal holding the same text
     #[test]
     fn rstring_dedent() {
         check(
             indoc! {r#"
                 text = r"""
-                    start-of-line
-                    |
+                    \d+ "quoted"
+                    |\
                     """
             "#},
             indoc! {r#"
-                text = r"""\
-                start-of-line
-                |\
+                text = """\
+                \\d+ \"quoted\"
+                |\\\
                 """
+            "#},
+        );
+    }
+
+    /// only the literal text of a raw f-string is escaped: a replacement field
+    /// is code, and the literal text of its format spec is raw too
+    #[test]
+    fn raw_fstring_dedent() {
+        check(
+            indoc! {r#"
+                a = "asdf"
+                text = Rf"""
+                    \w{a!r:\>10}
+                    """
+            "#},
+            indoc! {r#"
+                a = "asdf"
+                text = f"""\
+                \\w{a!r:\\>10}\
+                """
+            "#},
+        );
+    }
+
+    /// the quotes that close a literal are its own, whatever other quotes it holds
+    #[test]
+    fn single_quoted_triple_holding_double_quotes() {
+        check(
+            indoc! {r#"
+                text = '''
+                    say """hi"""
+                    '''
+            "#},
+            indoc! {r#"
+                text = '''\
+                say """hi"""\
+                '''
             "#},
         );
     }
@@ -282,22 +375,6 @@ mod tests {
             "text = u\"\"\"\n    hello\n    \"\"\"\n",
             "text = u\"\"\"\\\nhello\\\n\"\"\"\n",
         );
-    }
-
-    #[test]
-    fn unit_dedent_basic() {
-        match dedent_triple_string("\"\"\"\n    hello\n    \"\"\"") {
-            DedentOutcome::Transformed(s) => assert_eq!(s, "\"\"\"\\\nhello\\\n\"\"\""),
-            _ => panic!("expected Transformed"),
-        }
-    }
-
-    #[test]
-    fn unit_dedent_no_indent_returns_unchanged() {
-        assert!(matches!(
-            dedent_triple_string("\"\"\"\nhello\n\"\"\""),
-            DedentOutcome::Unchanged
-        ));
     }
 
     #[test]
