@@ -57,8 +57,8 @@ use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 use ty_python_core::scope::ScopeKind;
 use ty_python_semantic::{
-    HasType, ImportAliasResolution, ResolvedDefinition, SemanticModel, definitions_for_attribute,
-    definitions_for_imported_symbol,
+    HasDefinition, HasType, ImportAliasResolution, ResolvedDefinition, SemanticModel,
+    definitions_for_attribute, definitions_for_imported_symbol,
     types::format::{SpecLanguage, spec_language},
     types::ide_support::{
         CallArgumentForm, call_argument_forms, definition_for_name,
@@ -968,8 +968,10 @@ impl<'db> SemanticTokenVisitor<'db> {
 
         match definition.kind(db) {
             DefinitionKind::Function(_) => {
-                // Check if this is a method based on current scope
-                if self.in_class_scope {
+                // a method is a `def` made in a class body, wherever it is used
+                // from: `field` called in a dataclass's body is the function
+                // `dataclasses` defines
+                if definition.scope(db).scope(db).kind() == ScopeKind::Class {
                     Some((SemanticTokenType::Method, modifiers))
                 } else {
                     Some((SemanticTokenType::Function, modifiers))
@@ -1776,14 +1778,19 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // token by the synthetic `__init_method__` decorator above.
                 if !is_init_method(func) {
                     // Function name
+                    let mut modifiers = SemanticTokenModifier::DEFINITION;
+                    if func.is_async {
+                        modifiers |= SemanticTokenModifier::ASYNC;
+                    }
+                    // a `def` nested in a function binds a local, as an
+                    // assignment there would
+                    if self.is_function_scoped(func.definition(self.model)) {
+                        modifiers |= SemanticTokenModifier::FUNCTION_SCOPE;
+                    }
                     self.add_token(
                         func.name.range(),
                         self.classify_function_definition(func),
-                        if func.is_async {
-                            SemanticTokenModifier::DEFINITION | SemanticTokenModifier::ASYNC
-                        } else {
-                            SemanticTokenModifier::DEFINITION
-                        },
+                        modifiers,
                     );
                 }
 
@@ -1854,12 +1861,12 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_decorator(decorator);
                 }
 
-                // Class name
-                self.add_token(
-                    class.name.range(),
-                    SemanticTokenType::Class,
-                    SemanticTokenModifier::DEFINITION,
-                );
+                // class name, a local when the class is declared in a function
+                let mut modifiers = SemanticTokenModifier::DEFINITION;
+                if self.is_function_scoped(class.definition(self.model)) {
+                    modifiers |= SemanticTokenModifier::FUNCTION_SCOPE;
+                }
+                self.add_token(class.name.range(), SemanticTokenType::Class, modifiers);
 
                 // Type parameters (Python 3.12+ syntax)
                 if let Some(type_params) = &class.type_params {
@@ -6370,6 +6377,71 @@ def clamp(value: int) -> int:
         );
     }
 
+    /// a `def` or a class nested in a function binds a local, so its name is marked where
+    /// it is declared as well as where it is used; a module's are not
+    #[test]
+    fn function_scope_marks_nested_definitions() {
+        let test = SemanticTokenTest::new(
+            r#"
+def outer():
+    def inner():
+        pass
+
+    class Local:
+        pass
+
+    return inner, Local
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.function_scoped_names(&tokens),
+            ["inner@22", "Local@55", "inner@87", "Local@94"]
+        );
+    }
+
+    /// a function is a method where it is defined in a class body, not where it is used:
+    /// `field` called in a dataclass's body is the function `dataclasses` defines
+    #[test]
+    fn a_function_used_in_a_class_body_is_a_function() {
+        let test = SemanticTokenTest::new(
+            r#"
+from dataclasses import dataclass, field
+
+@dataclass
+class P:
+    x: list[int] = field(default_factory=list)
+
+    def m(self) -> None: ...
+
+    alias = m
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "dataclasses" @ 6..17: Namespace
+        "dataclass" @ 25..34: Function
+        "field" @ 36..41: Function
+        "dataclass" @ 44..53: Decorator
+        "P" @ 60..61: Class [definition]
+        "x" @ 67..68: Variable [definition]
+        "list" @ 70..74: Class
+        "int" @ 75..78: Class
+        "field" @ 82..87: Function
+        "default_factory" @ 88..103: Parameter
+        "list" @ 104..108: Class
+        "m" @ 119..120: Method [definition]
+        "self" @ 121..125: SelfParameter [definition]
+        "None" @ 130..134: BuiltinConstant
+        "alias" @ 145..150: Variable [definition]
+        "m" @ 153..154: Method
+        "#);
+    }
+
     /// A lambda's parameters and a comprehension's variables are the lambda's and the
     /// comprehension's own, wherever they are written.
     #[test]
@@ -6455,6 +6527,7 @@ def outer():
                 "x@28",
                 "x@34",
                 "count@67",
+                "inner@85",
                 "count@111",
                 "count@146",
                 "count@176",

@@ -543,8 +543,13 @@ where one fits; the others are basedpython's own
 class attribute. it is the binding that decides, not where the name is written:
 a global read inside a function is not marked, a `nonlocal` name is, and an
 assignment expression in a comprehension at the top of a module binds a global.
-an editor that colours each local by its name ("rainbow" highlighting) reads it
-off this modifier
+a `def` or a class nested in a function is a local too, and its name is marked
+where it is declared as well as where it is used. an editor that colours each
+local by its name ("rainbow" highlighting) reads it off this modifier
+
+a name is a `method` where the `def` it names is made in a class body, wherever
+the name is used: `field` called in a dataclass's body is a `function`, the one
+`dataclasses` defines
 
 `annotation` marks every token of a type expression: a parameter's or a
 variable's annotation, what a function returns or raises, a type alias's value,
