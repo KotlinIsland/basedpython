@@ -466,6 +466,12 @@ fn shard_of(name: &str) -> u64 {
     }) % SHARDS
 }
 
+/// the blocks a shard works on at once. each alternates a cpu-bound `by` with a wait on the
+/// python it runs, so two keep a core busy. nextest runs shards beside one another and beside
+/// other tests, so a shard declares these threads to it, as `threads-required` in
+/// `.config/nextest.toml`, rather than sizing itself to the whole machine
+const SHARD_WORKERS: usize = 2;
+
 #[test_case(0)]
 #[test_case(1)]
 #[test_case(2)]
@@ -698,14 +704,7 @@ fn run_shard(shard: u64) {
         None => failures.lock().unwrap().push(report),
     };
     let next = AtomicUsize::new(0);
-    // each block alternates a cpu-bound `by transpile` with a wait on the python
-    // subprocess, and `by` startup also reads typeshed from disk — so a little
-    // oversubscription past the core count overlaps that i/o and keeps the cores
-    // busy, while the cap bounds how many processes are ever live at once
-    let workers = std::thread::available_parallelism()
-        .map_or(4, |n| n.get() * 2)
-        .clamp(1, 16)
-        .min(total);
+    let workers = SHARD_WORKERS.min(total);
 
     // work-stealing pool: each worker claims the next index and processes it
     // until the list is drained. the closures borrow the shared state (the

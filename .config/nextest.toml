@@ -7,6 +7,14 @@ serial = { max-threads = 1 }
 filter = 'binary(file_watching)'
 test-group = 'serial'
 
+# a divergence harness shard works on `SHARD_WORKERS` blocks at once, each a `by` and
+# a python process (`crates/ty/tests/mdtest_divergence.rs`). nextest counts them against
+# the machine's cores, so shards running beside one another and beside other tests do
+# not oversubscribe it
+[[profile.default.overrides]]
+filter = 'test(clean_mdtest_blocks_run)'
+threads-required = 2
+
 # the transpiler's runtime tests transpile for the interpreter they run on. a few
 # programs need a newer python than the one found, or more of it —
 # `typing_extensions`, the `regex` package — which a machine often does not have.
