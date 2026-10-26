@@ -166,7 +166,7 @@ a name the file has not imported is offered for import only when what you have
 typed starts where one of its words does — at its start, after a `_`, a `.` or
 any other character that is not a letter or a digit, at an upper-case letter that
 follows a lower-case one, at the last of a run of capitals that a lower-case letter
-follows (`ser` offers `HTTPServer`), or at a letter that follows a digit (`sum`
+follows (`set` offers `HTTPServer`), or at a letter that follows a digit (`sum`
 offers `md5sum`) — and the rest follows in order. `ret` offers `reveal_type` and `NoReturn` to import, but not
 `secrets` or `urlretrieve`, which merely contain the letters, and which would
 otherwise crowd out `return` and the names in scope
@@ -216,13 +216,17 @@ written through it, and one from a module with a `from ... import` is added to t
 statement. how imports are sorted, grouped and split is not an editor setting: it
 is the project's isort configuration, which `buff` reads and fixes
 
-an import any of these write — a completion's, a quick fix's, a pasted name's, an
-inlay hint's — goes where `buff check --select I --fix` would put it, so adding one
-never leaves the block unsorted. it joins its section of the file's first block of
+an import any of these write — a completion's, an unresolved name's quick fix's, a
+pasted name's, an inlay hint's — goes where `buff check --select I --fix` would put
+it, so adding one never leaves the block unsorted. it joins its section of the file's first block of
 imports (future, standard library, third party, first party, local, or the
 sections the configuration defines) in the order isort sorts that section, with a
 blank line around a section the block did not have yet, and a member added to an
-existing `from` import is listed where isort orders the members:
+existing `from` import is listed where isort orders the members. a new statement,
+and a `from` import a new member makes too long, is wrapped to the line length as
+isort wraps it, a section new to the block gets the heading `import-heading`
+configures for it, and two members of a module the file does not import yet become
+one `from` import:
 
 ```py
 import json
@@ -241,7 +245,8 @@ resolves it — the closest `ruff.toml`, `.ruff.toml` or `pyproject.toml` with a
 `no-lines-before`, `lines-between-types`, `force-single-line` and the rest apply
 as they do to `buff`. the import has to run before the name it binds is used, so a
 file whose imports all come after that point, or that has none, still gets it at
-the top, below a docstring and any `from __future__` import. `buff` sorts each cell
+the top, below a docstring and any `from __future__` import, followed by the blank
+lines isort writes after a block. `buff` sorts each cell
 of a notebook on its own, so in a notebook the block an import joins, and the top it
 otherwise goes at, are those of the cell the name is used in
 
@@ -733,7 +738,8 @@ the move is refused, with the reason, when the program would not run as before:
     nor python into basedpython, which reads it differently
 
 `by/prepareMoveSymbol` takes `textDocument` and `position` — in a top-level
-definition's name, or in a reference to one — and answers `{name, kind, module, uri, range}`: the name, `function`, `class` or `variable`, the dotted name of the module
+definition's name, in a reference to one, or anywhere else in a top-level
+definition, its body included, which is then the one moved — and answers `{name, kind, module, uri, range}`: the name, `function`, `class` or `variable`, the dotted name of the module
 it is defined in, and its name's range in the file `uri`, which need not be the
 document asked about; `null` where there is nothing to move. `by/moveSymbol` takes
 the same and `target`, the URI of an existing `.py` or `.by` file of the project

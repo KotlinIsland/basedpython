@@ -38,7 +38,7 @@ use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_python_codegen::Stylist;
-use ruff_source_file::LineRanges;
+use ruff_source_file::{LineRanges, UniversalNewlines};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ImportingFile, ModuleName, file_to_module};
@@ -87,9 +87,9 @@ pub struct SymbolMove {
     pub warnings: Vec<String>,
 }
 
-/// The top-level definition named at `offset` — at its definition or at a reference to it — when
-/// it is one [`move_symbol`] can move: a function, a class, or a variable a single name is
-/// assigned to, at the top level of a module of the project.
+/// the top-level definition named at `offset` — at its definition or at a reference to it — or
+/// else the one `offset` is anywhere in, when it is one [`move_symbol`] can move: a function, a
+/// class, or a variable a single name is assigned to, at the top level of a module of the project
 pub fn movable_symbol(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -502,7 +502,9 @@ fn disjoint(db: &dyn Db, edits: Vec<FileEdit>) -> Result<Vec<FileEdit>, String> 
 }
 
 /// The file and offset of the top-level declaration named at `offset`: `offset` itself when it is
-/// in a declaration's name, or else where the name at `offset` is defined.
+/// in a declaration's name, or else where the name at `offset` is defined, or else the name of the
+/// top-level declaration `offset` is anywhere in, as a move from inside a definition's body moves
+/// the definition
 fn declaration_site<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
@@ -512,6 +514,19 @@ fn declaration_site<'db>(
     if Declaration::at(parsed.suite(), offset).is_some() {
         return Some((file, offset));
     }
+    if let Some(site) = referenced_declaration(db, file, offset) {
+        return Some(site);
+    }
+    let declaration = Declaration::enclosing(parsed.suite(), offset)?;
+    Some((file, declaration.name_range.start()))
+}
+
+/// the file and offset of the top-level declaration of the project the name at `offset` refers to
+fn referenced_declaration<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    offset: TextSize,
+) -> Option<(ProgramFile<'db>, TextSize)> {
     let targets = crate::goto_definition(db, file, offset)?;
     let mut targets = targets.value.into_iter();
     let target = targets.next()?;
@@ -537,6 +552,22 @@ struct Declaration<'a> {
 }
 
 impl<'a> Declaration<'a> {
+    /// the top-level declaration `offset` is anywhere in: its decorators, its signature, its body
+    /// or its value
+    fn enclosing(suite: &'a [Stmt], offset: TextSize) -> Option<Self> {
+        let statement = suite
+            .iter()
+            .find(|statement| statement.range().contains_inclusive(offset))?;
+        let name = match statement {
+            Stmt::FunctionDef(function) => function.name.start(),
+            Stmt::ClassDef(class) => class.name.start(),
+            Stmt::Assign(assign) => assign.targets.first()?.start(),
+            Stmt::AnnAssign(assign) => assign.target.start(),
+            _ => return None,
+        };
+        Self::at(suite, name)
+    }
+
     /// The top-level declaration whose name `offset` is in.
     fn at(suite: &'a [Stmt], offset: TextSize) -> Option<Self> {
         suite.iter().enumerate().find_map(|(index, statement)| {
@@ -1054,7 +1085,13 @@ fn appended_text(
     for _ in trailing_blank_lines.min(blank_lines)..blank_lines {
         text.push_str(line_ending);
     }
-    text.push_str(definition);
+    // the definition is written in the line ending of the module it was cut from
+    for line in definition.universal_newlines() {
+        text.push_str(line.as_str());
+        if line.line_ending().is_some() {
+            text.push_str(line_ending);
+        }
+    }
     text
 }
 
@@ -1572,6 +1609,41 @@ X = os.sep
             SRC.replace("def area(r)", "def <CURSOR>area(r)")
         ));
         assert_snapshot!(test.move_to_dst(), @"refused: mv.src and mv.dst would import each other: `area` uses `RATE`, and mv.src still uses `area`");
+    }
+
+    /// anywhere in a definition that is not a name of something else, a move moves the
+    /// definition, as it does from its name
+    #[test]
+    fn a_move_from_inside_a_body_moves_the_definition() {
+        let inside =
+            project(&SRC.replace("    return OrderedDict", "    re<CURSOR>turn OrderedDict"));
+        let at_name = project(&SRC.replace("def free(x)", "def <CURSOR>free(x)"));
+        assert_eq!(inside.move_to_dst(), at_name.move_to_dst());
+        assert!(inside.move_to_dst().contains("def free(x)"));
+    }
+
+    /// a definition moved out of a module written with `\r\n` line endings into one written with
+    /// `\n` is written with `\n`, as the rest of the target is
+    #[test]
+    fn a_moved_definition_takes_the_targets_line_endings() {
+        let test = project(
+            &SRC.replace("def free(x)", "def <CURSOR>free(x)")
+                .replace('\n', "\r\n"),
+        );
+        let moved = test.move_to_dst();
+        let dst_path = system_path_to_file(&test.db, "mv/dst.py")
+            .expect("dst to exist")
+            .path(&test.db)
+            .to_string();
+        let dst = moved
+            .split("--- ")
+            .find(|file| file.starts_with(&dst_path))
+            .expect("the move to change mv/dst.py");
+        assert!(
+            dst.contains("def free(x):\n    return OrderedDict(x=x)\n"),
+            "{dst:?}"
+        );
+        assert!(!dst.contains('\r'), "{dst:?}");
     }
 
     #[test]

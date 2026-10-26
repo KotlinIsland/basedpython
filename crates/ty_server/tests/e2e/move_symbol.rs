@@ -7,6 +7,7 @@
 use anyhow::Result;
 use lsp_types::{LspRequestMethod, MessageDirection, Request};
 use ruff_db::system::SystemPath;
+use ruff_source_file::LineEnding;
 use serde_json::json;
 
 use crate::{TestServer, TestServerBuilder};
@@ -113,16 +114,20 @@ fn a_move_answers_the_edit_to_every_file_it_changes() -> Result<()> {
         }]),
         "{answer:#}"
     );
+    // geometry.py is empty, so what the move writes there takes the platform's line ending
+    let newline = LineEnding::default().as_str();
     assert_eq!(
         changes[geometry.as_str()],
         json!([
             {
                 "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
-                "newText": "from shapes.util import RATE\n",
+                "newText": format!("from shapes.util import RATE{newline}"),
             },
             {
                 "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
-                "newText": "\n\ndef area(r: float) -> float:\n    return r * r * RATE\n",
+                "newText": format!(
+                    "{newline}{newline}def area(r: float) -> float:{newline}    return r * r * RATE{newline}"
+                ),
             },
         ]),
         "{answer:#}"
