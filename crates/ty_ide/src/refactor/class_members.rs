@@ -1981,6 +1981,18 @@ class <CURSOR>Leaf(Mid):
         ");
     }
 
+    /// the new class's name has to be one a class statement can be written with, and one the
+    /// module does not bind already, to a class or to anything else
+    #[test]
+    fn extracting_under_a_name_a_class_cannot_have_is_refused() {
+        let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));
+        assert_snapshot!(test.extract(&["plain"], "1Shape"), @"refused: `1Shape` is not a name a class can have");
+        assert_snapshot!(test.extract(&["plain"], "My Shape"), @"refused: `My Shape` is not a name a class can have");
+        assert_snapshot!(test.extract(&["plain"], ""), @"refused: `` is not a name a class can have");
+        assert_snapshot!(test.extract(&["plain"], "class"), @"refused: `class` is not a name a class can have");
+        assert_snapshot!(test.extract(&["plain"], "Base"), @"refused: cls.shapes has a `Base` already");
+    }
+
     #[test]
     fn extracting_what_reads_an_attribute_left_behind_is_refused() {
         let test = project(&SHAPES.replace("class Child(Base)", "class <CURSOR>Child(Base)"));

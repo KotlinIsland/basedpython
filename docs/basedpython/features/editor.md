@@ -839,8 +839,9 @@ started. it is refused, with the reason, for a member that reads an attribute of
 left behind), a name-mangled member, a method that reads `__class__`, which would
 be the new class, an attribute of a decorated class (a data
 class's field, say), a generic class, a class whose base python treats specially —
-`Protocol`, `NamedTuple`, `TypedDict`, `Generic`, an enum — and a name the module
-binds already. it takes `textDocument`, `position` (anywhere in the class),
+`Protocol`, `NamedTuple`, `TypedDict`, `Generic`, an enum — a class that passes a
+keyword other than `metaclass` when it is made, a name that is not an
+identifier or is a keyword, and a name the module binds already. it takes `textDocument`, `position` (anywhere in the class),
 `members`, the names to move, as `by/prepareMoveMembers` lists them, and `name`,
 and answers as `by/moveSymbol` does
 
