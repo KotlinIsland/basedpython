@@ -328,6 +328,11 @@ pub(crate) struct RefactorData {
     pub(crate) version: crate::document::DocumentVersion,
     pub(crate) refactor: String,
     pub(crate) range: types::Range,
+    /// set when the action is resolved, for a refactoring that makes up a name, the new
+    /// function's or variable's: where the name is in the document once the action's edit is
+    /// applied, at the place the rewritten code uses it, for an editor to start renaming it there
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rename: Option<types::Location>,
 }
 
 impl RefactorData {
@@ -337,6 +342,7 @@ impl RefactorData {
             version: snapshot.document().version(),
             refactor: kind.id().to_string(),
             range,
+            rename: None,
         }
     }
 }

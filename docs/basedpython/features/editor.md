@@ -545,6 +545,17 @@ one that asks while the caret moves is only offered what applies
 | convert quotes          | `refactor.rewrite.flipQuotes`          | a string or bytes literal            |
 | loop to comprehension   | `refactor.rewrite.loopToComprehension` | a loop filling an empty collection   |
 
+an extraction makes up a name, which its user will want to choose. once its
+action is resolved, its `data` says where the name is: `rename`, a `uri` and a
+`range` in the document as the action's edit leaves it, at the place the
+rewritten code uses the name, where the selection was. an editor applies the
+edit and starts renaming there, as TypeScript's refactorings hand over a
+rename location:
+
+```json
+{ "data": { "rename": { "uri": "file:///src/shapes.by", "range": { "start": { "line": 13, "character": 21 }, "end": { "line": 13, "character": 30 } } } } }
+```
+
 inlining is offered on the variable's assignment and on any of its reads alike, and
 replaces every read either way
 

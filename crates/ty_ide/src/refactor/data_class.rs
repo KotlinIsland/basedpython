@@ -79,6 +79,7 @@ pub(super) fn plan(
             Ok(Plan {
                 title: title.to_string(),
                 edits: vec![Edit::range_deletion(marker.range())],
+                name: None,
             })
         }
         (Direction::ToDataClass, None) => {
@@ -105,6 +106,7 @@ pub(super) fn plan(
             Ok(Plan {
                 title: title.to_string(),
                 edits: vec![Edit::insertion("data ".to_string(), keyword.start())],
+                name: None,
             })
         }
         _ => Err(Refusal::NotApplicable),

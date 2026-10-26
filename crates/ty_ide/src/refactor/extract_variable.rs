@@ -30,7 +30,8 @@ use super::evaluation::{NotOnce, Placement, placement_in_statement};
 use super::hazards::{contains_named_expression, context_dependent_construct};
 use super::names::{fresh_name, names_in_file, suggest_for_expression};
 use super::text::{leading_comments_start, statement_ancestors, suite_of};
-use super::{Plan, RefactorContext, Refusal};
+use super::{Plan, PlannedName, RefactorContext, Refusal};
+use crate::method_kind::{MethodKind, resolved_method_kind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Target {
@@ -155,7 +156,10 @@ fn plan_selection(
     let version = context.file.python_version(context.db);
     let base = selection.suggested_name(version.minor);
     let receiver = method
-        .filter(|(_, function)| function.decorator_list.is_empty())
+        .filter(|(_, function)| {
+            function.decorator_list.is_empty()
+                && resolved_method_kind(&context.model, function) == Some(MethodKind::Instance)
+        })
         .and_then(|(_, function)| function.parameters.iter_non_variadic_params().next())
         .map(|parameter| parameter.name().as_str());
     let name = match target {
@@ -315,6 +319,24 @@ fn plan_selection(
             let Some((class, function)) = method else {
                 return Err(Refusal::NotApplicable);
             };
+            match resolved_method_kind(&context.model, function) {
+                Some(MethodKind::Instance) => {}
+                None => {
+                    return Err(refuse(
+                        "the checker cannot tell what the method is passed".to_string(),
+                    ));
+                }
+                Some(MethodKind::Class) => {
+                    return Err(refuse(
+                        "the method is passed its class rather than an instance".to_string(),
+                    ));
+                }
+                Some(MethodKind::Static) => {
+                    return Err(refuse(
+                        "the method is static, so it is passed no instance".to_string(),
+                    ));
+                }
+            }
             if !function.decorator_list.is_empty() {
                 return Err(refuse(
                     "the method is decorated, so its first parameter need not be the instance"
@@ -334,12 +356,15 @@ fn plan_selection(
         }
     };
 
+    // the name where the expression was, after the receiver for a field
+    let name_at = PlannedName::at(1, replacement.len() - name.len(), name.len());
     Ok(Plan {
         title,
         edits: vec![
             insertion,
             Edit::range_replacement(replacement, selection.replaced),
         ],
+        name: Some(name_at),
     })
 }
 
@@ -865,33 +890,45 @@ mod tests {
     /// the same value because adding integers is associative.
     #[test]
     fn operands_of_an_associative_chain() {
-        assert_snapshot!(extract(
+        assert_snapshot!(RefactorTest::basedpython(
             "
-            def f(a: int, b: int, c: int, d: int):
+            def f(a: final int, b: final int, c: final int, d: final int):
                 return a + <START>b + c<END> + d
             ",
-        ), @"
+        ).apply(RefactorKind::ExtractVariable), @"
         Extract variable `value`
         ---
 
-        def f(a: int, b: int, c: int, d: int):
+        def f(a: final int, b: final int, c: final int, d: final int):
             value = b + c
             return a + value + d
         ");
     }
 
+    /// an `int` may be an instance of a subclass, whose `+` is its own and need not be
+    /// associative
     #[test]
-    fn operands_of_a_string_concatenation() {
+    fn operands_of_ints_that_may_be_subclasses_are_not_offered() {
         assert_snapshot!(extract(
             "
-            def f(name: str):
+            def f(a: int, b: int, c: int, d: int):
+                return a + <START>b + c<END> + d
+            ",
+        ), @"not offered");
+    }
+
+    #[test]
+    fn operands_of_a_string_concatenation() {
+        assert_snapshot!(RefactorTest::basedpython(
+            "
+            def f(name: final str):
                 return 'hello ' + <START>name + '!'<END>
             ",
-        ), @"
+        ).apply(RefactorKind::ExtractVariable), @"
         Extract variable `value`
         ---
 
-        def f(name: str):
+        def f(name: final str):
             value = name + '!'
             return 'hello ' + value
         ");
@@ -920,37 +957,63 @@ mod tests {
 
     #[test]
     fn operands_after_a_call_are_refused() {
-        assert_snapshot!(extract(
+        assert_snapshot!(RefactorTest::basedpython(
             "
-            def f(b: int, c: int):
+            def f(b: final int, c: final int):
                 return g() + <START>b + c<END>
 
-            def g() -> int: ...
+            def g() -> final int: ...
             ",
-        ), @"refused: Extract variable `value` (something with effects is evaluated before the expression, which would now run after it)");
+        ).apply(RefactorKind::ExtractVariable), @"refused: Extract variable `value` (something with effects is evaluated before the expression, which would now run after it)");
     }
 
-    /// reading a module's attribute and multiplying two numbers run nothing of the program's,
-    /// so evaluating the power first changes nothing
+    /// reading a module's attribute and multiplying two floats run nothing of the program's, so
+    /// evaluating the power first changes nothing. a `float` of a `.py` file may be an `int`,
+    /// which a `float` it meets converts, so this is written where `float` is a float alone, and
+    /// any `float` may be an instance of a subclass, so the floats are `final`
     #[test]
     fn after_a_module_attribute_and_arithmetic() {
-        assert_snapshot!(extract(
+        assert_snapshot!(RefactorTest::basedpython(
             "
             import math
 
-            def f(radius: float, scale: int):
-                return scale * math.pi * <START>radius ** 2<END>
+            def f(radius: final float, scale: final float):
+                return math.pi, scale * scale * <START>radius ** 2<END>
             ",
-        ), @"
+        ).apply(RefactorKind::ExtractVariable), @"
         Extract variable `value`
         ---
 
         import math
 
-        def f(radius: float, scale: int):
+        def f(radius: final float, scale: final float):
             value = radius ** 2
-            return scale * math.pi * value
+            return math.pi, scale * scale * value
         ");
+    }
+
+    /// an `int` too large for a `float` raises `OverflowError` when it is added to one, so the
+    /// addition before the expression may decide whether it runs
+    #[test]
+    fn after_arithmetic_mixing_int_and_float_is_refused() {
+        assert_snapshot!(extract(
+            "
+            def f(count: int, ratio: float, n: int):
+                return count * ratio + <START>n * n<END>
+            ",
+        ), @"refused: Extract variable `value` (something with effects is evaluated before the expression, which would now run after it)");
+    }
+
+    /// repeating a string as many times as an `int` too large for an index raises
+    /// `OverflowError`
+    #[test]
+    fn after_repeating_a_string_is_refused() {
+        assert_snapshot!(extract(
+            "
+            def f(text: str, count: int, n: int):
+                return text * count, <START>n * n<END>
+            ",
+        ), @"refused: Extract variable `value` (something with effects is evaluated before the expression, which would now run after it)");
     }
 
     /// `self.price` may be a property, which could see the program differently once the
@@ -1385,7 +1448,48 @@ mod tests {
                 def double(x: int):
                     return <START>x * 2<END>
             ",
-        ), @"refused: Introduce attribute `self.value` (the method is decorated, so its first parameter need not be the instance)");
+        ), @"refused: Introduce attribute `self.value` (the method is static, so it is passed no instance)");
+    }
+
+    /// a method is static by what its decorator resolves to, under whatever name
+    #[test]
+    fn field_in_a_static_method_under_another_name_is_refused() {
+        assert_snapshot!(field(
+            "
+            static = staticmethod
+
+            class Math:
+                @static
+                def double(x: int):
+                    return <START>x * 2<END>
+            ",
+        ), @"refused: Introduce attribute `self.value` (the method is static, so it is passed no instance)");
+    }
+
+    /// `__init_subclass__` is passed the class, so an attribute assigned on its first parameter
+    /// would be the class's
+    #[test]
+    fn field_in_init_subclass_is_refused() {
+        assert_snapshot!(field(
+            "
+            class Base:
+                def __init_subclass__(cls, size: int):
+                    print(<START>size * 2<END>)
+            ",
+        ), @"refused: Introduce attribute `self.value` (the method is passed its class rather than an instance)");
+    }
+
+    /// `__new__` is passed the class, not an instance
+    #[test]
+    fn field_in_new_is_refused() {
+        assert_snapshot!(field(
+            "
+            class Base:
+                def __new__(cls, size: int):
+                    print(<START>size * 2<END>)
+                    return super().__new__(cls)
+            ",
+        ), @"refused: Introduce attribute `self.value` (the method is static, so it is passed no instance)");
     }
 
     #[test]

@@ -243,3 +243,46 @@ fn extraction_at_a_caret_offers_the_expressions_around_it() -> Result<()> {
 
     Ok(())
 }
+
+/// an extraction, once resolved, says in its `data` where the name it made up is in the text its
+/// edit leaves, where the rewritten code uses it, for an editor to rename it in place
+#[test]
+fn a_resolved_extraction_says_where_its_new_name_is() -> Result<()> {
+    let (mut server, file) = server(true)?;
+
+    let selection = Range::new(Position::new(1, 8), Position::new(1, 17));
+    let actions = request(
+        &mut server,
+        file,
+        selection,
+        Some(vec![CodeActionKind::new("refactor.extract.variable")]),
+        Some(CodeActionTriggerKind::Invoked),
+    );
+    let [action] = actions.as_slice() else {
+        panic!("expected exactly the extraction, got {actions:#?}");
+    };
+    let resolved = server.send_request_await::<CodeActionResolveRequest>(action.clone());
+    let data = resolved
+        .data
+        .expect("a resolved refactoring keeps its data");
+    // the new binding goes above, so line 1 becomes line 2, `x = <name>`, and the name is the
+    // one the title gives
+    let range = &data["rename"]["range"];
+    assert_eq!(
+        range["start"],
+        serde_json::json!({ "line": 2, "character": 8 })
+    );
+    assert_eq!(range["end"]["line"], 2);
+    let length = range["end"]["character"].as_u64().unwrap_or_default() - 8;
+    let name = resolved
+        .title
+        .split('`')
+        .nth(1)
+        .expect("the title quotes the name");
+    assert_eq!(length, name.len() as u64, "{}", resolved.title);
+    assert_eq!(
+        data["rename"]["uri"],
+        serde_json::json!(server.file_uri(file))
+    );
+    Ok(())
+}

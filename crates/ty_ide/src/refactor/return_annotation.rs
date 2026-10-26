@@ -69,6 +69,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
     Ok(Plan {
         title: format!("Add return annotation `-> {annotation}`"),
         edits,
+        name: None,
     })
 }
 

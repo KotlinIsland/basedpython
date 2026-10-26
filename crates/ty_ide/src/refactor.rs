@@ -36,7 +36,7 @@ use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::{SourceText, source_text};
 use ruff_diagnostics::Edit;
 use ruff_python_codegen::Stylist;
-use ruff_text_size::TextRange;
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_project::Db;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::SemanticModel;
@@ -161,6 +161,10 @@ pub struct Refactor {
     pub kind: RefactorKind,
     pub title: String,
     pub edits: Vec<FileEdit>,
+    /// the name the rewrite made up, in the text the edits leave behind in the refactored file:
+    /// the new function's or variable's where the rewritten code uses it, for its user to rename
+    /// in place. `None` for a rewrite that makes up no name
+    pub name: Option<TextRange>,
 }
 
 /// Why a refactoring does not apply: either it is not about what is at the
@@ -185,6 +189,47 @@ impl Refusal {
 pub(crate) struct Plan {
     title: String,
     edits: Vec<Edit>,
+    /// the name the rewrite makes up, which its user will want to choose: the new
+    /// function's or the new variable's, where it is declared
+    name: Option<PlannedName>,
+}
+
+/// where a made-up name is in a plan's edits: the edit whose content writes it, and its range
+/// within that content
+pub(crate) struct PlannedName {
+    edit: usize,
+    range: TextRange,
+}
+
+impl PlannedName {
+    /// the name `len` bytes long at byte `start` of the content of edit `edit`
+    fn at(edit: usize, start: usize, len: usize) -> Self {
+        let start = TextSize::try_from(start).unwrap_or_default();
+        let len = TextSize::try_from(len).unwrap_or_default();
+        Self {
+            edit,
+            range: TextRange::at(start, len),
+        }
+    }
+
+    /// where the name is in the text `edits` leave behind, the edits being the plan's
+    fn in_edited_text(&self, edits: &[Edit]) -> Option<TextRange> {
+        let edit = edits.get(self.edit)?;
+        // what the edits before this one in the text add or remove before it
+        let mut shift: i64 = 0;
+        for other in edits {
+            if other.start() < edit.start() {
+                let added = other.content().map_or(0, str::len);
+                shift += i64::try_from(added).ok()? - i64::from(u32::from(other.range().len()));
+            }
+        }
+        let start =
+            i64::from(u32::from(edit.start())) + shift + i64::from(u32::from(self.range.start()));
+        Some(TextRange::at(
+            TextSize::from(u32::try_from(start).ok()?),
+            self.range.len(),
+        ))
+    }
 }
 
 /// Everything a refactoring reads about the file it rewrites.
@@ -346,6 +391,7 @@ pub fn refactor(
         Ok(plan) => Ok(Refactor {
             kind,
             title: plan.title,
+            name: plan.name.and_then(|name| name.in_edited_text(&plan.edits)),
             edits: context.file_edits(plan.edits),
         }),
         Err(Refusal::NotApplicable) => Err(NOT_HERE.to_string()),
@@ -363,6 +409,7 @@ fn is_refactorable(db: &dyn Db, file: ProgramFile<'_>) -> bool {
 pub(crate) mod test_support {
     use ruff_db::files::{File, system_path_to_file};
     use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
+    use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::{Ranged, TextRange, TextSize};
     use ty_project::{ProjectMetadata, SemanticDb as _};
@@ -383,6 +430,12 @@ pub(crate) mod test_support {
 
         pub(crate) fn basedpython(source: &str) -> Self {
             Self::with_files("main.by", source, &[])
+        }
+
+        /// the test, read as python `version` reads it
+        pub(crate) fn with_python_version(mut self, version: PythonVersion) -> Self {
+            self.db.set_python_version(version);
+            self
         }
 
         pub(crate) fn with_files(path: &str, source: &str, others: &[(&str, &str)]) -> Self {
@@ -445,6 +498,14 @@ pub(crate) mod test_support {
                 .join("\n")
         }
 
+        /// where the name `kind` makes up is in the text its edits leave, when it makes one up
+        pub(crate) fn name(&self, kind: RefactorKind) -> Option<TextRange> {
+            let program_file = self.db.program_file(self.file);
+            refactor(&self.db, program_file, kind, self.range)
+                .ok()
+                .and_then(|result| result.name)
+        }
+
         /// The file after applying `kind`, or why it was not offered or refused.
         pub(crate) fn apply(&self, kind: RefactorKind) -> String {
             let program_file = self.db.program_file(self.file);
@@ -481,6 +542,16 @@ pub(crate) mod test_support {
                             edit.content().unwrap_or_default(),
                         );
                     }
+                    // the name a rewrite made up is where it says, in the text it leaves: the
+                    // name its title ends a quoted `name` or `self.name` with
+                    if let Some(name) = result.name {
+                        let written = &text[name.start().to_usize()..name.end().to_usize()];
+                        assert!(
+                            result.title.contains(&format!("{written}`")),
+                            "the made-up name is at {name:?}, which reads `{written}`, not the name `{}` gives",
+                            result.title
+                        );
+                    }
                     format!("{}\n---\n{text}", offer.title)
                 }
                 Err(reason) => {
@@ -489,5 +560,33 @@ pub(crate) mod test_support {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RefactorKind;
+    use super::test_support::RefactorTest;
+
+    /// an extraction says where the name it made up is, where the rewritten code uses it, for an
+    /// editor to rename it in place; a rewrite that makes up no name says nothing
+    #[test]
+    fn extractions_say_where_their_new_name_is() {
+        for (kind, source) in [
+            (
+                RefactorKind::ExtractFunction,
+                "def f(r: float) -> float:\n    <START>total = 3.14 * r ** 2<END>\n    return total\n",
+            ),
+            (
+                RefactorKind::ExtractVariable,
+                "def f(r: float) -> float:\n    return <START>3.14 * r ** 2<END>\n",
+            ),
+        ] {
+            let test = RefactorTest::python(source);
+            assert!(test.apply(kind).contains("---"), "{kind:?} applies");
+            assert!(test.name(kind).is_some(), "{kind:?} names its made-up name");
+        }
+        let test = RefactorTest::python("x = [1, <CURSOR>2]\n");
+        assert_eq!(test.name(RefactorKind::SplitList), None);
     }
 }

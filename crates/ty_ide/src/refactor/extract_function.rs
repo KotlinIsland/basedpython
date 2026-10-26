@@ -33,7 +33,7 @@ use super::flow::{reaching_definitions, resolving_scope};
 use super::hazards::context_dependent_construct;
 use super::names::{fresh_name, names_in_file};
 use super::text::{leading_comments_start, nested_suites, statement_ancestors};
-use super::{Plan, RefactorContext, Refusal};
+use super::{Plan, PlannedName, RefactorContext, Refusal};
 
 pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Plan, Refusal> {
     let Some(selection) = select_statements(context, range) else {
@@ -332,13 +332,14 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
     }
 
     // the call
+    let name_len = name.len();
     let callee = match &method {
         Some(method) => format!("{}.{name}", method.receiver),
         None => name,
     };
+    let await_ = if scan.awaits { "await " } else { "" };
     let call = format!(
         "{await_}{callee}({arguments})",
-        await_ = if scan.awaits { "await " } else { "" },
         arguments = parameters
             .iter()
             .map(ToString::to_string)
@@ -351,20 +352,35 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         format!("{selection_indent}{} = {call}", join_names(&returned))
     };
 
+    // the name where the call uses it, which is where the selection was: the statement ends
+    // with the call, which writes the callee after any `await`, and the callee ends with the name
+    let name_in_call = call_statement.len() - call.len() + await_.len() + callee.len() - name_len;
+
     // a definition written directly above the statements it replaces is one edit,
     // since two edits starting at one offset have no order a client must keep
-    let edits = if insert_at == lines.start() {
-        vec![Edit::range_replacement(
-            format!("{definition}{call_statement}"),
-            lines,
-        )]
+    let (edits, name) = if insert_at == lines.start() {
+        let name = PlannedName::at(0, definition.len() + name_in_call, name_len);
+        (
+            vec![Edit::range_replacement(
+                format!("{definition}{call_statement}"),
+                lines,
+            )],
+            name,
+        )
     } else {
-        vec![
-            Edit::insertion(definition, insert_at),
-            Edit::range_replacement(call_statement, lines),
-        ]
+        (
+            vec![
+                Edit::insertion(definition, insert_at),
+                Edit::range_replacement(call_statement, lines),
+            ],
+            PlannedName::at(1, name_in_call, name_len),
+        )
     };
-    Ok(Plan { title, edits })
+    Ok(Plan {
+        title,
+        edits,
+        name: Some(name),
+    })
 }
 
 /// Whole statements, siblings in one suite, that the selection covers.

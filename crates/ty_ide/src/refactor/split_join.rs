@@ -125,6 +125,7 @@ pub(super) fn plan(
         return Ok(Plan {
             title: title.to_string(),
             edits: vec![Edit::range_replacement(text, inside)],
+            name: None,
         });
     }
     Err(Refusal::NotApplicable)

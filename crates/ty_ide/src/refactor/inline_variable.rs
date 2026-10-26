@@ -180,7 +180,11 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
     }
     edits.push(context.delete_statement(in_suite));
 
-    Ok(Plan { title, edits })
+    Ok(Plan {
+        title,
+        edits,
+        name: None,
+    })
 }
 
 /// Whether `definition` is a binding this refactoring could inline, to tell a

@@ -185,12 +185,15 @@ pub(crate) fn is_stable_value(model: &SemanticModel<'_>, expr: &Expr) -> bool {
 /// operands themselves — runs no code of the program's and cannot raise.
 ///
 /// That is an operator of python's own over builtin scalars that is defined for every
-/// pair of values it is given: `+`, `-` and `*` over numbers, `+` joining two strings
-/// or two byte strings and `*` repeating one, the bitwise operators over integers,
-/// equality, and ordering among numbers that are not complex or among strings. `/`,
-/// `//`, `%`, `**` and the shifts are left out because each raises for some operands,
-/// and something that may raise before an expression decides whether it runs. Reading
-/// an attribute of a module is quiet too.
+/// pair of values it is given: `+`, `-` and `*` over numbers that python does not convert
+/// to compute them, `+` joining two strings or two byte strings, the bitwise operators
+/// over integers, equality, and ordering among numbers that are not complex or among
+/// strings. an `int` meeting a `float` or a `complex` is converted to one, which raises
+/// `OverflowError` for an `int` too large for it, as `10**400 + 0.5` does, and repeating
+/// a string or a byte string raises it for a count too large for an index. `/`, `//`,
+/// `%`, `**` and the shifts are left out because each raises for some operands, and
+/// something that may raise before an expression decides whether it runs. reading an
+/// attribute of a module is quiet too
 fn operation_is_quiet(model: &SemanticModel<'_>, expr: &Expr) -> bool {
     use BuiltinScalar::{Bool, Bytes, Complex, Float, Int, Str};
     const NUMBERS: &[BuiltinScalar] = &[Bool, Int, Float, Complex];
@@ -201,6 +204,16 @@ fn operation_is_quiet(model: &SemanticModel<'_>, expr: &Expr) -> bool {
     let all_in = |kinds: &[BuiltinScalar], allowed: &[BuiltinScalar]| {
         kinds.iter().all(|kind| allowed.contains(kind))
     };
+    // an `int` is converted to the other operand's `float` or `complex`
+    let converts = |from: &[BuiltinScalar], to: &[BuiltinScalar]| {
+        from.contains(&Int) && to.iter().any(|kind| matches!(kind, Float | Complex))
+    };
+    let arithmetic = |left: &[BuiltinScalar], right: &[BuiltinScalar]| {
+        all_in(left, NUMBERS)
+            && all_in(right, NUMBERS)
+            && !converts(left, right)
+            && !converts(right, left)
+    };
 
     match expr {
         Expr::BinOp(bin_op) => {
@@ -209,16 +222,11 @@ fn operation_is_quiet(model: &SemanticModel<'_>, expr: &Expr) -> bool {
             };
             match bin_op.op {
                 Operator::Add => {
-                    (all_in(&left, NUMBERS) && all_in(&right, NUMBERS))
+                    arithmetic(&left, &right)
                         || (left == [Str] && right == [Str])
                         || (left == [Bytes] && right == [Bytes])
                 }
-                Operator::Sub => all_in(&left, NUMBERS) && all_in(&right, NUMBERS),
-                Operator::Mult => {
-                    (all_in(&left, NUMBERS) && all_in(&right, NUMBERS))
-                        || ((left == [Str] || left == [Bytes]) && all_in(&right, INTEGERS))
-                        || (all_in(&left, INTEGERS) && (right == [Str] || right == [Bytes]))
-                }
+                Operator::Sub | Operator::Mult => arithmetic(&left, &right),
                 Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
                     all_in(&left, INTEGERS) && all_in(&right, INTEGERS)
                 }
