@@ -1160,7 +1160,22 @@ fn member_implementation_definition<'db>(
     // Use the inferred function type to collapse overload declarations to their concrete
     // implementation. If inference cannot produce a function literal, keep the original `def` as a
     // conservative fallback.
-    let Some(function) = binding_type(db, definition).as_function_literal() else {
+    //
+    // This is the function the `def` defines, before any decorator. The name's binding type is
+    // what the decorators return, which for
+    //
+    // ```py
+    // def logged(func):
+    //     def wrapper(*args, **kwargs): ...
+    //     return wrapper
+    //
+    // class Circle(Shape):
+    //     @logged
+    //     def area(self) -> float: ...
+    // ```
+    //
+    // is `wrapper`, a function defined somewhere else entirely.
+    let Some(function) = infer_definition_types(db, definition).function_type(definition) else {
         return Some(ResolvedDefinition::Definition(definition));
     };
 

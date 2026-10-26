@@ -350,6 +350,47 @@ mod tests {
         ");
     }
 
+    /// An override with a decorator is its own `def`, not the function the decorator returns,
+    /// which is defined somewhere else entirely.
+    #[test]
+    fn implementation_decorated_override_is_its_def() {
+        let test = cursor_test(
+            r#"
+            def logged(func):
+                def wrapper(*args, **kwargs):
+                    return func(*args, **kwargs)
+                return wrapper
+
+            class Shape:
+                def ar<CURSOR>ea(self) -> float:
+                    return 0.0
+
+            class Circle(Shape):
+                @logged
+                def area(self) -> float:
+                    return 1.0
+            "#,
+        );
+
+        assert_snapshot!(test.goto_implementation(), @"
+        info[goto-implementation]: Go to implementation
+         --> main.py:8:9
+          |
+        8 |     def area(self) -> float:
+          |         ^^^^ Clicking here
+        info: Found 2 implementations
+          --> main.py:8:9
+           |
+         8 |     def area(self) -> float:
+           |         ----
+           |
+          ::: main.py:13:9
+           |
+        13 |     def area(self) -> float:
+           |         ----
+        ");
+    }
+
     #[test]
     fn implementation_transitive_subclass_overrides() {
         let test = cursor_test(

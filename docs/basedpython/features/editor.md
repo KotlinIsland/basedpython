@@ -506,7 +506,9 @@ language services are off
 ## go to super
 
 `textDocument/implementation` on a method goes down, to the methods that
-override it. `by/superMembers` goes up: given a position on the name a class
+override it. a decorated override is its own `def`, not the function its
+decorator returns, which a decorator like `logged`, returning a `wrapper` of its
+own, defines somewhere else. `by/superMembers` goes up: given a position on the name a class
 member is declared with — a `def` or a nested class, a name the class body
 assigns, annotates or captures, or an import's alias — it answers the
 superclass members that member overrides, each with its class, its file and the

@@ -338,6 +338,36 @@ print(Shape().area(), Square().area())
         ");
     }
 
+    /// A decorated method is counted by its own `def`: what the decorator hands back is defined
+    /// elsewhere, and is neither an override of the method nor overridden by it.
+    #[test]
+    fn a_decorated_method_is_counted_as_its_def() {
+        let test = cursor_test(
+            "<CURSOR>
+def logged(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+class Shape:
+    def area(self) -> float:
+        return 0.0
+
+class Circle(Shape):
+    @logged
+    def area(self) -> float:
+        return 1.0
+",
+        );
+        assert_snapshot!(test.usage_counts(), @"
+        function logged 2 refs=1
+        class Shape 7 refs=1 impls=1
+        method area 8 refs=0 impls=1
+        class Circle 11 refs=0 impls=0
+        method area 13 refs=0 impls=0
+        ");
+    }
+
     #[test]
     fn dunders_nested_functions_and_extensions_are_not_counted() {
         let test = CursorTest::builder()
