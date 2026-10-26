@@ -40,15 +40,20 @@ impl BackgroundRequestHandler for WorkspaceSymbolRequestHandler {
                 let WorkspaceSymbolInfo {
                     symbol,
                     file,
+                    declared_in,
                     container,
                 } = workspace_symbol_info;
 
                 // Get position encoding from session
                 let encoding = snapshot.position_encoding();
 
-                let Some(symbol) =
-                    convert_to_lsp_symbol_information(db, file, symbol, container, encoding)
-                else {
+                let Some(symbol) = convert_to_lsp_symbol_information(
+                    db,
+                    file,
+                    symbol,
+                    container.or(declared_in.as_deref()),
+                    encoding,
+                ) else {
                     tracing::debug!(
                         "Failed to convert symbol '{}' to LSP symbol information",
                         file.path(db)

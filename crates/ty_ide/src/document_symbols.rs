@@ -219,6 +219,13 @@ def standalone_function():
         info: Method _private_method
 
         info[document-symbols]: SymbolInfo
+          --> main.py:16:14
+           |
+        16 |         self.instance_var = 0
+           |              ^^^^^^^^^^^^
+        info: Field instance_var
+
+        info[document-symbols]: SymbolInfo
           --> main.py:24:5
            |
         24 | def standalone_function():

@@ -158,6 +158,22 @@ impl FlatSymbols {
             .filter(|(_, symbol)| query.is_match_symbol(symbol))
     }
 
+    /// The names of the symbols the symbol `id` is nested in, outermost first: `["Circle"]` for
+    /// a method of `Circle`.
+    pub(crate) fn container_names(&self, id: SymbolId) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut parent = self.symbols.get(id).and_then(|symbol| symbol.parent);
+        while let Some(id) = parent {
+            let Some(symbol) = self.symbols.get(id) else {
+                break;
+            };
+            names.push(symbol.name.as_str());
+            parent = symbol.parent;
+        }
+        names.reverse();
+        names
+    }
+
     /// Turns this flat sequence of symbols into a hierarchy of symbols.
     pub fn to_hierarchical(&self) -> HierarchicalSymbols {
         let mut children_ids: IndexVec<SymbolId, Vec<SymbolId>> = IndexVec::new();
@@ -1239,6 +1255,72 @@ impl<'db> SymbolVisitor<'db> {
         name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
     }
 
+    /// Adds the attributes `class_def`'s methods assign on their receiver, `self.radius` in
+    /// `self.radius = radius`, as fields of the class: a reader looks for them among its members,
+    /// where the class body itself never declares them. The first assignment of each is the
+    /// declaration, and a name the class body declares is its own already.
+    fn add_instance_attributes(&mut self, class_id: SymbolId, class_def: &'db ast::StmtClassDef) {
+        let mut seen: FxHashSet<String> = self
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.parent == Some(class_id))
+            .map(|symbol| symbol.name.clone())
+            .collect();
+        // basedpython: what a property construct is lowered into, its backing field among it,
+        // stands for source the property already covers
+        let constructs: Vec<TextRange> = class_def
+            .body
+            .iter()
+            .filter_map(|stmt| stmt.as_function_def_stmt()?.property_construct_range())
+            .collect();
+        for stmt in &class_def.body {
+            let ast::Stmt::FunctionDef(method) = stmt else {
+                continue;
+            };
+            if constructs
+                .iter()
+                .any(|construct| construct.contains_range(stmt.range()))
+            {
+                continue;
+            }
+            // a static method's first parameter is not the instance
+            let is_static = method.decorator_list.iter().any(|decorator| {
+                UnqualifiedName::from_expr(&decorator.expression)
+                    .is_some_and(|name| name.segments().last() == Some(&"staticmethod"))
+            });
+            if is_static {
+                continue;
+            }
+            let Some(receiver) = method
+                .parameters
+                .posonlyargs
+                .first()
+                .or_else(|| method.parameters.args.first())
+            else {
+                continue;
+            };
+            let mut collector = ReceiverAttributes {
+                receiver: receiver.name().as_str(),
+                current_stmt: None,
+                found: Vec::new(),
+            };
+            collector.visit_body(&method.body);
+            for (name, name_range, full_range) in collector.found {
+                if seen.insert(name.to_string()) {
+                    self.add_symbol(SymbolTree {
+                        parent: None,
+                        name: name.to_string(),
+                        kind: SymbolKind::Field,
+                        deprecated: false,
+                        name_range,
+                        full_range,
+                        imported_from: None,
+                    });
+                }
+            }
+        }
+    }
+
     fn has_deprecated_decorator(decorator_list: &[ast::Decorator]) -> bool {
         decorator_list.iter().any(|decorator| {
             let expr = match &decorator.expression {
@@ -1412,6 +1494,7 @@ impl<'db> SymbolVisitor<'db> {
 
                 self.symbol_stack.push(symbol_id);
                 self.visit_body(&class_def.body);
+                self.add_instance_attributes(symbol_id, class_def);
                 self.pop_symbol();
 
                 // Restore the previous class scope state
@@ -1689,6 +1772,43 @@ fn is_recognized_all_assignment(stmt: &ast::Stmt, name: &ast::ExprName) -> bool 
 /// `__all__` element.
 fn create_all_name(expr: &ast::Expr) -> Option<Name> {
     Some(expr.as_string_literal_expr()?.value.to_str().into())
+}
+
+/// The attributes a method assigns on its receiver, each with the statement that assigns it, in
+/// the order they are assigned. A nested function or class has receivers of its own.
+struct ReceiverAttributes<'a> {
+    receiver: &'a str,
+    current_stmt: Option<TextRange>,
+    found: Vec<(&'a Name, TextRange, TextRange)>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for ReceiverAttributes<'a> {
+    fn visit_stmt(&mut self, stmt: &'a ast::Stmt) {
+        if matches!(stmt, ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_)) {
+            return;
+        }
+        let previous = self.current_stmt.replace(stmt.range());
+        source_order::walk_stmt(self, stmt);
+        self.current_stmt = previous;
+    }
+
+    fn visit_expr(&mut self, expr: &'a ast::Expr) {
+        match expr {
+            ast::Expr::Lambda(_) => {}
+            ast::Expr::Attribute(attribute)
+                if attribute.ctx.is_store()
+                    && attribute
+                        .value
+                        .as_name_expr()
+                        .is_some_and(|name| name.id.as_str() == self.receiver)
+                    && let Some(stmt) = self.current_stmt =>
+            {
+                self.found
+                    .push((&attribute.attr.id, attribute.attr.range(), stmt));
+            }
+            _ => source_order::walk_expr(self, expr),
+        }
+    }
 }
 
 #[cfg(test)]

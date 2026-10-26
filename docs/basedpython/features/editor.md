@@ -332,6 +332,27 @@ a [property](properties.md) is one member in the source, so it is one entry in
 the outline — not the getter, backing field and setter it lowers into. enum
 variants and an extension's methods appear under their declarations
 
+an attribute a method assigns on its receiver, `self.radius = radius`, is a
+field of the class, listed after the members the class body declares. the first
+assignment is its declaration, and a name the class body declares already is not
+listed again
+
+## workspace symbols
+
+`workspace/symbol` gives each python symbol the module and the classes it is
+declared in as its `containerName`, `shapes.base.Circle` for the method `area`
+of `Circle`, so that the three `area`s of a class hierarchy can be told apart.
+the attributes a method assigns on `self` are found as fields of their class
+
+a query with dots in it is a qualified name. its last part is matched against
+the symbol's name and the parts before it against what the symbol is declared
+in: `Shape.describe` finds `describe` in the class `Shape`, and `base.Sq` the
+class `Square` of the module `shapes.base`. every part matches the way a whole
+query does, as a subsequence of its letters. the last part before the name
+matches what the symbol is directly in, and each part before that something
+further out. a name with dots of its own, like a template's `base.html`, takes as
+many of the query's parts as it has
+
 ## folding
 
 `textDocument/foldingRange` gives every range a kind saying what it folds, so
