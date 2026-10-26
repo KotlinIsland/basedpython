@@ -73,7 +73,8 @@ pub fn completion<'db>(
     if let Some(completions) =
         format_spec_completions(db, env, program_file, &model, &source, &context.cursor)
     {
-        return completions.into_completions();
+        // a clause is written at the cursor, after what the spec has already
+        return replacing(completions.into_completions(), TextRange::empty(offset));
     }
 
     if !matches!(context.kind, ContextKind::Keywords(_)) && context.cursor.is_in_string() {
@@ -105,7 +106,18 @@ pub fn completion<'db>(
             &mut completions,
         );
 
-        return completions.into_completions();
+        // a literal's value stands for all the string holds before the cursor, not the word
+        // before it: `"slow-mo` completes to `"slow-mode`
+        let typed = string_expr
+            .value
+            .iter()
+            .find(|part| part.range().contains_inclusive(offset))
+            .map(|part| part.content_range().start())
+            .filter(|start| *start <= offset)
+            .map_or(TextRange::empty(offset), |start| {
+                TextRange::new(start, offset)
+            });
+        return replacing(completions.into_completions(), typed);
     }
 
     let query = UserQuery::fuzzy(context.cursor.typed);
@@ -284,7 +296,22 @@ pub fn completion<'db>(
         },
     }
 
-    completions.into_completions()
+    replacing(completions.into_completions(), context.cursor.range)
+}
+
+/// `completions`, each saying what it replaces: `typed` for one that does not say already.
+///
+/// A client that is not told works the range out from its own idea of the word before the
+/// cursor, which is not python's: inside an f-string's `{car` it is the whole string token, and
+/// every name is filtered out against `f"{car`.
+fn replacing(completions: Vec<Completion<'_>>, typed: TextRange) -> Vec<Completion<'_>> {
+    completions
+        .into_iter()
+        .map(|mut completion| {
+            completion.replace.get_or_insert(typed);
+            completion
+        })
+        .collect()
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -507,9 +534,9 @@ pub struct Completion<'db> {
     pub insert_text_format: CompletionInsertTextFormat,
     /// The range that [`Self::insert`] replaces.
     ///
-    /// This is only set when the client's own idea of the word under the
-    /// cursor would be wrong, as it is for a django template path or a
-    /// namespaced url name.
+    /// [`completion`] answers every completion with one: what was typed of
+    /// the word before the cursor, or more where the completion stands for
+    /// more, as a django template path or a namespaced url name does.
     pub replace: Option<TextRange>,
     /// The text the client should match the user's typing against, when
     /// [`Self::label`] is not it.

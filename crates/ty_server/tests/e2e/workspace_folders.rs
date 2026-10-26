@@ -542,7 +542,20 @@ fn different_settings() -> Result<()> {
           "kind": "plaintext",
           "value": "The type of the None singleton.\n"
         },
-        "sortText": "0"
+        "sortText": "0",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 0
+            },
+            "end": {
+              "line": 1,
+              "character": 4
+            }
+          },
+          "newText": "ZQZQZQ"
+        }
       }
     ]
     "#);

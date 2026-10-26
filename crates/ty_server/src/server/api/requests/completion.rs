@@ -127,6 +127,11 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                         .collect();
 
                     let label = comp.label().to_string();
+                    // what accepting it writes, which the label shown for it may say more than
+                    let new_text = comp
+                        .insert
+                        .as_ref()
+                        .map_or_else(|| label.clone(), ToString::to_string);
                     let import_suffix = comp.module_name.and_then(|name| {
                         import_edit.is_some().then(|| format!(" (import {name})"))
                     });
@@ -169,16 +174,16 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                         CompletionInsertTextFormat::PlainText => None,
                         CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
                     };
-                    // A completion that says what it replaces is one the client's own
-                    // idea of the word under the cursor would get wrong, so the range
-                    // is spelled out as an edit rather than left to be guessed.
+                    // every completion says what it replaces: the client's own idea of the
+                    // word before the cursor is not python's, and inside an f-string's
+                    // `{car` it is the whole string token, against which nothing matches
                     let text_edit = comp.replace.and_then(|replace| {
                         let range = replace
                             .to_lsp_range(db, file, snapshot.encoding())?
                             .local_range();
                         Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
                             range,
-                            new_text: insert_text.clone().unwrap_or_else(|| label.clone()),
+                            new_text,
                         }))
                     });
 

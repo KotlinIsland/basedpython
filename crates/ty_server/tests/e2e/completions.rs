@@ -32,6 +32,19 @@ walktr
         "kind": 3,
         "sortText": "0",
         "insertText": "walktree()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 6
+            }
+          },
+          "newText": "walktree()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -146,7 +159,20 @@ complete_parenth
         "detail": "def complete_parentheses(x: int)",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
-        "insertTextFormat": 2
+        "insertTextFormat": 2,
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses($0)"
+        }
       }
     ]
     "#);
@@ -187,6 +213,19 @@ complete_parenth
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
         "insertTextFormat": 2,
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses($0)"
+        },
         "command": {
           "title": "Trigger parameter hints",
           "command": "ty.triggerParameterHints"
@@ -232,7 +271,20 @@ complete_parenth
         "kind": 3,
         "detail": "def complete_parentheses()",
         "sortText": "0",
-        "insertText": "complete_parentheses()"
+        "insertText": "complete_parentheses()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses()"
+        }
       }
     ]
     "#);
@@ -271,7 +323,20 @@ complete_parenth
         "label": "complete_parentheses",
         "kind": 3,
         "detail": "def complete_parentheses(x: int)",
-        "sortText": "0"
+        "sortText": "0",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses"
+        }
       }
     ]
     "#);
@@ -310,7 +375,20 @@ complete_parenth
         "detail": "def complete_parentheses(x: int)",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
-        "insertTextFormat": 2
+        "insertTextFormat": 2,
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses($0)"
+        }
       }
     ]
     "#);
@@ -347,7 +425,20 @@ complete_parenth
         "kind": 3,
         "detail": "def complete_parentheses()",
         "sortText": "0",
-        "insertText": "complete_parentheses()"
+        "insertText": "complete_parentheses()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 16
+            }
+          },
+          "newText": "complete_parentheses()"
+        }
       }
     ]
     "#);
@@ -387,6 +478,19 @@ is_typedd
         "sortText": "0",
         "insertText": "typing.is_typeddict($0)",
         "insertTextFormat": 2,
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 8
+            }
+          },
+          "newText": "typing.is_typeddict($0)"
+        },
         "command": {
           "title": "Trigger parameter hints",
           "command": "ty.triggerParameterHints"
@@ -398,6 +502,19 @@ is_typedd
         "sortText": "1",
         "insertText": "is_typeddict($0)",
         "insertTextFormat": 2,
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 8
+            }
+          },
+          "newText": "is_typeddict($0)"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -455,19 +572,58 @@ TypedDi<CURSOR>
         "label": "typing.TypedDict",
         "kind": 6,
         "sortText": "0",
-        "insertText": "typing.TypedDict"
+        "insertText": "typing.TypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "typing.TypedDict"
+        }
       },
       {
         "label": "typing.is_typeddict",
         "kind": 3,
         "sortText": "1",
-        "insertText": "typing.is_typeddict()"
+        "insertText": "typing.is_typeddict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "typing.is_typeddict()"
+        }
       },
       {
         "label": "TypedDict (import typing_extensions)",
         "kind": 6,
         "sortText": "2",
         "insertText": "TypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "TypedDict"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -489,6 +645,19 @@ TypedDi<CURSOR>
         "kind": 7,
         "sortText": "3",
         "insertText": "TypedDictFallback()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "TypedDictFallback()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -510,6 +679,19 @@ TypedDi<CURSOR>
         "kind": 3,
         "sortText": "4",
         "insertText": "is_typeddict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "is_typeddict()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -531,6 +713,19 @@ TypedDi<CURSOR>
         "kind": 7,
         "sortText": "5",
         "insertText": "_FilterConfigurationTypedDict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "_FilterConfigurationTypedDict()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -552,6 +747,19 @@ TypedDi<CURSOR>
         "kind": 6,
         "sortText": "6",
         "insertText": "_FormatterConfigurationTypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "_FormatterConfigurationTypedDict"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -573,6 +781,19 @@ TypedDi<CURSOR>
         "kind": 9,
         "sortText": "7",
         "insertText": "_typeshed.dbapi",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 7
+            }
+          },
+          "newText": "_typeshed.dbapi"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -624,6 +845,19 @@ TypedDi<CURSOR>
         "kind": 6,
         "sortText": "0",
         "insertText": "TypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "TypedDict"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -645,6 +879,19 @@ TypedDi<CURSOR>
         "kind": 3,
         "sortText": "1",
         "insertText": "is_typeddict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "is_typeddict()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -666,6 +913,19 @@ TypedDi<CURSOR>
         "kind": 6,
         "sortText": "2",
         "insertText": "TypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "TypedDict"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -687,6 +947,19 @@ TypedDi<CURSOR>
         "kind": 7,
         "sortText": "3",
         "insertText": "TypedDictFallback()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "TypedDictFallback()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -708,6 +981,19 @@ TypedDi<CURSOR>
         "kind": 3,
         "sortText": "4",
         "insertText": "is_typeddict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "is_typeddict()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -729,6 +1015,19 @@ TypedDi<CURSOR>
         "kind": 7,
         "sortText": "5",
         "insertText": "_FilterConfigurationTypedDict()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "_FilterConfigurationTypedDict()"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -750,6 +1049,19 @@ TypedDi<CURSOR>
         "kind": 6,
         "sortText": "6",
         "insertText": "_FormatterConfigurationTypedDict",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "_FormatterConfigurationTypedDict"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -771,6 +1083,19 @@ TypedDi<CURSOR>
         "kind": 9,
         "sortText": "7",
         "insertText": "_typeshed.dbapi",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 0,
+              "character": 7
+            }
+          },
+          "newText": "_typeshed.dbapi"
+        },
         "additionalTextEdits": [
           {
             "range": {
@@ -822,7 +1147,20 @@ re.match('', '', fla<CURSOR>
         "kind": 6,
         "detail": "FlagsType",
         "sortText": "0",
-        "insertText": "flags="
+        "insertText": "flags=",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 17
+            },
+            "end": {
+              "line": 1,
+              "character": 20
+            }
+          },
+          "newText": "flags="
+        }
       },
       {
         "label": "FloatingPointError",
@@ -833,7 +1171,20 @@ re.match('', '', fla<CURSOR>
           "value": "Floating-point operation failed.\n"
         },
         "sortText": "1",
-        "insertText": "FloatingPointError()"
+        "insertText": "FloatingPointError()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 17
+            },
+            "end": {
+              "line": 1,
+              "character": 20
+            }
+          },
+          "newText": "FloatingPointError()"
+        }
       },
       {
         "label": "PythonFinalizationError",
@@ -844,7 +1195,20 @@ re.match('', '', fla<CURSOR>
           "value": "Operation blocked during Python finalization.\n"
         },
         "sortText": "2",
-        "insertText": "PythonFinalizationError()"
+        "insertText": "PythonFinalizationError()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 17
+            },
+            "end": {
+              "line": 1,
+              "character": 20
+            }
+          },
+          "newText": "PythonFinalizationError()"
+        }
       },
       {
         "label": "float",
@@ -855,7 +1219,20 @@ re.match('', '', fla<CURSOR>
           "value": "Convert a string or number to a floating-point number, if possible.\n"
         },
         "sortText": "3",
-        "insertText": "float()"
+        "insertText": "float()",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 17
+            },
+            "end": {
+              "line": 1,
+              "character": 20
+            }
+          },
+          "newText": "float()"
+        }
       }
     ]
     "#);
@@ -895,7 +1272,20 @@ x: Literal[\"apple\"] = \"app\"
         "kind": 12,
         "detail": "Literal[\"apple\"]",
         "sortText": "0",
-        "insertText": "apple"
+        "insertText": "apple",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 23
+            },
+            "end": {
+              "line": 1,
+              "character": 26
+            }
+          },
+          "newText": "apple"
+        }
       }
     ]
     "#);
@@ -1000,7 +1390,20 @@ x: Literal[\"apple\"] = \"app\"
         "kind": 12,
         "detail": "\"apple\"",
         "sortText": "0",
-        "insertText": "apple"
+        "insertText": "apple",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 23
+            },
+            "end": {
+              "line": 1,
+              "character": 26
+            }
+          },
+          "newText": "apple"
+        }
       }
     ]
     "#);
@@ -1043,21 +1446,60 @@ take({\"\"})
         "kind": 12,
         "detail": "Literal[\"x\"]",
         "sortText": "0",
-        "insertText": "x"
+        "insertText": "x",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 9,
+              "character": 7
+            },
+            "end": {
+              "line": 9,
+              "character": 7
+            }
+          },
+          "newText": "x"
+        }
       },
       {
         "label": "y",
         "kind": 12,
         "detail": "Literal[\"y\"]",
         "sortText": "1",
-        "insertText": "y"
+        "insertText": "y",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 9,
+              "character": 7
+            },
+            "end": {
+              "line": 9,
+              "character": 7
+            }
+          },
+          "newText": "y"
+        }
       },
       {
         "label": "z",
         "kind": 12,
         "detail": "Literal[\"z\"]",
         "sortText": "2",
-        "insertText": "z"
+        "insertText": "z",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 9,
+              "character": 7
+            },
+            "end": {
+              "line": 9,
+              "character": 7
+            }
+          },
+          "newText": "z"
+        }
       }
     ]
     "#);
@@ -1187,5 +1629,68 @@ walktr
     ]
     "#);
 
+    Ok(())
+}
+
+/// every completion says what it replaces, so that a client never falls back on its own idea of
+/// the word before the cursor: inside an f-string's replacement field that is the whole string
+/// token, against which no name matches, and inside a literal it is the last word of it
+#[test]
+fn every_completion_says_what_it_replaces() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+from typing import Literal
+
+def pick(mode: Literal['slow-mode']) -> None: ...
+
+cart = 1
+label = f'{car}'
+pick('slow-mo')
+";
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(foo, foo_content, 1);
+    let uri = server.file_uri(foo);
+
+    let replaced = |completions: &[lsp_types::CompletionItem], label: &str| {
+        assert!(
+            completions.iter().all(|item| item.text_edit.is_some()),
+            "{completions:#?}"
+        );
+        completions
+            .iter()
+            .find(|item| item.label == label)
+            .and_then(|item| match &item.text_edit {
+                Some(lsp_types::CompletionItemTextEdit::TextEdit(edit)) => {
+                    Some((edit.range, edit.new_text.clone()))
+                }
+                _ => None,
+            })
+    };
+
+    // `car` in the field, not `f'{car`
+    let in_field = server.completion_request(&uri, Position::new(5, 14));
+    assert_eq!(
+        replaced(&in_field, "cart"),
+        Some((
+            lsp_types::Range::new(Position::new(5, 11), Position::new(5, 14)),
+            "cart".to_string()
+        ))
+    );
+
+    // all of the literal before the cursor, not its last word `mo`
+    let in_literal = server.completion_request(&uri, Position::new(6, 13));
+    assert_eq!(
+        replaced(&in_literal, "slow-mode"),
+        Some((
+            lsp_types::Range::new(Position::new(6, 6), Position::new(6, 13)),
+            "slow-mode".to_string()
+        ))
+    );
     Ok(())
 }

@@ -8,6 +8,19 @@ expression: completions
     "kind": 6,
     "sortText": "[RANKING]",
     "insertText": "Literal",
+    "textEdit": {
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 3
+        },
+        "end": {
+          "line": 1,
+          "character": 9
+        }
+      },
+      "newText": "Literal"
+    },
     "additionalTextEdits": [
       {
         "range": {
@@ -29,6 +42,19 @@ expression: completions
     "kind": 6,
     "sortText": "[RANKING]",
     "insertText": "LiteralString",
+    "textEdit": {
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 3
+        },
+        "end": {
+          "line": 1,
+          "character": 9
+        }
+      },
+      "newText": "LiteralString"
+    },
     "additionalTextEdits": [
       {
         "range": {
@@ -50,6 +76,19 @@ expression: completions
     "kind": 6,
     "sortText": "[RANKING]",
     "insertText": "Literal",
+    "textEdit": {
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 3
+        },
+        "end": {
+          "line": 1,
+          "character": 9
+        }
+      },
+      "newText": "Literal"
+    },
     "additionalTextEdits": [
       {
         "range": {
@@ -71,6 +110,19 @@ expression: completions
     "kind": 6,
     "sortText": "[RANKING]",
     "insertText": "LiteralString",
+    "textEdit": {
+      "range": {
+        "start": {
+          "line": 1,
+          "character": 3
+        },
+        "end": {
+          "line": 1,
+          "character": 9
+        }
+      },
+      "newText": "LiteralString"
+    },
     "additionalTextEdits": [
       {
         "range": {
