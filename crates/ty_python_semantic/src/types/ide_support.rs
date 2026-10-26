@@ -2937,6 +2937,26 @@ pub fn builtin_scalar_kinds(
     (collect(model.db(), &env, ty, exact, &mut kinds) && !kinds.is_empty()).then_some(kinds)
 }
 
+/// whether `parameter` of the function `definition` defines is the regular expression of one of
+/// python's `re` functions — the `pattern` of `re.compile`, `re.match`, `re.sub` and the others
+/// that compile one — so that a string handed to it is written in python's regular expression
+/// syntax
+pub fn is_re_pattern_parameter<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+    parameter: &str,
+) -> bool {
+    let DefinitionKind::Function(function) = definition.kind(db) else {
+        return false;
+    };
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    parameter == "pattern"
+        && crate::types::regex::RegexCall::from_name(function.node(&module).name.as_str()).is_some()
+        && ty_module_resolver::file_to_module(db, definition.program_file(db).resolver_file(db))
+            .and_then(|module| module.known(db))
+            == Some(ty_module_resolver::KnownModule::Re)
+}
+
 /// Whether `expr` evaluates to a module, so that reading an attribute of it looks the name up
 /// in the module's namespace and runs nothing.
 pub fn is_module_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {

@@ -14,6 +14,34 @@ and nothing in basedpython interprets it: your editor matches it against the
 languages it has, so `sql`, `html`, `json` and `basedpython` all work as well
 as your editor supports them
 
+the marker can trail the statement instead, at the end of its last line:
+
+```by
+query = "select name from users"  # language=sql
+```
+
+a comment trailing one statement is that statement's alone — the statement on the
+next line is not marked by it
+
+## a regular expression is one already
+
+what python's `re` functions take as their pattern — `re.compile`, `re.match`,
+`re.search`, `re.sub`, `re.split` and the rest — is written in python's regular
+expression syntax, and is reported as `PythonRegExp` with nothing written to say so:
+
+```by
+import re
+
+word = re.compile(r"(?P<word>\w+)")   # PythonRegExp
+```
+
+which function is called is resolved, not read off the spelling, so
+`from re import sub as replace` is found as well, and a `re.compile` of some other
+module is not. a pattern handed in through a parameter that passes it straight on
+travels the way [a declared language does](#the-language-travels-to-the-call).
+`PythonRegExp` is what PyCharm calls python's dialect of regular expressions; an
+editor with only a generic regular expression language reads it as that
+
 ## a parameter can say it instead
 
 a function that takes source code says so once, on the parameter, rather than

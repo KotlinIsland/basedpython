@@ -61,7 +61,7 @@ use rustc_hash::FxHashMap;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::SemanticModel;
-use ty_python_semantic::types::ide_support::call_signature_details;
+use ty_python_semantic::types::ide_support::{call_signature_details, is_re_pattern_parameter};
 
 use crate::Db;
 
@@ -76,6 +76,11 @@ const MAX_PROPAGATION_DEPTH: usize = 8;
 
 /// The text both spellings share.
 const MARKER: &str = "language=";
+
+/// the language a pattern handed to python's `re` functions is written in: regular expressions
+/// as python's `re` reads them, `(?P<name>...)` groups and all. PyCharm calls its own support for
+/// that language this; an editor with only a generic regular expression language maps it there
+const PYTHON_REGEX: &str = "PythonRegExp";
 
 /// A fragment of another language inside a basedpython file.
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
@@ -244,6 +249,15 @@ impl InjectionFinder<'_, '_> {
             .iter()
             .rev()
             .find(|(range, _)| range.end() <= statement.start())
+            // a marker trailing the statement before is that statement's, not this one's
+            .filter(|(range, _)| {
+                let line_start = self.source[..range.start().to_usize()]
+                    .rfind('\n')
+                    .map_or(0, |newline| newline + 1);
+                self.source[line_start..range.start().to_usize()]
+                    .chars()
+                    .all(char::is_whitespace)
+            })
             .filter(|(range, _)| {
                 let between = TextRange::new(range.end(), statement.start());
                 self.source
@@ -253,6 +267,27 @@ impl InjectionFinder<'_, '_> {
                             line.trim().is_empty() || line.trim_start().starts_with('#')
                         })
                     })
+            })
+            .map(|(_, language)| language.clone())
+    }
+
+    /// the language a marker comment at the end of `statement`'s last line gives it, when
+    /// `statement` is a simple statement and nothing but spaces comes between the two
+    ///
+    /// a compound statement ends with the end of its body, whose own last statement the
+    /// comment trails, and a statement followed by another on its line is not the one the
+    /// comment ends
+    fn trailing_marker(&self, statement: &ast::Stmt) -> Option<String> {
+        if is_compound(statement) {
+            return None;
+        }
+        self.markers
+            .iter()
+            .find(|(range, _)| range.start() >= statement.end())
+            .filter(|(range, _)| {
+                self.source
+                    .get(statement.end().to_usize()..range.start().to_usize())
+                    .is_some_and(|between| between.chars().all(|c| c == ' ' || c == '\t'))
             })
             .map(|(_, language)| language.clone())
     }
@@ -338,7 +373,10 @@ fn parameters_matching<'db>(
 
 impl<'db> SourceOrderVisitor<'db> for InjectionFinder<'_, 'db> {
     fn visit_stmt(&mut self, statement: &'db ast::Stmt) {
-        if let Some(language) = self.marker_for_statement(statement) {
+        if let Some(language) = self
+            .marker_for_statement(statement)
+            .or_else(|| self.trailing_marker(statement))
+        {
             self.mark_statement(statement, &language);
         }
         walk_stmt(self, statement);
@@ -471,6 +509,11 @@ fn parameter_language(
     {
         return Some((language, InjectionOrigin::Declared));
     }
+    // what python's own `re` functions take as a pattern is a regular expression, which their
+    // stubs cannot say in the annotation, so it is read as declared here
+    if is_re_pattern_parameter(db, definition, name) {
+        return Some((PYTHON_REGEX.to_string(), InjectionOrigin::Declared));
+    }
 
     // Nothing declared here, so follow the value: if the body does no more than
     // hand this parameter on, whatever the parameter it reaches expects is what
@@ -490,6 +533,21 @@ fn parameter_language(
             // out than the one that did.
             .map(|(language, _)| (language, InjectionOrigin::Propagated))
     })
+}
+
+/// whether `statement` has a body of statements of its own
+fn is_compound(statement: &ast::Stmt) -> bool {
+    matches!(
+        statement,
+        ast::Stmt::FunctionDef(_)
+            | ast::Stmt::ClassDef(_)
+            | ast::Stmt::If(_)
+            | ast::Stmt::For(_)
+            | ast::Stmt::While(_)
+            | ast::Stmt::With(_)
+            | ast::Stmt::Try(_)
+            | ast::Stmt::Match(_)
+    ) || matches!(statement, ast::Stmt::Let(stmt) if !stmt.orelse.is_empty())
 }
 
 /// The language an annotation declares, from `Annotated[T, "language=<id>"]`.
@@ -1062,6 +1120,95 @@ run_later(\"const x = 1\")<CURSOR>
           |
         6 | run_later("const x = 1")
           |            ^^^^^^^^^^^
+        "#);
+    }
+
+    #[test]
+    fn a_marker_trailing_the_statement_marks_it() {
+        let test = injection_test(
+            "\
+query = \"select * from users\"  # language=sql
+other = \"not marked\"<CURSOR>
+",
+        );
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: sql (comment)
+         --> main.by:1:10
+          |
+        1 | query = "select * from users"  # language=sql
+          |          ^^^^^^^^^^^^^^^^^^^
+        "#);
+    }
+
+    #[test]
+    fn a_trailing_marker_after_a_second_statement_is_that_one_s() {
+        let test = injection_test(
+            "\
+first = \"a\"; second = \"b\"  # language=sql<CURSOR>
+",
+        );
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: sql (comment)
+         --> main.by:1:24
+          |
+        1 | first = "a"; second = "b"  # language=sql
+          |                        ^
+        "#);
+    }
+
+    /// what `re.compile` and the other `re` functions take as their pattern is python's regular
+    /// expression syntax, resolved through the call rather than read off the name `re`
+    #[test]
+    fn a_re_pattern_is_python_s_regular_expressions() {
+        let test = injection_test(
+            "\
+import re
+from re import sub as replace
+
+word = re.compile(\"(?P<word>\\\\w+)\")
+replace(\"a+\", \"b\", \"aaa\")
+re.split(\",\", \"a,b\")<CURSOR>
+",
+        );
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: PythonRegExp (declared)
+         --> main.by:4:20
+          |
+        4 | word = re.compile("(?P<word>\\w+)")
+          |                    ^^^^^^^^^^^^^^
+
+        info[injection]: PythonRegExp (declared)
+         --> main.by:5:10
+          |
+        5 | replace("a+", "b", "aaa")
+          |          ^^
+
+        info[injection]: PythonRegExp (declared)
+         --> main.by:6:11
+          |
+        6 | re.split(",", "a,b")
+          |           ^
+        "#);
+    }
+
+    #[test]
+    fn a_re_pattern_travels_through_a_parameter_passed_straight_on() {
+        let test = injection_test(
+            "\
+import re
+
+def find(pattern: str, text: str):
+    return re.search(pattern, text)
+
+find(\"[0-9]+\", \"abc 123\")<CURSOR>
+",
+        );
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: PythonRegExp (propagated)
+         --> main.by:6:7
+          |
+        6 | find("[0-9]+", "abc 123")
+          |       ^^^^^^
         "#);
     }
 }
