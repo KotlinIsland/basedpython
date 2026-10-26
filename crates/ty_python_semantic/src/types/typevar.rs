@@ -2138,6 +2138,17 @@ impl<'db> BoundTypeVarInstance<'db> {
         binding_type(db, definition).is_class_literal()
     }
 
+    /// basedpython: whether this type parameter belongs to a function.
+    ///
+    /// Such a parameter has no variance to speak of: a specialized function is compared as the
+    /// plain callable it becomes, so nothing ever relates `f[A]` to `f[B]` through it.
+    pub fn binds_function(self, db: &'db dyn Db) -> bool {
+        let BindingContext::Definition(definition) = self.binding_context(db) else {
+            return false;
+        };
+        binding_type(db, definition).is_function_literal()
+    }
+
     /// basedpython: whether this parameter is declared `in out` on a class whose
     /// body never writes through it.
     ///

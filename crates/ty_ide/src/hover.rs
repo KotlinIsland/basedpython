@@ -162,7 +162,7 @@ fn hover_inner<'db>(
                     },
                     |typevar| HoverContent::Type {
                         ty: Type::TypeVar(typevar),
-                        variance: Some(typevar.variance(db)),
+                        variance: (!typevar.binds_function(db)).then(|| typevar.variance(db)),
                         qualifiers,
                     },
                 )
@@ -185,7 +185,7 @@ fn hover_inner<'db>(
             }
             Type::TypeVar(typevar) => HoverContent::Type {
                 ty,
-                variance: Some(typevar.variance(db)),
+                variance: (!typevar.binds_function(db)).then(|| typevar.variance(db)),
                 qualifiers,
             },
             _ => HoverContent::Type {
@@ -4839,10 +4839,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (contravariant)
+        T
         ---------------------------------------------
         ```python
-        T (contravariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4864,10 +4864,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (contravariant)
+        T
         ---------------------------------------------
         ```python
-        T (contravariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4889,10 +4889,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (contravariant)
+        T
         ---------------------------------------------
         ```python
-        T (contravariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4918,10 +4918,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (invariant)
+        T
         ---------------------------------------------
         ```python
-        T (invariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -4948,10 +4948,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (invariant)
+        T
         ---------------------------------------------
         ```python
-        T (invariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -5001,10 +5001,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        P.args (covariant)
+        P.args
         ---------------------------------------------
         ```python
-        P.args (covariant)
+        P.args
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6319,6 +6319,57 @@ def function():
     }
 
     #[test]
+    fn hover_method_typevar_variance() {
+        let test = hover_test(
+            r#"
+        class C[T]:
+            def m[U](self, t: T<CURSOR>, u: U):
+                pass
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (contravariant)
+        ---------------------------------------------
+        ```python
+        T (contravariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:23
+          |
+        3 |     def m[U](self, t: T, u: U):
+          |                       ^- Cursor offset
+          |                       |
+          |                       source
+        ");
+
+        let test = hover_test(
+            r#"
+        class C[T]:
+            def m[U](self, t: T, u: U<CURSOR>):
+                pass
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        U
+        ---------------------------------------------
+        ```python
+        U
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:29
+          |
+        3 |     def m[U](self, t: T, u: U):
+          |                             ^- Cursor offset
+          |                             |
+          |                             source
+        ");
+    }
+
+    #[test]
     fn hover_function_typevar_variance() {
         let test = hover_test(
             r#"
@@ -6328,10 +6379,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (covariant)
+        T
         ---------------------------------------------
         ```python
-        T (covariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6351,10 +6402,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (covariant)
+        T
         ---------------------------------------------
         ```python
-        T (covariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6374,10 +6425,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (contravariant)
+        T
         ---------------------------------------------
         ```python
-        T (contravariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6397,10 +6448,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T (contravariant)
+        T
         ---------------------------------------------
         ```python
-        T (contravariant)
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6780,10 +6831,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@covariant (covariant)
+        T@covariant
         ---------------------------------------------
         ```python
-        T@covariant (covariant)
+        T@covariant
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6834,10 +6885,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        T@contravariant (contravariant)
+        T@contravariant
         ---------------------------------------------
         ```python
-        T@contravariant (contravariant)
+        T@contravariant
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -6847,6 +6898,34 @@ def function():
           |                      ^- Cursor offset
           |                      |
           |                      source
+        ");
+
+        let test = hover_test(
+            r#"
+        from typing import Generic, TypeVar
+
+        T = TypeVar('T', contravariant=True)
+
+        class Contravariant(Generic[T]):
+            def m(self, x: T<CURSOR>):
+                pass
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @"
+        T (contravariant)
+        ---------------------------------------------
+        ```python
+        T (contravariant)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:7:20
+          |
+        7 |     def m(self, x: T):
+          |                    ^- Cursor offset
+          |                    |
+          |                    source
         ");
     }
 
