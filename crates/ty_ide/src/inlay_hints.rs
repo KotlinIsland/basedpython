@@ -6381,6 +6381,30 @@ Source with applied edits:
         ");
     }
 
+    /// basedpython reads an upper-case name a class body assigns as `final`, and
+    /// an `auto()` member written that way is hinted all the same
+    #[test]
+    fn basedpython_enum_auto_values() {
+        let mut test = basedpython_inlay_hint_test(
+            r#"
+            from enum import IntEnum, auto
+
+            class Color(IntEnum):
+                RED = auto()
+                GREEN = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        from enum import IntEnum, auto
+
+        class Color(IntEnum):
+            RED = auto()[ 1]
+            GREEN = auto()[ 2]
+        ");
+    }
+
     /// annotating an enum member is an error, and ty reads the value off the
     /// annotation rather than the `auto()` — so there is nothing to show
     #[test]

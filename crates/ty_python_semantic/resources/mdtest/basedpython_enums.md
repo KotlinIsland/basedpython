@@ -498,6 +498,22 @@ enum class Shape:
 reveal_type(Shape.Point)  # revealed: Shape.Point
 ```
 
+## an upper-case `auto()` member of an `Enum` subclass
+
+a class body reads an upper-case name it assigns as `final`, and an `auto()` member written that way
+is still an `auto()` member: its value is counted out as python's `Enum` counts it
+
+```by
+from enum import IntEnum, auto
+
+class Level(IntEnum):
+    LOW = auto()
+    HIGH = auto()
+
+reveal_type(Level.LOW.value)  # revealed: 1
+reveal_type(Level.HIGH.value)  # revealed: 2
+```
+
 ## constants in an enum body stay constants
 
 an assignment member disqualifies the idiomatic-`Enum` lowering (python's `Enum` would turn the

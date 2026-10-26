@@ -1313,6 +1313,10 @@ pub(crate) fn enum_metadata<'db>(
                     return None;
                 }
                 Place::Defined(DefinedPlace { ty, .. }) => {
+                    // basedpython: an upper-case name a class body assigns is read
+                    // as `final`, and the member is the value the restriction wraps:
+                    // `RED = auto()` is an `auto()` member however it is qualified
+                    let ty = ty.erase_restriction(db);
                     let special_case = match ty {
                         Type::Callable(_) | Type::FunctionLiteral(_) => {
                             // Some types are specifically disallowed for enum members.
