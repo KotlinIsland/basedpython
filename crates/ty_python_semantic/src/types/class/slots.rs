@@ -52,7 +52,7 @@ impl get_size2::GetSize for SlotDescriptorType<'_> {}
 /// This describes `instance.__dict__`, not `Class.__dict__`: the class's own namespace remains
 /// available regardless of its instance layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
-enum InstanceDictionary {
+pub(crate) enum InstanceDictionary {
     /// Instances definitely have dictionary-backed attribute storage.
     Present,
     /// Instances definitely lack dictionary-backed attribute storage.
@@ -524,14 +524,19 @@ impl<'db> StaticClassLiteral<'db> {
         }
     }
 
-    /// Returns whether instance dictionary storage exists or cannot be ruled out.
-    fn has_instance_dictionary(self, db: &'db dyn Db) -> bool {
+    /// basedpython: whether instances of this class have dictionary-backed attribute storage
+    pub(crate) fn instance_dictionary(self, db: &'db dyn Db) -> InstanceDictionary {
         if !self.has_explicit_slots(db) && !self.has_generated_slots(db) && self.known(db).is_none()
         {
-            return true;
+            return InstanceDictionary::Present;
         }
 
-        self.instance_layout(db).dictionary != InstanceDictionary::Absent
+        self.instance_layout(db).dictionary
+    }
+
+    /// returns whether instance dictionary storage exists or cannot be ruled out
+    fn has_instance_dictionary(self, db: &'db dyn Db) -> bool {
+        self.instance_dictionary(db) != InstanceDictionary::Absent
     }
 
     /// Returns whether this class or any base defines a slot with the given name.

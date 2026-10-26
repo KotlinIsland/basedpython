@@ -421,17 +421,19 @@ a refactoring either keeps the program meaning what it meant or is refused, and 
 refusal says why. an editor that asks for refactorings explicitly shows the reason;
 one that asks while the caret moves is only offered what applies
 
-| refactoring             | kind                                | offered on                        |
-| ----------------------- | ----------------------------------- | --------------------------------- |
-| inline variable         | `refactor.inline.variable`          | a variable assigned once          |
-| extract variable        | `refactor.extract.variable`         | a selected expression             |
-| introduce constant      | `refactor.extract.constant`         | a selected expression of literals |
-| extract function        | `refactor.extract.function`         | selected statements               |
-| add return annotation   | `refactor.rewrite.returnAnnotation` | a `def` header with no `->`       |
-| convert to data class   | `refactor.rewrite.toDataClass`      | a class header                    |
-| convert from data class | `refactor.rewrite.fromDataClass`    | a `data class` header             |
-| put on separate lines   | `refactor.rewrite.splitList`        | a list not yet one element a line |
-| put on one line         | `refactor.rewrite.joinList`         | a list spread over several lines  |
+| refactoring             | kind                                | offered on                           |
+| ----------------------- | ----------------------------------- | ------------------------------------ |
+| inline variable         | `refactor.inline.variable`          | a variable assigned once             |
+| extract variable        | `refactor.extract.variable`         | a selected expression                |
+| introduce constant      | `refactor.extract.constant`         | a selected expression of literals    |
+| introduce parameter     | `refactor.extract.parameter`        | an expression of literals in a `def` |
+| introduce attribute     | `refactor.extract.field`            | a selected expression in a method    |
+| extract function        | `refactor.extract.function`         | selected statements                  |
+| add return annotation   | `refactor.rewrite.returnAnnotation` | a `def` header with no `->`          |
+| convert to data class   | `refactor.rewrite.toDataClass`      | a class header                       |
+| convert from data class | `refactor.rewrite.fromDataClass`    | a `data class` header                |
+| put on separate lines   | `refactor.rewrite.splitList`        | a list not yet one element a line    |
+| put on one line         | `refactor.rewrite.joinList`         | a list spread over several lines     |
 
 inlining is offered on the variable's assignment and on any of its reads alike, and
 replaces every read either way
@@ -488,6 +490,21 @@ what it names. it is refused when that type is partly `Unknown` — `x + y` of t
 unannotated parameters — since `Unknown` is no type a program can name, and the
 rest of the union would claim more than the body says. an inlay hint's
 double-click edit follows the same rule
+
+introducing a parameter adds `name=expression` to the parameters of the function
+the expression is in — last, or before a `**` parameter — and reads the parameter
+where the expression was, so every call goes on passing what it passed. a default
+is evaluated once, when the `def` runs, so this is offered only for what a constant
+can be made of
+
+introducing an attribute assigns `self.name = expression` above the statement in the
+method and reads `self.name` where the expression was, by whatever name the method's
+first parameter has. the name is one the class does not already have, its own or
+inherited, and it is refused where an instance takes no new attribute: a class with
+`__slots__` in its MRO, a frozen data class, an enum, a named tuple, a protocol or a
+`TypedDict`, and in a class method or a static method — `__new__`,
+`__init_subclass__` and `__class_getitem__` included — or a decorated method,
+whose first parameter need not be the instance
 
 extracting statements from a method makes a method of the same class, called
 through the receiver. what the statements read from the function becomes a

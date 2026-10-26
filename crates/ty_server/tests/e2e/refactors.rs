@@ -204,7 +204,7 @@ fn resolve_after_an_edit_is_content_modified() -> Result<()> {
 #[test]
 fn extraction_at_a_caret_offers_the_expressions_around_it() -> Result<()> {
     let (mut server, file) = server(true)?;
-    let only = Some(vec![CodeActionKind::new("refactor.extract")]);
+    let only = Some(vec![CodeActionKind::new("refactor.extract.variable")]);
 
     let moving = request(
         &mut server,

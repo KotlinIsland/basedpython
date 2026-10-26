@@ -11,6 +11,7 @@ use self::named_tuple::synthesize_namedtuple_class_member;
 pub(super) use self::named_tuple::{
     DynamicNamedTupleAnchor, DynamicNamedTupleLiteral, NamedTupleField, NamedTupleSpec,
 };
+pub(crate) use self::slots::InstanceDictionary;
 pub use self::slots::SlotDescriptorType;
 pub(crate) use self::static_literal::{
     ClassLiteralFlags, ExpandedClassBaseEntry, FrozenDataclassDispatch, StaticClassLiteral,

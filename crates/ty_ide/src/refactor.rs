@@ -45,6 +45,8 @@ pub enum RefactorKind {
     InlineVariable,
     ExtractVariable,
     IntroduceConstant,
+    IntroduceParameter,
+    IntroduceField,
     ExtractFunction,
     AddReturnAnnotation,
     ConvertToDataClass,
@@ -58,6 +60,8 @@ impl RefactorKind {
         RefactorKind::InlineVariable,
         RefactorKind::ExtractVariable,
         RefactorKind::IntroduceConstant,
+        RefactorKind::IntroduceParameter,
+        RefactorKind::IntroduceField,
         RefactorKind::ExtractFunction,
         RefactorKind::AddReturnAnnotation,
         RefactorKind::ConvertToDataClass,
@@ -72,6 +76,8 @@ impl RefactorKind {
             RefactorKind::InlineVariable => "refactor.inline.variable",
             RefactorKind::ExtractVariable => "refactor.extract.variable",
             RefactorKind::IntroduceConstant => "refactor.extract.constant",
+            RefactorKind::IntroduceParameter => "refactor.extract.parameter",
+            RefactorKind::IntroduceField => "refactor.extract.field",
             RefactorKind::ExtractFunction => "refactor.extract.function",
             RefactorKind::AddReturnAnnotation => "refactor.rewrite.returnAnnotation",
             RefactorKind::ConvertToDataClass => "refactor.rewrite.toDataClass",
@@ -88,6 +94,8 @@ impl RefactorKind {
             RefactorKind::InlineVariable => "inline-variable",
             RefactorKind::ExtractVariable => "extract-variable",
             RefactorKind::IntroduceConstant => "introduce-constant",
+            RefactorKind::IntroduceParameter => "introduce-parameter",
+            RefactorKind::IntroduceField => "introduce-field",
             RefactorKind::ExtractFunction => "extract-function",
             RefactorKind::AddReturnAnnotation => "add-return-annotation",
             RefactorKind::ConvertToDataClass => "convert-to-data-class",
@@ -204,6 +212,12 @@ impl<'db> RefactorContext<'db> {
             RefactorKind::IntroduceConstant => {
                 extract_variable::plan(self, range, extract_variable::Target::Constant)
             }
+            RefactorKind::IntroduceParameter => {
+                extract_variable::plan(self, range, extract_variable::Target::Parameter)
+            }
+            RefactorKind::IntroduceField => {
+                extract_variable::plan(self, range, extract_variable::Target::Field)
+            }
             RefactorKind::ExtractFunction => extract_function::plan(self, range),
             RefactorKind::AddReturnAnnotation => return_annotation::plan(self, range),
             RefactorKind::ConvertToDataClass => {
@@ -250,6 +264,8 @@ pub fn refactors(
         let extracted = match kind {
             RefactorKind::ExtractVariable => Some(extract_variable::Target::Variable),
             RefactorKind::IntroduceConstant => Some(extract_variable::Target::Constant),
+            RefactorKind::IntroduceParameter => Some(extract_variable::Target::Parameter),
+            RefactorKind::IntroduceField => Some(extract_variable::Target::Field),
             _ => None,
         };
         let plans = match extracted {

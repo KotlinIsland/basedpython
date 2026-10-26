@@ -22,7 +22,8 @@ use ruff_python_trivia::PythonWhitespace;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::types::ide_support::{
-    BuiltinScalar, builtin_scalar_kinds, folds_to_a_literal,
+    BuiltinScalar, builtin_scalar_kinds, class_instance_has_member, folds_to_a_literal,
+    new_attribute_obstacle,
 };
 
 use super::evaluation::{NotOnce, Placement, placement_in_statement};
@@ -35,6 +36,8 @@ use super::{Plan, RefactorContext, Refusal};
 pub(super) enum Target {
     Variable,
     Constant,
+    Parameter,
+    Field,
 }
 
 pub(super) fn plan(
@@ -129,16 +132,57 @@ fn plan_selection(
         return Err(Refusal::NotApplicable);
     }
 
+    // what the expression becomes a parameter or an attribute of: the innermost function
+    // whose body the statement is in, and for an attribute the class it is a method of
+    let function = ancestors
+        .iter()
+        .enumerate()
+        .rev()
+        .skip(1)
+        .find(|(_, stmt)| matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)))
+        .and_then(|(at, stmt)| Some((at, stmt.as_function_def_stmt()?)));
+    let method = function.and_then(|(at, function)| {
+        let class = ancestors.get(at.checked_sub(1)?)?.as_class_def_stmt()?;
+        Some((class, function))
+    });
+    match target {
+        Target::Parameter if function.is_none() => return Err(Refusal::NotApplicable),
+        Target::Field if method.is_none() => return Err(Refusal::NotApplicable),
+        _ => {}
+    }
+
     let names = names_in_file(context);
     let version = context.file.python_version(context.db);
     let base = selection.suggested_name(version.minor);
+    let receiver = method
+        .filter(|(_, function)| function.decorator_list.is_empty())
+        .and_then(|(_, function)| function.parameters.iter_non_variadic_params().next())
+        .map(|parameter| parameter.name().as_str());
     let name = match target {
-        Target::Variable => fresh_name(&base, &names),
+        Target::Variable | Target::Parameter => fresh_name(&base, &names),
         Target::Constant => fresh_name(&base.to_uppercase(), &names),
+        Target::Field => {
+            // a name the class or a base already has would read or replace that member
+            let mut taken = names;
+            loop {
+                let name = fresh_name(&base, &taken);
+                match method {
+                    Some((class, _)) if class_instance_has_member(&context.model, class, &name) => {
+                        taken.insert(name);
+                    }
+                    _ => break name,
+                }
+            }
+        }
     };
     let mut title = match target {
         Target::Variable => format!("Extract variable `{name}`"),
         Target::Constant => format!("Introduce constant `{name}`"),
+        Target::Parameter => format!("Introduce parameter `{name}`"),
+        Target::Field => format!(
+            "Introduce attribute `{}.{name}`",
+            receiver.unwrap_or("self")
+        ),
     };
     if title_kind == Title::Naming {
         title = format!(
@@ -167,27 +211,65 @@ fn plan_selection(
     let expression_text = expression_source(context, selection);
     let line_ending = context.line_ending();
 
+    // a binding made directly above the statement, where the expression is then evaluated
+    let above_statement = |binding: &str| -> Result<Edit, Refusal> {
+        match placement {
+            Placement::Once {
+                effects_before: false,
+            } => {}
+            Placement::Once {
+                effects_before: true,
+            } => {
+                return Err(refuse(
+                    "something with effects is evaluated before the expression, which would now run after it"
+                        .to_string(),
+                ));
+            }
+            Placement::NotOnce(reason) => {
+                return Err(refuse(format!(
+                    "the expression can't be evaluated before its statement: {}",
+                    reason.describe()
+                )));
+            }
+        }
+        if suite_of(module, statement).is_none()
+            || ruff_python_trivia::indentation_at_offset(statement.start(), context.source())
+                .is_none()
+        {
+            return Err(refuse(
+                "the statement shares its line with the one it belongs to".to_string(),
+            ));
+        }
+        let indentation = context.indentation(statement);
+        Ok(Edit::insertion(
+            format!("{indentation}{binding} = {expression_text}{line_ending}"),
+            context.source().line_start(statement.start()),
+        ))
+    };
+    // a constant and a parameter's default are evaluated once, before the code they are made
+    // from runs, so only an expression of literals that cannot raise may become one
+    let hoisted = |what: &str| -> Result<(), Refusal> {
+        if !selection
+            .operands()
+            .iter()
+            .all(|operand| is_constant(context, operand))
+        {
+            return Err(refuse(format!(
+                "only an expression of literals can become {what}, which is evaluated once, before the code it is read in runs"
+            )));
+        }
+        if let Placement::NotOnce(reason @ (NotOnce::Annotation | NotOnce::Opaque)) = placement {
+            return Err(refuse(format!(
+                "the expression can't be moved: {}",
+                reason.describe()
+            )));
+        }
+        Ok(())
+    };
+
+    let mut replacement = name.clone();
     let insertion = match target {
         Target::Variable => {
-            match placement {
-                Placement::Once {
-                    effects_before: false,
-                } => {}
-                Placement::Once {
-                    effects_before: true,
-                } => {
-                    return Err(refuse(
-                        "something with effects is evaluated before the expression, which would now run after it"
-                            .to_string(),
-                    ));
-                }
-                Placement::NotOnce(reason) => {
-                    return Err(refuse(format!(
-                        "the expression can't be evaluated before its statement: {}",
-                        reason.describe()
-                    )));
-                }
-            }
             if ancestors
                 .iter()
                 .rev()
@@ -200,19 +282,7 @@ fn plan_selection(
                         .to_string(),
                 ));
             }
-            if suite_of(module, statement).is_none()
-                || ruff_python_trivia::indentation_at_offset(statement.start(), context.source())
-                    .is_none()
-            {
-                return Err(refuse(
-                    "the statement shares its line with the one it belongs to".to_string(),
-                ));
-            }
-            let indentation = context.indentation(statement);
-            Edit::insertion(
-                format!("{indentation}{name} = {expression_text}{line_ending}"),
-                context.source().line_start(statement.start()),
-            )
+            above_statement(&name)?
         }
         Target::Constant => {
             if let Placement::NotOnce(reason @ (NotOnce::Annotation | NotOnce::Opaque)) = placement
@@ -234,12 +304,65 @@ fn plan_selection(
                 at,
             )
         }
+        Target::Parameter => {
+            hoisted("a parameter's default")?;
+            let Some((_, function)) = function else {
+                return Err(Refusal::NotApplicable);
+            };
+            parameter_insertion(&function.parameters, &name, &expression_text)
+        }
+        Target::Field => {
+            let Some((class, function)) = method else {
+                return Err(Refusal::NotApplicable);
+            };
+            if !function.decorator_list.is_empty() {
+                return Err(refuse(
+                    "the method is decorated, so its first parameter need not be the instance"
+                        .to_string(),
+                ));
+            }
+            let Some(receiver) = receiver else {
+                return Err(refuse(
+                    "the method takes no parameter the instance is passed as".to_string(),
+                ));
+            };
+            if let Some(reason) = new_attribute_obstacle(&context.model, class) {
+                return Err(refuse(reason.to_string()));
+            }
+            replacement = format!("{receiver}.{name}");
+            above_statement(&replacement)?
+        }
     };
 
     Ok(Plan {
         title,
-        edits: vec![insertion, Edit::range_replacement(name, selection.replaced)],
+        edits: vec![
+            insertion,
+            Edit::range_replacement(replacement, selection.replaced),
+        ],
     })
+}
+
+/// the edit adding `name=value` to `parameters`: last, or before a `**` parameter, which has to
+/// stay last. after a `*args` or a bare `*` it is keyword-only, which a parameter with a default
+/// can be
+fn parameter_insertion(parameters: &ast::Parameters, name: &str, value: &str) -> Edit {
+    let parameter = format!("{name}={value}");
+    let kwarg = parameters.kwarg.as_deref().map(Ranged::range);
+    let previous = parameters
+        .iter()
+        .filter(|parameter| Some(parameter.range()) != kwarg)
+        .map(|parameter| parameter.end())
+        .max();
+    match (previous, kwarg) {
+        (Some(previous), _) => Edit::insertion(format!(", {parameter}"), previous),
+        // `(**kwargs)`: the parameter goes first, after the parenthesis
+        (None, Some(_)) => Edit::insertion(
+            format!("{parameter}, "),
+            parameters.start() + TextSize::from(1),
+        ),
+        (None, None) => Edit::insertion(parameter, parameters.end() - TextSize::from(1)),
+    }
 }
 
 /// `text` on one line and at most a few dozen characters, for a title to name it by.
@@ -1101,5 +1224,177 @@ mod tests {
             .apply(RefactorKind::ExtractVariable),
             @"refused: Extract variable `name_1` (the expression can't be evaluated before its statement: it is a link of an optional chain, which is evaluated as a whole)"
         );
+    }
+
+    fn parameter(source: &str) -> String {
+        RefactorTest::python(source).apply(RefactorKind::IntroduceParameter)
+    }
+
+    fn field(source: &str) -> String {
+        RefactorTest::python(source).apply(RefactorKind::IntroduceField)
+    }
+
+    #[test]
+    fn parameter_takes_the_expression_as_its_default() {
+        assert_snapshot!(parameter(
+            "
+            def wrap(text: str, *, margin: int = 2):
+                return text.center(<START>80<END> - margin)
+            ",
+        ), @"
+        Introduce parameter `number`
+        ---
+
+        def wrap(text: str, *, margin: int = 2, number=80):
+            return text.center(number - margin)
+        ");
+    }
+
+    #[test]
+    fn parameter_goes_before_keyword_variadics() {
+        assert_snapshot!(parameter(
+            "
+            def show(*args, **kwargs):
+                print(*args, sep=<START>', '<END>, **kwargs)
+            ",
+        ), @"
+        Introduce parameter `text`
+        ---
+
+        def show(*args, text=', ', **kwargs):
+            print(*args, sep=text, **kwargs)
+        ");
+    }
+
+    #[test]
+    fn parameter_of_a_function_without_parameters() {
+        assert_snapshot!(parameter(
+            "
+            def timeout():
+                return <START>60 * 60<END>
+            ",
+        ), @"
+        Introduce parameter `value`
+        ---
+
+        def timeout(value=60 * 60):
+            return value
+        ");
+    }
+
+    /// a default is evaluated once, when the function is defined
+    #[test]
+    fn parameter_from_a_value_read_at_each_call_is_refused() {
+        assert_snapshot!(parameter(
+            "
+            def count(items: list[int]):
+                return <START>len(items)<END> + 1
+            ",
+        ), @"refused: Introduce parameter `value` (only an expression of literals can become a parameter's default, which is evaluated once, before the code it is read in runs)");
+    }
+
+    #[test]
+    fn parameter_outside_a_function_is_not_offered() {
+        assert_snapshot!(parameter(
+            "
+            limit = <START>10<END> * 2
+            ",
+        ), @"not offered");
+    }
+
+    #[test]
+    fn field_is_assigned_on_the_instance_above_the_statement() {
+        assert_snapshot!(field(
+            "
+            class Cart:
+                def __init__(self, prices: list[float]):
+                    self.prices = prices
+
+                def total(self, tax: float):
+                    return <START>sum(self.prices)<END> * tax
+            ",
+        ), @"
+        Introduce attribute `self.value`
+        ---
+
+        class Cart:
+            def __init__(self, prices: list[float]):
+                self.prices = prices
+
+            def total(self, tax: float):
+                self.value = sum(self.prices)
+                return self.value * tax
+        ");
+    }
+
+    /// `copy` is a method the class inherits from `list`, so the attribute is named apart from it
+    #[test]
+    fn field_name_avoids_the_class_members() {
+        assert_snapshot!(field(
+            "
+            class Cart(list[int]):
+                def backup(this, items: list[int]):
+                    return <START>items.copy()<END>
+            ",
+        ), @"
+        Introduce attribute `this.copy_1`
+        ---
+
+        class Cart(list[int]):
+            def backup(this, items: list[int]):
+                this.copy_1 = items.copy()
+                return this.copy_1
+        ");
+    }
+
+    #[test]
+    fn field_of_a_class_with_slots_is_refused() {
+        assert_snapshot!(field(
+            "
+            class Point:
+                __slots__ = ('x',)
+
+                def scaled(self, factor: int):
+                    return <START>self.x * factor<END>
+            ",
+        ), @"refused: Introduce attribute `self.value` (the class has `__slots__`, which leaves no room for another attribute)");
+    }
+
+    #[test]
+    fn field_of_a_frozen_data_class_is_refused() {
+        assert_snapshot!(field(
+            "
+            from dataclasses import dataclass
+
+            @dataclass(frozen=True)
+            class Point:
+                x: int
+
+                def scaled(self, factor: int):
+                    return <START>self.x * factor<END>
+            ",
+        ), @"refused: Introduce attribute `self.value` (a frozen data class refuses every assignment to an attribute)");
+    }
+
+    #[test]
+    fn field_in_a_static_method_is_refused() {
+        assert_snapshot!(field(
+            "
+            class Math:
+                @staticmethod
+                def double(x: int):
+                    return <START>x * 2<END>
+            ",
+        ), @"refused: Introduce attribute `self.value` (the method is decorated, so its first parameter need not be the instance)");
+    }
+
+    #[test]
+    fn field_outside_a_method_is_not_offered() {
+        assert_snapshot!(field(
+            "
+            def double(x: int):
+                return <START>x * 2<END>
+            ",
+        ), @"not offered");
     }
 }

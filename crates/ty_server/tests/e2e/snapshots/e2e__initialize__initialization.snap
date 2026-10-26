@@ -58,6 +58,8 @@ expression: initialization_result
         "refactor.inline.variable",
         "refactor.extract.variable",
         "refactor.extract.constant",
+        "refactor.extract.parameter",
+        "refactor.extract.field",
         "refactor.extract.function",
         "refactor.rewrite.returnAnnotation",
         "refactor.rewrite.toDataClass",

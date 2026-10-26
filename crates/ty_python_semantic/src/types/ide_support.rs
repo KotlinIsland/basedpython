@@ -17,7 +17,8 @@ use crate::types::abstract_methods::type_as_abstract_method;
 use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{
-    DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor, expanded_class_base_entries,
+    DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor, InstanceDictionary,
+    expanded_class_base_entries,
 };
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context_sensitive::for_each_candidate;
@@ -4457,6 +4458,74 @@ pub fn data_class_conversion_obstacle(
     None
 }
 
+/// why an instance of `class` cannot be given a new attribute by assigning it in a method, or
+/// `None` when it can
+///
+/// an enum's members, a named tuple's fields and a `TypedDict`'s keys are fixed, a protocol has
+/// no instances of its own, a frozen data class refuses every assignment, and an instance has a
+/// `__dict__` to hold an attribute no slot lists only when some class in its MRO gives it one: a
+/// class without `__slots__`, or one whose `__slots__` lists `__dict__`
+pub fn new_attribute_obstacle(
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+) -> Option<&'static str> {
+    let db = model.db();
+    let index = semantic_index(db, model.program_file());
+    let Some(literal) = index
+        .try_definition(class)
+        .and_then(|definition| crate::types::infer::original_class_type(db, definition))
+    else {
+        return Some("the class is not one ty can read");
+    };
+    let Some(static_class) = literal.as_static() else {
+        return Some("the class is not one ty can read statically");
+    };
+    if crate::types::enums::is_enum_class(db, Type::ClassLiteral(literal)) {
+        return Some("an enum's members are fixed");
+    }
+    if static_class.is_protocol(db) {
+        return Some("a protocol has no instances of its own");
+    }
+    if static_class.is_typed_dict(db) {
+        return Some("a `TypedDict` is a dict, whose keys are not attributes");
+    }
+    if static_class.has_named_tuple_class_in_mro(db) {
+        return Some("a named tuple's fields are fixed");
+    }
+    if static_class.is_frozen_dataclass(db) == Some(true) {
+        return Some("a frozen data class refuses every assignment to an attribute");
+    }
+    match static_class.instance_dictionary(db) {
+        InstanceDictionary::Present => None,
+        InstanceDictionary::Absent => {
+            Some("the class has `__slots__`, which leaves no room for another attribute")
+        }
+        InstanceDictionary::Unknown => {
+            Some("ty cannot tell whether an instance has a `__dict__` to hold another attribute")
+        }
+    }
+}
+
+/// whether an instance of `class` has a member called `name`, its own or inherited, declared
+/// in the class body or assigned in a method
+pub fn class_instance_has_member(
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+    name: &str,
+) -> bool {
+    let db = model.db();
+    let env = model.program_environment();
+    let index = semantic_index(db, model.program_file());
+    let Some(literal) = index
+        .try_definition(class)
+        .and_then(|definition| crate::types::infer::original_class_type(db, definition))
+    else {
+        return true;
+    };
+    let instance = Type::instance(db, &env, literal.default_specialization(db));
+    !instance.member(db, &env, name).place.is_undefined()
+}
+
 /// The type worth showing for a parameter the source leaves unannotated.
 ///
 /// A receiver's `Self` type says nothing the enclosing class does not already,
@@ -4849,6 +4918,86 @@ mod tests {
     use ruff_python_ast as ast;
     use ruff_text_size::Ranged;
     use ty_python_core::ProgramFile;
+
+    /// what [`super::new_attribute_obstacle`] says of each class in `source`, by name
+    fn new_attribute_obstacles(source: &str) -> anyhow::Result<Vec<String>> {
+        let db = TestDbBuilder::new()
+            .with_file("/src/foo.py", source)
+            .build()?;
+        let file = system_path_to_file(&db, "/src/foo.py")?;
+        let file = ProgramFile::new(&db, file, db.program_environment().program(&db));
+        let parsed = parsed_module(&db, file.python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, file);
+        Ok(parsed
+            .suite()
+            .iter()
+            .filter_map(ast::Stmt::as_class_def_stmt)
+            .map(|class| {
+                format!(
+                    "{}: {}",
+                    class.name,
+                    super::new_attribute_obstacle(&model, class).unwrap_or("none")
+                )
+            })
+            .collect())
+    }
+
+    #[test]
+    fn a_class_without_slots_throughout_its_bases_takes_a_new_attribute() -> anyhow::Result<()> {
+        let obstacles = new_attribute_obstacles(
+            r#"
+from typing import Any
+
+class Slotted:
+    __slots__ = ("a",)
+
+class Plain:
+    pass
+
+class Unslotted(Slotted):
+    pass
+
+class SlottedOverPlain(Plain):
+    __slots__ = ("b",)
+
+class SlottedOverSlotted(Slotted):
+    __slots__ = ("b",)
+
+class WithDictionary(Slotted):
+    __slots__ = ("b", "__dict__")
+
+class SlottedOverInt(int):
+    __slots__ = ()
+
+class SlottedOverException(Exception):
+    __slots__ = ()
+
+def slots() -> tuple[str, ...]: ...
+
+class DynamicSlots:
+    __slots__ = slots()
+
+class SlottedOverAny(Any):
+    __slots__ = ()
+"#,
+        )?;
+        assert_eq!(
+            obstacles,
+            [
+                "Slotted: the class has `__slots__`, which leaves no room for another attribute",
+                "Plain: none",
+                "Unslotted: none",
+                "SlottedOverPlain: none",
+                "SlottedOverSlotted: the class has `__slots__`, which leaves no room for another attribute",
+                "WithDictionary: none",
+                "SlottedOverInt: the class has `__slots__`, which leaves no room for another attribute",
+                "SlottedOverException: none",
+                "DynamicSlots: ty cannot tell whether an instance has a `__dict__` to hold another attribute",
+                "SlottedOverAny: ty cannot tell whether an instance has a `__dict__` to hold another attribute",
+            ]
+        );
+        Ok(())
+    }
 
     #[test]
     fn only_a_value_of_exactly_a_builtin_scalar_type_has_a_scalar_kind() -> anyhow::Result<()> {
