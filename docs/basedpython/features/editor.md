@@ -1071,6 +1071,37 @@ name. a called class is the class, not the `__init__` the call runs, and a
 decorated `def` is the `def`. the answer is `null` where there is no name, and
 for a name whose definitions declare different things
 
+## what each usage does
+
+an editor's *find usages* groups the usages of a name by what each does with
+it, as PyCharm's Python groups them: the imports of a class apart from its uses
+as a base and in annotations. a `Location` has nowhere to say that, so
+`by/references` takes what `textDocument/references` takes, a position and
+`context.includeDeclaration`, and answers the same references in the same
+order, each with its `kind`:
+
+```json
+[
+  { "uri": "file:///src/shapes/util.by", "range": { "start": { "line": 0, "character": 31 }, "end": { "line": 0, "character": 36 } }, "kind": "import" },
+  { "uri": "file:///src/shapes/util.by", "range": { "start": { "line": 3, "character": 25 }, "end": { "line": 3, "character": 30 } }, "kind": "typeHint" }
+]
+```
+
+| kind          | the reference is                                                                                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `import`      | in an `import` or `from ... import` statement                                                                                                                                                  |
+| `isinstance`  | among the classes an `isinstance` call tests against: its second argument, or in a tuple there                                                                                                 |
+| `typeHint`    | in a type expression: an annotation, a return or `raises` annotation, a type alias's value, a type parameter's bound or default, or an argument a call takes as a type, such as `cast`'s first |
+| `superclass`  | in the parentheses of a class's header, a base or a keyword such as `metaclass=`                                                                                                               |
+| `write`       | binding the name: an assignment, an augmented assignment, a `del`, a `for` or `with` target                                                                                                    |
+| `read`        | reading it, which calling it is                                                                                                                                                                |
+| `declaration` | the name where it is declared, there with `includeDeclaration`                                                                                                                                 |
+
+a reference is the first of these that holds, from the top, so an import is an
+`import` although it binds the name, and of nested groups the nearest wins: a
+class in `cast`'s first argument in a base list is a `typeHint`. the answer is
+`null` where `textDocument/references` answers `null`
+
 ## type info
 
 an editor's *type info* shows the type of an expression, and which expression

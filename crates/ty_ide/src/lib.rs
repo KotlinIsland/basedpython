@@ -57,6 +57,7 @@ mod test_links;
 mod type_hierarchy;
 mod unwrap;
 mod usage_counts;
+mod usage_kinds;
 mod workspace_symbols;
 
 pub use add_dependency::{AddDependency, DependencyTarget};
@@ -141,6 +142,7 @@ pub use unwrap::{UnwrapOption, unwrap_options};
 pub use usage_counts::{
     DeclarationKind, DeclarationUsages, Implementor, UsageCountKinds, document_usage_counts,
 };
+pub use usage_kinds::{UsageKind, usage_kinds};
 pub use workspace_symbols::{WorkspaceSymbolInfo, workspace_symbols};
 
 use ruff_db::{

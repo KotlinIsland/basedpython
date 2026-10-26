@@ -86,6 +86,11 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::ReferencesRequestHandler::METHOD => background_document_request_task::<
             requests::ReferencesRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::ClassifiedReferencesRequestHandler::METHOD => background_document_request_task::<
+            requests::ClassifiedReferencesRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::DocumentHighlightRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentHighlightRequestHandler,
         >(

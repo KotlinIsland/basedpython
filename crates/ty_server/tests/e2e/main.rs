@@ -33,6 +33,7 @@ mod build_trees;
 mod call_hierarchy;
 mod change_signature;
 mod check_workspace;
+mod classified_references;
 mod closed_documents;
 mod code_actions;
 mod commands;

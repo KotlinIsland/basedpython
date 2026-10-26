@@ -1828,6 +1828,15 @@ fn argument_form_from_binding<'db>(
     CallArgumentForm::Unknown
 }
 
+/// Whether `call` calls python's `isinstance`, by whatever name it is reached.
+pub fn calls_isinstance(model: &SemanticModel<'_>, call: &ast::ExprCall) -> bool {
+    matches!(
+        call.func.inferred_type(model),
+        Some(Type::FunctionLiteral(function))
+            if function.is_known(model.db(), KnownFunction::IsInstance)
+    )
+}
+
 /// Returns the form of each call-site argument in source order.
 ///
 /// `CallArgumentForm::Unknown` indicates that an argument is unmatched or its form cannot be
