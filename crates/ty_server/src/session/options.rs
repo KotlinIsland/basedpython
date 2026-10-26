@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::IntoEnumIterator;
 use ty_combine::Combine;
-use ty_ide::{CompletionSettings, InlayHintSettings};
+use ty_ide::{AutoImportStyle, CompletionSettings, InlayHintSettings};
 use ty_project::metadata::Options as TyOptions;
 use ty_project::metadata::options::EnvironmentOptions;
 use ty_project::metadata::python_version::SupportedPythonVersion;
@@ -167,6 +167,15 @@ impl ClientOptions {
             .completions
             .get_or_insert_default()
             .auto_import = Some(enabled);
+        self
+    }
+
+    #[must_use]
+    pub fn with_import_style(mut self, style: ImportStyleOption) -> Self {
+        self.workspace
+            .completions
+            .get_or_insert_default()
+            .import_style = Some(style);
         self
     }
 
@@ -471,6 +480,21 @@ pub struct CompletionOptions {
     auto_import: Option<bool>,
     /// Whether callable completions should insert parentheses.
     complete_function_parentheses: Option<bool>,
+    /// how an auto-import brings in a member of a module the file imports nothing from yet
+    import_style: Option<ImportStyleOption>,
+}
+
+/// `completions.importStyle`: `"from"` writes `from pathlib import Path`, `"module"` writes
+/// `import pathlib` and reads `pathlib.Path`
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportStyleOption {
+    From,
+    Module,
+}
+
+impl Combine for ImportStyleOption {
+    fn combine_with(&mut self, _other: Self) {}
 }
 
 impl CompletionOptions {
@@ -485,6 +509,10 @@ impl CompletionOptions {
             auto_import: self.auto_import.unwrap_or(true),
             // basedpython defaults this on — see `CompletionSettings::default`
             complete_function_parentheses: self.complete_function_parentheses.unwrap_or(true),
+            import_style: match self.import_style {
+                Some(ImportStyleOption::Module) => AutoImportStyle::ModuleImport,
+                Some(ImportStyleOption::From) | None => AutoImportStyle::FromImport,
+            },
         }
     }
 }

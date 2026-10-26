@@ -65,8 +65,8 @@ pub use call_hierarchy::{CallHierarchyItem, prepare_call_hierarchy};
 pub use code_action::{FileEdit, QuickFix, code_actions};
 pub use complete_statement::{CompletedStatement, StatementEdit, complete_statement};
 pub use completion::{
-    Completion, CompletionCapabilities, CompletionCommand, CompletionInsertTextFormat,
-    CompletionKind, CompletionSettings, completion,
+    AutoImportStyle, Completion, CompletionCapabilities, CompletionCommand,
+    CompletionInsertTextFormat, CompletionKind, CompletionSettings, completion,
 };
 pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use declaration::{Declaration, DeclarationAt, DeclaredKind, declaration_at};

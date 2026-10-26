@@ -32,7 +32,9 @@ use index::DocumentError;
 use ty_python_core::program::UseDefaultStrategy;
 
 pub(crate) use self::options::InitializationOptions;
-pub use self::options::{ClientOptions, DiagnosticMode, GlobalOptions, WorkspaceOptions};
+pub use self::options::{
+    ClientOptions, DiagnosticMode, GlobalOptions, ImportStyleOption, WorkspaceOptions,
+};
 pub(crate) use self::settings::{GlobalSettings, WorkspaceSettings};
 use crate::capabilities::{ResolvedClientCapabilities, server_diagnostic_options};
 use crate::db::Db as _;

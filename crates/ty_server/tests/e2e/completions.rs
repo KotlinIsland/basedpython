@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lsp_types::{Documentation, MarkupKind, Position};
 use ruff_db::system::SystemPath;
-use ty_server::ClientOptions;
+use ty_server::{ClientOptions, ImportStyleOption};
 
 use crate::TestServerBuilder;
 
@@ -1137,4 +1137,55 @@ foo_
     };
 
     Ok(markup.kind)
+}
+
+/// `completions.importStyle: "module"` imports the module an unimported name is in and writes
+/// the name through it, where the default writes `from module import name`
+#[test]
+fn import_style_module_imports_the_module() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+import os
+
+walktr
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(
+            &ClientOptions::default()
+                .with_complete_function_parentheses(false)
+                .with_import_style(ImportStyleOption::Module),
+        )
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let completions = server.completion_request(&server.file_uri(foo), Position::new(2, 6));
+    let offered: Vec<String> = completions
+        .iter()
+        .map(|item| {
+            let imports: Vec<&str> = item
+                .additional_text_edits
+                .iter()
+                .flatten()
+                .map(|edit| edit.new_text.as_str())
+                .collect();
+            format!(
+                "{}: {} with {imports:?}",
+                item.label,
+                item.insert_text.as_deref().unwrap_or(&item.label)
+            )
+        })
+        .collect();
+    insta::assert_debug_snapshot!(offered, @r#"
+    [
+        "inspect.walktree (import inspect): inspect.walktree with [\"import inspect/n\"]",
+    ]
+    "#);
+
+    Ok(())
 }

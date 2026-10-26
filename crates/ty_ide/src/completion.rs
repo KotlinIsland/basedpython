@@ -268,8 +268,13 @@ pub fn completion<'db>(
                         &importer,
                         &members,
                         context.cursor.is_in_type_expression(&model),
-                        |module_name: &ModuleName, symbol: &str| {
-                            ImportRequest::import_from(module_name.as_str(), symbol)
+                        |module_name: &ModuleName, symbol: &str| match settings.import_style {
+                            AutoImportStyle::FromImport => {
+                                ImportRequest::import_from(module_name.as_str(), symbol)
+                            }
+                            AutoImportStyle::ModuleImport => {
+                                ImportRequest::import(module_name.as_str(), symbol)
+                            }
                         },
                         &mut completions,
                     );
@@ -976,6 +981,19 @@ pub struct CompletionSettings {
     pub auto_import: bool,
     /// Whether callable completions should insert parentheses.
     pub complete_function_parentheses: bool,
+    /// how an auto-import brings a member of a module the file does not import yet into scope
+    pub import_style: AutoImportStyle,
+}
+
+/// how an auto-import brings a module's member into a file that imports nothing from that
+/// module yet. a module the file already imports is imported from the way the file does it
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoImportStyle {
+    /// `from pathlib import Path`, and `Path` where the completion was
+    #[default]
+    FromImport,
+    /// `import pathlib`, and `pathlib.Path` where the completion was
+    ModuleImport,
 }
 
 // N.B. It's important for the defaults here to match the defaults
@@ -993,6 +1011,7 @@ impl Default for CompletionSettings {
             // below writes `name($0)` and asks for signature help, so accepting
             // one leaves the caret where the first argument goes
             complete_function_parentheses: true,
+            import_style: AutoImportStyle::FromImport,
         }
     }
 }

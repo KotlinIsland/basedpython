@@ -171,6 +171,16 @@ nothing, because every symbol spelled `mod` anywhere would qualify
 like the aliases above, these are auto-imports, and turning off
 `ty.completions.autoImport` turns them off too
 
+how an auto-import brings in a name from a module the file imports nothing from yet
+is `ty.completions.importStyle` (`completions.importStyle` in the initialization
+options): `"from"`, the default, writes `from inspect import walktree` and
+completes `walktree`; `"module"` writes `import inspect` and completes
+`inspect.walktree`. a module the file already imports is imported from the way the
+file does it, whichever is set — a name from a module imported with `import` is
+written through it, and one from a module with a `from ... import` is added to that
+statement. how imports are sorted, grouped and split is not an editor setting: it
+is the project's isort configuration, which `buff` reads and fixes
+
 ### names inside a string
 
 a name written inside a plain string's braces completes as a name, and taking
