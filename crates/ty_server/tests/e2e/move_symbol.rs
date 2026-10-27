@@ -343,6 +343,72 @@ fn a_pull_up_answers_its_edit_and_a_push_down_with_nowhere_to_go_is_refused() ->
     Ok(())
 }
 
+const MIXED: &str = "\
+class Mixin:
+    pass
+
+
+class Shape:
+    pass
+
+
+class Square(Shape, Mixin):
+    Mixin = 1
+";
+
+/// a pull names the bases it moves apart from the members, so a base and a member written with
+/// one name are told apart; a request that names its bases among the members, as an older client
+/// sends it, is read by the kinds `by/prepareMoveMembers` lists them with
+#[test]
+fn a_pull_up_names_its_bases_apart_from_its_members() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/shapes.py"), MIXED)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(SystemPath::new("src/shapes.py"), MIXED, 1);
+    let uri = server.file_uri(SystemPath::new("src/shapes.py"));
+    let pulled = server
+        .send_request_await::<PullMembersUp>(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 8, "character": 7 },
+            "members": [],
+            "bases": ["Mixin"],
+            "target": "shapes.Shape",
+        }))
+        .expect("an answer");
+    assert_eq!(
+        pulled["edit"]["changes"][uri.as_str()],
+        json!([
+            {
+                "range": { "start": { "line": 8, "character": 18 }, "end": { "line": 8, "character": 25 } },
+                "newText": "",
+            },
+            {
+                "range": { "start": { "line": 4, "character": 11 }, "end": { "line": 4, "character": 11 } },
+                "newText": "(Mixin)",
+            },
+        ]),
+        "{pulled:#}"
+    );
+
+    let ambiguous = server.send_request_await::<PullMembersUp>(json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 8, "character": 7 },
+        "members": ["Mixin"],
+        "target": "shapes.Shape",
+    }));
+    assert_eq!(
+        ambiguous,
+        Some(json!({
+            "refused": "`Mixin` is both a member of Square and one of its bases; name the bases \
+                        to pull up in `bases`",
+            "warnings": [],
+        }))
+    );
+    Ok(())
+}
+
 /// `by/extractSuperclass`, in json throughout
 enum ExtractSuperclass {}
 

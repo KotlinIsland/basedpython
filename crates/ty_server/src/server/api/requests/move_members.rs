@@ -8,11 +8,13 @@ use lsp_types::{
     LspRequestMethod, MessageDirection, Position, Range, Request, TextDocumentIdentifier, Uri,
 };
 use ruff_db::files::FileRange;
+use ruff_text_size::TextSize;
 use ty_ide::{
     HierarchyClass, MemberKind, extract_superclass, movable_members, pull_members_up,
     push_members_down,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
+use ty_python_core::ProgramFile;
 
 use super::move_symbol::MoveSymbolAnswer;
 use crate::document::{FileRangeExt, PositionExt};
@@ -194,13 +196,18 @@ impl Request for PullMembersUpRequest {
     const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
 }
 
-/// the class, the names of the members to pull up, and the superclass to pull them into
+/// the class, the members and bases to pull up, and the superclass to pull them into
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PullMembersUpParams {
     text_document: TextDocumentIdentifier,
     position: Position,
+    /// the names of the members to pull up, as `by/prepareMoveMembers` lists them. without
+    /// `bases`, the bases to pull up are named here too, each as listed with the kind `base`
     members: Vec<String>,
+    /// the bases to pull up, each as `by/prepareMoveMembers` lists one of the kind `base`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bases: Option<Vec<String>>,
     /// the superclass's `qualifiedName`, as `by/prepareMoveMembers` lists it
     target: String,
 }
@@ -226,18 +233,54 @@ impl BackgroundDocumentRequestHandler for PullMembersUpRequestHandler {
         let Some((file, offset)) = position(db, snapshot, params.position) else {
             return Ok(None);
         };
+        let file = db.program_file(file);
+        let parts = match params.bases {
+            Some(bases) => Ok((params.members, bases)),
+            None => members_and_bases(db, file, offset, params.members),
+        };
         Ok(Some(MoveSymbolAnswer::of(
             db,
             snapshot,
-            pull_members_up(
-                db,
-                db.program_file(file),
-                offset,
-                &params.members,
-                &params.target,
-            ),
+            parts.and_then(|(members, bases)| {
+                pull_members_up(db, file, offset, &members, &bases, &params.target)
+            }),
         )))
     }
+}
+
+/// `names`, a request's `members` that names the bases to pull up among the members, split into
+/// the members and the bases by the kind `by/prepareMoveMembers` lists each with. a name it lists
+/// as both is refused, and one it does not list is left with the members, for the pull to refuse
+fn members_and_bases(
+    db: &ProjectDatabase,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+    names: Vec<String>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let movable =
+        movable_members(db, file, offset).ok_or_else(|| "there is no class here".to_string())?;
+    let mut members = Vec::new();
+    let mut bases = Vec::new();
+    for name in names {
+        let listed = |base: bool| {
+            movable
+                .members
+                .iter()
+                .any(|member| member.name == name && (member.kind == MemberKind::Base) == base)
+        };
+        match (listed(false), listed(true)) {
+            (true, true) => {
+                return Err(format!(
+                    "`{name}` is both a member of {} and one of its bases; name the bases to pull \
+                     up in `bases`",
+                    movable.class.name
+                ));
+            }
+            (false, true) => bases.push(name),
+            _ => members.push(name),
+        }
+    }
+    Ok((members, bases))
 }
 
 impl RetriableRequestHandler for PullMembersUpRequestHandler {

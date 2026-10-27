@@ -18,16 +18,22 @@
 //! meant:
 //!
 //! - pulled up, a member that reads an attribute of its receiver the superclass does not have,
-//!   which the superclass's other subclasses would then miss; that uses `super()` from a class
-//!   whose base is not the superclass, since `super()` would then start from elsewhere; that
-//!   another subclass of the superclass inherits from further up already, and would inherit the
-//!   pulled one instead; or that the superclass binds already
+//!   which the superclass's other subclasses would then miss; that reads, where the class body
+//!   evaluates it — a value, a default, a decorator — a name the class body binds and that is
+//!   not pulled with it, or a name bound after the superclass is defined; that uses `super()`
+//!   from a class whose base is not the superclass, since `super()` would then start from
+//!   elsewhere; that a class below the superclass would then find in another class than it does,
+//!   by its method resolution order — another subclass that finds it in a mixin or above the
+//!   superclass, or the class itself, in a class it finds before the superclass; or that the
+//!   superclass binds already
 //! - pushed down, a member something reads off the class itself or an instance that may be the
 //!   class rather than a subclass — another of its methods, through `self`, included — or of a
 //!   class without subclasses in the project
 //! - either way, a name-mangled `__member`, whose name depends on the class it is written in,
-//!   and, between modules, a member that reads a name of its module that the other would have
-//!   to import from a module that imports it
+//!   a method that reads `__class__`, which is the class it is written in, a member that reads a
+//!   name one class finds in a scope around it — a function it is defined in, say — and the
+//!   other finds elsewhere, and, between modules, a member that reads a name of its module that
+//!   the other would have to import from a module that imports it
 //!
 //! `override` follows the move: a method pulled up overrides nothing where it lands unless the
 //! superclass inherits the name, so it loses the modifier there, and the methods of the same
@@ -40,7 +46,7 @@ use ruff_db::source::source_text;
 use ruff_diagnostics::Edit;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, walk_expr};
-use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_python_ast::{self as ast, Expr, ExprContext, Stmt};
 use ruff_python_codegen::Stylist;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -48,20 +54,27 @@ use rustc_hash::FxHashSet;
 use ty_module_resolver::file_to_module;
 use ty_project::Db;
 use ty_python_core::ProgramFile;
+use ty_python_core::scope::{FileScopeId, NodeWithScopeRef};
+use ty_python_core::semantic_index;
 use ty_python_semantic::importer::{ImportAction, ImportRequest, MembersInScope};
 use ty_python_semantic::types::Type;
+use ty_python_semantic::types::ide_support::{
+    decorated_function, is_enum_class, is_override_function, is_super, reads_class_cell,
+};
 use ty_python_semantic::{
-    HasType, ProgramEnvironment, SemanticModel, class_bases, instance_member_names,
+    HasDefinition, HasType, ProgramEnvironment, SemanticModel, class_bases, instance_member_names,
     is_within_classes, type_hierarchy_prepare, type_hierarchy_subtypes,
 };
 
+use super::flow::{bindings_of_symbol, resolving_scope, resolving_scope_among};
 use super::move_symbol::{
-    Dependency, OwnedRequest, SymbolMove, cut_range, dependencies, imports_module, line_number,
+    Dependency, OwnedRequest, SymbolMove, checked_dependencies, cut_range, imports_module,
+    line_number, loads,
 };
 use crate::code_action::FileEdit;
 use crate::goto::find_goto_target;
 use crate::import_order;
-use crate::method_kind::{MethodKind, method_kind};
+use crate::method_kind::{MethodKind, resolved_method_kind};
 use crate::references::{ReferencesMode, references};
 
 mod bases;
@@ -74,20 +87,20 @@ pub enum MemberKind {
     StaticMethod,
     Property,
     Attribute,
-    /// A base the class statement names, which a pull up moves into the superclass's bases.
+    /// a base the class statement names, which a pull up moves into the superclass's bases
     Base,
 }
 
-/// A member [`pull_members_up`] or [`push_members_down`] can move, or a base a pull up can.
+/// a member [`pull_members_up`] or [`push_members_down`] can move, or a base a pull up can
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassMember {
-    /// Its name, or a base as the class statement writes it.
+    /// its name, or a base as the class statement writes it
     pub name: String,
     pub kind: MemberKind,
-    /// The range of its name in its first statement, or of the base.
+    /// the range of its name in its first statement, or of the base
     pub name_range: TextRange,
-    /// How it reads in a list of members: a method or property as its name and its parameters
-    /// as its first statement writes them, `fetch(self, key: str)`, an attribute as its name.
+    /// how it reads in a list of members: a method or property as its name and its parameters
+    /// as its first statement writes them, `fetch(self, key: str)`, an attribute as its name
     pub detail: String,
 }
 
@@ -123,9 +136,11 @@ pub fn movable_members(
     let class = ClassSite::at(db, file, offset)?;
     let def = class.def()?;
     let source = source_text(db, class.file_id);
+    let model = SemanticModel::new(db, class.file);
     let mut members: Vec<ClassMember> = Vec::new();
     for statement in &def.body {
-        let Some((name, kind)) = member_of(statement) else {
+        let (Some(name), Some(kind)) = (member_name(statement), member_kind(&model, statement))
+        else {
             continue;
         };
         if let Some(existing) = members
@@ -145,7 +160,7 @@ pub fn movable_members(
         });
     }
     members.extend(
-        bases::written_bases(def, source.as_str())
+        bases::written_bases(db, &class, def, source.as_str())
             .into_iter()
             .map(|base| ClassMember {
                 name: base.text.to_string(),
@@ -170,13 +185,15 @@ pub fn movable_members(
     })
 }
 
-/// Moves the members `names` of the class around `offset` into its superclass `target`, named by
-/// its qualified name as [`movable_members`] lists it. `Err` says why they cannot be moved.
+/// moves the members `names` and the bases `bases`, each as the class statement writes it, of the
+/// class around `offset` into its superclass `target`, named by its qualified name as
+/// [`movable_members`] lists it. `Err` says why they cannot be moved
 pub fn pull_members_up(
     db: &dyn Db,
     file: ProgramFile<'_>,
     offset: TextSize,
     names: &[String],
+    bases: &[String],
     target: &str,
 ) -> Result<SymbolMove, String> {
     let class =
@@ -201,28 +218,24 @@ pub fn pull_members_up(
     let mut super_members = instance_member_names(db, &env, superclass.ty);
     let source = source_text(db, class.file.file(db));
     let source = source.as_str();
+    let model = SemanticModel::new(db, class.file);
+    let super_model = SemanticModel::new(db, superclass.file);
 
-    // a name the class body binds is a member; any other is one of the bases it writes
-    let (names, pulled_bases): (Vec<&String>, Vec<&String>) = names
-        .iter()
-        .partition(|name| !member_statements(def, name).is_empty());
     let mut moved = SymbolMove::default();
-    if !pulled_bases.is_empty() {
+    if !bases.is_empty() {
         let pulled = bases::pull_bases_up(
             db,
             &class,
             superclass,
-            &pulled_bases
-                .iter()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>(),
+            &bases.iter().map(String::as_str).collect::<Vec<_>>(),
             source,
         )?;
         // what the bases bring is the superclass's from now on, for the members pulled with them
         super_members.extend(pulled.gained);
         moved.edits.extend(pulled.edits);
     }
-    let pulled: FxHashSet<&str> = names.iter().map(|name| name.as_str()).collect();
+    let pulled: FxHashSet<&str> = names.iter().map(String::as_str).collect();
+    let below_superclass = superclass.descendants(db);
 
     let mut texts: Vec<(usize, MemberKind, String)> = Vec::new();
     let mut removed: Vec<usize> = Vec::new();
@@ -238,31 +251,17 @@ pub fn pull_members_up(
             .body
             .iter()
             .any(|statement| binds(statement, name))
-            || assigns_on_receiver(super_def, name)
+            || assigns_on_receiver(&super_model, super_def, name)?
         {
             return Err(format!("{} has a `{name}` already", superclass.name));
         }
         let inherited_above = super_members.contains(&Name::new(name));
-        // a class between the two that has the name would be what the class inherits instead
-        if let Some(between) = ancestors
-            .iter()
-            .take_while(|ancestor| !ancestor.same(superclass))
-            .find(|ancestor| {
-                superclass.is_ancestor_of(db, ancestor)
-                    && ancestor
-                        .def()
-                        .is_some_and(|def| !member_statements(def, name).is_empty())
-            })
-        {
-            return Err(format!(
-                "{} would inherit {}'s `{name}` rather than its own",
-                class.name, between.name
-            ));
-        }
+        bases::refuse_changed_lookups(db, &class, superclass, &below_superclass, name)?;
         for &index in &statements {
             let statement = &def.body[index];
+            let kind = member_kind(&model, statement).ok_or_else(|| unknown_kind(name))?;
             // what it reads off its receiver has to be there in the superclass
-            for (attribute, range) in receiver_attributes(statement) {
+            for (attribute, range) in receiver_attributes(&model, statement)? {
                 if pulled.contains(attribute.as_str()) || super_members.contains(&attribute) {
                     continue;
                 }
@@ -279,23 +278,89 @@ pub fn pull_members_up(
                     if is_member { "; pull it up too" } else { "" }
                 ));
             }
-            for (sibling, _) in class_scope_reads(def, statement) {
-                if !pulled.contains(sibling.as_str()) && !super_members.contains(&sibling) {
-                    return Err(format!(
-                        "`{name}` reads {}'s `{sibling}`, which {} does not have; pull it up too",
-                        class.name, superclass.name
-                    ));
+            for read in class_body_reads(db, &class, def, statement) {
+                match read {
+                    BodyRead::Member {
+                        name: sibling,
+                        index: read_index,
+                    } => {
+                        if !pulled.contains(sibling.as_str()) {
+                            return Err(format!(
+                                "`{name}` reads {}'s `{sibling}`, which it would no longer read \
+                                 in {}'s body; pull it up too",
+                                class.name, superclass.name
+                            ));
+                        }
+                        // an attribute lands before the superclass's methods, and a method
+                        // after them
+                        if is_attribute(statement)
+                            && read_index
+                                .is_some_and(|read_index| !is_attribute(&def.body[read_index]))
+                        {
+                            return Err(format!(
+                                "`{name}` reads `{sibling}`, which {} would define after it, \
+                                 among its methods",
+                                superclass.name
+                            ));
+                        }
+                    }
+                    BodyRead::Outside {
+                        name: read,
+                        resolves_to,
+                    } => {
+                        if superclass.file_id != class.file_id {
+                            // what another module would have to import is asked below
+                            continue;
+                        }
+                        let index = semantic_index(db, class.file);
+                        let super_scope = index
+                            .try_node_scope(NodeWithScopeRef::Class(super_def))
+                            .ok_or_else(|| format!("{} cannot be read", superclass.name))?;
+                        if resolving_scope(index, super_scope, read.as_str()) != resolves_to {
+                            return Err(format!(
+                                "`{name}` reads `{read}`, which is another name where {} is \
+                                 defined",
+                                superclass.name
+                            ));
+                        }
+                        if let Some(scope) = resolves_to
+                            && bound_between(db, &class, scope, read.as_str(), super_def, def)
+                        {
+                            return Err(format!(
+                                "`{name}` reads `{read}`, which is bound after {} is defined",
+                                superclass.name
+                            ));
+                        }
+                    }
                 }
             }
-            if uses_super(statement) && !class.has_only_base(db, superclass) {
+            if let Some(read) =
+                read_rebound_around(db, &class, def, statement, superclass, super_def)
+            {
+                return Err(format!(
+                    "`{name}` reads `{read}`, which is another name where {} is defined",
+                    superclass.name
+                ));
+            }
+            if uses_super(&model, statement) && !class.has_only_base(db, superclass) {
                 return Err(format!(
                     "`{name}` calls `super()`, which would start from {} rather than from {}",
                     superclass.name, class.name
                 ));
             }
+            if member_reads_class_cell(&model, statement) {
+                return Err(class_cell_refusal(name, &superclass.name, &class.name));
+            }
             if superclass.file_id != class.file_id {
-                let parsed = &class.parsed;
-                for dependency in dependencies(db, class.file, parsed, statement, name) {
+                for dependency in checked_dependencies(
+                    db,
+                    class.file,
+                    &class.parsed,
+                    statement,
+                    name,
+                    None,
+                    superclass.file,
+                )? {
                     match dependency {
                         Dependency::Imported { request, .. } => target_imports.push(request),
                         Dependency::Sibling(sibling) => {
@@ -311,31 +376,17 @@ pub fn pull_members_up(
             }
             texts.push((
                 index,
-                member_kind(statement),
+                kind,
                 member_text(
                     source,
                     &def.body,
                     index,
-                    !inherited_above && has_override(statement),
+                    override_marker(db, &class, statement).filter(|_| !inherited_above),
                 ),
             ));
             removed.push(index);
         }
-        if inherited_above {
-            // another subclass of the superclass that inherits it from further up would
-            // inherit this one instead
-            for below in superclass.descendants(db) {
-                if below.same(&class) || class.is_ancestor_of(db, &below) {
-                    continue;
-                }
-                if !below.inherits_own(db, name, superclass) {
-                    return Err(format!(
-                        "{} inherits `{name}` from above {}, and would inherit {}'s instead",
-                        below.name, superclass.name, class.name
-                    ));
-                }
-            }
-        } else {
+        if !inherited_above {
             overriding.push(name.clone());
         }
     }
@@ -377,7 +428,7 @@ pub fn pull_members_up(
             }
             if let Some(below_def) = below.def()
                 && let Some(&first) = member_statements(below_def, name).first()
-                && !has_override(&below_def.body[first])
+                && override_marker(db, &below, &below_def.body[first]).is_none()
             {
                 moved
                     .edits
@@ -474,7 +525,14 @@ pub fn push_members_down(
 
         for &index in &statements {
             let statement = &def.body[index];
-            if uses_super(statement) {
+            if member_reads_class_cell(&model, statement) {
+                return Err(class_cell_refusal(
+                    name,
+                    "the subclass it lands in",
+                    &class.name,
+                ));
+            }
+            if uses_super(&model, statement) {
                 for subclass in &subclasses {
                     if !subclass.has_only_base(db, &class) {
                         return Err(format!(
@@ -485,12 +543,12 @@ pub fn push_members_down(
                 }
             }
             texts.push((
-                member_kind(statement),
+                member_kind(&model, statement).ok_or_else(|| unknown_kind(name))?,
                 member_text(
                     source,
                     &def.body,
                     index,
-                    !inherited_above && has_override(statement),
+                    override_marker(db, &class, statement).filter(|_| !inherited_above),
                 ),
                 vec![index],
             ));
@@ -514,23 +572,39 @@ pub fn push_members_down(
         let mut imports = Vec::new();
         for (kind, text, indices) in &texts {
             let statement = &def.body[indices[0]];
-            let Some((name, _)) = member_of(statement) else {
+            let Some(name) = member_name(statement) else {
                 continue;
             };
             let own = member_statements(sub_def, name.as_str());
             if let Some(&first) = own.first() {
                 // it keeps its own, which overrides nothing once the class no longer has it
                 let own_statement = &sub_def.body[first];
-                if !inherited.contains(name) && has_override(own_statement) {
+                if !inherited.contains(name)
+                    && override_marker(db, subclass, own_statement).is_some()
+                {
                     moved
                         .edits
                         .extend(remove_override(db, subclass, own_statement));
                 }
                 continue;
             }
+            if let Some(read) = read_rebound_around(db, &class, def, statement, subclass, sub_def) {
+                return Err(format!(
+                    "`{name}` reads `{read}`, which is another name where {} is defined",
+                    subclass.name
+                ));
+            }
             copies.push((*kind, reindent(text, &from_indent, &to_indent)));
             if subclass.file_id != class.file_id {
-                for dependency in dependencies(db, class.file, &class.parsed, statement, name) {
+                for dependency in checked_dependencies(
+                    db,
+                    class.file,
+                    &class.parsed,
+                    statement,
+                    name,
+                    None,
+                    subclass.file,
+                )? {
                     match dependency {
                         Dependency::Imported { request, .. } => imports.push(request),
                         Dependency::Sibling(sibling) => {
@@ -579,7 +653,8 @@ pub fn push_members_down(
 /// the class's bases and its members `names`, and makes it the class's one base. the class's
 /// method resolution order is what it was with the new class inserted right after it, so every
 /// member is found where it was found, and `super()` in a moved method starts where it started.
-/// `Err` says why it cannot be extracted.
+/// a class that passes a keyword other than `metaclass` when it is made is refused, since the
+/// keyword would be passed for the new class instead. `Err` says why it cannot be extracted
 pub fn extract_superclass(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -613,6 +688,8 @@ pub fn extract_superclass(
             class.module(db).unwrap_or_default()
         ));
     }
+    let source = source_text(db, class.file.file(db));
+    let source = source.as_str();
     let env = ProgramEnvironment::from_file(class.file);
     let bases = class_bases(db, &env, class.ty);
     // a base that is a special form rather than a class — `Protocol`, `NamedTuple`, `TypedDict`,
@@ -622,15 +699,25 @@ pub fn extract_superclass(
         .arguments
         .as_ref()
         .map_or(0, |arguments| arguments.args.len());
-    if bases.len() != written_bases
-        || bases.iter().any(|base| {
-            instance_member_names(db, &env, *base).contains(&Name::new_static("_member_map_"))
-        })
-    {
+    if bases.len() != written_bases || bases.iter().any(|base| is_enum_class(db, &env, *base)) {
         return Err(format!(
             "{} has a base whose subclasses python treats specially, which {name} would take \
              in its place",
             class.name
+        ));
+    }
+    // a keyword is passed to `__init_subclass__` and the metaclass for the class it is written on
+    // alone, while a metaclass the new class is made by makes the class too
+    if let Some(keyword) = def.arguments.as_ref().and_then(|arguments| {
+        arguments
+            .keywords
+            .iter()
+            .find(|keyword| keyword.arg.as_ref().is_none_or(|arg| arg != "metaclass"))
+    }) {
+        return Err(format!(
+            "{} passes `{}` when it is made, which {name} would be passed instead",
+            class.name,
+            &source[keyword.range()]
         ));
     }
     // what the new class has: everything the class's bases give it, and what moves into it
@@ -639,8 +726,7 @@ pub fn extract_superclass(
         .flat_map(|base| instance_member_names(db, &env, base))
         .collect();
     let extracted: FxHashSet<&str> = names.iter().map(String::as_str).collect();
-    let source = source_text(db, class.file.file(db));
-    let source = source.as_str();
+    let model = SemanticModel::new(db, class.file);
 
     let mut texts: Vec<(usize, MemberKind, String)> = Vec::new();
     let mut removed: Vec<usize> = Vec::new();
@@ -652,12 +738,13 @@ pub fn extract_superclass(
         }
         for &index in &statements {
             let statement = &def.body[index];
-            if !def.decorator_list.is_empty() && member_kind(statement) == MemberKind::Attribute {
+            if !def.decorator_list.is_empty() && is_attribute(statement) {
                 return Err(format!(
-                    "`{member}` is an attribute of a decorated class, which its decorator may                      read as a field"
+                    "`{member}` is an attribute of a decorated class, which its decorator may \
+                     read as a field"
                 ));
             }
-            for (attribute, range) in receiver_attributes(statement) {
+            for (attribute, range) in receiver_attributes(&model, statement)? {
                 if extracted.contains(attribute.as_str()) || inherited.contains(&attribute) {
                     continue;
                 }
@@ -673,19 +760,26 @@ pub fn extract_superclass(
                     if is_member { "; extract it too" } else { "" }
                 ));
             }
-            for (sibling, _) in class_scope_reads(def, statement) {
-                if !extracted.contains(sibling.as_str()) && !inherited.contains(&sibling) {
+            if member_reads_class_cell(&model, statement) {
+                return Err(class_cell_refusal(member, name, &class.name));
+            }
+            // the new class is written right above the class, so a name read from outside the
+            // class body is the same name there
+            for read in class_body_reads(db, &class, def, statement) {
+                if let BodyRead::Member { name: sibling, .. } = read
+                    && !extracted.contains(sibling.as_str())
+                {
                     return Err(format!(
-                        "`{member}` reads {}'s `{sibling}`, which {name} would not have; \
-                         extract it too",
+                        "`{member}` reads {}'s `{sibling}`, which it would no longer read in \
+                         {name}'s body; extract it too",
                         class.name
                     ));
                 }
             }
             texts.push((
                 index,
-                member_kind(statement),
-                member_text(source, &def.body, index, false),
+                member_kind(&model, statement).ok_or_else(|| unknown_kind(member))?,
+                member_text(source, &def.body, index, None),
             ));
             removed.push(index);
         }
@@ -946,26 +1040,6 @@ impl<'db> ClassSite<'db> {
         }
         found
     }
-
-    /// Whether this class, or a class between it and `top`, defines `name` itself, so that it
-    /// does not inherit `name` from `top` or above.
-    fn inherits_own(&self, db: &'db dyn Db, name: &str, top: &ClassSite<'db>) -> bool {
-        if self
-            .def()
-            .is_some_and(|def| !member_statements(def, name).is_empty())
-        {
-            return true;
-        }
-        self.ancestors(db)
-            .iter()
-            .take_while(|ancestor| !ancestor.same(top))
-            .any(|ancestor| {
-                top.is_ancestor_of(db, ancestor)
-                    && ancestor
-                        .def()
-                        .is_some_and(|def| !member_statements(def, name).is_empty())
-            })
-    }
 }
 
 /// every class definition of a module, at any depth
@@ -988,27 +1062,32 @@ fn all_classes(parsed: &ParsedModuleRef) -> Vec<&ast::StmtClassDef> {
     classes.found
 }
 
-/// The member a class body statement binds, and what kind of member it is.
-fn member_of(statement: &Stmt) -> Option<(&Name, MemberKind)> {
+/// the member a class body statement binds
+fn member_name(statement: &Stmt) -> Option<&Name> {
     match statement {
-        Stmt::FunctionDef(function) => Some((&function.name.id, member_kind(statement))),
+        Stmt::FunctionDef(function) => Some(&function.name.id),
         Stmt::Assign(assign) => match assign.targets.as_slice() {
-            [Expr::Name(name)] => Some((&name.id, MemberKind::Attribute)),
+            [Expr::Name(name)] => Some(&name.id),
             _ => None,
         },
         Stmt::AnnAssign(assign) => match assign.target.as_ref() {
-            Expr::Name(name) => Some((&name.id, MemberKind::Attribute)),
+            Expr::Name(name) => Some(&name.id),
             _ => None,
         },
         _ => None,
     }
 }
 
-/// See [`ClassMember::detail`]. Each parameter is written as the source writes it, but on one
-/// line, with the `/` and `*` that separate the kinds.
+/// whether a class body statement binds an attribute rather than a method
+fn is_attribute(statement: &Stmt) -> bool {
+    !matches!(statement, Stmt::FunctionDef(_))
+}
+
+/// see [`ClassMember::detail`]. each parameter is written as the source writes it, but on one
+/// line, with the `/` and `*` that separate the kinds
 fn member_detail(source: &str, statement: &Stmt) -> String {
     let Stmt::FunctionDef(function) = statement else {
-        return member_of(statement).map_or_else(String::new, |(name, _)| name.to_string());
+        return member_name(statement).map_or_else(String::new, ToString::to_string);
     };
     let written = |range: TextRange| {
         source[range]
@@ -1043,23 +1122,25 @@ fn member_detail(source: &str, statement: &Stmt) -> String {
     format!("{}({})", function.name, parts.join(", "))
 }
 
-fn member_kind(statement: &Stmt) -> MemberKind {
+/// what kind of member the class body statement `statement` of `model`'s file binds: a method
+/// is a property where its decorators bind its name to one, and is passed what its decorators
+/// say as the checker resolves them. `None` where the checker has no function for a `def`
+fn member_kind(model: &SemanticModel<'_>, statement: &Stmt) -> Option<MemberKind> {
     let Stmt::FunctionDef(function) = statement else {
-        return MemberKind::Attribute;
+        return Some(MemberKind::Attribute);
     };
-    let is_property = function.decorator_list.iter().any(|decorator| {
-        matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "property")
-            || matches!(&decorator.expression, Expr::Attribute(attribute)
-                if matches!(attribute.attr.as_str(), "setter" | "getter" | "deleter"))
-    });
-    if is_property {
-        return MemberKind::Property;
+    if decorated_function(model.db(), function.definition(model))?.is_property() {
+        return Some(MemberKind::Property);
     }
-    match method_kind(function) {
+    Some(match resolved_method_kind(model, function)? {
         MethodKind::Instance => MemberKind::Method,
         MethodKind::Class => MemberKind::ClassMethod,
         MethodKind::Static => MemberKind::StaticMethod,
-    }
+    })
+}
+
+fn unknown_kind(name: &str) -> String {
+    format!("the checker cannot tell what kind of method `{name}` is")
 }
 
 fn member_name_range(statement: &Stmt) -> Option<TextRange> {
@@ -1072,7 +1153,7 @@ fn member_name_range(statement: &Stmt) -> Option<TextRange> {
 }
 
 fn binds(statement: &Stmt, name: &str) -> bool {
-    member_of(statement).is_some_and(|(bound, _)| bound.as_str() == name)
+    member_name(statement).is_some_and(|bound| bound.as_str() == name)
 }
 
 /// the indices of the statements of `class`'s body that bind `name`
@@ -1095,18 +1176,25 @@ fn refuse_mangled(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether a method of `class` assigns `name` on its receiver: `self.name = ...`.
-fn assigns_on_receiver(class: &ast::StmtClassDef, name: &str) -> bool {
-    class.body.iter().any(|statement| {
-        receiver_attributes(statement)
-            .iter()
-            .any(|(attribute, _)| attribute.as_str() == name)
-            && matches!(statement, Stmt::FunctionDef(_))
-            && assigned_on_receiver(statement, name)
-    })
+/// whether a method of `class`, a class of `model`'s file, assigns `name` on its receiver:
+/// `self.name = ...`
+fn assigns_on_receiver(
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+    name: &str,
+) -> Result<bool, String> {
+    for statement in &class.body {
+        if let Stmt::FunctionDef(function) = statement
+            && let Some(receiver) = receiver_name(model, function)?
+            && assigned_on_receiver(statement, receiver.as_str(), name)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-fn assigned_on_receiver(statement: &Stmt, name: &str) -> bool {
+fn assigned_on_receiver(statement: &Stmt, receiver: &str, name: &str) -> bool {
     struct Stores<'a> {
         receiver: &'a str,
         name: &'a str,
@@ -1124,11 +1212,8 @@ fn assigned_on_receiver(statement: &Stmt, name: &str) -> bool {
             walk_expr(self, expr);
         }
     }
-    let Some(receiver) = receiver_name(statement) else {
-        return false;
-    };
     let mut stores = Stores {
-        receiver: receiver.as_str(),
+        receiver,
         name,
         found: false,
     };
@@ -1136,26 +1221,32 @@ fn assigned_on_receiver(statement: &Stmt, name: &str) -> bool {
     stores.found
 }
 
-/// The name of a method's receiver parameter, `self` or `cls`; `None` for a static method or
-/// what is no method.
-fn receiver_name(statement: &Stmt) -> Option<Name> {
-    let Stmt::FunctionDef(function) = statement else {
-        return None;
-    };
-    if method_kind(function) == MethodKind::Static {
-        return None;
+/// the name of the receiver parameter of `function`, a method of `model`'s file, `self` or
+/// `cls`; `None` for a static method
+fn receiver_name(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Result<Option<Name>, String> {
+    let kind = resolved_method_kind(model, function)
+        .ok_or_else(|| unknown_kind(function.name.as_str()))?;
+    if kind == MethodKind::Static {
+        return Ok(None);
     }
-    function
+    Ok(function
         .parameters
         .posonlyargs
         .iter()
         .chain(&function.parameters.args)
         .next()
-        .map(|parameter| parameter.parameter.name.id.clone())
+        .map(|parameter| parameter.parameter.name.id.clone()))
 }
 
-/// The attributes a method reads or writes on its receiver, `x` of `self.x`, with where.
-fn receiver_attributes(statement: &Stmt) -> Vec<(Name, TextRange)> {
+/// the attributes a method of `model`'s file reads or writes on its receiver, `x` of `self.x`,
+/// with where
+fn receiver_attributes(
+    model: &SemanticModel<'_>,
+    statement: &Stmt,
+) -> Result<Vec<(Name, TextRange)>, String> {
     struct Attributes<'a> {
         receiver: &'a str,
         found: Vec<(Name, TextRange)>,
@@ -1175,94 +1266,279 @@ fn receiver_attributes(statement: &Stmt) -> Vec<(Name, TextRange)> {
             walk_expr(self, expr);
         }
     }
-    let Some(receiver) = receiver_name(statement) else {
-        return Vec::new();
+    let Stmt::FunctionDef(function) = statement else {
+        return Ok(Vec::new());
+    };
+    let Some(receiver) = receiver_name(model, function)? else {
+        return Ok(Vec::new());
     };
     let mut attributes = Attributes {
         receiver: receiver.as_str(),
         found: Vec::new(),
     };
-    if let Stmt::FunctionDef(function) = statement {
-        attributes.visit_body(&function.body);
-    }
-    attributes.found
+    attributes.visit_body(&function.body);
+    Ok(attributes.found)
 }
 
-/// The names an attribute's value reads from the class body it is in: other members bound
-/// before it, like `B` in `B = A + 1`.
-fn class_scope_reads(class: &ast::StmtClassDef, statement: &Stmt) -> Vec<(Name, TextRange)> {
-    struct Loads {
-        found: Vec<(Name, TextRange)>,
+/// a name a member reads where its class body is evaluated: an attribute's annotation and value,
+/// a method's decorators, defaults and annotations, a lambda's defaults and a comprehension's
+/// first iterable
+enum BodyRead {
+    /// a name the class body binds, bound by the member statement `index` where one binds it
+    Member { name: Name, index: Option<usize> },
+    /// a name the class body does not bind, and the scope it resolves to from there; `None` for
+    /// a builtin or a name nothing binds
+    Outside {
+        name: Name,
+        resolves_to: Option<FileScopeId>,
+    },
+}
+
+fn class_body_reads(
+    db: &dyn Db,
+    class: &ClassSite<'_>,
+    def: &ast::StmtClassDef,
+    statement: &Stmt,
+) -> Vec<BodyRead> {
+    #[derive(Default)]
+    struct Loads<'a> {
+        found: Vec<&'a ast::ExprName>,
     }
-    impl<'a> SourceOrderVisitor<'a> for Loads {
+    impl<'a> SourceOrderVisitor<'a> for Loads<'a> {
         fn visit_expr(&mut self, expr: &'a Expr) {
             match expr {
-                Expr::Name(name) if name.ctx.is_load() => {
-                    self.found.push((name.id.clone(), name.range()));
+                Expr::Name(name) if name.ctx.is_load() => self.found.push(name),
+                // what is evaluated later, in a scope of its own, is not read in the class body
+                Expr::Lambda(lambda) => {
+                    if let Some(parameters) = &lambda.parameters {
+                        for default in parameters.iter().filter_map(ast::AnyParameterRef::default) {
+                            self.visit_expr(default);
+                        }
+                    }
                 }
-                // a lambda or comprehension does not see the class body
-                Expr::Lambda(_)
-                | Expr::ListComp(_)
-                | Expr::SetComp(_)
-                | Expr::DictComp(_)
-                | Expr::Generator(_) => {}
+                Expr::ListComp(ast::ExprListComp { generators, .. })
+                | Expr::SetComp(ast::ExprSetComp { generators, .. })
+                | Expr::Generator(ast::ExprGenerator { generators, .. }) => {
+                    if let Some(first) = generators.first() {
+                        self.visit_expr(&first.iter);
+                    }
+                }
+                Expr::DictComp(ast::ExprDictComp { generators, .. }) => {
+                    if let Some(first) = generators.first() {
+                        self.visit_expr(&first.iter);
+                    }
+                }
                 _ => walk_expr(self, expr),
             }
         }
     }
-    let value = match statement {
-        Stmt::Assign(assign) => &*assign.value,
-        Stmt::AnnAssign(assign) => match &assign.value {
-            Some(value) => value,
-            None => return Vec::new(),
-        },
-        _ => return Vec::new(),
-    };
-    let mut loads = Loads { found: Vec::new() };
-    loads.visit_expr(value);
+    let mut loads = Loads::default();
+    match statement {
+        Stmt::Assign(assign) => loads.visit_expr(&assign.value),
+        Stmt::AnnAssign(assign) => {
+            loads.visit_expr(&assign.annotation);
+            if let Some(value) = &assign.value {
+                loads.visit_expr(value);
+            }
+        }
+        Stmt::FunctionDef(function) => {
+            for decorator in &function.decorator_list {
+                loads.visit_expr(&decorator.expression);
+            }
+            for parameter in &function.parameters {
+                if let Some(default) = parameter.default() {
+                    loads.visit_expr(default);
+                }
+                if let Some(annotation) = parameter.annotation() {
+                    loads.visit_expr(annotation);
+                }
+            }
+            if let Some(returns) = &function.returns {
+                loads.visit_expr(returns);
+            }
+        }
+        _ => {}
+    }
+    let index = semantic_index(db, class.file);
+    let body_scope = index.try_node_scope(NodeWithScopeRef::Class(def));
     loads
         .found
         .into_iter()
-        .filter(|(name, _)| {
-            class
-                .body
-                .iter()
-                .any(|other| !std::ptr::eq(other, statement) && binds(other, name))
+        .filter_map(|load| {
+            let scope = index.try_expression_scope_id(&ast::ExprRef::Name(load))?;
+            let resolves_to = resolving_scope(index, scope, load.id.as_str());
+            Some(if resolves_to.is_some() && resolves_to == body_scope {
+                BodyRead::Member {
+                    name: load.id.clone(),
+                    index: member_statements(def, load.id.as_str()).first().copied(),
+                }
+            } else {
+                BodyRead::Outside {
+                    name: load.id.clone(),
+                    resolves_to,
+                }
+            })
         })
         .collect()
 }
 
-/// Whether a method calls `super()`, or reads basedpython's `super`.
-fn uses_super(statement: &Stmt) -> bool {
-    struct Super {
+/// whether `scope` binds `name` after the statement of `first` begins and before the statement of
+/// `second`, where a class body run between them would read another value
+fn bound_between(
+    db: &dyn Db,
+    class: &ClassSite<'_>,
+    scope: FileScopeId,
+    name: &str,
+    first: &ast::StmtClassDef,
+    second: &ast::StmtClassDef,
+) -> bool {
+    let index = semantic_index(db, class.file);
+    let Some(symbol) = index.place_table(scope).symbol_id(name) else {
+        return false;
+    };
+    let in_stub = class.file_id.is_stub(db);
+    let between = TextRange::new(first.start(), second.start().max(first.start()));
+    bindings_of_symbol(db, index, &class.parsed, scope, symbol, in_stub)
+        .into_iter()
+        .any(|definition| between.contains_range(definition.focus_range(db, &class.parsed).range()))
+}
+
+/// whether a member of `model`'s file reads the builtin `super`, under whatever name it is bound
+/// to, or basedpython's `super` keyword: either names the class the member is written in, the
+/// one by its `__class__` cell, the other by the class it is passed
+fn uses_super(model: &SemanticModel<'_>, statement: &Stmt) -> bool {
+    struct Super<'m, 'db> {
+        model: &'m SemanticModel<'db>,
         found: bool,
     }
-    impl<'a> SourceOrderVisitor<'a> for Super {
+    impl<'a> SourceOrderVisitor<'a> for Super<'_, '_> {
         fn visit_expr(&mut self, expr: &'a Expr) {
-            if matches!(expr, Expr::Name(name) if name.id.as_str() == "super") {
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+                && name
+                    .inferred_type(self.model)
+                    .is_some_and(|ty| is_super(self.model.db(), ty))
+            {
                 self.found = true;
             }
             walk_expr(self, expr);
         }
     }
-    let mut uses = Super { found: false };
+    let mut uses = Super {
+        model,
+        found: false,
+    };
     uses.visit_stmt(statement);
     uses.found
 }
 
-/// The `override` a method is marked with: basedpython's modifier, or `@override`.
-fn override_marker(statement: &Stmt) -> Option<&ast::Decorator> {
-    let Stmt::FunctionDef(function) = statement else {
-        return None;
-    };
-    function.decorator_list.iter().find(|decorator| {
-        matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "override")
-            || matches!(&decorator.expression, Expr::Attribute(attribute) if attribute.attr.as_str() == "override")
+/// a name `statement`, a member of the class `def`, reads from around the class that names
+/// something else around `target`'s class `target_def`, where the member would read it: a scope
+/// around one binds it and the same scope is not around the other, or the class body of
+/// `target_def` binds what the class body of `def` reads from around it. a name both read from
+/// their module's top level, or that no scope binds, is for [`checked_dependencies`] to compare
+/// between modules
+fn read_rebound_around(
+    db: &dyn Db,
+    class: &ClassSite<'_>,
+    def: &ast::StmtClassDef,
+    statement: &Stmt,
+    target: &ClassSite<'_>,
+    target_def: &ast::StmtClassDef,
+) -> Option<Name> {
+    let index = semantic_index(db, class.file);
+    let target_index = semantic_index(db, target.file);
+    let body = index.try_node_scope(NodeWithScopeRef::Class(def))?;
+    let target_body = target_index.try_node_scope(NodeWithScopeRef::Class(target_def))?;
+    let around: FxHashSet<FileScopeId> = index
+        .ancestor_scopes(body)
+        .map(|(scope, _)| scope)
+        .filter(|scope| *scope != body)
+        .collect();
+    let in_module = |scope: Option<FileScopeId>| scope.is_none_or(FileScopeId::is_global);
+    loads(statement).into_iter().find_map(|load| {
+        let scope = index.try_expression_scope_id(&ast::ExprRef::Name(load))?;
+        let name = load.id.as_str();
+        let seen: Vec<FileScopeId> = index
+            .visible_ancestor_scopes(scope)
+            .map(|(scope, _)| scope)
+            .collect();
+        let resolves_to = resolving_scope_among(index, seen.iter().copied(), name);
+        // what the member binds itself moves with it, and what the class body binds is a sibling
+        if resolves_to.is_some_and(|scope| !around.contains(&scope)) {
+            return None;
+        }
+        // what a method reads skips its class body, and what the class body evaluates does not
+        let sees_body = seen.contains(&body);
+        let target_resolves_to = resolving_scope_among(
+            target_index,
+            target_index
+                .visible_ancestor_scopes(target_body)
+                .map(|(scope, _)| scope)
+                .skip(usize::from(!sees_body)),
+            name,
+        );
+        let rebound = if class.file_id == target.file_id {
+            resolves_to != target_resolves_to
+        } else {
+            !in_module(resolves_to) || !in_module(target_resolves_to)
+        };
+        rebound.then(|| load.id.clone())
     })
 }
 
-fn has_override(statement: &Stmt) -> bool {
-    override_marker(statement).is_some()
+/// whether a member of `model`'s file reads the `__class__` cell python gives a method, which is
+/// the class the method is written in, wherever it is called from
+fn member_reads_class_cell(model: &SemanticModel<'_>, statement: &Stmt) -> bool {
+    struct ClassCell<'m, 'db> {
+        model: &'m SemanticModel<'db>,
+        found: bool,
+    }
+    impl<'a> SourceOrderVisitor<'a> for ClassCell<'_, '_> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+                && reads_class_cell(self.model, name)
+            {
+                self.found = true;
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut reads = ClassCell {
+        model,
+        found: false,
+    };
+    reads.visit_stmt(statement);
+    reads.found
+}
+
+fn class_cell_refusal(member: &str, to: &str, from: &str) -> String {
+    format!("`{member}` reads `__class__`, which would be {to} rather than {from}")
+}
+
+/// the `override` a method of `class` is marked with: basedpython's modifier, or a decorator
+/// that is `typing.override`
+fn override_marker<'a>(
+    db: &dyn Db,
+    class: &ClassSite<'_>,
+    statement: &'a Stmt,
+) -> Option<&'a ast::Decorator> {
+    let Stmt::FunctionDef(function) = statement else {
+        return None;
+    };
+    let model = SemanticModel::new(db, class.file);
+    function
+        .decorator_list
+        .iter()
+        .find(|decorator| match &decorator.expression {
+            // the modifier is parsed into a decorator named for it, which no source spells, so
+            // it is told apart from a real name by its context
+            Expr::Name(name) if name.ctx == ExprContext::Invalid => name.id.as_str() == "override",
+            expression => expression
+                .inferred_type(&model)
+                .is_some_and(|ty| is_override_function(db, ty)),
+        })
 }
 
 /// the range that takes `decorator` out: an `@override` line with its line break, or the
@@ -1285,12 +1561,16 @@ fn override_range(source: &str, decorator: &ast::Decorator) -> TextRange {
     }
 }
 
-/// The text of the body statement `index`, as [`cut_range`] cuts it, without its `override` when
-/// `strip_override`.
-fn member_text(source: &str, body: &[Stmt], index: usize, strip_override: bool) -> String {
-    let statement = &body[index];
+/// the text of the body statement `index`, as [`cut_range`] cuts it, without the `override`
+/// `strip_override` when there is one
+fn member_text(
+    source: &str,
+    body: &[Stmt],
+    index: usize,
+    strip_override: Option<&ast::Decorator>,
+) -> String {
     let cut = cut_range(source, body, index);
-    if strip_override && let Some(decorator) = override_marker(statement) {
+    if let Some(decorator) = strip_override {
         let local = override_range(source, decorator) - cut.start;
         let mut text = cut.text;
         text.replace_range(local.to_std_range(), "");
@@ -1420,6 +1700,11 @@ fn insert_members(
     members: &[(MemberKind, String)],
     line_ending: &str,
 ) -> Vec<FileEdit> {
+    // a pull of bases alone moves no member, and the superclass's body stays as it is: its
+    // placeholder too, which replaced with nothing would leave the class without a body
+    if members.is_empty() {
+        return Vec::new();
+    }
     let attributes: Vec<&str> = members
         .iter()
         .filter(|(kind, _)| *kind == MemberKind::Attribute)
@@ -1596,7 +1881,7 @@ fn add_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<Fil
 
 /// the edit taking the `override` off `statement`, a method of `class`
 fn remove_override(db: &dyn Db, class: &ClassSite<'_>, statement: &Stmt) -> Vec<FileEdit> {
-    let Some(decorator) = override_marker(statement) else {
+    let Some(decorator) = override_marker(db, class, statement) else {
         return Vec::new();
     };
     let source = source_text(db, class.file_id);
@@ -1674,13 +1959,19 @@ class GrandChild(Child):
 
     impl CursorTest {
         fn pull_up(&self, names: &[&str], target: &str) -> String {
+            self.pull_up_with_bases(names, &[], target)
+        }
+
+        fn pull_up_with_bases(&self, names: &[&str], bases: &[&str], target: &str) -> String {
             let names: Vec<String> = names.iter().map(ToString::to_string).collect();
+            let bases: Vec<String> = bases.iter().map(ToString::to_string).collect();
             let moved = salsa::attach(&self.db, || {
                 pull_members_up(
                     &self.db,
                     self.program_file(self.cursor.file),
                     self.cursor.offset,
                     &names,
+                    &bases,
                     target,
                 )
             });
@@ -1747,7 +2038,7 @@ class GrandChild(Child):
         ");
     }
 
-    /// A method reads as its parameters, on one line whatever lines they are written on.
+    /// a method reads as its parameters, on one line whatever lines they are written on
     #[test]
     fn a_member_reads_as_its_name_and_parameters() {
         let test = CursorTestBuilder::default()
@@ -1783,8 +2074,8 @@ class GrandChild(Child):
             .build()
     }
 
-    /// A base the class writes is pulled up into the superclass's bases, after its own, where
-    /// every class below the superclass finds what it found before.
+    /// a base the class writes is pulled up into the superclass's bases, after its own, where
+    /// every class below the superclass finds what it found before
     #[test]
     fn a_base_is_pulled_up_into_the_superclass() {
         let test = mixins(
@@ -1809,7 +2100,7 @@ class <CURSOR>Child(Base, Mixin, metaclass=type):
         superclasses: main.Base, main.Mixin
         subclasses:
         ");
-        assert_snapshot!(test.pull_up(&["Mixin", "own"], "main.Base"), @"
+        assert_snapshot!(test.pull_up_with_bases(&["own"], &["Mixin"], "main.Base"), @"
         --- /main.py
         class Mixin:
             def mix(self):
@@ -1829,7 +2120,43 @@ class <CURSOR>Child(Base, Mixin, metaclass=type):
         ");
     }
 
-    /// Whatever a class below the superclass finds, it has to find in the same class afterwards.
+    /// bases pulled up on their own move no member, and leave a superclass whose body is only
+    /// `pass` as it is
+    #[test]
+    fn a_base_alone_is_pulled_up_into_a_superclass_with_an_empty_body() {
+        let test = mixins(
+            r#"class Mixin:
+    def mix(self):
+        return 1
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base, Mixin):
+    def own(self):
+        return self.mix()
+"#,
+        );
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Mixin"], "main.Base"), @"
+        --- /main.py
+        class Mixin:
+            def mix(self):
+                return 1
+
+
+        class Base(Mixin):
+            pass
+
+
+        class Child(Base):
+            def own(self):
+                return self.mix()
+        ");
+    }
+
+    /// whatever a class below the superclass finds, it has to find in the same class afterwards
     #[test]
     fn a_base_that_changes_what_a_class_finds_is_refused() {
         let test = mixins(
@@ -1847,7 +2174,7 @@ class <CURSOR>Child(Mixin, Base):
     pass
 "#,
         );
-        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: Child would find `keep` in another class than it does");
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Mixin"], "main.Base"), @"refused: Child would find `keep` in another class than it does");
 
         let test = mixins(
             r#"class Mixin:
@@ -1872,11 +2199,11 @@ class Sibling(Base, Other):
     pass
 "#,
         );
-        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: Sibling would find `shared` in another class than it does");
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Mixin"], "main.Base"), @"refused: Sibling would find `shared` in another class than it does");
     }
 
-    /// The superclass names the base where it is defined, so the name has to be bound there, and
-    /// the class cannot lose the base it reaches the superclass through.
+    /// the superclass names the base where it is defined, so the name has to be bound there, and
+    /// the class cannot lose the base it reaches the superclass through
     #[test]
     fn a_base_the_superclass_cannot_take_is_refused() {
         let test = mixins(
@@ -1892,7 +2219,7 @@ class <CURSOR>Child(Base, Mixin):
     pass
 "#,
         );
-        assert_snapshot!(test.pull_up(&["Mixin"], "main.Base"), @"refused: `Mixin` is not bound above Base, where it would be written");
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Mixin"], "main.Base"), @"refused: `Mixin` is not bound above Base, where it would be written");
 
         let test = mixins(
             r#"class Base:
@@ -1907,7 +2234,7 @@ class <CURSOR>Child(Middle):
     pass
 "#,
         );
-        assert_snapshot!(test.pull_up(&["Middle"], "main.Base"), @"refused: Child inherits Base through `Middle`, so it cannot lose it");
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Middle"], "main.Base"), @"refused: Child inherits Base through `Middle`, so it cannot lose it");
     }
 
     #[test]
@@ -2251,5 +2578,541 @@ class <CURSOR>Leaf(Mid):
             )
             .build();
         assert_snapshot!(test.extract(&["x"], "Base"), @"refused: Point has a base whose subclasses python treats specially, which Base would take in its place");
+    }
+
+    /// a default, a decorator and a comprehension's first iterable are evaluated in the class
+    /// body, so what they read there has to move with the member
+    #[test]
+    fn a_member_whose_class_body_reads_stay_behind_is_refused() {
+        let test = mixins(
+            r#"class Base:
+    pass
+
+
+class <CURSOR>Child(Base):
+    LIMIT = 3
+    RAW = ["a", "b"]
+
+    def tag(function):
+        return function
+
+    def clamp(self, x, limit=LIMIT):
+        return min(x, limit)
+
+    @tag
+    def run(self):
+        return 1
+
+    NAMES = [name.upper() for name in RAW]
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["clamp"], "main.Base"), @"refused: `clamp` reads Child's `LIMIT`, which it would no longer read in Base's body; pull it up too");
+        assert_snapshot!(test.pull_up(&["run"], "main.Base"), @"refused: `run` reads Child's `tag`, which it would no longer read in Base's body; pull it up too");
+        assert_snapshot!(test.pull_up(&["NAMES"], "main.Base"), @"refused: `NAMES` reads Child's `RAW`, which it would no longer read in Base's body; pull it up too");
+        assert_snapshot!(test.extract(&["clamp"], "Shape"), @"refused: `clamp` reads Child's `LIMIT`, which it would no longer read in Shape's body; extract it too");
+    }
+
+    /// `Base`'s own `LIMIT` is not what `Child`'s body reads: a class body does not see another
+    /// class's members, and `SIZE` would read `Base.LIMIT` once it is written in `Base`
+    #[test]
+    fn a_member_that_reads_a_sibling_the_superclass_also_has_is_refused() {
+        let test = mixins(
+            r#"class Base:
+    LIMIT = 1
+
+
+class <CURSOR>Child(Base):
+    LIMIT = 3
+    SIZE = LIMIT * 2
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["SIZE"], "main.Base"), @"refused: `SIZE` reads Child's `LIMIT`, which it would no longer read in Base's body; pull it up too");
+    }
+
+    /// `LIMIT` is bound after `Base`, so `Base`'s body would read it before it is bound
+    #[test]
+    fn a_member_that_reads_a_name_bound_between_the_classes_is_refused() {
+        let test = mixins(
+            r#"class Base:
+    pass
+
+
+LIMIT = 3
+
+
+class <CURSOR>Child(Base):
+    SIZE = LIMIT * 2
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["SIZE"], "main.Base"), @"refused: `SIZE` reads `LIMIT`, which is bound after Base is defined");
+    }
+
+    /// `Other` finds `describe` in `Mixin`, after `Shape` in its method resolution order, and
+    /// would find the one pulled into `Shape` instead
+    #[test]
+    fn a_pull_up_another_subclass_would_find_before_its_mixin_is_refused() {
+        let test = mixins(
+            r#"class Shape:
+    pass
+
+
+class Mixin:
+    def describe(self) -> str:
+        return "mixin"
+
+
+class <CURSOR>Square(Shape):
+    def describe(self) -> str:
+        return "square"
+
+
+class Other(Shape, Mixin):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["describe"], "main.Shape"), @"refused: Other would find `describe` in Shape rather than in Mixin");
+    }
+
+    /// `Square` finds `Mixin`'s `describe` before `Shape`'s, so it would lose its own
+    #[test]
+    fn a_pull_up_past_a_mixin_before_the_superclass_is_refused() {
+        let test = mixins(
+            r#"class Shape:
+    pass
+
+
+class Mixin:
+    def describe(self) -> str:
+        return "mixin"
+
+
+class <CURSOR>Square(Mixin, Shape):
+    def describe(self) -> str:
+        return "square"
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["describe"], "main.Shape"), @"refused: Square would inherit Mixin's `describe` rather than its own");
+    }
+
+    /// `Both` finds `Square`'s `describe` before `Other`'s, and would find `Other`'s once
+    /// `Square` loses it to `Shape`, which comes after `Other`
+    #[test]
+    fn a_pull_up_a_class_below_would_find_elsewhere_is_refused() {
+        let test = mixins(
+            r#"class Shape:
+    pass
+
+
+class <CURSOR>Square(Shape):
+    def describe(self) -> str:
+        return "square"
+
+
+class Other(Shape):
+    def describe(self) -> str:
+        return "other"
+
+
+class Both(Square, Other):
+    pass
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["describe"], "main.Shape"), @"refused: Both would find `describe` in Other rather than in Square");
+    }
+
+    /// a decorator the program itself calls `override` is no `typing.override`, and stays
+    #[test]
+    fn a_decorator_named_override_that_is_not_typing_s_stays() {
+        let test = mixins(
+            r#"def override(function):
+    return function
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base):
+    @override
+    def describe(self) -> str:
+        return "child"
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["describe"], "main.Base"), @r#"
+        --- /main.py
+        def override(function):
+            return function
+
+
+        class Base:
+            @override
+            def describe(self) -> str:
+                return "child"
+
+
+        class Child(Base):
+            pass
+        "#);
+    }
+
+    /// a member and a base written with one name are told apart by what the pull is asked to
+    /// move: here the base, while the class keeps its member
+    #[test]
+    fn a_base_is_pulled_up_apart_from_a_member_of_its_name() {
+        let test = mixins(
+            r#"class Mixin:
+    pass
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base, Mixin):
+    Mixin = 1
+"#,
+        );
+        assert_snapshot!(test.pull_up_with_bases(&[], &["Mixin"], "main.Base"), @"
+        --- /main.py
+        class Mixin:
+            pass
+
+
+        class Base(Mixin):
+            pass
+
+
+        class Child(Base):
+            Mixin = 1
+        ");
+    }
+
+    /// `Root` is `object`, which every class inherits already, so it is no base to pull up
+    #[test]
+    fn object_is_no_movable_base_whatever_it_is_called() {
+        let test = mixins(
+            r#"Root = object
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base, Root):
+    pass
+"#,
+        );
+        assert_snapshot!(test.movable(), @"
+        main.Child
+        members: Base (Base)
+        superclasses: main.Base
+        subclasses:
+        ");
+    }
+
+    /// a class keyword is passed to `__init_subclass__` for the class it is written on alone,
+    /// so it cannot move to the new class
+    #[test]
+    fn extracting_from_a_class_with_a_keyword_is_refused() {
+        let test = mixins(
+            r#"class Base:
+    def __init_subclass__(cls, flag: bool = False, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+
+class <CURSOR>Child(Base, flag=True):
+    x = 1
+"#,
+        );
+        assert_snapshot!(test.extract(&["x"], "Shape"), @"refused: Child passes `flag=True` when it is made, which Shape would be passed instead");
+    }
+
+    /// a metaclass makes the new class too, and the class still gets it from the new class
+    #[test]
+    fn extracting_from_a_class_with_a_metaclass_moves_it() {
+        let test = mixins(
+            r#"from abc import ABCMeta
+
+
+class <CURSOR>Child(metaclass=ABCMeta):
+    x = 1
+"#,
+        );
+        assert_snapshot!(test.extract(&["x"], "Shape"), @"
+        --- /main.py
+        from abc import ABCMeta
+
+
+        class Shape(metaclass=ABCMeta):
+            x = 1
+
+
+        class Child(Shape):
+            pass
+        ");
+    }
+
+    #[test]
+    fn extracting_an_attribute_of_a_decorated_class_is_refused() {
+        let test = mixins(
+            r#"from dataclasses import dataclass
+
+
+@dataclass
+class <CURSOR>Point:
+    x: int
+"#,
+        );
+        assert_snapshot!(test.extract(&["x"], "Base"), @"refused: `x` is an attribute of a decorated class, which its decorator may read as a field");
+    }
+
+    fn two_modules(base: &str, child: &str) -> CursorTest {
+        CursorTestBuilder::default()
+            .source("pkg/__init__.py", "")
+            .source("pkg/base.py", base)
+            .source("pkg/child.py", child)
+            .build()
+    }
+
+    /// pulled into another module, a member reads what it read where it was written, or is
+    /// refused as a function moved there is
+    #[test]
+    fn a_member_pulled_into_another_module_is_checked_as_a_moved_function_is() {
+        let base = "class Base:\n    pass\n";
+        let test = two_modules(
+            base,
+            "from pkg.base import Base\n\n\nclass <CURSOR>Child(Base):\n    def origin(self):\n        return __name__\n",
+        );
+        assert_snapshot!(test.pull_up(&["origin"], "pkg.base.Base"), @"refused: `origin` reads `__name__`, which is pkg.child's own and would be pkg.base's once moved");
+        let test = two_modules(
+            base,
+            "from pkg.base import Base\n\nCOUNT = 0\n\n\nclass <CURSOR>Child(Base):\n    def bump(self):\n        global COUNT\n        COUNT += 1\n",
+        );
+        assert_snapshot!(test.pull_up(&["bump"], "pkg.base.Base"), @"refused: `bump` assigns pkg.child's `COUNT` through `global`, which would name pkg.base's once moved");
+        let test = two_modules(
+            "len = 3\n\n\nclass Base:\n    pass\n",
+            "from pkg.base import Base\n\n\nclass <CURSOR>Child(Base):\n    def size(self, x):\n        return len(x)\n",
+        );
+        assert_snapshot!(test.pull_up(&["size"], "pkg.base.Base"), @"refused: `size` uses the builtin `len`, which pkg.base binds to something else");
+        let test = two_modules(
+            base,
+            "import os\nfrom pkg.base import Base\n\nimport os.path as os\n\n\nclass <CURSOR>Child(Base):\n    def sep(self):\n        return os.sep\n",
+        );
+        assert_snapshot!(test.pull_up(&["sep"], "pkg.base.Base"), @"refused: `sep` uses `os`, which pkg.child binds more than once, and an import of it would keep only the value it had when imported");
+    }
+
+    /// pushed into another module, a member reads what it read where it was written: a name
+    /// private to its module is not imported into the other
+    #[test]
+    fn a_member_pushed_into_another_module_is_checked_as_a_moved_function_is() {
+        let test = two_modules(
+            "_RATE = 2\n\n\nclass <CURSOR>Base:\n    def rate(self):\n        return _RATE\n",
+            "from pkg.base import Base\n\n\nclass Child(Base):\n    pass\n",
+        );
+        assert_snapshot!(test.push_down(&["rate"]), @"refused: `rate` uses `_RATE`, which is private to pkg.base; make it public, or move it too");
+    }
+
+    /// what a decorator makes of a method is what the checker resolves it to, under whatever
+    /// name it is bound to
+    #[test]
+    fn a_member_s_kind_is_what_its_decorators_resolve_to() {
+        let test = mixins(
+            r#"prop = property
+static = staticmethod
+
+
+class Base:
+    pass
+
+
+class <CURSOR>Child(Base):
+    @prop
+    def size(self):
+        return 1
+
+    @static
+    def make(other):
+        return other.missing
+"#,
+        );
+        assert_snapshot!(test.movable(), @"
+        main.Child
+        members: size(self) (Property), make(other) (StaticMethod), Base (Base)
+        superclasses: main.Base
+        subclasses:
+        ");
+        // a static method is passed no receiver, so `other.missing` is no attribute it needs
+        assert_snapshot!(test.pull_up(&["make"], "main.Base"), @"
+        --- /main.py
+        prop = property
+        static = staticmethod
+
+
+        class Base:
+            @static
+            def make(other):
+                return other.missing
+
+
+        class Child(Base):
+            @prop
+            def size(self):
+                return 1
+        ");
+    }
+
+    /// `super` read under another name still names the class the method is written in, and a
+    /// parameter called `super` does not
+    #[test]
+    fn a_use_of_super_is_the_builtin_s_under_whatever_name() {
+        let test = mixins(
+            r#"sup = super
+
+
+class Root:
+    def describe(self):
+        return "root"
+
+
+class Base(Root):
+    pass
+
+
+class Mixin:
+    pass
+
+
+class <CURSOR>Child(Base, Mixin):
+    def describe(self):
+        return sup(Child, self).describe()
+
+    def tag(self, super):
+        return super.tag
+"#,
+        );
+        assert_snapshot!(test.pull_up(&["describe"], "main.Base"), @"refused: `describe` calls `super()`, which would start from Base rather than from Child");
+        assert_snapshot!(test.pull_up(&["tag"], "main.Base"), @r#"
+        --- /main.py
+        sup = super
+
+
+        class Root:
+            def describe(self):
+                return "root"
+
+
+        class Base(Root):
+            def tag(self, super):
+                return super.tag
+
+
+        class Mixin:
+            pass
+
+
+        class Child(Base, Mixin):
+            def describe(self):
+                return sup(Child, self).describe()
+        "#);
+    }
+
+    /// a name a pushed member reads from around its class has to be the same name around the
+    /// subclass: a function the subclass is defined in, or the subclass's body for what the class
+    /// body evaluates, may bind it to something else
+    #[test]
+    fn a_push_down_into_a_scope_that_binds_a_name_it_reads_is_refused() {
+        let test = mixins(
+            "def helper():\n    return 1\n\n\nclass <CURSOR>Base:\n    def run(self):\n        return helper()\n\n\ndef make():\n    def helper():\n        return 2\n\n    class Child(Base):\n        pass\n\n    return Child\n",
+        );
+        assert_snapshot!(test.push_down(&["run"]), @"refused: `run` reads `helper`, which is another name where Child is defined");
+        let test = mixins(
+            "def helper():\n    return 1\n\n\nclass <CURSOR>Base:\n    def run(self, value=helper()):\n        return value\n\n\nclass Child(Base):\n    helper = None\n",
+        );
+        assert_snapshot!(test.push_down(&["run"]), @"refused: `run` reads `helper`, which is another name where Child is defined");
+        let test = mixins(
+            "def make():\n    def helper():\n        return 2\n\n    class <CURSOR>Base:\n        def run(self):\n            return helper()\n\n    class Child(Base):\n        pass\n\n    return Child\n",
+        );
+        assert_snapshot!(test.push_down(&["run"]), @"
+        --- /main.py
+        def make():
+            def helper():
+                return 2
+
+            class Base:
+                pass
+
+            class Child(Base):
+                def run(self):
+                    return helper()
+
+            return Child
+        ");
+    }
+
+    /// a name a pulled member reads from around its class has to be the same name around the
+    /// superclass, as it does for what the class body evaluates
+    #[test]
+    fn a_pull_up_out_of_a_scope_that_binds_a_name_it_reads_is_refused() {
+        let test = mixins(
+            "class Base:\n    pass\n\n\ndef make():\n    def helper():\n        return 2\n\n    class <CURSOR>Child(Base):\n        def run(self):\n            return helper()\n\n    return Child\n",
+        );
+        assert_snapshot!(test.pull_up(&["run"], "main.Base"), @"refused: `run` reads `helper`, which is another name where Base is defined");
+    }
+
+    /// `__class__` in a method is the class the method is written in, so it names another class
+    /// wherever the method moves to, and a `__class__` the method binds itself does not
+    #[test]
+    fn a_method_reading_its_class_cell_stays_in_its_class() {
+        let test = mixins(
+            "class Base:\n    def make(self):\n        return __class__()\n\n\nclass <CURSOR>Child(Base):\n    def copy(self):\n        return __class__()\n\n    def local(self):\n        __class__ = int\n        return __class__()\n",
+        );
+        assert_snapshot!(test.pull_up(&["copy"], "main.Base"), @"refused: `copy` reads `__class__`, which would be Base rather than Child");
+        assert_snapshot!(test.extract(&["copy"], "Middle"), @"refused: `copy` reads `__class__`, which would be Middle rather than Child");
+        assert_snapshot!(test.pull_up(&["local"], "main.Base"), @"
+        --- /main.py
+        class Base:
+            def make(self):
+                return __class__()
+
+            def local(self):
+                __class__ = int
+                return __class__()
+
+
+        class Child(Base):
+            def copy(self):
+                return __class__()
+        ");
+        let test = mixins(
+            "class <CURSOR>Base:\n    def make(self):\n        return __class__()\n\n\nclass Child(Base):\n    pass\n",
+        );
+        assert_snapshot!(test.push_down(&["make"]), @"refused: `make` reads `__class__`, which would be the subclass it lands in rather than Base");
+    }
+
+    /// an enum is a base python treats specially, whatever it holds, and a class that holds what
+    /// an enum does is not one
+    #[test]
+    fn an_enum_base_is_told_by_its_class() {
+        let test = mixins(
+            "from enum import Enum\n\n\nclass Flavor(Enum):\n    pass\n\n\nclass <CURSOR>Child(Flavor):\n    def describe(self):\n        return 1\n",
+        );
+        assert_snapshot!(test.extract(&["describe"], "Base"), @"refused: Child has a base whose subclasses python treats specially, which Base would take in its place");
+        let test = mixins(
+            "class Registry:\n    _member_map_ = {}\n\n\nclass <CURSOR>Child(Registry):\n    def describe(self):\n        return 1\n",
+        );
+        assert_snapshot!(test.extract(&["describe"], "Base"), @"
+        --- /main.py
+        class Registry:
+            _member_map_ = {}
+
+
+        class Base(Registry):
+            def describe(self):
+                return 1
+
+
+        class Child(Base):
+            pass
+        ");
     }
 }

@@ -1,4 +1,4 @@
-//! Moving a module's top-level function, class or variable to another module.
+//! moving a module's top-level function, class or variable to another module
 //!
 //! ```py
 //! # shapes/util.py               # shapes/geometry.py
@@ -10,16 +10,16 @@
 //!     return math.pi * r * RATE      return math.pi * r * RATE
 //! ```
 //!
-//! The definition is cut from its module, with its decorators and the comments directly above
-//! it, and appended to the target. What it reads from its old module comes with it: an import it
+//! the definition is cut from its module, with its decorators and the comments directly above
+//! it, and appended to the target. what it reads from its old module comes with it: an import it
 //! uses is written in the target too (and dropped from the old module when nothing else there
 //! uses it and no other module imports it from there), and another of the old module's names is
-//! imported from there. Every reference to it in the project follows it:
+//! imported from there. every reference to it in the project follows it:
 //! `from shapes.util import area` imports it from `shapes.geometry`, `shapes.util.area` reads
 //! `shapes.geometry.area`, a module that reached it through a star import of the old module
-//! imports it by name, and the old module imports it back when it still uses it.
+//! imports it by name, and the old module imports it back when it still uses it
 //!
-//! The move is refused, with the reason, when the result would not run as the original did:
+//! the move is refused, with the reason, when the result would not run as the original did:
 //! when the definition reads a name private to its module, which nothing outside the module is
 //! meant to import; when it reads a name its module binds more than once, which an import would
 //! see only as it was when imported; when it assigns a name of its module through `global`, which
@@ -27,7 +27,7 @@
 //! or `__file__`, which would be the target's; when it reads a builtin the target binds to
 //! something else; when the two modules would end up importing each other, which python cannot
 //! load; when the target already binds the name; when the name is bound more than once in its
-//! module; and when the modules are not the same kind of file.
+//! module; and when the modules are not the same kind of file
 
 use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
@@ -49,6 +49,9 @@ use ty_python_core::scope::FileScopeId;
 use ty_python_core::{SemanticIndex, semantic_index};
 use ty_python_semantic::importer::{ImportAction, ImportRequest, MembersInScope};
 use ty_python_semantic::types::Type;
+use ty_python_semantic::types::ide_support::{
+    is_module_implicit_global, reads_module_implicit_global,
+};
 use ty_python_semantic::{HasType, SemanticModel};
 
 use super::flow::{bindings_of_symbol, resolving_scope};
@@ -57,7 +60,7 @@ use crate::goto::find_goto_target;
 use crate::import_order;
 use crate::references::{ReferencesMode, references};
 
-/// What a top-level definition that can be moved is.
+/// what a top-level definition that can be moved is
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MovableKind {
     Function,
@@ -65,25 +68,25 @@ pub enum MovableKind {
     Variable,
 }
 
-/// A top-level definition [`move_symbol`] can move.
+/// a top-level definition [`move_symbol`] can move
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MovableSymbol {
-    /// The file it is defined in, which need not be the one asked about.
+    /// the file it is defined in, which need not be the one asked about
     pub file: File,
     pub name: String,
     pub kind: MovableKind,
-    /// The range of its name where it is defined.
+    /// the range of its name where it is defined
     pub name_range: TextRange,
-    /// The qualified name of the module it is defined in.
+    /// the qualified name of the module it is defined in
     pub module: String,
 }
 
-/// What [`move_symbol`] does to the project.
+/// what [`move_symbol`] does to the project
 #[derive(Debug, Default)]
 pub struct SymbolMove {
     pub edits: Vec<FileEdit>,
-    /// References the move leaves as they are, which may no longer reach the definition once it
-    /// has moved, each described with where it is.
+    /// references the move leaves as they are, which may no longer reach the definition once it
+    /// has moved, each described with where it is
     pub warnings: Vec<String>,
 }
 
@@ -108,8 +111,8 @@ pub fn movable_symbol(
     })
 }
 
-/// Moves the top-level definition named at `offset` to the end of the module `target`, and
-/// updates the project to find it there. `Err` says why it cannot be moved.
+/// moves the top-level definition named at `offset` to the end of the module `target`, and
+/// updates the project to find it there. `Err` says why it cannot be moved
 pub fn move_symbol(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -176,90 +179,30 @@ pub fn move_symbol(
     }
 
     let target_parsed = parsed_module(db, target_file.python_file(db)).load(db);
-    let target_index = semantic_index(db, target_file);
-    let target_globals = target_index.place_table(FileScopeId::global());
-    let target_binds = |name: &str| {
-        target_globals
-            .symbol_id(name)
-            .is_some_and(|symbol| target_globals.symbol(symbol).is_bound())
-    };
-    if target_binds(name) {
+    if module_binds(db, target_file, name) {
         return Err(format!("{target_module} has a `{name}` already"));
     }
 
-    // a `global` in the definition names the module it is in, which the move changes
-    if let Some(written) = global_written_by(db, index, declaration.statement.range()) {
-        return Err(format!(
-            "`{name}` assigns {source_module}'s `{written}` through `global`, which would name \
-             {target_module}'s once moved"
-        ));
-    }
-
-    // What the definition reads from its module comes with it.
-    let dependencies = dependencies(db, source, &parsed, declaration.statement, name);
+    // what the definition reads from its module comes with it
+    let dependencies = checked_dependencies(
+        db,
+        source,
+        &parsed,
+        declaration.statement,
+        name,
+        Some(name),
+        target_file,
+    )?;
     let mut target_imports: Vec<OwnedRequest> = Vec::new();
     let mut from_source: Vec<String> = Vec::new();
-    for builtin in builtins_read(db, source, declaration.statement) {
-        if target_binds(&builtin) {
-            return Err(format!(
-                "`{name}` uses the builtin `{builtin}`, which {target_module} binds to something \
-                 else"
-            ));
-        }
-    }
     for dependency in &dependencies {
-        let read = match dependency {
-            Dependency::Imported { request, .. } => &request.binds,
-            Dependency::Sibling(sibling) => sibling,
-        };
-        if globals.symbol_id(read).is_some_and(|symbol| {
-            bindings_of_symbol(
-                db,
-                index,
-                &parsed,
-                FileScopeId::global(),
-                symbol,
-                source_type.is_stub(),
-            )
-            .len()
-                > 1
-        }) {
-            return Err(format!(
-                "`{name}` uses `{read}`, which {source_module} binds more than once, and an import \
-                 of it would keep only the value it had when imported"
-            ));
-        }
         match dependency {
-            Dependency::Imported { request, .. } => {
-                if target_binds(&request.binds)
-                    && !target_imports_same(db, target_file, &target_parsed, request)
-                {
-                    return Err(format!(
-                        "`{name}` uses `{}`, which {target_module} binds to something else",
-                        request.binds
-                    ));
-                }
-                target_imports.push(request.clone());
-            }
-            Dependency::Sibling(sibling) => {
-                if is_private(sibling) {
-                    return Err(format!(
-                        "`{name}` uses `{sibling}`, which is private to {source_module}; make it \
-                         public, or move it too"
-                    ));
-                }
-                if target_binds(sibling) {
-                    return Err(format!(
-                        "`{name}` uses {source_module}'s `{sibling}`, which {target_module} binds \
-                         to something else"
-                    ));
-                }
-                from_source.push(sibling.clone());
-            }
+            Dependency::Imported { request, .. } => target_imports.push(request.clone()),
+            Dependency::Sibling(sibling) => from_source.push(sibling.clone()),
         }
     }
 
-    // Where the definition is referred to, other than by itself.
+    // where the definition is referred to, other than by itself
     let statement_range = declaration.statement.range();
     let model = SemanticModel::new(db, source);
     let goto_target = find_goto_target(&model, &parsed, declaration.name_range.start())
@@ -278,8 +221,8 @@ pub fn move_symbol(
     }
     let source_uses: Vec<TextRange> = by_file.remove(&source_file).unwrap_or_default();
 
-    // Two modules that import each other at the top cannot both be loaded: the second one would
-    // read a name from the first before the first has bound it.
+    // two modules that import each other at the top cannot both be loaded: the second one would
+    // read a name from the first before the first has bound it
     let source_needs_target =
         !source_uses.is_empty() || imports_module(db, source, &parsed, &target_module);
     let target_needs_source =
@@ -310,8 +253,8 @@ pub fn move_symbol(
 
     let mut moved = SymbolMove::default();
 
-    // The old module: the definition cut, the imports only it used dropped, and the definition
-    // imported back where the module still uses it.
+    // the old module: the definition cut, the imports only it used dropped, and the definition
+    // imported back where the module still uses it
     let source_text = source_text(db, source_file);
     let source_text = source_text.as_str();
     let cut = cut_range(source_text, parsed.suite(), declaration.index);
@@ -371,7 +314,7 @@ pub fn move_symbol(
         );
     }
 
-    // The target: what the definition imports, then the definition.
+    // the target: what the definition imports, then the definition
     let target_text = ruff_db::source::source_text(db, target);
     let target_text = target_text.as_str();
     let target_end = TextSize::of(target_text);
@@ -422,7 +365,7 @@ pub fn move_symbol(
         moved.edits.push(FileEdit { file: target, edit });
     }
 
-    // Every other module that refers to it.
+    // every other module that refers to it
     let mut files: Vec<File> = by_file.keys().copied().collect();
     files.sort_by_key(|file| file.path(db).as_str().to_string());
     for file in files {
@@ -501,7 +444,7 @@ fn disjoint(db: &dyn Db, edits: Vec<FileEdit>) -> Result<Vec<FileEdit>, String> 
     Ok(disjoint)
 }
 
-/// The file and offset of the top-level declaration named at `offset`: `offset` itself when it is
+/// the file and offset of the top-level declaration named at `offset`: `offset` itself when it is
 /// in a declaration's name, or else where the name at `offset` is defined, or else the name of the
 /// top-level declaration `offset` is anywhere in, as a move from inside a definition's body moves
 /// the definition
@@ -542,7 +485,7 @@ fn referenced_declaration<'db>(
     Some((target_file, declaration.name_range.start()))
 }
 
-/// A top-level statement that defines one name.
+/// a top-level statement that defines one name
 struct Declaration<'a> {
     index: usize,
     statement: &'a Stmt,
@@ -568,7 +511,7 @@ impl<'a> Declaration<'a> {
         Self::at(suite, name)
     }
 
-    /// The top-level declaration whose name `offset` is in.
+    /// the top-level declaration whose name `offset` is in
     fn at(suite: &'a [Stmt], offset: TextSize) -> Option<Self> {
         suite.iter().enumerate().find_map(|(index, statement)| {
             let (name, kind) = match statement {
@@ -611,13 +554,13 @@ impl<'a> Declaration<'a> {
     }
 }
 
-/// An import request whose strings it owns.
+/// an import request whose strings it owns
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct OwnedRequest {
     pub(super) module: String,
     pub(super) member: Option<String>,
     pub(super) asname: Option<String>,
-    /// The name the import binds.
+    /// the name the import binds
     pub(super) binds: String,
 }
 
@@ -634,28 +577,29 @@ impl OwnedRequest {
     }
 }
 
-/// A name a definition reads from the top level of its module.
+/// a name a definition reads from the top level of its module
 #[derive(Debug)]
 pub(super) enum Dependency {
-    /// A name one of the module's imports binds, as the import that binds it.
+    /// a name one of the module's imports binds, as the import that binds it
     Imported {
-        /// The start of the statement that imports it, or `None` for a star import, which binds
-        /// more than this name and so is never dropped.
+        /// the start of the statement that imports it, or `None` for a star import, which binds
+        /// more than this name and so is never dropped
         binding_statement: Option<TextSize>,
         alias_index: usize,
         request: OwnedRequest,
     },
-    /// Another of the module's own top-level names.
+    /// another of the module's own top-level names
     Sibling(String),
 }
 
-/// The names `statement` reads from the top level of `file`, other than `name`, which it defines.
-pub(super) fn dependencies(
+/// the names `statement` reads from the top level of `file`, other than `defines`, the name it
+/// binds there itself
+fn dependencies(
     db: &dyn Db,
     file: ProgramFile<'_>,
     parsed: &ParsedModuleRef,
     statement: &Stmt,
-    name: &str,
+    defines: Option<&str>,
 ) -> Vec<Dependency> {
     let index = semantic_index(db, file);
     let globals = index.place_table(FileScopeId::global());
@@ -664,7 +608,7 @@ pub(super) fn dependencies(
     let mut dependencies = Vec::new();
     for load in loads(statement) {
         let id = load.id.as_str();
-        if id == name || !seen.insert(id) {
+        if defines == Some(id) || !seen.insert(id) {
             continue;
         }
         let Some(scope) = index.try_expression_scope_id(&ast::ExprRef::Name(load)) else {
@@ -739,8 +683,133 @@ pub(super) fn dependencies(
     dependencies
 }
 
+/// the names `statement`, moved from the top of `source` into `target`, reads from `source`'s
+/// top level, each of which `target` has to import, or why the move would change what it reads:
+/// a `global` write to a name of `source`, which would name `target`'s once moved; a name
+/// `source` binds more than once, an import of which would keep only the value it had when
+/// imported; a name private to `source`; an attribute of the module object, `__name__` or
+/// `__file__`, which would be `target`'s; and a builtin, an imported name or a name of `source`
+/// that `target` binds to something else. `subject` names what moves in a refusal, and `defines`
+/// is the name `statement` itself binds at the top of `source`, which it reads as itself
+pub(super) fn checked_dependencies(
+    db: &dyn Db,
+    source: ProgramFile<'_>,
+    parsed: &ParsedModuleRef,
+    statement: &Stmt,
+    subject: &str,
+    defines: Option<&str>,
+    target: ProgramFile<'_>,
+) -> Result<Vec<Dependency>, String> {
+    let module_name = |file: ProgramFile<'_>| {
+        file_to_module(db, file.resolver_file(db))
+            .map(|module| module.name(db).to_string())
+            .unwrap_or_default()
+    };
+    let source_module = module_name(source);
+    let target_module = module_name(target);
+    let index = semantic_index(db, source);
+    let globals = index.place_table(FileScopeId::global());
+
+    // a `global` in it names the module it is in, which the move changes
+    if let Some(written) = global_written_by(db, index, statement.range()) {
+        return Err(format!(
+            "`{subject}` assigns {source_module}'s `{written}` through `global`, which would \
+             name {target_module}'s once moved"
+        ));
+    }
+
+    let model = SemanticModel::new(db, source);
+    let mut builtins: Vec<&str> = Vec::new();
+    for load in loads(statement) {
+        let id = load.id.as_str();
+        if reads_module_implicit_global(&model, load) {
+            return Err(format!(
+                "`{subject}` reads `{id}`, which is {source_module}'s own and would be \
+                 {target_module}'s once moved"
+            ));
+        }
+        if let Some(scope) = index.try_expression_scope_id(&ast::ExprRef::Name(load))
+            && resolving_scope(index, scope, id).is_none()
+            && !builtins.contains(&id)
+        {
+            builtins.push(id);
+        }
+    }
+    for builtin in builtins {
+        if module_binds(db, target, builtin) {
+            return Err(format!(
+                "`{subject}` uses the builtin `{builtin}`, which {target_module} binds to \
+                 something else"
+            ));
+        }
+    }
+
+    let dependencies = dependencies(db, source, parsed, statement, defines);
+    let target_parsed = parsed_module(db, target.python_file(db)).load(db);
+    for dependency in &dependencies {
+        let read = match dependency {
+            Dependency::Imported { request, .. } => &request.binds,
+            Dependency::Sibling(sibling) => sibling,
+        };
+        if globals.symbol_id(read).is_some_and(|symbol| {
+            bindings_of_symbol(
+                db,
+                index,
+                parsed,
+                FileScopeId::global(),
+                symbol,
+                source.file(db).is_stub(db),
+            )
+            .len()
+                > 1
+        }) {
+            return Err(format!(
+                "`{subject}` uses `{read}`, which {source_module} binds more than once, and an \
+                 import of it would keep only the value it had when imported"
+            ));
+        }
+        match dependency {
+            Dependency::Imported { request, .. } => {
+                if module_binds(db, target, &request.binds)
+                    && !target_imports_same(db, target, &target_parsed, request)
+                {
+                    return Err(format!(
+                        "`{subject}` uses `{}`, which {target_module} binds to something else",
+                        request.binds
+                    ));
+                }
+            }
+            Dependency::Sibling(sibling) => {
+                if is_private(sibling) {
+                    return Err(format!(
+                        "`{subject}` uses `{sibling}`, which is private to {source_module}; make \
+                         it public, or move it too"
+                    ));
+                }
+                if module_binds(db, target, sibling) {
+                    return Err(format!(
+                        "`{subject}` uses {source_module}'s `{sibling}`, which {target_module} \
+                         binds to something else"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(dependencies)
+}
+
+/// whether the top level of `file` binds `name`, or the module object gives it to every module
+/// as one of its attributes, `__name__` or `__doc__`
+fn module_binds(db: &dyn Db, file: ProgramFile<'_>, name: &str) -> bool {
+    let globals = semantic_index(db, file).place_table(FileScopeId::global());
+    globals
+        .symbol_id(name)
+        .is_some_and(|symbol| globals.symbol(symbol).is_bound())
+        || is_module_implicit_global(db, file, name)
+}
+
 /// the names `statement` reads
-fn loads(statement: &Stmt) -> Vec<&ast::ExprName> {
+pub(super) fn loads(statement: &Stmt) -> Vec<&ast::ExprName> {
     struct Loads<'a> {
         names: Vec<&'a ast::ExprName>,
     }
@@ -757,22 +826,6 @@ fn loads(statement: &Stmt) -> Vec<&ast::ExprName> {
     let mut loads = Loads { names: Vec::new() };
     loads.visit_stmt(statement);
     loads.names
-}
-
-/// the names `statement` reads that no scope of `file` binds, the builtins among them
-fn builtins_read(db: &dyn Db, file: ProgramFile<'_>, statement: &Stmt) -> Vec<String> {
-    let index = semantic_index(db, file);
-    let mut read: Vec<String> = Vec::new();
-    for load in loads(statement) {
-        let id = load.id.as_str();
-        if let Some(scope) = index.try_expression_scope_id(&ast::ExprRef::Name(load))
-            && resolving_scope(index, scope, id).is_none()
-            && !read.iter().any(|seen| seen == id)
-        {
-            read.push(id.to_string());
-        }
-    }
-    read
 }
 
 /// a name of the module's own that a `global` in a scope inside `range` assigns
@@ -871,13 +924,13 @@ fn imported_from(
     })
 }
 
-/// Whether `name` is private to its module by python's convention: it starts with an underscore
-/// and is not a dunder.
-pub(super) fn is_private(name: &str) -> bool {
+/// whether `name` is private to its module by python's convention: it starts with an underscore
+/// and is not a dunder
+fn is_private(name: &str) -> bool {
     name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__"))
 }
 
-/// Whether `file` already imports what `request` asks for, under the name it asks for.
+/// whether `file` already imports what `request` asks for, under the name it asks for
 fn target_imports_same(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -905,7 +958,7 @@ fn target_imports_same(
     })
 }
 
-/// Whether a top-level import of `file` imports `module`, or something from it.
+/// whether a top-level import of `file` imports `module`, or something from it
 pub(super) fn imports_module(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -929,7 +982,7 @@ pub(super) fn imports_module(
     })
 }
 
-/// Whether `name` is read anywhere in the module outside `except`, or listed in its `__all__`.
+/// whether `name` is read anywhere in the module outside `except`, or listed in its `__all__`
 fn used_elsewhere(parsed: &ParsedModuleRef, name: &str, except: TextRange) -> bool {
     struct Uses<'a> {
         name: &'a str,
@@ -965,15 +1018,15 @@ fn used_elsewhere(parsed: &ParsedModuleRef, name: &str, except: TextRange) -> bo
     uses.found
 }
 
-/// The text a cut takes, and the range it removes from the module.
+/// the text a cut takes, and the range it removes from the module
 pub(super) struct Cut {
-    /// The definition with its decorators and the comments directly above it, ending in a line
-    /// break.
+    /// the definition with its decorators and the comments directly above it, ending in a line
+    /// break
     pub(super) text: String,
     /// where `text` starts in the module
     pub(super) start: TextSize,
-    /// Its lines and the blank lines that separated it from the statement after it, or, when it is
-    /// the last statement, from the one before.
+    /// its lines and the blank lines that separated it from the statement after it, or, when it is
+    /// the last statement, from the one before
     pub(super) removed: TextRange,
 }
 
@@ -1052,8 +1105,8 @@ pub(super) fn cut_range(source: &str, suite: &[Stmt], index: usize) -> Cut {
     }
 }
 
-/// The text appended to the end of the target: the definition, set apart from what is above it
-/// as PEP 8 sets apart a top-level definition.
+/// the text appended to the end of the target: the definition, set apart from what is above it
+/// as PEP 8 sets apart a top-level definition
 fn appended_text(
     target: &str,
     suite: &[Stmt],
@@ -1095,8 +1148,8 @@ fn appended_text(
     text
 }
 
-/// The edit removing alias `alias_index` from the import statement starting at `statement`, or the
-/// whole statement when it is its only alias.
+/// the edit removing alias `alias_index` from the import statement starting at `statement`, or the
+/// whole statement when it is its only alias
 fn remove_alias(
     source: &str,
     suite: &[Stmt],
@@ -1126,7 +1179,7 @@ fn remove_alias(
     Some(Edit::range_deletion(range))
 }
 
-/// The `__all__ = [...]` (or tuple) assignment at the top level of a module.
+/// the `__all__ = [...]` (or tuple) assignment at the top level of a module
 fn all_list(suite: &[Stmt]) -> Option<&[Expr]> {
     suite.iter().find_map(|stmt| {
         let (target, value) = match stmt {
@@ -1145,7 +1198,7 @@ fn all_list(suite: &[Stmt]) -> Option<&[Expr]> {
     })
 }
 
-/// The edit taking `name` out of the module's `__all__`, when it lists it.
+/// the edit taking `name` out of the module's `__all__`, when it lists it
 fn remove_from_all(suite: &[Stmt], name: &str) -> Option<Edit> {
     let elements = all_list(suite)?;
     let position = elements.iter().position(
@@ -1162,7 +1215,7 @@ fn remove_from_all(suite: &[Stmt], name: &str) -> Option<Edit> {
     Some(Edit::range_deletion(range))
 }
 
-/// The edit adding `name` to the end of the module's `__all__`, when it has one.
+/// the edit adding `name` to the end of the module's `__all__`, when it has one
 fn add_to_all(source: &str, suite: &[Stmt], name: &str) -> Option<Edit> {
     let elements = all_list(suite)?;
     let quote = elements
@@ -1175,7 +1228,7 @@ fn add_to_all(source: &str, suite: &[Stmt], name: &str) -> Option<Edit> {
         .map(|last| Edit::insertion(format!(", {quote}{name}{quote}"), last.end()))
 }
 
-/// Points the references `ranges` in `file` at `name`'s new module.
+/// points the references `ranges` in `file` at `name`'s new module
 fn rewrite_references(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -1389,7 +1442,7 @@ fn from_module_range(parsed: &ParsedModuleRef, from: &ast::StmtImportFrom) -> Op
     Some(TextRange::new(first.start(), end))
 }
 
-/// The one-based line `offset` is on.
+/// the one-based line `offset` is on
 pub(super) fn line_number(source: &str, offset: TextSize) -> usize {
     source[..offset.to_usize()].matches('\n').count() + 1
 }
@@ -1440,8 +1493,8 @@ import os
 X = os.sep
 "#;
 
-    /// A project of the modules above and modules using `area`, with the cursor where `src`
-    /// gives it, in `mv/src.py`.
+    /// a project of the modules above and modules using `area`, with the cursor where `src`
+    /// gives it, in `mv/src.py`
     fn project(src: &str) -> CursorTest {
         CursorTestBuilder::default()
             .source("mv/__init__.py", "")
@@ -1517,7 +1570,7 @@ X = os.sep
     }
 
     impl CursorTest {
-        /// Every module the move to `mv/dst.py` changes, as it is afterwards, or why it refuses.
+        /// every module the move to `mv/dst.py` changes, as it is afterwards, or why it refuses
         fn move_to_dst(&self) -> String {
             let target = system_path_to_file(&self.db, "mv/dst.py").expect("dst to exist");
             let moved = salsa::attach(&self.db, || {
@@ -1532,9 +1585,9 @@ X = os.sep
         }
     }
 
-    /// The definition goes to the end of the target with the import it uses and the name of
+    /// the definition goes to the end of the target with the import it uses and the name of
     /// its old module it reads; the old module drops the import nothing else uses and its
-    /// `__all__` entry; and every way the project refers to it follows it.
+    /// `__all__` entry; and every way the project refers to it follows it
     #[test]
     fn a_function_moves_with_what_it_reads() {
         let test = project(&SRC.replace("def area(r)", "def <CURSOR>area(r)"));
@@ -1600,8 +1653,8 @@ X = os.sep
         "#);
     }
 
-    /// The old module still calls it, and it reads `RATE` from the old module, so the two
-    /// modules would import each other, which python cannot load.
+    /// the old module still calls it, and it reads `RATE` from the old module, so the two
+    /// modules would import each other, which python cannot load
     #[test]
     fn a_move_that_makes_two_modules_import_each_other_is_refused() {
         let test = project(&format!(
@@ -1652,7 +1705,7 @@ X = os.sep
         assert_snapshot!(test.move_to_dst(), @"refused: `uses_private` uses `_SECRET`, which is private to mv.src; make it public, or move it too");
     }
 
-    /// A variable the old module still reads is imported back from its new module.
+    /// a variable the old module still reads is imported back from its new module
     #[test]
     fn a_variable_the_old_module_reads_is_imported_back() {
         let test = project(&SRC.replace("RATE = 2", "<CURSOR>RATE = 2"));
@@ -1694,7 +1747,7 @@ X = os.sep
         "#);
     }
 
-    /// Asked at a reference, the definition the reference is to is moved.
+    /// asked at a reference, the definition the reference is to is moved
     #[test]
     fn asked_at_a_reference() {
         let test = CursorTestBuilder::default()
@@ -1910,6 +1963,29 @@ X = os.sep
             &[],
         );
         assert_snapshot!(test.move_to_dst(), @"refused: `size` uses the builtin `len`, which mv.dst binds to something else");
+    }
+
+    /// `__name__` is the module's own, and would be the target's once moved
+    #[test]
+    fn a_definition_that_reads_an_attribute_of_its_module_is_refused() {
+        let test = modules("def <CURSOR>origin():\n    return __name__\n", "", &[]);
+        assert_snapshot!(test.move_to_dst(), @"refused: `origin` reads `__name__`, which is mv.src's own and would be mv.dst's once moved");
+    }
+
+    /// a `__name__` the definition binds itself is read as any other name of its own
+    #[test]
+    fn a_definition_that_binds_a_module_attribute_s_name_itself_moves() {
+        let test = modules(
+            "def <CURSOR>origin(__name__):\n    return __name__\n",
+            "",
+            &[],
+        );
+        assert_snapshot!(test.move_to_dst(), @"
+        --- /mv/dst.py
+        def origin(__name__):
+            return __name__
+        --- /mv/src.py
+        ");
     }
 
     /// the module of an import is found by its tokens, so a comment that says `import` is not

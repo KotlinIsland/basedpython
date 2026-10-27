@@ -9,7 +9,8 @@ use crate::place::{
     imported_symbol, place_by_id, place_from_bindings,
 };
 use crate::place_load::{
-    PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind, resolve_place_load,
+    ImplicitPlaceLoad, PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind,
+    resolve_place_load,
 };
 use crate::reachability::is_range_reachable;
 use crate::types::EnumLiteralType;
@@ -2757,6 +2758,108 @@ pub fn is_within_classes<'db>(
         })
 }
 
+/// basedpython: whether the name `name`, read in `model`'s file, may read one of the attributes
+/// python gives the module object itself, `__name__`, `__file__` or `__doc__`, which each module
+/// has its own value of. it does where the read finds nothing sure to be bound before it reaches
+/// the module's implicit globals
+pub fn reads_module_implicit_global(model: &SemanticModel<'_>, name: &ast::ExprName) -> bool {
+    let db = model.db();
+    load_may_reach(model, name, |implicit| match implicit {
+        ImplicitPlaceLoad::ModuleImplicitGlobal { file, name } => {
+            Some(is_module_implicit_global(db, *file, name))
+        }
+        _ => None,
+    })
+}
+
+/// basedpython: whether the name `name`, read in `model`'s file, may read the `__class__` cell
+/// python gives a method, the class the method is written in. it does where the read finds
+/// nothing sure to be bound before it reaches the cell
+pub fn reads_class_cell(model: &SemanticModel<'_>, name: &ast::ExprName) -> bool {
+    load_may_reach(model, name, |implicit| {
+        matches!(implicit, ImplicitPlaceLoad::DunderClass(_)).then_some(true)
+    })
+}
+
+/// whether the load of `name` in `model`'s file may reach an implicit source `decides` answers
+/// for, and its answer there: the load goes on past a source while nothing it has passed is sure
+/// to be bound
+fn load_may_reach<'db>(
+    model: &SemanticModel<'db>,
+    name: &ast::ExprName,
+    decides: impl Fn(&ImplicitPlaceLoad<'db>) -> Option<bool>,
+) -> bool {
+    let db = model.db();
+    let file = model.program_file();
+    let env = ProgramEnvironment::from_file(file);
+    let index = semantic_index(db, file);
+    let Some(scope) = index.try_expression_scope_id(&ast::ExprRef::Name(name)) else {
+        return false;
+    };
+    let scope = scope.to_scope_id(db, file);
+    let mut resolution = resolve_place_load(
+        db,
+        index,
+        scope,
+        PlaceExpr::from_expr_name(name),
+        PlaceLoadMode::AtExpression(name.into()),
+    );
+    while let Some(PlaceLoadResolutionStep::Source(source)) = resolution.next() {
+        let place = match source.kind {
+            PlaceLoadSourceKind::Bindings(bindings) => {
+                place_from_bindings(db, &env, bindings).place
+            }
+            PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+                place_by_id(
+                    db,
+                    scope,
+                    id,
+                    RequiresExplicitReExport::No,
+                    ConsideredDefinitions::AllReachable,
+                )
+                .place
+            }
+            PlaceLoadSourceKind::Implicit(implicit) => {
+                if let Some(answer) = decides(&implicit) {
+                    return answer;
+                }
+                implicit.place(db, &env, scope).place
+            }
+            // only a program carrying a debugger's assumptions observes a place
+            PlaceLoadSourceKind::Observed(_) => return false,
+        };
+        if place.is_definitely_bound() {
+            return false;
+        }
+    }
+    false
+}
+
+/// basedpython: whether `name` is one of the attributes python gives every module object, which
+/// the module reads as a global where it binds no `name` of its own: `__name__`, `__file__`,
+/// `__doc__`
+pub fn is_module_implicit_global(db: &dyn Db, file: ProgramFile<'_>, name: &str) -> bool {
+    !crate::place::module_type_implicit_global_symbol(db, file, name)
+        .place
+        .is_undefined()
+}
+
+/// basedpython: whether `class` is an enum class, a subclass of `enum.Enum` or a class whose
+/// metaclass is `enum.EnumType`, which python makes a subclass of something other than what the
+/// class itself is
+pub fn is_enum_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: Type<'db>,
+) -> bool {
+    match class {
+        Type::ClassLiteral(ClassLiteral::Static(class)) => {
+            crate::types::enums::is_enum_class_by_inheritance(db, env, class)
+        }
+        _ => false,
+    }
+}
+
 /// Enumerates the reachable class definitions in `file`.
 fn reachable_class_literals_in_file<'db>(
     db: &'db dyn Db,
@@ -4782,6 +4885,16 @@ pub fn is_dataclass_field_function<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool 
         ty.as_function_literal()
             .and_then(|function| function.known(db)),
         Some(KnownFunction::Field)
+    )
+}
+
+/// basedpython: whether `ty` is `typing.override`, the decorator that marks a method as
+/// overriding one of a superclass
+pub fn is_override_function<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(
+        ty.as_function_literal()
+            .and_then(|function| function.known(db)),
+        Some(KnownFunction::Override)
     )
 }
 

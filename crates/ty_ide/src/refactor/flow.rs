@@ -116,7 +116,21 @@ pub(crate) fn resolving_scope(
     scope: FileScopeId,
     name: &str,
 ) -> Option<FileScopeId> {
-    for (scope_id, _) in index.visible_ancestor_scopes(scope) {
+    resolving_scope_among(
+        index,
+        index.visible_ancestor_scopes(scope).map(|(scope, _)| scope),
+        name,
+    )
+}
+
+/// the scope a load of `name` resolves to that sees `scopes`, innermost first, as
+/// [`resolving_scope`] reads them
+pub(crate) fn resolving_scope_among(
+    index: &SemanticIndex<'_>,
+    scopes: impl IntoIterator<Item = FileScopeId>,
+    name: &str,
+) -> Option<FileScopeId> {
+    for scope_id in scopes {
         let table = index.place_table(scope_id);
         let Some(symbol_id) = table.symbol_id(name) else {
             continue;

@@ -1,15 +1,15 @@
-//! Pulling a class's bases up into a superclass, as python's own pull members up offers a mixin:
+//! pulling a class's bases up into a superclass, as python's own pull members up offers a mixin:
 //!
 //! ```py
 //! class Shape: ...                         class Shape(Mixin): ...
 //! class Square(Shape, Mixin): ...   ──►    class Square(Shape): ...
 //! ```
 //!
-//! Every class below the superclass then inherits the base, so the pull is refused unless every
+//! every class below the superclass then inherits the base, so the pull is refused unless every
 //! class whose bases change — the superclass and every class of the project below it — finds each
-//! name it found before in the class it found it in. A name only the base brings is gained, which
-//! is what the pull is for. Python has to be able to order each class's bases afterwards, and the
-//! superclass has to be able to name the base where it is defined.
+//! name it found before in the class it found it in. a name only the base brings is gained, which
+//! is what the pull is for. python has to be able to order each class's bases afterwards, and the
+//! superclass has to be able to name the base where it is defined
 
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -23,37 +23,48 @@ use ty_project::Db;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::types::Type;
 use ty_python_semantic::{
-    ProgramEnvironment, class_bases, instance_member_names, type_hierarchy_mro,
-    type_hierarchy_prepare,
+    HasType, ProgramEnvironment, SemanticModel, class_bases, instance_member_names,
+    type_hierarchy_mro, type_hierarchy_prepare,
 };
 
-use super::{ClassSite, all_classes};
+use super::{ClassSite, all_classes, member_statements};
 use crate::code_action::FileEdit;
 
-/// A base a class statement writes, by name, which a pull up can move.
+/// a base a class statement writes, by name, which a pull up can move
 pub(super) struct WrittenBase<'a> {
-    /// The base as written, which is how a client names it.
+    /// the base as written, which is how a client names it
     pub(super) text: &'a str,
     pub(super) expression: &'a Expr,
 }
 
-/// The bases `def` writes as a name or a dotted name, the kind a superclass can write too.
+/// the bases `def`, the statement of `class`, writes as a name or a dotted name, the kind a
+/// superclass can write too, but `object`, which every class inherits already
 pub(super) fn written_bases<'a>(
+    db: &dyn Db,
+    class: &ClassSite<'_>,
     def: &'a ast::StmtClassDef,
     source: &'a str,
 ) -> Vec<WrittenBase<'a>> {
+    let model = SemanticModel::new(db, class.file);
+    let env = ProgramEnvironment::from_file(class.file);
+    // `object` is the one class with nothing above it
+    let is_object = |expression: &Expr| {
+        expression.inferred_type(&model).is_some_and(|ty| {
+            type_hierarchy_prepare(db, &env, ty).is_some()
+                && type_hierarchy_mro(db, &env, ty).is_empty()
+        })
+    };
     def.bases()
         .iter()
-        .filter(|base| root_name(base).is_some())
+        .filter(|base| root_name(base).is_some() && !is_object(base))
         .map(|expression| WrittenBase {
             text: &source[expression.range()],
             expression,
         })
-        .filter(|base| base.text != "object")
         .collect()
 }
 
-/// The name a base's name or dotted name starts with.
+/// the name a base's name or dotted name starts with
 fn root_name(expression: &Expr) -> Option<&Name> {
     match expression {
         Expr::Name(name) => Some(&name.id),
@@ -62,16 +73,16 @@ fn root_name(expression: &Expr) -> Option<&Name> {
     }
 }
 
-/// What pulling bases up does: the edits, and the names the superclass gains with them.
+/// what pulling bases up does: the edits, and the names the superclass gains with them
 pub(super) struct PulledBases {
     pub(super) edits: Vec<FileEdit>,
     pub(super) gained: FxHashSet<Name>,
 }
 
-/// A class, as the file and name range its statement has.
+/// a class, as the file and name range its statement has
 type ClassKey = (File, TextRange);
 
-/// Pulls the bases `pulled`, as `class` writes them, up into `superclass`, after its own bases.
+/// pulls the bases `pulled`, as `class` writes them, up into `superclass`, after its own bases
 pub(super) fn pull_bases_up<'db>(
     db: &'db dyn Db,
     class: &ClassSite<'db>,
@@ -90,7 +101,7 @@ pub(super) fn pull_bases_up<'db>(
         type_hierarchy_prepare(db, &env, ty)
             .map(|class| (class.file.file(db), class.selection_range))
     };
-    let written = written_bases(def, source);
+    let written = written_bases(db, class, def, source);
     let resolved = class_bases(db, &env, class.ty);
     if resolved.len() != def.bases().len() {
         return Err(format!(
@@ -274,7 +285,92 @@ pub(super) fn pull_bases_up<'db>(
     Ok(PulledBases { edits, gained })
 }
 
-/// The classes `ty` inherits from in its method resolution order, itself not among them.
+/// refuses pulling the member `name` of `class` up into `superclass` where a class would then
+/// find `name` elsewhere than it should: `class` and the classes below it that found its own
+/// have to find the pulled one, and every other class below the superclass, `below_superclass`,
+/// what it found before. a class that found no `name` gains the pulled one, which is what the
+/// pull is for
+pub(super) fn refuse_changed_lookups<'db>(
+    db: &'db dyn Db,
+    class: &ClassSite<'db>,
+    superclass: &ClassSite<'db>,
+    below_superclass: &[ClassSite<'db>],
+    name: &str,
+) -> Result<(), String> {
+    let def = class
+        .def()
+        .ok_or_else(|| "there is no class here".to_string())?;
+    let env = ProgramEnvironment::from_file(class.file);
+    let name = Name::new(name);
+    let class_key = (class.file_id, class.name_range);
+    let super_key = (superclass.file_id, superclass.name_range);
+    // the class keeps what binds the name besides the members pulled
+    let pulled = member_statements(def, name.as_str());
+    let mut keeps = Binder::default();
+    for (index, statement) in def.body.iter().enumerate() {
+        if !pulled.contains(&index) {
+            keeps.visit_stmt(statement);
+        }
+    }
+    let class_keeps = keeps.names.contains(&name);
+    let mut names = OwnNames {
+        db,
+        program: class.file,
+        cache: FxHashMap::default(),
+    };
+    let sites =
+        std::iter::once(class).chain(below_superclass.iter().filter(|site| !site.same(class)));
+    for site in sites {
+        let order: Vec<(ClassKey, Name)> =
+            std::iter::once(((site.file_id, site.name_range), Name::new(&site.name)))
+                .chain(
+                    type_hierarchy_mro(db, &env, site.ty)
+                        .into_iter()
+                        .map(|class| ((class.file.file(db), class.selection_range), class.name)),
+                )
+                .collect();
+        let mut before = None;
+        let mut after = None;
+        for (key, owner) in &order {
+            let owns = names.of(*key).contains(&name);
+            if before.is_none() && owns {
+                before = Some((*key, owner));
+            }
+            let owns_after = if *key == class_key {
+                class_keeps
+            } else {
+                *key == super_key || owns
+            };
+            if after.is_none() && owns_after {
+                after = Some((*key, owner));
+            }
+        }
+        let before_key = before.map(|(key, _)| key);
+        let after_key = after.map(|(key, _)| key);
+        let moves_with_it =
+            after_key == Some(super_key) && (before_key.is_none() || before_key == Some(class_key));
+        if before_key == after_key || moves_with_it {
+            continue;
+        }
+        let after_name =
+            after.map_or_else(|| "nothing".to_string(), |(_, owner)| owner.to_string());
+        return Err(if site.same(class) {
+            format!(
+                "{} would inherit {after_name}'s `{name}` rather than its own",
+                class.name
+            )
+        } else {
+            format!(
+                "{} would find `{name}` in {after_name} rather than in {}",
+                site.name,
+                before.map_or_else(|| "nothing".to_string(), |(_, owner)| owner.to_string())
+            )
+        });
+    }
+    Ok(())
+}
+
+/// the classes `ty` inherits from in its method resolution order, itself not among them
 fn mro_keys<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> Vec<ClassKey> {
     type_hierarchy_mro(db, env, ty)
         .into_iter()
@@ -282,9 +378,9 @@ fn mro_keys<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) 
         .collect()
 }
 
-/// The method resolution order of `key` with the bases `new_bases` gives the classes whose bases
-/// change, by python's C3 linearization; `None` where python could not order them. A class whose
-/// bases stay as they are keeps the order python gives it, as `types` says which class it is.
+/// the method resolution order of `key` with the bases `new_bases` gives the classes whose bases
+/// change, by python's C3 linearization; `None` where python could not order them. a class whose
+/// bases stay as they are keeps the order python gives it, as `types` says which class it is
 fn linearize<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -315,8 +411,8 @@ fn linearize<'db>(
     order
 }
 
-/// The C3 merge of `sequences`: python's order for a class's ancestors, given each base's order
-/// and the bases' own.
+/// the C3 merge of `sequences`: python's order for a class's ancestors, given each base's order
+/// and the bases' own
 fn merge(mut sequences: Vec<Vec<ClassKey>>) -> Option<Vec<ClassKey>> {
     let mut merged = Vec::new();
     loop {
@@ -338,7 +434,7 @@ fn merge(mut sequences: Vec<Vec<ClassKey>>) -> Option<Vec<ClassKey>> {
     }
 }
 
-/// The names each class's own body binds, the ones a lookup through it finds there.
+/// the names each class's own body binds, the ones a lookup through it finds there
 struct OwnNames<'db> {
     db: &'db dyn Db,
     program: ProgramFile<'db>,
@@ -346,7 +442,7 @@ struct OwnNames<'db> {
 }
 
 impl OwnNames<'_> {
-    /// Where a lookup through `order`, a method resolution order, finds each name it finds.
+    /// where a lookup through `order`, a method resolution order, finds each name it finds
     fn found_through(&mut self, order: &[ClassKey]) -> FxHashMap<Name, ClassKey> {
         let mut found = FxHashMap::default();
         for owner in order {
@@ -377,9 +473,9 @@ impl OwnNames<'_> {
     }
 }
 
-/// The names statements bind in the scope they are in, not in the functions and classes they
-/// define. Every name a store writes counts, and every name an import or a definition binds, so
-/// that no name a class could be found to have is missed.
+/// the names statements bind in the scope they are in, not in the functions and classes they
+/// define. every name a store writes counts, and every name an import or a definition binds, so
+/// that no name a class could be found to have is missed
 #[derive(Default)]
 struct Binder {
     names: FxHashSet<Name>,
@@ -432,15 +528,15 @@ impl<'a> SourceOrderVisitor<'a> for Binder {
     }
 }
 
-/// Whether a top-level statement binds `name`.
+/// whether a top-level statement binds `name`
 fn binds_at_top(statement: &Stmt, name: &Name) -> bool {
     let mut binder = Binder::default();
     binder.visit_stmt(statement);
     binder.names.contains(name)
 }
 
-/// The edits that take `bases` out of the list `def` writes. A run of them is deleted up to the
-/// argument after it, or, at the end of the list, from the argument before it.
+/// the edits that take `bases` out of the list `def` writes. a run of them is deleted up to the
+/// argument after it, or, at the end of the list, from the argument before it
 fn remove_bases(
     file: File,
     def: &ast::StmtClassDef,
@@ -485,7 +581,7 @@ fn remove_bases(
     edits
 }
 
-/// The edit that writes `bases` after the bases `def` writes, before its keywords.
+/// the edit that writes `bases` after the bases `def` writes, before its keywords
 fn add_bases(def: &ast::StmtClassDef, bases: &str) -> Edit {
     let Some(arguments) = &def.arguments else {
         let after = def
