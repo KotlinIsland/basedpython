@@ -130,6 +130,8 @@ struct Definition {
     /// position in the file. a set of definitions renders in this order, which
     /// is the order they can be executed in
     order: usize,
+    /// the line of the file it starts on, 1-based, its decorators included
+    line: u32,
     /// the other definitions its body reads
     needs: Vec<String>,
     /// each read of a name the runtime does not define, which python looks up in the
@@ -174,6 +176,7 @@ fn build_index() -> BTreeMap<String, Definition> {
             last += 1;
         }
         let span = suite[at].range().cover(suite[last].range());
+        let line = SOURCE[..span.start().to_usize()].matches('\n').count() + 1;
         let mut source = SOURCE[span].to_owned();
         if !source.ends_with('\n') {
             source.push('\n');
@@ -196,6 +199,7 @@ fn build_index() -> BTreeMap<String, Definition> {
             definitions.entry(name).or_insert_with(|| Definition {
                 source: source.clone(),
                 order,
+                line: u32::try_from(line).unwrap_or(u32::MAX),
                 needs: needs.clone(),
                 builtin_reads: builtin_reads.clone(),
             });
@@ -1061,6 +1065,19 @@ pub(crate) fn defines(name: &str) -> bool {
     index().contains_key(name)
 }
 
+/// the line of [`SOURCE`] each definition starts on, 1-based and its decorators included, by
+/// each name it binds
+///
+/// a definition pasted into a module is the same lines, so a line of it in the module is the
+/// line of [`SOURCE`] as far into the definition: what a run names the runtime's code by,
+/// wherever it ran from
+pub fn definition_lines() -> BTreeMap<&'static str, u32> {
+    index()
+        .iter()
+        .map(|(name, definition)| (name.as_str(), definition.line))
+        .collect()
+}
+
 /// the definitions `helpers` need, as preamble entries for a module that has nowhere to
 /// import them from, whose top-level statements are `module` and whose names `written`
 /// holds
@@ -1171,6 +1188,22 @@ mod tests {
                 assert!(seen.insert(name.clone()), "`{name}` is bound twice");
             }
         }
+    }
+
+    /// a definition's line is where its text starts in the file: a decorated one at its first
+    /// decorator
+    #[test]
+    fn a_definition_starts_on_its_line() {
+        let lines: Vec<&str> = SOURCE.lines().collect();
+        for (name, line) in definition_lines() {
+            let definition = &index()[name];
+            let first = definition.source.lines().next().unwrap_or_default();
+            assert_eq!(lines[line as usize - 1], first, "`{name}` at line {line}");
+        }
+        assert!(
+            lines[definition_lines()["_force_unwrap"] as usize - 1]
+                .starts_with("def _force_unwrap")
+        );
     }
 
     /// the preamble is one entry per line, so an entry that did not end its own

@@ -1852,6 +1852,105 @@ fn run_profile_names_functions_by_their_project_files() {
     assert!(staged.is_empty(), "a staged copy is named: {staged:?}");
 }
 
+/// the runtime's helpers are named `<by runtime>`, at the line of `_by_runtime.py` they start
+/// on and by their own names, whether the transpiler wrote them into a module at a root or they
+/// ran from the copy of the runtime beside a package's modules: one helper is one function
+/// wherever it ran from, and none is named as line 0 of the module it was written into, which a
+/// viewer opens at the module's first line
+#[test]
+fn run_profile_names_the_runtime_s_helpers_by_the_runtime() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        package.join("util.by"),
+        "def twice(x: int | None) -> int:\n    return x!! * 2\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from pkg.util import twice\n\n\ndef first(xs: list[int] | None) -> int:\n    return xs!![0]\n\n\nprint(twice(first([3])))\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let main = project.join("main.by").display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "--profile", "run.pstat", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "by run --profile failed:\n{stderr}"
+    );
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        "6\n",
+        "{stderr}"
+    );
+    let functions = profiled_functions(&python, &dir.path().join("run.pstat"));
+
+    let runtime = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../by_transforms/src/runtime/_by_runtime.py"),
+    )
+    .expect("the runtime's source");
+    let runtime: Vec<&str> = runtime.lines().collect();
+    let helper = |name: &str| {
+        let found: Vec<&Profiled> = functions
+            .iter()
+            .filter(|function| function.file == "<by runtime>" && function.name == name)
+            .collect();
+        found
+    };
+
+    // written into `main.py`, and in `pkg/_by_runtime.py`: one function
+    let unwrap = helper("_force_unwrap");
+    assert_eq!(unwrap.len(), 1, "{functions:#?}");
+    let unwrap = unwrap[0];
+    assert!(
+        runtime[unwrap.line as usize - 1].starts_with("def _force_unwrap("),
+        "line {} of the runtime is {:?}",
+        unwrap.line,
+        runtime[unwrap.line as usize - 1]
+    );
+    let callers: Vec<&str> = unwrap
+        .callers
+        .iter()
+        .map(|(_, _, name)| name.as_str())
+        .collect();
+    assert!(
+        callers.contains(&"first") && callers.contains(&"twice"),
+        "{callers:?}"
+    );
+
+    // two methods of a helper written into `main.py` are two functions, each at its own line
+    for (name, text) in [
+        ("__init__", "    def __init__(self, namespace, names):"),
+        ("__getattr__", "    def __getattr__(self, name):"),
+    ] {
+        assert!(
+            helper(name)
+                .iter()
+                .any(|function| runtime[function.line as usize - 1] == text),
+            "no {name} at {text:?}: {functions:#?}"
+        );
+    }
+
+    let at_line_0: Vec<&Profiled> = functions
+        .iter()
+        .filter(|function| {
+            function.file == main && function.line == 0 && function.name != "<module>"
+        })
+        .collect();
+    assert!(at_line_0.is_empty(), "{at_line_0:#?}");
+}
+
 /// a test runner compiles a test module itself, so the module's own top level runs
 /// as the staged `.py`, at the generated python's lines, and is still named by the
 /// `.by`

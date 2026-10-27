@@ -137,8 +137,18 @@ that ran. a viewer's way from a function to its source then leads to the file it
 was written in. that holds for a module a test runner compiled itself too, and
 two functions that turn out to be one — the same name at the same `.by` line —
 are added up as one, as `pstats` adds two profiles. a function the transpiler
-wrote on its own, such as a helper pasted into a module, has no `.by` line, and
-is named by its module's `.by` at line 0
+wrote on its own has no `.by` line, and is named by its module's `.by` at line 0
+
+the runtime's helpers — what the emitted python calls for `!!`, a lazy import or
+a soundness check — are named `<by runtime>`, at the line of `_by_runtime.py`
+they start on, as `by build` writes that file, and by their own names:
+`<by runtime>:103(_force_unwrap)`. one helper is then one function whether the
+transpiler wrote it into a module or it ran from the copy of the runtime beside
+a package's modules, and two helpers that share a name, such as two `__init__`
+methods, stay two. like python's own `<frozen runpy>`, the name is no file: a
+viewer's way to the source opens nothing, where line 0 of the module the helper
+was written into would open that module at its first line, as PyCharm's viewer
+opens a file it finds at the line it is given
 
 ```console
 $ by run --profile run.pstat main
