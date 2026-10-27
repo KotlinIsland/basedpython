@@ -98,6 +98,12 @@ docs = [
 ty-ecosystem = [
     "ecosystem-analyzer",
 ]
+# what the end-to-end tests of `by run --coverage` and of a pytest run import, which ci installs
+# into each interpreter it tests
+test-python = [
+    "coverage",
+    "pytest",
+]
 typeshed-docstrings = [
     "docstring-adder",
 ]
@@ -258,6 +264,7 @@ basedpython-docs = { requires-python = ">=3.12" }
 docs = { requires-python = ">=3.12" }
 release = { requires-python = ">=3.12" }
 ty-ecosystem = { requires-python = ">=3.13" }
+test-python = { requires-python = ">=3.11" }
 typeshed-docstrings = { requires-python = ">=3.10" }
 typeshed-formatting = { requires-python = ">=3.10" }
 

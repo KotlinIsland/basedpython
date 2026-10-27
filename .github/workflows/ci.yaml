@@ -537,6 +537,17 @@ jobs:
       # interpreters as externally managed, though this one belongs to the job alone
       - name: "Install `typing_extensions` into the interpreter"
         run: uv pip install --python "$PYTHON" --break-system-packages "typing_extensions==4.16.0"
+      # the end-to-end tests of `by run --coverage` and of a pytest run need coverage.py and
+      # pytest, and skip on an interpreter without them, as a contributor's may be. this one is
+      # given both, as the `test-python` dependency group locks them, and says so: while
+      # `BY_TEST_PYTHON_PROVIDES` names a module, a test that cannot import it fails rather
+      # than skips
+      - name: "Install pytest and coverage.py into the interpreter"
+        run: |
+          uv export --only-group test-python --no-emit-project --output-file "$RUNNER_TEMP/test-python.txt"
+          uv pip install --python "$PYTHON" --break-system-packages --require-hashes \
+            --requirements "$RUNNER_TEMP/test-python.txt"
+          echo "BY_TEST_PYTHON_PROVIDES=pytest coverage" >> "$GITHUB_ENV"
       # a separate invocation on purpose: the backend's differential tests fork processes
       # and compile C, and sharing a run with `by_transforms`' ~1800 other tests starves
       # them into failures that pass on their own

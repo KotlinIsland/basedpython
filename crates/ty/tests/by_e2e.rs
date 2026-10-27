@@ -1244,15 +1244,33 @@ fn run_in_build_runs_in_the_tree_it_staged() {
     );
 }
 
+/// the modules, separated by whitespace, that whoever installed them says the interpreter
+/// `$PYTHON` names can import. a test that needs one fails when it cannot import it, rather
+/// than skipping as it does on an interpreter that was not given it
+const BY_TEST_PYTHON_PROVIDES: &str = "BY_TEST_PYTHON_PROVIDES";
+
+/// whether `python` can import `module`. an interpreter `BY_TEST_PYTHON_PROVIDES` says can
+/// import it and cannot fails the test
+fn imports(python: &str, module: &str) -> bool {
+    let importable = Command::new(python)
+        .args(["-c", &format!("import {module}")])
+        .status()
+        .is_ok_and(|status| status.success());
+    let provided = std::env::var(BY_TEST_PYTHON_PROVIDES)
+        .is_ok_and(|provided| provided.split_whitespace().any(|name| name == module));
+    assert!(
+        importable || !provided,
+        "`{python}` cannot import {module}, which {BY_TEST_PYTHON_PROVIDES} says it can"
+    );
+    importable
+}
+
 /// The interpreter the coverage tests run on, and whether it can import
 /// coverage.py: `$PYTHON` when it is set, as for every python-executing test,
 /// and `python3` otherwise.
 fn coverage_interpreter() -> (String, bool) {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let importable = Command::new(&python)
-        .args(["-c", "import coverage"])
-        .status()
-        .is_ok_and(|status| status.success());
+    let importable = imports(&python, "coverage");
     (python, importable)
 }
 
@@ -1682,10 +1700,7 @@ fn run_coverage_measures_threads_and_exit_handlers() {
 )]
 fn run_coverage_maps_a_module_a_test_runner_compiled() {
     let (python, importable) = coverage_interpreter();
-    let pytest = Command::new(&python)
-        .args(["-c", "import pytest"])
-        .status()
-        .is_ok_and(|status| status.success());
+    let pytest = imports(&python, "pytest");
     if !importable || !pytest {
         eprintln!("skipping: {python} cannot import both coverage and pytest");
         return;
@@ -2652,11 +2667,7 @@ fn repl_interrupts_a_read_of_the_program_s_at_the_program_s_line() {
 )]
 fn pytest_project(dir: &Path) -> Option<String> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let pytest = Command::new(&python)
-        .args(["-c", "import pytest"])
-        .status()
-        .is_ok_and(|status| status.success());
-    if !pytest {
+    if !imports(&python, "pytest") {
         eprintln!("skipping: {python} cannot import pytest");
         return None;
     }

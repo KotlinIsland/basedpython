@@ -104,6 +104,10 @@ PYTHON=$(which python3.13) CARGO_PROFILE_DEV_OPT_LEVEL=1 CARGO_PROFILE_DEV_LTO=o
 
 CI pins it in a dedicated step, so it never sees this.
 
+The end-to-end tests of a `pytest` or `--coverage` run skip when `$PYTHON` cannot import `pytest` or
+`coverage`. Setting `BY_TEST_PYTHON_PROVIDES="pytest coverage"`, the modules the interpreter was
+given, makes them fail instead when it cannot import one. CI sets it.
+
 ### Fallback without nextest
 
 If `cargo nextest` is not available, use `cargo test` with the same environment variables. For the workspace, exclude `ty` and then run its other test targets explicitly. If new non-watcher test targets are added to `ty`, add them to the `ty` command below; `cargo metadata --no-deps --format-version 1` lists each crate's targets:
