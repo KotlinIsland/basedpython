@@ -2469,6 +2469,119 @@ print(x<CURSOR>)
         ");
     }
 
+    /// an import of the target declares a name of the importing module's own, and is a use of
+    /// the target, as is an assignment to it through the module
+    #[test]
+    fn without_declaration_keeps_imports_and_writes_from_other_modules() {
+        let test = CursorTest::builder()
+            .source("lib.py", "def <CURSOR>foo(): ...\nx = 1\n")
+            .source(
+                "main.py",
+                "from lib import foo\nimport lib\nfoo()\nlib.foo = foo\n",
+            )
+            .build();
+
+        assert_snapshot!(test.references_without_declaration(), @"
+        info[references]: Found 4 references
+         --> main.py:1:17
+          |
+        1 | from lib import foo
+          |                 ---
+        2 | import lib
+        3 | foo()
+          | ---
+        4 | lib.foo = foo
+          |     ---   ---
+        ");
+    }
+
+    /// only the assignment that declares an attribute is its declaration: one from another method,
+    /// or through an instance, writes it
+    #[test]
+    fn without_declaration_keeps_attribute_writes_outside_the_declaring_scope() {
+        let test = cursor_test(
+            "
+class C:
+    def __init__(self):
+        self.x<CURSOR> = 1
+
+    def reset(self):
+        self.x = 2
+
+c = C()
+c.x = 3
+print(c.x)
+",
+        );
+
+        assert_snapshot!(test.references_without_declaration(), @"
+        info[references]: Found 3 references
+          --> main.py:7:14
+           |
+         7 |         self.x = 2
+           |              -
+         8 |
+         9 | c = C()
+        10 | c.x = 3
+           |   -
+        11 | print(c.x)
+           |         -
+        ");
+    }
+
+    /// a function that rebinds a module's name through `global` writes it
+    #[test]
+    fn without_declaration_keeps_a_global_write() {
+        let test = cursor_test(
+            "
+x<CURSOR> = 1
+def f():
+    global x
+    x = 2
+print(x)
+",
+        );
+
+        assert_snapshot!(test.references_without_declaration(), @"
+        info[references]: Found 3 references
+         --> main.py:4:12
+          |
+        4 |     global x
+          |            -
+        5 |     x = 2
+          |     -
+        6 | print(x)
+          |       -
+        ");
+    }
+
+    /// a decorated `def` resolves to what its decorator returns, but is still where its name is
+    /// declared
+    #[test]
+    fn without_declaration_excludes_a_decorated_def() {
+        let test = cursor_test(
+            "
+def logged(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@logged
+def ru<CURSOR>n(): ...
+
+run()
+",
+        );
+
+        assert_snapshot!(test.references_without_declaration(), @"
+        info[references]: Found 1 references
+          --> main.py:10:1
+           |
+        10 | run()
+           | ---
+        ");
+    }
+
     #[test]
     fn without_declaration_excludes_initial_attribute_assignment() {
         let test = cursor_test(

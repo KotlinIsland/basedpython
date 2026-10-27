@@ -28,9 +28,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use ty_project::parallel::{ParallelIteratorExt, minimum_parallel_job_len};
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
-use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, ScopeKind};
+use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, ScopeId, ScopeKind};
 use ty_python_semantic::{
-    Db as SemanticDb, FixtureExposure, FixtureNameSource, ImportAliasResolution,
+    Db as SemanticDb, FixtureExposure, FixtureNameSource, HasDefinition, ImportAliasResolution,
     ResolvedDefinition, SemanticModel, fixture_bindings_for_parameter,
     fixture_exposures_for_definition, pytest_global_plugin_files,
 };
@@ -243,9 +243,26 @@ impl<'db> PreparedSearch<'db> {
     ) -> Option<Self> {
         let target_text = goto_target.to_string()?.into_owned();
 
-        let target_definitions = goto_target
-            .definitions(model, mode.to_import_alias_resolution())?
-            .goto_declaration(model, goto_target, ClassCallName::Class)?;
+        let definitions = goto_target.definitions(model, mode.to_import_alias_resolution())?;
+        // what the target is bound by as written, as well as what declares it
+        let mut declaring_scopes: FxHashSet<ScopeId<'db>> = definitions
+            .iter()
+            .filter_map(ResolvedDefinition::definition)
+            .map(|definition| definition.scope(model.db()))
+            .collect();
+        // a decorated `def` resolves to what its decorator returns, which is declared somewhere
+        // else, but the `def` declares the name where it is written
+        if let GotoTarget::FunctionDef(function) = goto_target {
+            declaring_scopes.insert(function.definition(model).scope(model.db()));
+        }
+        let target_definitions =
+            definitions.goto_declaration(model, goto_target, ClassCallName::Class)?;
+        declaring_scopes.extend(
+            target_definitions
+                .iter()
+                .filter_map(ResolvedDefinition::definition)
+                .map(|definition| definition.scope(model.db())),
+        );
         let import_alias_resolution = mode.to_import_alias_resolution();
         // An identifier can have both ordinary Python references and pytest fixture references.
         // Keep its Python definitions alongside any fixture roots used for the same search.
@@ -270,6 +287,7 @@ impl<'db> PreparedSearch<'db> {
             search: LocalReferenceSearch {
                 target_text,
                 target_definitions,
+                declaring_scopes,
                 import_alias_resolution,
                 fixture_resolution,
             },
@@ -558,6 +576,7 @@ impl<'db> FixtureReferenceTarget<'db> {
         let search = LocalReferenceSearch {
             target_text: self.name.to_string(),
             target_definitions: Definitions::new(Vec::new()),
+            declaring_scopes: FxHashSet::default(),
             import_alias_resolution: ImportAliasResolution::PreserveAliases,
             fixture_resolution: Some(self.resolution),
         };
@@ -604,6 +623,10 @@ impl<'db> FixtureReferenceTarget<'db> {
 struct LocalReferenceSearch<'db> {
     target_text: String,
     target_definitions: Definitions<'db>,
+    /// the scopes the target is declared in. without `includeDeclaration`, what declares the
+    /// target in one of them is left out, and what binds it anywhere else is a use of it: an
+    /// import of it, an attribute assignment through an instance or from another method
+    declaring_scopes: FxHashSet<ScopeId<'db>>,
     import_alias_resolution: ImportAliasResolution,
     fixture_resolution: Option<FixtureReferenceResolution<'db>>,
 }
@@ -969,9 +992,15 @@ impl<'a> LocalReferencesFinder<'a> {
                 // A parameter declares a Python local but references the fixture it requests.
                 // Keep fixture requests even when the fixture declaration is excluded.
                 OccurrenceKind::Declaration if fixture_request_match => false,
-                OccurrenceKind::Declaration => true,
+                // a fixture is exposed under the name its definition or an import binds, each
+                // a declaration of that exposure wherever it is
+                OccurrenceKind::Declaration if fixture_match => true,
+                OccurrenceKind::Declaration => self.is_in_declaring_scope(covering_node),
                 OccurrenceKind::Reference => false,
-                OccurrenceKind::Binding => self.is_declaration(covering_node),
+                OccurrenceKind::Binding => {
+                    (fixture_match || self.is_in_declaring_scope(covering_node))
+                        && self.is_declaration(covering_node)
+                }
             };
 
             if is_declaration {
@@ -1169,6 +1198,20 @@ impl<'a> LocalReferencesFinder<'a> {
                 );
             place.is_member() || is_class_attribute_declaration
         })
+    }
+
+    /// whether the occurrence binds the target in one of the scopes the target is declared in,
+    /// where binding it declares it, as opposed to using it. an import declares a name of the
+    /// importing module's own, an attribute assignment through an instance or from another
+    /// method writes the attribute, and a `global` statement names it
+    fn is_in_declaring_scope(&self, covering_node: &CoveringNode<'_>) -> bool {
+        self.model
+            .first_local_definition(covering_node)
+            .is_some_and(|definition| {
+                self.search
+                    .declaring_scopes
+                    .contains(&definition.scope(self.model.db()))
+            })
     }
 
     fn is_declaration(&self, covering_node: &CoveringNode<'_>) -> bool {

@@ -168,10 +168,10 @@ fn a_count_is_the_number_of_places_the_request_it_stands_for_goes_to() -> Result
     assert_eq!(
         counts,
         [
-            ("Shape".to_string(), Some(2), Some(1), Some(false)),
+            ("Shape".to_string(), Some(3), Some(1), Some(false)),
             ("area".to_string(), Some(1), Some(1), Some(true)),
             ("describe".to_string(), Some(1), Some(0), Some(false)),
-            ("total".to_string(), Some(1), None, Some(false)),
+            ("total".to_string(), Some(2), None, Some(false)),
         ]
     );
 
@@ -348,8 +348,8 @@ fn a_count_the_client_cancels_while_it_runs_is_answered_once_and_the_next_is_ans
         .expect("an answer for a document");
     let shape = &declarations.as_array().expect("a list of declarations")[0];
     assert_eq!(shape["name"], "Shape");
-    // `total` names it, and `main.by` and every module subclass it (an import is not a usage)
-    assert_eq!(shape["references"].as_u64(), Some(MODULES as u64 + 2));
+    // `total` names it, and `main.by` and every module import it and subclass it
+    assert_eq!(shape["references"].as_u64(), Some(2 * MODULES as u64 + 3));
     assert_eq!(shape["implementations"].as_u64(), Some(MODULES as u64 + 1));
 
     // and the cancelled count does not bring a second answer

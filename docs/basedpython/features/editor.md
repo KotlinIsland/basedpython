@@ -1258,6 +1258,13 @@ a reference is the first of these that holds, from the top, so an import is an
 class in `cast`'s first argument in a base list is a `typeHint`. the answer is
 `null` where `textDocument/references` answers `null`
 
+without `includeDeclaration`, both leave out only where the name is declared, in
+the scope that declares it: its `def` or `class`, an annotation of it, or an
+assignment no other assignment of it comes before. what binds it anywhere else
+uses it and stays, as PyCharm's Python counts it: an import of it, an assignment
+to it through its module or through an instance, from another method than the
+one that declares the attribute, or from a function naming it `global`
+
 ## type info
 
 an editor's *type info* shows the type of an expression, and which expression

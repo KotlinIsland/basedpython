@@ -386,7 +386,7 @@ print(Shape().area(), Square().area())
             )
             .build();
         assert_snapshot!(test.usage_counts(), @"
-        class Shape 2 refs=2 impls=1 <main.Square /main.py:4>
+        class Shape 2 refs=3 impls=1 <main.Square /main.py:4>
         method area 3 refs=1 impls=1 <main.Square /main.py:5>
         function unused 6 refs=0
         ");
