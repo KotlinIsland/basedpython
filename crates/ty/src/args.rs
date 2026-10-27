@@ -139,9 +139,11 @@ pub(crate) enum Command {
         /// the `.by` line it starts at, and one of a `.py` the project carries over
         /// by the file in the project rather than the staged copy that ran, so a
         /// profile viewer's way to a function's source leads to the file it was
-        /// written in. The runtime's helpers are named `<by runtime>`, at the line
-        /// of `_by_runtime.py` they start on. The profile starts at the program's
-        /// first line and ends after its last `atexit` handler.
+        /// written in. the runtime's helpers are named `<by runtime>`, at the line
+        /// of `_by_runtime.py` they start on. the profile starts at the program's
+        /// first line and ends after its last `atexit` handler, and by's own code is
+        /// not in it: the loader it puts on each module is folded into python's
+        /// import machinery, which called it
         #[arg(long, value_name = "PATH", conflicts_with = "coverage")]
         profile: Option<PathBuf>,
     },

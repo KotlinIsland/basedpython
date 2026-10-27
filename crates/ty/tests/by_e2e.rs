@@ -1951,6 +1951,94 @@ fn run_profile_names_the_runtime_s_helpers_by_the_runtime() {
     assert!(at_line_0.is_empty(), "{at_line_0:#?}");
 }
 
+/// the functions of `functions` in a file of by's own python, or called from one
+fn by_s_own(functions: &[Profiled]) -> Vec<&Profiled> {
+    let by_s = |file: &str| {
+        [
+            "_by_runner.py",
+            "_by_repl.py",
+            "_by_pytest.py",
+            "_by_coverage_plugin.py",
+        ]
+        .iter()
+        .any(|name| file.ends_with(name))
+    };
+    functions
+        .iter()
+        .filter(|function| {
+            by_s(&function.file) || function.callers.iter().any(|(file, ..)| by_s(file))
+        })
+        .collect()
+}
+
+/// a profile is the program's: the loader the runner puts on every staged module is
+/// folded into python's import machinery, which called it, as python's own finder and
+/// loader are there under `python main.py`; the runner ending the profile and writing
+/// it is not in it; and neither is the traceback the runner prints for an exception the
+/// program did not catch, which python prints once the program has ended
+#[test]
+fn run_profile_leaves_out_by_s_own_machinery() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        package.join("calc.by"),
+        "def double(n: int) -> int:\n    return n * 2\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from pkg.calc import double\n\n\nprint(double(2))\nraise ValueError('done')\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "--profile", "run.pstat", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("ValueError: done"), "{stderr}");
+    let functions = profiled_functions(&python, &dir.path().join("run.pstat"));
+
+    let calc = project.join("pkg/calc.by").display().to_string();
+    assert!(
+        functions
+            .iter()
+            .any(|function| function.file == calc && function.name == "double"),
+        "{functions:#?}"
+    );
+    assert_eq!(by_s_own(&functions).len(), 0, "{:#?}", by_s_own(&functions));
+    let machinery: Vec<&Profiled> = functions
+        .iter()
+        .filter(|function| {
+            function.name.contains("'disable' of '_lsprof.Profiler'")
+                || function.file.ends_with("traceback.py")
+        })
+        .collect();
+    assert!(machinery.is_empty(), "{machinery:#?}");
+    // what the runner's finder did is python's import machinery's: each function is
+    // called as often as it was, by a function that is in the profile
+    for function in &functions {
+        if function.callers.is_empty() {
+            continue;
+        }
+        for (file, line, name) in &function.callers {
+            assert!(
+                functions
+                    .iter()
+                    .any(|caller| (&caller.file, &caller.line, &caller.name) == (file, line, name)),
+                "{function:#?} is called by {name} in {file}, which is not in the profile"
+            );
+        }
+    }
+}
+
 /// a test runner compiles a test module itself, so the module's own top level runs
 /// as the staged `.py`, at the generated python's lines, and is still named by the
 /// `.by`
@@ -1995,6 +2083,8 @@ fn run_profile_maps_a_module_a_test_runner_compiled() {
             .any(|function| function.file.ends_with("test_calc.py")),
         "the staged test module is named: {functions:#?}"
     );
+    // pytest's plugin is pytest's to call, and is folded into what called it
+    assert_eq!(by_s_own(&functions).len(), 0, "{:#?}", by_s_own(&functions));
 }
 
 /// what a `by repl` session in `dir` printed, and how it ended, given `input` on its standard
@@ -2490,10 +2580,47 @@ fn repl_tells_an_editor_what_standard_input_is_read_for() {
     assert_eq!(rest, Vec::<serde_json::Value>::new());
 }
 
-/// A project of `.by` tests for pytest to run, with a module they test, checked
+/// a `KeyboardInterrupt` while the program reads standard input is the program's: its
+/// traceback ends at the line that read, as python's does, and not in the standard input
+/// `by repl` reads the program's lines through
+///
+/// unix only: the program interrupts itself with `os.kill(pid, SIGINT)`, which windows has no
+/// equivalent of, its `os.kill` ending the process for any signal but a console event
+#[cfg(unix)]
+#[test]
+fn repl_interrupts_a_read_of_the_program_s_at_the_program_s_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut session = EditorSession::start(dir.path(), &[]);
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    // ctrl-c, as the console sends it, once the program is waiting for its line
+    session.send_input(
+        "import os, signal, threading\n\
+         threading.Timer(0.2, os.kill, (os.getpid(), signal.SIGINT)).start()\n\
+         name = input('who? ')",
+    );
+    session.expect(&serde_json::json!({ "reading": "program" }));
+    session.expect(&serde_json::json!({ "finished": 1, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    let (status, _, stderr, _) = session.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    let frames: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.trim_start().starts_with("File "))
+        .collect();
+    assert_eq!(
+        frames,
+        [r#"  File "<by-input-1>", line 3, in <module>"#],
+        "{stderr}"
+    );
+    assert!(stderr.ends_with("KeyboardInterrupt\n"), "{stderr}");
+}
+
+/// a project of `.by` tests for pytest to run, with a module they test, checked
 /// against the environment the tests run in: the `conftest` imports pytest, which
 /// `--python` does not configure. `None`, having said why, when `$PYTHON` (or
-/// `python3`) cannot import pytest.
+/// `python3`) cannot import pytest
 #[expect(
     clippy::print_stderr,
     reason = "a skipped test must say why it skipped, or it reads as a pass"

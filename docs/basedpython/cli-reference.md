@@ -167,10 +167,14 @@ $ python -m pstats run.pstat
 ```
 
 the profile starts at the program's first line and ends after its last `atexit`
-handler, so it holds the program and not `by run`'s search for it. what `by run`
+handler, so it holds the program and not `by run`'s search for it, nor the
+writing of the snapshot or the traceback of an exception the program did not
+catch. `by`'s own python in the staged tree is not in it either: what `by run`
 does to load a module — finding it, and compiling it under its `.by` lines — is
-time the program spends, and is named by the runner's file in the staged tree.
-cProfile measures every thread on python 3.12 and later, and only the thread the
+time the program spends, so it is folded into python's import machinery, which
+called it, as python's own finder and loader are under `python main.py`. so is
+pytest's plugin into pytest, under a test run. a function of `by`'s called from
+two places is shared between them by how often each called it. cProfile measures every thread on python 3.12 and later, and only the thread the
 program starts on before that, as `python -m cProfile` does. a program that leaves
 without returning to `by run` — on `os._exit`, an `os.exec*` or a signal — leaves no snapshot, and `--coverage`
 cannot be combined with it, since a profile taken under coverage.py's tracer

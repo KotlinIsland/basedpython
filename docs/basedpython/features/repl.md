@@ -108,7 +108,9 @@ each expression statement of an input prints its value, through `sys.displayhook
 repl prints it: both of `1; 2`, and one in a loop's body, but not one in a function's. an input is numbered whether it runs or not, as python numbers its own. an
 exception prints a traceback whose frames name the
 input they ran in, at the input's line, with the line quoted, and the project's modules at
-their `.by` lines
+their `.by` lines. the python `by` runs the session with is not in it: a `KeyboardInterrupt`
+while the program reads standard input ends at the line that read, as it does in python's
+repl
 
 ```console
 >>> def ratio(a: int, b: int) -> float:
