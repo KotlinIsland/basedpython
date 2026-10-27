@@ -10752,7 +10752,7 @@ Source with applied edits:
         );
         assert_snapshot!(test.inlay_hints(), @"
 
-        def twice(value)[ -> list[Unknown]]:
+        def twice(value)[ -> list[value@twice]]:
             return [value, value]
 
         ---------------------------------------------
@@ -10764,19 +10764,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:22
            |
-        LL | def twice(value)[ -> list[Unknown]]:
+        LL | def twice(value)[ -> list[value@twice]]:
            |                      ^^^^
-
-        info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/ty_extensions/_internal.pyi:LL:1
-           |
-        LL | Unknown: _SpecialForm
-           | ^^^^^^^
-        info: Source
-          --> main2.py:LL:27
-           |
-        LL | def twice(value)[ -> list[Unknown]]:
-           |                           ^^^^^^^
         ");
 
         // We still suggest edits/imports for a user-defined class named Unknown.

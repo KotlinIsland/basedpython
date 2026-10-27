@@ -6,6 +6,8 @@ use crate::db::tests::{TestDb, TestDbBuilder, setup_db};
 use crate::lint::{LintSource, RuleSelection};
 use crate::place::symbol;
 use crate::place::{ConsideredDefinitions, Place, PlaceAndQualifiers};
+use crate::types::function::OverloadLiteral;
+use crate::types::inferred_signature::inferred_return_type;
 use crate::types::{KnownClass, KnownInstanceType, check_types};
 use ruff_db::diagnostic::{Diagnostic, DiagnosticId, Severity};
 use ruff_db::files::{File, system_path_to_file};
@@ -1388,6 +1390,76 @@ fn function_inference_regions_are_disjoint() -> anyhow::Result<()> {
         crate::types::definition_expression_type(&db, definition, default),
         defaults.expression_type(default)
     );
+    Ok(())
+}
+
+/// basedpython: what a function's body reads of its own signature — an unannotated parameter, a
+/// type variable or `ParamSpec` the signature binds — it reads without the return type recovered
+/// from that same body, so none of it is a cycle through that return type
+///
+/// each is inferred on its own: inferring the whole body would also infer `y`'s annotation, which
+/// is in the module's scope, and checking the module's `def f` asks for `f`'s return type
+#[test]
+fn a_body_reads_its_own_signature_without_the_return_type_it_recovers() -> anyhow::Result<()> {
+    fn function(db: &TestDb, file: File) -> Option<OverloadLiteral<'_>> {
+        let definition = first_public_binding(db, file, "f");
+        infer_definition_types(db, definition)
+            .function_type(definition)
+            .map(|function| function.literal(db).last_definition)
+    }
+
+    /// the definition of `name` in `f`'s body
+    fn body_definition<'db>(
+        db: &'db TestDb,
+        function: OverloadLiteral<'db>,
+        name: &str,
+    ) -> Option<Definition<'db>> {
+        let scope = function.body_scope(db);
+        let symbol = place_table(db, scope).symbol_id(name)?;
+        let use_def = use_def_map(db, scope);
+        use_def
+            .end_of_scope_symbol_declarations(symbol)
+            .find_map(|declaration| declaration.declaration.definition())
+            .or_else(|| {
+                use_def
+                    .end_of_scope_symbol_bindings(symbol)
+                    .find_map(|binding| binding.binding.definition())
+            })
+    }
+
+    let mut db = setup_db();
+    db.write_dedented(
+        "/src/main.py",
+        r#"
+        from typing import Callable, ParamSpec, TypeVar
+
+        T = TypeVar("T")
+        P = ParamSpec("P")
+
+        def f(x, y: T, *args: P.args, **kwargs: P.kwargs):
+            w: T
+            forwarded: Callable[P, None]
+            return x
+        "#,
+    )?;
+    let file = system_path_to_file(&db, "/src/main.py")?;
+
+    db.clear_salsa_events();
+    let Some(literal) = function(&db, file) else {
+        anyhow::bail!("expected a function");
+    };
+    for name in ["x", "w", "forwarded"] {
+        let Some(definition) = body_definition(&db, literal, name) else {
+            anyhow::bail!("expected a definition of `{name}`");
+        };
+        infer_definition_types(&db, definition);
+    }
+    let events = db.take_salsa_events();
+
+    let Some(literal) = function(&db, file) else {
+        anyhow::bail!("expected a function");
+    };
+    assert_function_query_was_not_run(&db, inferred_return_type, literal, &events);
     Ok(())
 }
 

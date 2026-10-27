@@ -125,6 +125,17 @@ reveal_type(ident(1))  # revealed: Literal[1]
 reveal_type(ident("a"))  # revealed: Literal["a"]
 ```
 
+the return type can mention the hole anywhere, and each call solves it from its own argument:
+
+```py
+def twice(value):
+    return [value]
+
+reveal_type(twice)  # revealed: def twice(value) -> list[value]
+reveal_type(twice(1))  # revealed: list[int]
+reveal_type(twice("a"))  # revealed: list[str]
+```
+
 the hole's [PEP 696](https://peps.python.org/pep-0696/) default is the parameter's own default
 value, so a call that omits the argument still names a type rather than leaving the hole unsolved:
 

@@ -2207,9 +2207,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     /// basedpython: for an unannotated parameter, look up the type that
-    /// [`OverloadLiteral::raw_signature`] filled in for it — from the sibling overloads when this
-    /// is an overload implementation, or (under `sound-types`) from the overridden base method.
-    /// matching is by name
+    /// [`OverloadLiteral::parameter_signature`] filled in for it — from the sibling overloads when
+    /// this is an overload implementation, or (under `sound-types`) from the overridden base
+    /// method. matching is by name
     fn inherited_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let ty = self.signature_parameter_type(parameter)?;
         // an anonymous hole is not inherited from anywhere; it is offered separately, after
@@ -2232,7 +2232,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         let enclosing = nearest_enclosing_function(db, self.index, self.scope())?;
         enclosing
-            .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
+            .last_definition_parameter_signature(db, ReturnCallableTypeVarScope::Public)
             .parameters()
             .iter()
             .find(|candidate| candidate.name() == Some(&parameter.name.id))?
@@ -2247,8 +2247,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn signature_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let db = self.db();
         let enclosing = nearest_enclosing_function(db, self.index, self.scope())?;
+        // not the raw signature: that one's return type can be read off this very body
         let signature =
-            enclosing.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
+            enclosing.last_definition_parameter_signature(db, ReturnCallableTypeVarScope::Public);
         let matched = signature
             .parameters()
             .iter()

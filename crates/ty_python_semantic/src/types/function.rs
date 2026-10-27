@@ -1167,18 +1167,22 @@ impl<'db> OverloadLiteral<'db> {
         }
     }
 
-    /// Typed internally-visible "raw" signature for this function.
-    /// That is, the return types of async functions are not wrapped in `CoroutineType[...]`.
-    /// The `return_callable_typevar_scope` controls whether type variables that only appear in a
-    /// return-position `Callable` stay bound to the function or move to the returned callable.
+    /// the [raw signature](Self::raw_signature) of this function short of the return type it
+    /// recovers: every parameter with the type it is written with or takes from elsewhere, and the
+    /// return type only when one is written (or an untyped property's initialiser declares it)
     ///
-    /// ## Warning
-    ///
-    /// This uses the semantic index to find the definition of the function. This means that if the
-    /// calling query is not in the same file as this function is defined in, then this will create
-    /// a cross-module dependency directly on the full AST which will lead to cache
-    /// over-invalidation.
-    pub(super) fn raw_signature(
+    /// a parameter's type never depends on what the body returns, so whatever reads a parameter
+    /// of this function from inside its body — the parameter's own definition, the default it
+    /// inherits, a type variable or `ParamSpec` of its signature that the body names — reads it
+    /// from here rather than from the raw signature. through the raw signature, inferring the body
+    /// would depend on the return type recovered from that same body, and every such body would be
+    /// a cycle through itself
+    #[salsa::tracked(
+        returns(ref),
+        cycle_initial=|_, _, _, _| Signature::bottom(),
+        heap_size=ruff_memory_usage::heap_size,
+    )]
+    pub(super) fn parameter_signature(
         self,
         db: &'db dyn Db,
         return_callable_typevar_scope: ReturnCallableTypeVarScope,
@@ -1413,7 +1417,10 @@ impl<'db> OverloadLiteral<'db> {
             if !overload_list.is_empty() {
                 let overload_sigs: Vec<Signature<'db>> = overload_list
                     .iter()
-                    .map(|ol| ol.raw_signature(db, ReturnCallableTypeVarScope::Public))
+                    .map(|ol| {
+                        ol.parameter_signature(db, ReturnCallableTypeVarScope::Public)
+                            .clone()
+                    })
                     .collect();
                 raw_signature.inherit_unannotated_from_overloads(db, env, &overload_sigs, false);
             }
@@ -1471,6 +1478,33 @@ impl<'db> OverloadLiteral<'db> {
                 self.binds_first_parameter(db),
             );
         }
+
+        raw_signature
+    }
+
+    /// typed internally-visible "raw" signature for this function.
+    /// that is, the return types of async functions are not wrapped in `CoroutineType[...]`.
+    /// the `return_callable_typevar_scope` controls whether type variables that only appear in a
+    /// return-position `Callable` stay bound to the function or move to the returned callable
+    ///
+    /// this is [`Self::parameter_signature`] with the return type that is not written filled in,
+    /// which can mean inferring the function's body
+    ///
+    /// ## Warning
+    ///
+    /// this uses the semantic index to find the definition of the function. this means that if the
+    /// calling query is not in the same file as this function is defined in, then this will create
+    /// a cross-module dependency directly on the full AST which will lead to cache
+    /// over-invalidation
+    pub(super) fn raw_signature(
+        self,
+        db: &'db dyn Db,
+        return_callable_typevar_scope: ReturnCallableTypeVarScope,
+    ) -> Signature<'db> {
+        let env = &ProgramEnvironment::from_scope(self.body_scope(db));
+        let mut raw_signature = self
+            .parameter_signature(db, return_callable_typevar_scope)
+            .clone();
 
         // basedpython: a return type nobody wrote is drawn from the first source that supplies
         // one; see `return_type_source`. the body is the last of them, and recovering from it
@@ -3232,6 +3266,18 @@ impl<'db> FunctionType<'db> {
     ) -> Signature<'db> {
         self.literal(db)
             .last_definition_raw_signature(db, return_callable_typevar_scope)
+    }
+
+    /// [`OverloadLiteral::parameter_signature`] of the last overload or implementation of this
+    /// function: its raw signature short of a return type recovered from its body
+    pub(super) fn last_definition_parameter_signature(
+        self,
+        db: &'db dyn Db,
+        return_callable_typevar_scope: ReturnCallableTypeVarScope,
+    ) -> &'db Signature<'db> {
+        self.literal(db)
+            .last_definition
+            .parameter_signature(db, return_callable_typevar_scope)
     }
 
     /// Return the kind for this function when it is converted into a [`CallableType`].

@@ -257,7 +257,7 @@ fn find_typevar_binding<'db>(
                 infer_definition_types(db, definition).function_type(definition)
             {
                 let signature = function_ty
-                    .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Lexical);
+                    .last_definition_parameter_signature(db, ReturnCallableTypeVarScope::Lexical);
                 if let Some(bound) = signature.paramspec_component_binding(db, typevar)
                     && bound.binding_context(db).definition() != Some(definition)
                     && is_visible_across_class_boundary(db, bound, crossed_class_scope)
@@ -515,11 +515,14 @@ impl<'db> GenericContext<'db> {
                 let definition = index.expect_single_definition(class);
                 original_class_type(db, definition)?.generic_context(db)
             }
+            // a function's type variables are the ones its parameters and written return type
+            // bind, so they are read without the return type recovered from its body: a body
+            // naming one of them would otherwise depend on what that same body returns
             NodeWithScopeKind::Function(function) => {
                 let definition = index.expect_single_definition(function);
                 infer_definition_types(db, definition)
                     .function_type(definition)?
-                    .last_definition_signature(db)
+                    .last_definition_parameter_signature(db, ReturnCallableTypeVarScope::Public)
                     .generic_context
             }
             NodeWithScopeKind::TypeAlias(type_alias) => {
@@ -546,7 +549,7 @@ impl<'db> GenericContext<'db> {
             let definition = index.expect_single_definition(function);
             infer_definition_types(db, definition)
                 .function_type(definition)?
-                .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Lexical)
+                .last_definition_parameter_signature(db, ReturnCallableTypeVarScope::Lexical)
                 .generic_context
         } else {
             Self::of_node(db, node, index)
