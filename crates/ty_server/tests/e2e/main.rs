@@ -1627,6 +1627,18 @@ impl TestServerBuilder {
     }
 
     /// Enable or disable the completion snippet capability.
+    /// Set what the client says of completions, in place of anything said before.
+    pub(crate) fn with_completion_capabilities(
+        mut self,
+        completion: lsp_types::CompletionClientCapabilities,
+    ) -> Self {
+        self.client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .completion = Some(completion);
+        self
+    }
+
     pub(crate) fn enable_completion_snippets(mut self, enabled: bool) -> Self {
         self.client_capabilities
             .text_document

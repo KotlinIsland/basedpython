@@ -1760,3 +1760,77 @@ x =
     assert_eq!(ask(&mut server, Position::new(8, 4)), None);
     Ok(())
 }
+
+/// the text a postfix `for` written at `x.` in `if x:` writes, and the mode it asks the client to
+/// insert it in, for a client with `capabilities`
+fn postfix_for(
+    capabilities: lsp_types::CompletionClientCapabilities,
+) -> Result<(String, Option<lsp_types::InsertTextMode>)> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/main.by");
+    let content = "def f(x: list[int]):\n    if x:\n        x.\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default().with_auto_import(false))
+        .with_workspace(workspace_root, None)?
+        .with_file(main, content)?
+        .with_completion_capabilities(capabilities)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(main, content, 1);
+
+    let completions = server.completion_request(&server.file_uri(main), Position::new(2, 10));
+    let item = completions
+        .into_iter()
+        .find(|item| item.label == "for")
+        .expect("a postfix `for`");
+    let text = match item.text_edit {
+        Some(lsp_types::CompletionItemTextEdit::TextEdit(edit)) => edit.new_text,
+        other => panic!("expected a text edit, got {other:?}"),
+    };
+    Ok((text, item.insert_text_mode))
+}
+
+/// a statement a postfix template writes over several lines is indented for the way the client
+/// inserts it: one level past the line it is accepted on for a client that indents each new line
+/// as that line, which a client is taken to do unless it says it inserts the text as it is
+#[test]
+fn postfix_statement_is_indented_for_how_the_client_inserts_it() -> Result<()> {
+    // says nothing, as the JetBrains IDEs' client does, which indents each new line as the line
+    assert_eq!(
+        postfix_for(lsp_types::CompletionClientCapabilities::default())?,
+        ("for item in x:\n    ".to_string(), None)
+    );
+
+    // inserts every completion as it is
+    assert_eq!(
+        postfix_for(lsp_types::CompletionClientCapabilities {
+            insert_text_mode: Some(lsp_types::InsertTextMode::AsIs),
+            ..Default::default()
+        })?,
+        ("for item in x:\n            ".to_string(), None)
+    );
+
+    // inserts as it is unless an item asks otherwise, and this one does
+    assert_eq!(
+        postfix_for(lsp_types::CompletionClientCapabilities {
+            insert_text_mode: Some(lsp_types::InsertTextMode::AsIs),
+            completion_item: Some(lsp_types::ClientCompletionItemOptions {
+                insert_text_mode_support: Some(
+                    lsp_types::ClientCompletionItemInsertTextModeOptions::new(vec![
+                        lsp_types::InsertTextMode::AsIs,
+                        lsp_types::InsertTextMode::AdjustIndentation,
+                    ])
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })?,
+        (
+            "for item in x:\n    ".to_string(),
+            Some(lsp_types::InsertTextMode::AdjustIndentation)
+        )
+    );
+
+    Ok(())
+}

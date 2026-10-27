@@ -11,12 +11,12 @@ use std::borrow::Cow;
 use lsp_types::{
     CompletionList, CompletionParams, LspRequestMethod, MessageDirection, Request, Uri,
 };
-use ty_ide::{CompletionCapabilities, smart_completion};
+use ty_ide::smart_completion;
 use ty_project::{ProjectDatabase, SemanticDb as _};
 use ty_python_semantic::ProgramEnvironment;
 
 use crate::document::PositionExt;
-use crate::server::api::requests::completion::completion_list;
+use crate::server::api::requests::completion::{completion_capabilities, completion_list};
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -76,11 +76,7 @@ impl BackgroundDocumentRequestHandler for SmartCompletionRequestHandler {
             db,
             &env,
             snapshot.workspace_settings().completions(),
-            CompletionCapabilities::default().snippets(
-                snapshot
-                    .resolved_client_capabilities()
-                    .supports_completion_item_snippets(),
-            ),
+            completion_capabilities(snapshot.resolved_client_capabilities()),
             program_file,
             offset,
         ) else {

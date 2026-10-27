@@ -44,6 +44,14 @@ editor supports snippets
 each is a completion labelled with its name, `for`, and the detail `postfix`,
 whose `textEdit` replaces the whole `x.for` and whose `filterText` is that text
 
+a statement that opens a suite continues on a line indented one level past the
+line it is written on. an editor indents each new line of a completion as the
+line it is accepted on, so the text says only the one level; an editor whose
+client says it inserts a completion's text as it is
+(`completion.insertTextMode: asIs`) gets the line's own indentation written in
+too, and one that can be told per completion is told
+(`insertTextMode: adjustIndentation`)
+
 `.let` and `.var` spell basedpython bindings; the rest are valid python and are
 offered in `.py` files too
 

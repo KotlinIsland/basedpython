@@ -81,8 +81,7 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
             db,
             &env,
             snapshot.workspace_settings().completions(),
-            CompletionCapabilities::default()
-                .snippets(client_capabilities.supports_completion_item_snippets()),
+            completion_capabilities(client_capabilities),
             program_file,
             offset,
         );
@@ -152,6 +151,12 @@ pub(super) fn completion_list<'db>(
                     .insert
                     .as_ref()
                     .map_or_else(|| label.clone(), ToString::to_string);
+                // a text over several lines is written for a client that indents its new lines
+                // as the line it is accepted on; one that can be told to is
+                let insert_text_mode = (client_capabilities
+                    .supports_completion_item_adjust_indentation()
+                    && new_text.contains('\n'))
+                .then_some(lsp_types::InsertTextMode::AdjustIndentation);
                 let import_suffix = comp
                     .module_name
                     .and_then(|name| import_edit.is_some().then(|| format!(" (import {name})")));
@@ -210,6 +215,7 @@ pub(super) fn completion_list<'db>(
                 CompletionItem {
                     label,
                     kind,
+                    insert_text_mode,
                     sort_text: Some(format!("{i:-max_index_len$}")),
                     detail: type_display,
                     label_details,
@@ -234,6 +240,16 @@ pub(super) fn completion_list<'db>(
         item_defaults: None,
         apply_kind: None,
     }
+}
+
+/// what a completion's text can be written for: snippets, and how the client indents the new
+/// lines of a text over several
+pub(super) fn completion_capabilities(
+    client_capabilities: ResolvedClientCapabilities,
+) -> CompletionCapabilities {
+    CompletionCapabilities::default()
+        .snippets(client_capabilities.supports_completion_item_snippets())
+        .adjusts_indentation(client_capabilities.completion_adjusts_indentation())
 }
 
 impl RetriableRequestHandler for CompletionRequestHandler {

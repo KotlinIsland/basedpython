@@ -50,6 +50,8 @@ bitflags::bitflags! {
         const FOLDING_RANGE_KIND_STRING = 1 << 31;
         const FOLDING_RANGE_KIND_COLLECTION = 1 << 32;
         const FOLDING_RANGE_KIND_ANNOTATION = 1 << 33;
+        const COMPLETION_ITEM_ADJUST_INDENTATION = 1 << 34;
+        const COMPLETION_INSERTS_AS_IS = 1 << 35;
     }
 }
 
@@ -230,6 +232,23 @@ impl ResolvedClientCapabilities {
     /// Returns `true` if the client supports snippets in completion items.
     pub(crate) const fn supports_completion_item_snippets(self) -> bool {
         self.contains(Self::COMPLETION_ITEM_SNIPPET_SUPPORT)
+    }
+
+    /// Returns `true` if a completion item can ask the client to indent each new line of its
+    /// text as the line the item is accepted on (`insertTextMode: adjustIndentation`).
+    pub(crate) const fn supports_completion_item_adjust_indentation(self) -> bool {
+        self.contains(Self::COMPLETION_ITEM_ADJUST_INDENTATION)
+    }
+
+    /// Returns `true` if the client indents each new line of a completion's text as the line the
+    /// completion is accepted on: a completion that asks it to, where it can be asked, and
+    /// otherwise every one, unless the client says it inserts the text as it is.
+    ///
+    /// a client that says neither is taken to adjust: VS Code says it does, and the client of
+    /// the `JetBrains` IDEs says nothing about it and adjusts
+    pub(crate) const fn completion_adjusts_indentation(self) -> bool {
+        self.supports_completion_item_adjust_indentation()
+            || !self.contains(Self::COMPLETION_INSERTS_AS_IS)
     }
 
     /// Returns `true` if the client prefers Markdown over plain text in completion items.
@@ -527,6 +546,24 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::COMPLETION_ITEM_SNIPPET_SUPPORT;
+        }
+
+        let completion = text_document.and_then(|text_document| text_document.completion.as_ref());
+        if completion
+            .and_then(|completion| completion.completion_item.as_ref())
+            .and_then(|completion_item| completion_item.insert_text_mode_support.as_ref())
+            .is_some_and(|support| {
+                support
+                    .value_set
+                    .contains(&lsp_types::InsertTextMode::AdjustIndentation)
+            })
+        {
+            flags |= Self::COMPLETION_ITEM_ADJUST_INDENTATION;
+        }
+        if completion.and_then(|completion| completion.insert_text_mode)
+            == Some(lsp_types::InsertTextMode::AsIs)
+        {
+            flags |= Self::COMPLETION_INSERTS_AS_IS;
         }
 
         let folding_range =

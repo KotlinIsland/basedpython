@@ -382,12 +382,25 @@ fn replacing(completions: Vec<Completion<'_>>, typed: TextRange) -> Vec<Completi
 pub struct CompletionCapabilities {
     /// Whether the client supports snippets.
     snippets: bool,
+    /// Whether the client indents each new line of a completion's text as the line the
+    /// completion is accepted on, rather than inserting the text as it is. A completion that
+    /// opens a line then writes it indented relative to that line, or the client indents it
+    /// twice.
+    adjusts_indentation: bool,
 }
 
 impl CompletionCapabilities {
     #[must_use]
     pub fn snippets(self, snippets: bool) -> Self {
-        Self { snippets }
+        Self { snippets, ..self }
+    }
+
+    #[must_use]
+    pub fn adjusts_indentation(self, adjusts_indentation: bool) -> Self {
+        Self {
+            adjusts_indentation,
+            ..self
+        }
     }
 }
 
@@ -4065,9 +4078,15 @@ fn add_postfix_completions<'db>(
     // the client's own idea of the word under the cursor is the attribute
     // alone, but a rewrite consumes the expression it is written on as well
     let replace = TextRange::new(value.start(), expr.range().end().max(cursor.offset));
-    // a statement-shaped rewrite needs a line of its own to continue onto
+    // a statement-shaped rewrite needs a line of its own to continue onto, indented a level past
+    // the statement's own. a client that indents each new line as the line the completion is
+    // accepted on adds the statement's own indentation itself
     let indent = cursor.statement_expression(expr).map(|statement| {
-        let own = line_indentation(source.as_str(), statement.start());
+        let own = if capabilities.adjusts_indentation {
+            ""
+        } else {
+            line_indentation(source.as_str(), statement.start())
+        };
         let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
         format!("{own}{}", stylist.indentation().as_str())
     });
@@ -14496,6 +14515,25 @@ count = 3
         );
     }
 
+    /// A client that indents each new line as the line the completion is
+    /// accepted on gets the new line indented one level past that line, and
+    /// adds the statement's own indentation itself.
+    #[test]
+    fn basedpython_postfix_statement_indentation_for_a_client_that_adjusts_it() {
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "def f(x: list[int]):\n    if x:\n        x.<CURSOR>",
+            )
+            .completion_test_builder()
+            .adjusts_indentation(true)
+            .filter(|c| c.name == "for");
+        assert_eq!(
+            inserted_text(&builder.build(), "for"),
+            "for item in x:\n    "
+        );
+    }
+
     /// A statement-shaped rewrite has no statement to replace when the
     /// expression is only part of one.
     #[test]
@@ -17015,6 +17053,11 @@ raise <CURSOR>
         /// (e.g. `$0`).
         fn snippets_support(mut self, supported: bool) -> CompletionTestBuilder {
             self.capabilities = self.capabilities.snippets(supported);
+            self
+        }
+
+        fn adjusts_indentation(mut self, adjusts: bool) -> CompletionTestBuilder {
+            self.capabilities = self.capabilities.adjusts_indentation(adjusts);
             self
         }
 
