@@ -520,7 +520,7 @@ pub(crate) fn cmd_run(
             ),
         })?;
 
-    let mut code = status.code().unwrap_or(1);
+    let mut code = exit_code(status);
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
         if file.is_file() {
             let report = cwd.join(report);

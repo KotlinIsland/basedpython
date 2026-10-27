@@ -1072,6 +1072,31 @@ fn run_checks_against_the_environment_a_launcher_runs_in() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
 }
 
+/// a program a signal ends makes `by run` exit as a shell reports that, with 128 and the
+/// signal's number
+#[cfg(unix)]
+#[test]
+fn run_exits_with_the_signal_that_ended_the_program() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "import os\nimport signal\n\nos.kill(os.getpid(), signal.SIGKILL)\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert_eq!(
+        output.status.code(),
+        Some(128 + 9),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// the program runs out of a directory of transpiled copies that is deleted when
 /// the run ends, so every path python derives from a module's origin named a
 /// temporary file — leaving a tool started anywhere but the project root with

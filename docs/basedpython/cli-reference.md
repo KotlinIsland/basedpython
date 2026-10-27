@@ -85,6 +85,9 @@ reports it and exits 1. a debugger that stops where such an exception leaves the
 outermost frame stops in the program by treating the runner's frames as it
 treats `runpy`'s under `python -m`: as the launcher's, not the program's
 
+a signal that ends the program ends `by run` with 128 and the signal's number,
+as a shell reports it
+
 `--in-build` runs the program in the tree `by run` staged rather than in the
 directory it was typed in. the default is right for an application: a relative
 path on the command line, and anything the program reads or writes beside the
