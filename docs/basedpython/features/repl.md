@@ -60,6 +60,48 @@ two things differ from `by run`, because a session is never run as a whole. a `f
 binds its names when it is entered rather than at their first use, so a name that cannot be
 imported says so then, and a `def main` is a function like any other: nothing calls it
 
+## starting in a module
+
+`by repl --module app.main` starts the session in a module of the project, named as `by run`
+takes one — what an editor's *run with console* does. the module runs first, as `__main__`, with
+the `__file__`, package and spec `by run` gives it, and the session goes on from there with its
+names. its source is the session's first: each input is checked and transpiled as the module's
+continuation, as the module itself, so what it defines is defined, a `let` of its stays
+read-only, and a relative import resolves, in the module and in an input
+
+```by
+# app/main.by
+from .helpers import double
+
+let base = 21
+answer = double(base)
+print(f"answer is {answer}")
+```
+
+```console
+$ by repl --module app.main
+answer is 42
+>>> answer + 1
+43
+>>> base = 1
+error[invalid-assignment]: read-only symbol `base` cannot be reassigned
+ --> <by-input-2>:1:1
+  |
+1 | base = 1
+  | ^^^^^^^^ reassigned here
+  |
+ ::: app/main.by:3:1
+  |
+3 | let base = 21
+  | ---- declared read-only here
+```
+
+it runs as the start of a session, not as a program: its `def main` is a function like any
+other, which nothing calls — `main()` is one input away — and a value its last line computes is
+not printed. a diagnostic or a traceback that points into it names its file and line. a module
+the project does not have, or one whose python cannot run as a session's start, keeps the
+session from starting
+
 ## what is printed
 
 each expression statement of an input prints its value, through `sys.displayhook`, as python's
@@ -155,8 +197,9 @@ an editor's console runs `by repl` as a process and talks to it through its stan
     `\`; `invalid` — no more lines can make it valid, and running it reports why. blank input,
     and input of comments only, is `complete`
 
-- **completion.** `--session-file PATH` keeps `PATH` holding the session's source — the inputs
-    that ran, in order, each ending in a newline — from the moment the session starts. completion
+- **completion.** `--session-file PATH` keeps `PATH` holding the session's source — the module
+    it started in, if it started in one, then the inputs that ran, in order, each ending in a
+    newline — from the moment the session starts. completion
     in the console is the language server's ordinary completion, asked of a document whose text
     is that file's followed by the input being typed, at the caret's offset past the file's
     length: the same module the session checks the input as, so what is offered is what the

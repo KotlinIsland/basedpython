@@ -2,9 +2,9 @@
 //!
 //! a session is a module whose source is the inputs that ran, in order, and each new input is
 //! checked and transpiled as that module's continuation (see `docs/basedpython/features/repl.md`).
-//! What is here is the part of that which is a question about source text: whether what has been
+//! what is here is the part of that which is a question about source text: whether what has been
 //! typed is a whole input yet, which the command and the language server both answer, and which
-//! of the python the module comes to is the new input's to run.
+//! of the python the module comes to is the new input's to run
 
 use std::collections::HashSet;
 
@@ -123,12 +123,12 @@ fn ends_with_blank_line(text: &str) -> bool {
     last_line.trim().is_empty() && before_last_newline.contains('\n')
 }
 
-/// The inputs of a session that ran, as the source of the one module they make.
+/// the inputs of a session that ran, as the source of the one module they make
 ///
-/// Each new input is checked and transpiled as this module's continuation, by
+/// each new input is checked and transpiled as this module's continuation, by
 /// [`Session::with_input`]; [`Session::select`] then picks out of the python the module came
 /// to the statements that are the input's to run, and [`Session::commit`] makes the input part
-/// of the session once it is handed over to run.
+/// of the session once it is handed over to run
 #[derive(Debug, Default)]
 pub struct Session {
     source: String,
@@ -148,13 +148,13 @@ struct RanInput {
     line_count: u32,
 }
 
-/// Where an input sits in the module made of a session and that input.
+/// where an input sits in the module made of a session and that input
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputLines {
     /// the module line, 0-based, the input's first line is
-    pub first: u32,
+    first: u32,
     /// how many lines the input is
-    pub count: u32,
+    count: u32,
 }
 
 impl InputLines {
@@ -166,7 +166,7 @@ impl InputLines {
     }
 }
 
-/// What of the python a session and its new input came to runs for the input.
+/// what of the python a session and its new input came to runs for the input
 #[derive(Debug, PartialEq, Eq)]
 pub struct Selection {
     /// the top-level statements of the python that run, by their index among them, in order
@@ -178,7 +178,7 @@ pub struct Selection {
     texts: Vec<String>,
 }
 
-/// Why the python written for an input cannot run.
+/// why the python written for an input cannot run
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// the python written for an earlier input, which has already run, came out differently
@@ -191,14 +191,14 @@ pub enum Refusal {
 }
 
 impl Session {
-    /// The module made of the session's inputs: the session's source.
+    /// the module made of the session's inputs: the session's source
     pub fn source(&self) -> &str {
         &self.source
     }
 
-    /// The source of the module made of the session and `input` after it, and where in it
-    /// the input is. An input is a whole number of lines, so one that does not end in a line
-    /// ending is given one.
+    /// the source of the module made of the session and `input` after it, and where in it
+    /// the input is. an input is a whole number of lines, so one that does not end in a line
+    /// ending is given one
     pub fn with_input(&self, input: &str) -> (String, InputLines) {
         let mut source = self.source.clone();
         let first = line_count(&source);
@@ -210,25 +210,25 @@ impl Session {
         (source, InputLines { first, count })
     }
 
-    /// The input of the session that holds `line` of its source, 0-based, as the number it is
+    /// the input of the session that holds `line` of its source, 0-based, as the number it is
     /// named by and the line of it, 0-based. `None` for a line past the session's, which is
-    /// the new input's.
-    pub fn input_at(&self, line: u32) -> Option<(u32, u32)> {
+    /// the new input's
+    fn input_at(&self, line: u32) -> Option<(u32, u32)> {
         self.inputs
             .iter()
             .find(|input| line >= input.first_line && line - input.first_line < input.line_count)
             .map(|input| (input.number, line - input.first_line))
     }
 
-    /// Which of `python`, what the module made of the session and the input at `input` was
+    /// which of `python`, what the module made of the session and the input at `input` was
     /// transpiled to, runs for the input. `line_map` is the transpile's: for each line of
-    /// `python`, the module line it was written for.
+    /// `python`, the module line it was written for
     ///
-    /// A top-level statement written for the input's lines runs. One written for an earlier
+    /// a top-level statement written for the input's lines runs. one written for an earlier
     /// input's has run already, and is skipped — unless it came out differently this time,
     /// which means the input changed what an earlier input meant after it ran, and refuses
-    /// the input. One written for no line at all is the transpiler's own, a runtime helper
-    /// or an import it needs, and runs the first time it appears.
+    /// the input. one written for no line at all is the transpiler's own, a runtime helper
+    /// or an import it needs, and runs the first time it appears
     pub fn select(
         &self,
         python: &str,
@@ -300,8 +300,8 @@ impl Session {
         })
     }
 
-    /// Make `input`, named `<by-input-{number}>`, part of the session, with the python
-    /// `selection` picked for it as what has run.
+    /// make `input`, named `<by-input-{number}>`, part of the session, with the python
+    /// `selection` picked for it as what has run
     pub fn commit(&mut self, number: u32, input: &str, selection: Selection) {
         let (source, lines) = self.with_input(input);
         self.source = source;
@@ -314,14 +314,14 @@ impl Session {
     }
 }
 
-/// How many lines `text` is, counting a last line with no line ending.
+/// how many lines `text` is, counting a last line with no line ending
 fn line_count(text: &str) -> u32 {
     let endings = text.bytes().filter(|byte| *byte == b'\n').count();
     let unended = usize::from(!text.is_empty() && !text.ends_with('\n'));
     u32::try_from(endings + unended).unwrap_or(u32::MAX)
 }
 
-/// The offset each line of `text` starts at.
+/// the offset each line of `text` starts at
 fn line_starts(text: &str) -> Vec<usize> {
     std::iter::once(0)
         .chain(text.match_indices('\n').map(|(at, _)| at + 1))

@@ -188,6 +188,7 @@ and `build` alike
 ```sh
 by repl                             # an interactive session, on the project's interpreter
 by repl --python python3.14         # on another interpreter
+by repl --module app.main           # starting in a module of the project, after running it
 ```
 
 an interactive session in which you type basedpython, each input checked and transpiled as the
@@ -195,7 +196,9 @@ continuation of the inputs before it and run in one python process. it starts wh
 would, with the project staged as `by run` stages it, so the project's modules import as they
 do in a program. `--session-file PATH` keeps `PATH` holding the inputs that ran, for an editor's
 console to complete against, and `--events PORT` tells the console, on a connection to `PORT`,
-whether standard input is read for an input or by the program. see [the repl](features/repl.md)
+whether standard input is read for an input or by the program. `--module MODULE` starts the
+session in a module of the project: it runs first, and each input is its continuation. see
+[the repl](features/repl.md)
 
 ## `by build`
 

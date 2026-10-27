@@ -1997,8 +1997,8 @@ fn run_profile_maps_a_module_a_test_runner_compiled() {
     );
 }
 
-/// What a `by repl` session in `dir` printed, and how it ended, given `input` on its standard
-/// input, which is not a terminal: no prompts are written.
+/// what a `by repl` session in `dir` printed, and how it ended, given `input` on its standard
+/// input, which is not a terminal: no prompts are written
 fn repl_session(dir: &Path, input: &str, extra: &[&str]) -> (Option<i32>, String, String) {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
@@ -2027,7 +2027,7 @@ fn repl_session(dir: &Path, input: &str, extra: &[&str]) -> (Option<i32>, String
     )
 }
 
-/// A project with a `.by` module for a session to import.
+/// a project with a `.by` module for a session to import
 fn project_with_a_module(dir: &Path) {
     let package = dir.join("pkg");
     fs::create_dir_all(&package).unwrap();
@@ -2138,6 +2138,61 @@ fn repl_takes_a_framed_input_whole_and_hands_input_lines_to_the_program() {
     assert_eq!(stdout, "2\n'basedpython'\n", "{stderr}");
 }
 
+/// as in python's repl, each expression statement of an input prints its value, not only the
+/// last: those on one line, and those in a block, but not those in a function's body
+#[test]
+fn repl_prints_the_value_of_every_expression_statement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "1; 2\n\
+         x = 3; x\n\
+         for i in range(2):\n    i\n\n\
+         def quiet() -> None:\n    4\n\n\
+         quiet()\n\
+         None\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "1\n2\n3\n0\n1\n", "{stderr}");
+}
+
+/// a line that opens a block, starts a clause after one, decorates a definition, leaves a
+/// bracket or a triple-quoted string open or ends in `\` waits for the next line, and a block
+/// runs at the blank line after it, whatever statement opened it
+#[test]
+fn repl_waits_for_the_rest_of_every_kind_of_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "try:\n    int(\"x\")\nexcept ValueError:\n    print(\"caught\")\n\n\
+         match 3:\n    case 3:\n        print(\"three\")\n\n\
+         class Box:\n    size = 2\n\n\
+         def deco(f):\n    return f\n\n\
+         @deco\ndef twice(x: int) -> int:\n    return x * 2\n\n\
+         twice(Box.size)\n\
+         flag = len(\"\") > 0\n\
+         if flag:\n    print(\"if\")\nelif not flag:\n    print(\"elif\")\nelse:\n    print(\"else\")\n\n\
+         for i in range(1):\n    pass\nelse:\n    print(\"for else\")\n\n\
+         with open(\"data.txt\", \"w\") as f:\n    f.write(\"x\")\n\n\
+         async def fetch() -> int:\n    return 5\n\n\
+         import asyncio\n\
+         asyncio.run(fetch())\n\
+         total = (1 +\n    2)\n\
+         total\n\
+         text = \"\"\"a\nb\"\"\"\n\
+         text\n\
+         value = 1 + \\\n    2\n\
+         value\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        stdout, "caught\nthree\n4\nelif\nfor else\n1\n5\n3\n'a\\nb'\n3\n",
+        "{stderr}"
+    );
+}
+
 /// the session's module is the project's own code, so a `sealed` class declared in it can be
 /// subclassed in a later input, as in any module of the project
 #[test]
@@ -2172,8 +2227,94 @@ fn repl_session_file_holds_the_inputs_that_ran() {
     );
 }
 
-/// A `by repl` session in a project, driven as an editor's console drives one: through pipes,
-/// listening for the session's events on a port of its own with `--events`.
+/// a package whose module `app.main` imports a sibling relatively, for a session to start in
+fn project_with_a_program(dir: &Path) {
+    let package = dir.join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        package.join("helpers.by"),
+        "def double(x: int) -> int:\n    return x * 2\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("main.by"),
+        "from .helpers import double\n\nlet base = 21\nanswer = double(base)\nprint(f\"answer is {answer}\")\n\n\ndef main():\n    print(\"main ran\")\n",
+    )
+    .unwrap();
+}
+
+/// with `--module`, the session starts in a module of the project: it runs first, as
+/// `__main__` and as `by run` runs it but for its `def main`, and each input is its
+/// continuation — its names are defined, its `let` stays read-only, and its relative import
+/// resolves, in the check and when the session runs
+#[test]
+fn repl_starts_in_a_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_program(dir.path());
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "answer + 1\n\
+         base = 1\n\
+         from .helpers import double as twice\n\
+         twice(base)\n\
+         main()\n\
+         (__name__, __package__, __file__.endswith('main.by'))\n",
+        &["--module", "app.main", "--session-file", "session.by"],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        stdout, "answer is 42\n43\n42\nmain ran\n('__main__', 'app', True)\n",
+        "{stderr}"
+    );
+    // the refused input is reported against itself, and the declaration it breaks against the
+    // module's own file
+    let main = Path::new("app").join("main.by").display().to_string();
+    assert!(
+        stderr.contains("error[invalid-assignment]")
+            && stderr.contains("--> <by-input-2>:1:1")
+            && stderr.contains(&format!("::: {main}:3:1")),
+        "{stderr}"
+    );
+    // the session's source starts with the module's
+    let session = fs::read_to_string(dir.path().join("session.by")).expect("the session file");
+    assert!(
+        session.starts_with("from .helpers import double\n")
+            && session.ends_with("main()\n(__name__, __package__, __file__.endswith('main.by'))\n"),
+        "{session}"
+    );
+}
+
+/// a module the project does not have is no session to start in
+#[test]
+fn repl_does_not_start_in_a_module_the_project_does_not_have() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_program(dir.path());
+    let (status, stdout, stderr) = repl_session(dir.path(), "1\n", &["--module", "app.nowhere"]);
+    assert_ne!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(
+        stderr.contains("no module named `app.nowhere` in the project"),
+        "{stderr}"
+    );
+}
+
+/// a session whose interpreter a signal ends exits as a shell reports that, with 128 and the
+/// signal's number
+#[cfg(unix)]
+#[test]
+fn repl_exits_with_the_signal_that_ended_its_interpreter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, _, stderr) = repl_session(
+        dir.path(),
+        "import os\nimport signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
+        &[],
+    );
+    assert_eq!(status, Some(128 + 9), "{stderr}");
+}
+
+/// a `by repl` session in a project, driven as an editor's console drives one: through pipes,
+/// listening for the session's events on a port of its own with `--events`
 struct EditorSession {
     child: Child,
     stdin: ChildStdin,
@@ -2181,8 +2322,8 @@ struct EditorSession {
 }
 
 impl EditorSession {
-    /// The session started in `dir` with `extra` arguments, its connection taken once it has
-    /// sent the token the editor gave it.
+    /// the session started in `dir` with `extra` arguments, its connection taken once it has
+    /// sent the token the editor gave it
     fn start(dir: &Path, extra: &[&str]) -> Self {
         let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port to listen on");
@@ -2240,7 +2381,7 @@ impl EditorSession {
         session
     }
 
-    /// The next event the session sent, `null` once it has closed the connection.
+    /// the next event the session sent, `null` once it has closed the connection
     fn next_event(&mut self) -> serde_json::Value {
         let mut line = String::new();
         self.events.read_line(&mut line).expect("an event");
@@ -2250,13 +2391,13 @@ impl EditorSession {
         serde_json::from_str(&line).expect("an event is a line of json")
     }
 
-    /// Wait for `expected`, the next event.
+    /// wait for `expected`, the next event
     #[track_caller]
     fn expect(&mut self, expected: &serde_json::Value) {
         assert_eq!(&self.next_event(), expected);
     }
 
-    /// Send `text` to the session's standard input as it is.
+    /// send `text` to the session's standard input as it is
     fn send(&mut self, text: &str) {
         self.stdin
             .write_all(text.as_bytes())
@@ -2264,12 +2405,12 @@ impl EditorSession {
         self.stdin.flush().expect("the session reads");
     }
 
-    /// Send `text` as an editor sends an input, framed as a paste.
+    /// send `text` as an editor sends an input, framed as a paste
     fn send_input(&mut self, text: &str) {
         self.send(&format!("\x1b[200~{text}\x1b[201~\n"));
     }
 
-    /// End the session's input, and what it printed and how it ended.
+    /// end the session's input, and what it printed and how it ended
     fn finish(self) -> (Option<i32>, String, String, Vec<serde_json::Value>) {
         let Self {
             child,

@@ -133,9 +133,9 @@ impl Rebuilder {
         }
     }
 
-    /// The project's db built again, and not frozen: what a caller holds that goes on
+    /// the project's db built again, and not frozen: what a caller holds that goes on
     /// changing an input after the build, as a `by repl` session changes its module with
-    /// every input.
+    /// every input
     pub fn project_database(&self) -> ProjectDatabase {
         let mut db =
             ProjectDatabase::use_defaults(self.metadata.clone(), OsSystem::new(&self.root));

@@ -148,8 +148,8 @@ pub(crate) struct RunFlags<'a> {
     pub(crate) profile: Option<&'a Path>,
 }
 
-/// What `by run` and `by repl` both start from: the project checked, transpiled and staged
-/// into a temporary tree, and the interpreter that runs out of it.
+/// what `by run` and `by repl` both start from: the project checked, transpiled and staged
+/// into a temporary tree, and the interpreter that runs out of it
 pub(crate) struct StagedRun {
     /// where the command was invoked, which is where the program runs
     pub(crate) cwd: PathBuf,
@@ -168,7 +168,7 @@ pub(crate) struct StagedRun {
     module: Option<String>,
 }
 
-/// What a staged tree is for.
+/// what a staged tree is for
 #[derive(Clone, Copy)]
 pub(crate) enum RunTarget<'a> {
     /// `by run`'s program: the module named, or the project's entry point
@@ -177,9 +177,9 @@ pub(crate) enum RunTarget<'a> {
     Session,
 }
 
-/// Check, transpile and stage the project around the working directory for `target`, on the
+/// check, transpile and stage the project around the working directory for `target`, on the
 /// interpreter `python_flag` names or discovery finds. `Err` is the exit status of a project
-/// that cannot run: one that does not check, having said why.
+/// that cannot run: one that does not check, having said why
 #[allow(clippy::print_stderr)]
 pub(crate) fn stage_run(
     min_version: Option<&str>,
@@ -555,6 +555,16 @@ pub(crate) fn cmd_run(
     // exiting while it's still in scope would leak the directory
     drop(tmp);
     std::process::exit(code);
+}
+
+/// the status `by` exits with for a program that ended with `status`: the program's own, or
+/// for one a signal ended, 128 and the signal's number, as a shell reports it
+pub(crate) fn exit_code(status: std::process::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        return 128 + signal;
+    }
+    status.code().unwrap_or(1)
 }
 
 /// The source roots a distribution's packages come from.
@@ -2068,7 +2078,9 @@ class _Session:
         # a thread of the program's can read standard input while the main thread talks to
         # `by repl`, and each message goes whole
         self._lock = threading.Lock()
-        self.tell({"token": token})
+        # alone on its line, which is all `by repl` reads of a connection before it is the token
+        with _holding_ctrl_c():
+            self._socket.sendall((token + "\n").encode("ascii"))
 
     def _send(self, message):
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -2231,6 +2243,44 @@ def _read_input(session):
     return text
 
 
+def _codes(reply, text, filename):
+    """The code objects of the python `by repl` wrote for `text`, in `reply`, which run for
+    it, named `filename` and at the lines of `text`."""
+    generated = reply["lines"]
+    widths = [len(line.rstrip("\r\n")) for line in text.splitlines()]
+
+    def by_line(line):
+        mapped = generated[line - 1] if line is not None and 0 < line <= len(generated) else None
+        return 0 if mapped is None else mapped + 1
+
+    def width(line):
+        return widths[line - 1] if 0 < line <= len(widths) else 0
+
+    module = ast.parse(reply["python"])
+    body = [module.body[index] for index in reply["statements"]]
+    if not body:
+        return []
+    if reply["display"]:
+        # compiled as python's repl compiles an input, each expression statement prints its value
+        code = compile(ast.Interactive(body=body), filename, "single", dont_inherit=True)
+    else:
+        code = compile(ast.Module(body=body, type_ignores=[]), filename, "exec", dont_inherit=True)
+    return [_by_runner._relined(code, filename, by_line, width)]
+
+
+def _execute(session, namespace, number, codes):
+    """Run `codes`, input `number`'s, which is part of the session from the moment it starts,
+    whatever it raises."""
+    try:
+        session.tell({"ran": number})
+        for code in codes:
+            exec(code, namespace)
+    except SystemExit:
+        raise
+    except BaseException:
+        sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
+
+
 def _run(session, namespace, text):
     """Run `text`, an input: the number it was given, and whether it ran, which makes it part
     of the session whatever it raised."""
@@ -2245,36 +2295,10 @@ def _run(session, namespace, text):
         # refused: `by repl` has said why
         return number, False
     filename = f"<by-input-{number}>"
-    lines = text.splitlines(True)
     # what a traceback quotes for a line of the input, for as long as the session lasts
-    linecache.cache[filename] = (len(text), None, lines, filename)
-    generated = reply["lines"]
-    widths = [len(line.rstrip("\r\n")) for line in lines]
-
-    def by_line(line):
-        mapped = generated[line - 1] if line is not None and 0 < line <= len(generated) else None
-        return 0 if mapped is None else mapped + 1
-
-    def width(line):
-        return widths[line - 1] if 0 < line <= len(widths) else 0
-
-    module = ast.parse(reply["python"])
-    body = [module.body[index] for index in reply["statements"]]
-    shown = None
-    if reply["display"] and body and isinstance(body[-1], ast.Expr):
-        shown = body.pop()
+    linecache.cache[filename] = (len(text), None, text.splitlines(True), filename)
     try:
-        codes = []
-        if body:
-            codes.append(
-                compile(ast.Module(body=body, type_ignores=[]), filename, "exec", dont_inherit=True)
-            )
-        if shown is not None:
-            # as python's repl compiles an input, which prints an expression's value
-            codes.append(
-                compile(ast.Interactive(body=[shown]), filename, "single", dont_inherit=True)
-            )
-        codes = [_by_runner._relined(code, filename, by_line, width) for code in codes]
+        codes = _codes(reply, text, filename)
     except Exception:
         sys.stderr.write("error: the python this input was transpiled to does not compile:\n")
         sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
@@ -2282,15 +2306,27 @@ def _run(session, namespace, text):
     except KeyboardInterrupt:
         sys.stderr.write("\nKeyboardInterrupt\n")
         return number, False
-    try:
-        session.tell({"ran": number})
-        for code in codes:
-            exec(code, namespace)
-    except SystemExit:
-        raise
-    except BaseException:
-        sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
+    _execute(session, namespace, number, codes)
     return number, True
+
+
+def _start_in(session, main_module, start):
+    """Run the module the session starts in, which `start` is what `by repl` wrote for, as
+    `__main__`: in the session's namespace, with the module's file, package and spec, as `by
+    run` runs it, so its relative imports resolve and a spawned process finds it."""
+    by_path = start["file"]
+    try:
+        _, spec = _by_runner._entry_spec(start["module"])
+        codes = _codes(start, start["text"], by_path)
+    except Exception:
+        sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
+        return
+    sys.argv = [by_path]
+    main_module.__file__ = by_path
+    main_module.__loader__ = spec.loader
+    main_module.__package__ = spec.parent
+    main_module.__spec__ = spec
+    _execute(session, main_module.__dict__, start["input"], codes)
 
 
 def main():
@@ -2303,6 +2339,14 @@ def main():
     namespace = main_module.__dict__
     if session.events:
         sys.stdin = _ProgramStdin(_STDIN, session)
+    try:
+        start = session.ask({"start": True})
+        if "module" in start:
+            _start_in(session, main_module, start)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nKeyboardInterrupt\n")
+    except EOFError:
+        return
     if _INTERACTIVE:
         try:
             import readline  # noqa: F401 — line editing for `input`

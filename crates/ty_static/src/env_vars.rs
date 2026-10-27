@@ -79,11 +79,11 @@ impl EnvVars {
     /// side was. Any other value is refused.
     pub const BY_TEST_REPORTER: &'static str = "BY_TEST_REPORTER";
 
-    /// The token `by repl --events` sends first on the connection it makes to an editor.
+    /// the token `by repl --events` sends first on the connection it makes to an editor
     ///
-    /// An editor listening for a session's events sets this to a value nothing else can guess,
-    /// and takes the connection whose first line carries it as the session's. The program the
-    /// session runs does not see it.
+    /// an editor listening for a session's events sets this to a value nothing else can guess,
+    /// and takes the connection whose first line carries it as the session's. the program the
+    /// session runs does not see it
     pub const BY_REPL_EVENTS_TOKEN: &'static str = "BY_REPL_EVENTS_TOKEN";
 
     /// Enable uv integration.

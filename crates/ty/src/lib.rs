@@ -149,6 +149,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             lowering,
             session_file,
             events,
+            module,
         } => by_repl::cmd_repl(
             min_version.as_deref(),
             &lowering,
@@ -156,6 +157,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 python: python.as_deref(),
                 session_file: session_file.as_deref(),
                 events,
+                module: module.as_deref(),
             },
         ),
         Command::Init {

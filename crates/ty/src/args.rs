@@ -146,37 +146,46 @@ pub(crate) enum Command {
         profile: Option<PathBuf>,
     },
 
-    /// Start an interactive session in basedpython.
+    /// start an interactive session in basedpython
     ///
-    /// Each input is checked and transpiled as the continuation of the module made of the
+    /// each input is checked and transpiled as the continuation of the module made of the
     /// inputs that ran before it, and runs in one python process that lives as long as the
-    /// session. The project is staged as `by run` stages it, so its modules import as they do
-    /// in a program.
+    /// session. the project is staged as `by run` stages it, so its modules import as they do
+    /// in a program
     Repl {
         /// minimum Python version the session's python must run on
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
-        /// The interpreter to run on, or the environment holding it, as `by run` takes it.
+        /// the interpreter to run on, or the environment holding it, as `by run` takes it
         #[arg(long, value_name = "PATH", alias = "venv")]
         python: Option<PathBuf>,
         #[command(flatten)]
         lowering: LoweringArgs,
-        /// Keep PATH holding the session's source: the inputs that ran, in order.
+        /// keep PATH holding the session's source: the inputs that ran, in order
         ///
-        /// For an editor's console, whose completion is asked of the module this file holds
-        /// followed by the input being typed.
+        /// for an editor's console, whose completion is asked of the module this file holds
+        /// followed by the input being typed
         #[arg(long, value_name = "PATH")]
         session_file: Option<PathBuf>,
-        /// Tell an editor what the session reads standard input for, on a connection of its own.
+        /// tell an editor what the session reads standard input for, on a connection of its own
         ///
         /// `by repl` connects to PORT on the loopback interface and writes a line of JSON there
         /// each time it waits for an input, the program reads standard input, or an input
         /// finishes: a console that talks to it through pipes cannot tell otherwise whether a
-        /// line it sends is an input or a line for the program. The first line carries the token
-        /// `BY_REPL_EVENTS_TOKEN` holds, for the editor to know the connection is the session's.
+        /// line it sends is an input or a line for the program. the first line carries the token
+        /// `BY_REPL_EVENTS_TOKEN` holds, for the editor to know the connection is the session's
         #[arg(long, value_name = "PORT")]
         events: Option<u16>,
+        /// start in MODULE, a module of the project named as `by run` takes one: it runs
+        /// first, as `__main__`, and the session goes on from it with its names
+        ///
+        /// the module's source is the session's first, and each input is checked and
+        /// transpiled as its continuation, as the module itself, so a relative import resolves
+        /// in an input as it does in the module. its `def main` is a function like any other in
+        /// a session: nothing calls it
+        #[arg(long, value_name = "MODULE")]
+        module: Option<String>,
     },
 
     /// Start a new project.

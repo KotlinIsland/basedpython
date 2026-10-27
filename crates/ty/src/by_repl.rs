@@ -1,26 +1,28 @@
-//! `by repl`: basedpython typed an input at a time, run in one python process.
+//! `by repl`: basedpython typed an input at a time, run in one python process
 //!
-//! The project is staged as `by run` stages it, and the interpreter runs `_by_repl.py` in that
-//! tree, which reads the inputs, runs them and prints what python's repl prints. Each input is
-//! a question for this process first: whether it is whole yet, and what python it runs as. The
+//! the project is staged as `by run` stages it, and the interpreter runs `_by_repl.py` in that
+//! tree, which reads the inputs, runs them and prints what python's repl prints. each input is
+//! a question for this process first: whether it is whole yet, and what python it runs as. the
 //! session is one module whose source is the inputs that ran (see
-//! `docs/basedpython/features/repl.md`), held here as a file the project's db checks and
-//! transpiles like any other, and [`by_stage::session`] picks the input's statements out of what
-//! the module comes to.
+//! `docs/basedpython/features/repl.md`), held here as the text of a file the project's db checks
+//! and transpiles like any other, and [`by_stage::session`] picks the input's statements out of
+//! what the module comes to. the file is one of its own outside the project, or, for a session
+//! started in a module of the project with `--module`, that module's: its source is the
+//! session's first, and the inputs follow it
 //!
-//! The two halves talk over a socket on the loopback interface rather than over the
+//! the two halves talk over a socket on the loopback interface rather than over the
 //! interpreter's standard streams, because those are the program's: `input()` reads standard
-//! input, and the program's output is its own. The interpreter is told the port and a token in
+//! input, and the program's output is its own. the interpreter is told the port and a token in
 //! its environment, and the first thing it sends is the token, so nothing else on the machine
-//! that finds the port is answered.
+//! that finds the port is answered
 //!
-//! For the same reason an editor that asks with `--events` is told what standard input is
+//! for the same reason an editor that asks with `--events` is told what standard input is
 //! being read for — an input, or the program — on a connection of its own: the interpreter says
-//! so to this process, which passes it on.
+//! so to this process, which passes it on
 
 use std::fs;
 use std::hash::{BuildHasher, RandomState};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -37,12 +39,15 @@ use ruff_db::diagnostic::{
 };
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::panic::PanicActivity;
+use ruff_db::source::source_text;
 use ruff_db::system::SystemPath;
+use ruff_diagnostics::SourceMap;
 use ruff_notebook::NotebookIndex;
-use ruff_python_ast::{PySourceType, Stmt};
+use ruff_python_ast::PySourceType;
 use ruff_python_parser::parse_unchecked_source;
 use ruff_source_file::{SourceFile, SourceFileBuilder};
 use ruff_text_size::{TextRange, TextSize};
+use salsa::Setter as _;
 use serde_json::{Value, json};
 use ty_project::{Db as _, ProjectDatabase};
 
@@ -52,11 +57,11 @@ use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_commands::{BY_REPL_FILENAME, RunTarget, StagedRun, stage_run};
 
-/// How long the interpreter has to connect once it has started, and to send its token once it
-/// has connected: it does both before it runs anything of the session's.
+/// how long the interpreter has to connect and send its token once it has started: it does both
+/// before it runs anything of the session's
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// What `by repl` is given beyond what it stages the project with.
+/// what `by repl` is given beyond what it stages the project with
 pub(crate) struct ReplFlags<'a> {
     /// `--python`: the interpreter, or the environment holding it
     pub(crate) python: Option<&'a Path>,
@@ -65,9 +70,11 @@ pub(crate) struct ReplFlags<'a> {
     /// `--events`: the port on the loopback interface an editor listens for the session's
     /// events on
     pub(crate) events: Option<u16>,
+    /// `--module`: the module of the project the session starts in
+    pub(crate) module: Option<&'a str>,
 }
 
-#[allow(clippy::exit, clippy::print_stderr)]
+#[expect(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_repl(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
@@ -96,7 +103,11 @@ pub(crate) fn cmd_repl(
         fs::write(path, "").with_context(|| format!("could not write {}", path.display()))?;
     }
     let events = flags.events.map(connect_events).transpose()?;
-    let mut repl = Repl::new(&rebuilder, config, session_file, events)?;
+    let mut repl = Repl::new(rebuilder, config, flags.module, session_file, events)?;
+    // a session that cannot start in the module it was asked to has said why, and does not start
+    if !repl.prepare_start()? {
+        return Ok(ExitStatus::Failure);
+    }
 
     let listener =
         TcpListener::bind(("127.0.0.1", 0)).context("could not listen for the session")?;
@@ -107,21 +118,24 @@ pub(crate) fn cmd_repl(
         .arg(tree.path().join(BY_REPL_FILENAME))
         .env("BY_REPL_PORT", port.to_string())
         .env("BY_REPL_TOKEN", &token)
+        // set either way, so a value this process was started with is never the session's
+        .env(
+            "BY_REPL_EVENTS",
+            if flags.events.is_some() { "1" } else { "0" },
+        )
         // the editor's, not the program's
         .env_remove(EnvVars::BY_REPL_EVENTS_TOKEN)
         .current_dir(&cwd);
-    if flags.events.is_some() {
-        command.env("BY_REPL_EVENTS", "1");
-    }
+    // ctrl-c is the interpreter's to answer, with a `KeyboardInterrupt` in the input it is
+    // running; this process lives as long as the session does, from before the interpreter
+    // can be sent one
+    ctrlc::set_handler(|| {}).context("could not hand ctrl-c to the session")?;
     let mut child = command.spawn().with_context(|| {
         format!(
             "could not run `{}`, the interpreter from {}",
             interpreter.path, interpreter.origin
         )
     })?;
-    // ctrl-c is the interpreter's to answer, with a `KeyboardInterrupt` in the input it is
-    // running; this process lives as long as the session does
-    ctrlc::set_handler(|| {}).context("could not hand ctrl-c to the session")?;
 
     let served = accept(&listener, &token, &mut child).and_then(|reader| match reader {
         Some(reader) => repl.serve(reader),
@@ -138,11 +152,11 @@ pub(crate) fn cmd_repl(
     drop(repl);
     // `process::exit` skips destructors, and the tree is a temporary directory
     drop(tree);
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(crate::by_commands::exit_code(status));
 }
 
-/// The editor's connection for the session's events, to `port` on the loopback interface, with
-/// the token it set in `BY_REPL_EVENTS_TOKEN` sent on it.
+/// the editor's connection for the session's events, to `port` on the loopback interface, with
+/// the token it set in `BY_REPL_EVENTS_TOKEN` sent on it
 fn connect_events(port: u16) -> anyhow::Result<TcpStream> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .with_context(|| format!("could not connect to the editor's events port, {port}"))?;
@@ -152,7 +166,7 @@ fn connect_events(port: u16) -> anyhow::Result<TcpStream> {
     Ok(stream)
 }
 
-/// A token nothing else can guess, from the process's own random hasher keys.
+/// a token nothing else can guess, from the process's own random hasher keys
 fn token() -> String {
     let state = RandomState::new();
     format!(
@@ -162,61 +176,100 @@ fn token() -> String {
     )
 }
 
-/// The interpreter's connection, read through the one buffer every message after the token
+/// the interpreter's connection, read through the one buffer every message after the token
 /// is read through, once it has sent `token`. `None` when the interpreter ended without
-/// making one.
+/// making one
+///
+/// anything on the machine can connect to the port, so no connection holds up another: each
+/// is read as its bytes arrive, only as far as the token goes, and one that sends anything but
+/// the token is dropped
 fn accept(
     listener: &TcpListener,
     token: &str,
     child: &mut std::process::Child,
 ) -> anyhow::Result<Option<BufReader<TcpStream>>> {
     listener.set_nonblocking(true)?;
+    let expected = format!("{token}\n").into_bytes();
+    // each connection that has yet to send the whole token, with what it has sent of it
+    let mut connections: Vec<(TcpStream, Vec<u8>)> = Vec::new();
     let started = Instant::now();
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                stream.set_nonblocking(false)?;
-                stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
-                let mut reader = BufReader::new(stream);
-                let mut first = String::new();
-                // a connection that is not the interpreter's is dropped, and the wait goes on
-                if reader.read_line(&mut first).is_ok()
-                    && serde_json::from_str::<Value>(&first)
-                        .is_ok_and(|message| message["token"] == token)
-                {
-                    reader.get_ref().set_read_timeout(None)?;
-                    return Ok(Some(reader));
-                }
+                stream.set_nonblocking(true)?;
+                connections.push((stream, Vec::new()));
+                continue;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if child.try_wait()?.is_some() {
-                    return Ok(None);
-                }
-                anyhow::ensure!(
-                    started.elapsed() < CONNECT_TIMEOUT,
-                    "the interpreter did not connect to the session"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            Err(error) if is_transient(&error) => {}
             Err(error) => return Err(error).context("could not accept the session's interpreter"),
         }
+        let mut index = 0;
+        while index < connections.len() {
+            let (stream, sent) = &mut connections[index];
+            // never past the token, so what the interpreter sends after it stays for the reader
+            let mut buffer = vec![0; expected.len() - sent.len()];
+            match stream.read(&mut buffer) {
+                Ok(read)
+                    if read > 0 && expected.starts_with(&[&sent[..], &buffer[..read]].concat()) =>
+                {
+                    sent.extend_from_slice(&buffer[..read]);
+                    if sent.len() == expected.len() {
+                        let (stream, _) = connections.swap_remove(index);
+                        stream.set_nonblocking(false)?;
+                        return Ok(Some(BufReader::new(stream)));
+                    }
+                }
+                Err(error) if is_transient(&error) => {}
+                // closed, or sent something that is not the token
+                _ => {
+                    connections.swap_remove(index);
+                    continue;
+                }
+            }
+            index += 1;
+        }
+        if child.try_wait()?.is_some() {
+            return Ok(None);
+        }
+        anyhow::ensure!(
+            started.elapsed() < CONNECT_TIMEOUT,
+            "the interpreter did not connect to the session"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
-/// The session as this process holds it: the module, the db that checks it, and what each
-/// input that ran was.
+/// whether `error`, from a socket that does not block, only says to try again
+fn is_transient(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+    )
+}
+
+/// the session as this process holds it: the module, the db that checks it, and what each
+/// input that ran was
 struct Repl {
     db: ProjectDatabase,
-    /// the project, with the module's directory one of its first-party roots
+    /// the project, with the module's directory one of its first-party roots when it is a file
+    /// of its own
     rebuilder: Rebuilder,
     /// what the module is transpiled for: the project's run configuration, as a session
     config: Config,
     session: Session,
-    /// the file the module is checked as, outside the project
+    /// the file the module is checked as, whose text the db holds as the session's source: one
+    /// of its own outside the project, or the module of the project the session started in
     module: File,
-    module_path: PathBuf,
-    /// keeps the module's directory as long as the session
-    _module_dir: tempfile::TempDir,
+    /// keeps the directory of a module of its own as long as the session
+    _module_dir: Option<tempfile::TempDir>,
+    /// `--module`: the module of the project the session started in
+    started_in: Option<StartModule>,
+    /// how much of the session's source is the module it started in, which a diagnostic points
+    /// into as the module's file rather than as an input
+    prelude: TextSize,
+    /// what the interpreter runs before the first input: the module the session starts in, as
+    /// `run` answers for an input
+    start: Option<Value>,
     /// each input that ran, for a diagnostic of a later one to point into
     inputs: Vec<RanInput>,
     /// the input handed over to run, which is part of the session once the interpreter says it
@@ -229,6 +282,16 @@ struct Repl {
     /// `--events`: the editor's connection, which each event the interpreter reports is
     /// passed on to
     events: Option<TcpStream>,
+}
+
+/// the module of the project a session starts in
+struct StartModule {
+    /// the name it was given, as `by run` takes one
+    name: String,
+    /// its file
+    path: PathBuf,
+    /// its source, as the session starts with it
+    text: String,
 }
 
 struct RanInput {
@@ -245,25 +308,52 @@ struct Pending {
 
 impl Repl {
     fn new(
-        rebuilder: &Rebuilder,
+        rebuilder: Rebuilder,
         config: Config,
+        start_in: Option<&str>,
         session_file: Option<PathBuf>,
         events: Option<TcpStream>,
     ) -> anyhow::Result<Self> {
-        let module_dir = tempfile::TempDir::new().context("failed to create temp directory")?;
-        // a module name nothing a project imports is called, since the directory is searched
-        // for first-party modules after the project's own roots
-        let module_path = module_dir.path().join("__by_session__.by");
-        fs::write(&module_path, "")?;
-        let directory = SystemPath::from_std_path(module_dir.path())
-            .with_context(|| format!("non-utf8 path: {}", module_dir.path().display()))?;
-        let rebuilder = rebuilder.with_first_party_root(directory);
-        let mut db = rebuilder.project_database();
-        let system_path = SystemPath::from_std_path(&module_path)
-            .with_context(|| format!("non-utf8 path: {}", module_path.display()))?;
-        let module = system_path_to_file(&db, system_path)
-            .with_context(|| format!("could not read {}", module_path.display()))?;
-        // outside the project, so checked only as a file the project has open
+        let (rebuilder, mut db, module, module_dir, started_in) = match start_in {
+            None => {
+                let module_dir =
+                    tempfile::TempDir::new().context("failed to create temp directory")?;
+                // a module name nothing a project imports is called, since the directory is
+                // searched for first-party modules after the project's own roots
+                let module_path = module_dir.path().join("__by_session__.by");
+                fs::write(&module_path, "")?;
+                let directory = SystemPath::from_std_path(module_dir.path())
+                    .with_context(|| format!("non-utf8 path: {}", module_dir.path().display()))?;
+                let rebuilder = rebuilder.with_first_party_root(directory);
+                let db = rebuilder.project_database();
+                let system_path = SystemPath::from_std_path(&module_path)
+                    .with_context(|| format!("non-utf8 path: {}", module_path.display()))?;
+                let module = system_path_to_file(&db, system_path)
+                    .with_context(|| format!("could not read {}", module_path.display()))?;
+                (rebuilder, db, module, Some(module_dir), None)
+            }
+            Some(name) => {
+                let db = rebuilder.project_database();
+                // the module `by run` would run: the session is its continuation, checked as
+                // the module itself, so a relative import resolves in it and in an input alike
+                let module = by_stage::run_module::module_file(&db, name)
+                    .with_context(|| format!("no module named `{name}` in the project"))?;
+                let path = module
+                    .path(&db)
+                    .as_system_path()
+                    .with_context(|| format!("module `{name}` is no file"))?
+                    .as_std_path()
+                    .to_path_buf();
+                let text = source_text(&db, module).as_str().to_owned();
+                let started_in = StartModule {
+                    name: name.to_owned(),
+                    path,
+                    text,
+                };
+                (rebuilder, db, module, None, Some(started_in))
+            }
+        };
+        // one outside the project is checked only as a file the project has open
         db.project().open_file(&mut db, module);
         Ok(Self {
             db,
@@ -279,8 +369,10 @@ impl Repl {
             },
             session: Session::default(),
             module,
-            module_path,
             _module_dir: module_dir,
+            started_in,
+            prelude: TextSize::default(),
+            start: None,
             inputs: Vec::new(),
             pending: None,
             next: 1,
@@ -289,7 +381,7 @@ impl Repl {
         })
     }
 
-    /// Answer the interpreter until it hangs up.
+    /// answer the interpreter until it hangs up
     fn serve(&mut self, mut reader: BufReader<TcpStream>) -> anyhow::Result<()> {
         let mut writer = reader.get_ref().try_clone()?;
         let mut line = String::new();
@@ -301,6 +393,8 @@ impl Repl {
             let message: Value = serde_json::from_str(&line).context("an unreadable message")?;
             let reply = if let Some(text) = message["status"].as_str() {
                 Some(json!({ "status": input_status(text) }))
+            } else if message.get("start").is_some() {
+                Some(self.start.take().unwrap_or_else(|| json!({})))
             } else if let Some(text) = message["run"].as_str() {
                 Some(self.run(text)?)
             } else if let Some(number) = message["ran"].as_u64() {
@@ -319,13 +413,48 @@ impl Repl {
         }
     }
 
-    /// What `text` runs as, or what is in the way of it running, said on standard error.
+    /// make ready what the interpreter runs before the first input: the module the session
+    /// starts in, if it starts in one. `false`, having said why on standard error, when the
+    /// module cannot run as the session's start
+    fn prepare_start(&mut self) -> anyhow::Result<bool> {
+        let Some(StartModule { name, path, text }) = &self.started_in else {
+            return Ok(true);
+        };
+        let (name, path, text) = (name.clone(), path.clone(), text.clone());
+        self.prelude = TextSize::try_from(text.len())?;
+        let file = SourceFileBuilder::new(path.display().to_string(), &*text).finish();
+        let Some(mut reply) = self.prepare(0, &text, &file)? else {
+            return Ok(false);
+        };
+        // a module prints no values, as a program does not
+        reply["display"] = json!(false);
+        reply["module"] = json!(name);
+        reply["file"] = json!(path);
+        reply["text"] = json!(text);
+        self.start = Some(reply);
+        Ok(true)
+    }
+
+    /// what `text` runs as, or what is in the way of it running, said on standard error
     fn run(&mut self, text: &str) -> anyhow::Result<Value> {
         let number = self.next;
         self.next += 1;
-        self.pending = None;
-        let refused = json!({ "input": number });
         let input_file = SourceFileBuilder::new(format!("<by-input-{number}>"), text).finish();
+        Ok(self
+            .prepare(number, text, &input_file)?
+            .unwrap_or_else(|| json!({ "input": number })))
+    }
+
+    /// what `text`, input `number`, runs as, and the run handed over for the interpreter to
+    /// start; `None` when something is in the way of it running, having said what on standard
+    /// error. `input_file` is the input as a diagnostic quotes it
+    fn prepare(
+        &mut self,
+        number: u32,
+        text: &str,
+        input_file: &SourceFile,
+    ) -> anyhow::Result<Option<Value>> {
+        self.pending = None;
 
         // the input's own grammar first: a line that continues an earlier input, `else:` after
         // an `if`, would otherwise parse as part of it
@@ -339,27 +468,25 @@ impl Repl {
                 })
                 .collect();
             self.render(&diagnostics);
-            return Ok(refused);
+            return Ok(None);
         }
-        let display = matches!(parsed.suite().last(), Some(Stmt::Expr(_)));
 
         let (source, lines) = self.session.with_input(text);
-        fs::write(&self.module_path, &source)
-            .with_context(|| format!("could not write {}", self.module_path.display()))?;
-        File::sync_path(
-            &mut self.db,
-            SystemPath::from_std_path(&self.module_path).context("non-utf8 path")?,
-        );
+        // the module's text is the session's, whatever its file holds
+        let source = source_text(&self.db, self.module).with_text(source, &SourceMap::default());
+        self.module
+            .set_source_text_override(&mut self.db)
+            .to(Some(source));
         let start = TextSize::try_from(self.session.source().len())?;
         let errors: Vec<Diagnostic> =
             ty_project::check_file_ignoring_check_mode(&self.db, self.module)
                 .into_iter()
                 .filter(|diagnostic| diagnostic.severity() >= Severity::Error)
-                .map(|diagnostic| self.in_inputs(diagnostic, start, &input_file))
+                .map(|diagnostic| self.in_inputs(diagnostic, start, input_file))
                 .collect();
         if !errors.is_empty() {
             self.render(&errors);
-            return Ok(refused);
+            return Ok(None);
         }
 
         let rebuild = || Some(self.rebuilder.rebuild());
@@ -380,20 +507,20 @@ impl Repl {
             Ok(Ok((python, line_map, _))) => (python, line_map),
             Ok(Err(error)) => {
                 let diagnostic = by_stage::emit::transpile_failure_diagnostic(self.module, &error);
-                let diagnostic = self.in_inputs(diagnostic, start, &input_file);
+                let diagnostic = self.in_inputs(diagnostic, start, input_file);
                 self.render(&[diagnostic]);
-                return Ok(refused);
+                return Ok(None);
             }
             Err(panic) => {
                 self.render(&[panic]);
-                return Ok(refused);
+                return Ok(None);
             }
         };
         let selection = match self.session.select(&python, &line_map, lines) {
             Ok(selection) => selection,
             Err(refusal) => {
-                report_refusal(&refusal);
-                return Ok(refused);
+                self.report_refusal(&refusal);
+                return Ok(None);
             }
         };
         let reply = json!({
@@ -401,18 +528,19 @@ impl Repl {
             "python": python,
             "statements": selection.statements,
             "lines": selection.lines,
-            "display": display,
+            // as python's repl runs an input, printing the value of each expression statement
+            "display": true,
         });
         self.pending = Some(Pending {
             number,
             text: text.to_owned(),
             selection,
         });
-        Ok(reply)
+        Ok(Some(reply))
     }
 
-    /// The interpreter has started running input `number`, which is part of the session from
-    /// now on, whatever it raises.
+    /// the interpreter has started running input `number`, which is part of the session from
+    /// now on, whatever it raises
     fn ran(&mut self, number: u64) -> anyhow::Result<()> {
         let Some(pending) = self.pending.take() else {
             return Ok(());
@@ -420,10 +548,14 @@ impl Repl {
         if u64::from(pending.number) != number {
             return Ok(());
         }
-        let start = TextSize::try_from(self.session.source().len())?;
-        let file = SourceFileBuilder::new(format!("<by-input-{}>", pending.number), &*pending.text)
-            .finish();
-        self.inputs.push(RanInput { start, file });
+        // the module the session started in is its own file to a diagnostic, not an input
+        if pending.number != 0 {
+            let start = TextSize::try_from(self.session.source().len())?;
+            let file =
+                SourceFileBuilder::new(format!("<by-input-{}>", pending.number), &*pending.text)
+                    .finish();
+            self.inputs.push(RanInput { start, file });
+        }
         self.session
             .commit(pending.number, &pending.text, pending.selection);
         if let Some(path) = &self.session_file {
@@ -433,7 +565,7 @@ impl Repl {
         Ok(())
     }
 
-    /// Pass `event`, which the interpreter reported, on to the editor listening for it, if one is.
+    /// pass `event`, which the interpreter reported, on to the editor listening for it, if one is
     fn event(&mut self, event: &Value) -> anyhow::Result<()> {
         if let Some(events) = &mut self.events {
             writeln!(events, "{event}")
@@ -444,7 +576,8 @@ impl Repl {
     }
 
     /// `diagnostic` with every place it points to in the session's module moved to the input
-    /// that place is in, `input` being the one at `start` that has not run yet.
+    /// that place is in, `input` being the one at `start` that has not run yet. a place in the
+    /// module the session started in stays where it is, in that module's file
     fn in_inputs(
         &self,
         mut diagnostic: Diagnostic,
@@ -478,6 +611,9 @@ impl Repl {
             match span.file() {
                 UnifiedFile::Ty(file) if *file == module => {
                     let range = span.range().unwrap_or_default();
+                    if range.start() < self.prelude {
+                        return None;
+                    }
                     let (file, range) = place(range);
                     Some(Span::from(file).with_range(range))
                 }
@@ -499,8 +635,37 @@ impl Repl {
         diagnostic
     }
 
-    /// Print `diagnostics` on standard error, as `by check` prints them.
-    #[allow(clippy::print_stderr)]
+    /// say why an input's python cannot run
+    #[expect(clippy::print_stderr)]
+    fn report_refusal(&self, refusal: &Refusal) {
+        match refusal {
+            Refusal::ChangesAnEarlierInput { input, line } => eprintln!(
+                "error: this input changes the python that {}, line {line} was transpiled to, \
+                 which has run already and cannot run again differently",
+                self.input_name(*input)
+            ),
+            Refusal::JoinsAnEarlierInput { input } => eprintln!(
+                "error: this input is transpiled into one statement with {}, which has run \
+                 already",
+                self.input_name(*input)
+            ),
+            Refusal::NotPython(error) => {
+                eprintln!("error: the python this input was transpiled to does not parse: {error}");
+            }
+        }
+    }
+
+    /// what input `number` is called: `<by-input-N>`, or the file of the module the session
+    /// started in, which is input 0
+    fn input_name(&self, number: u32) -> String {
+        match &self.started_in {
+            Some(started_in) if number == 0 => started_in.path.display().to_string(),
+            _ => format!("<by-input-{number}>"),
+        }
+    }
+
+    /// print `diagnostics` on standard error, as `by check` prints them
+    #[expect(clippy::print_stderr)]
     fn render(&self, diagnostics: &[Diagnostic]) {
         let config = DisplayDiagnosticConfig::new("ty")
             .color(colored::control::SHOULD_COLORIZE.should_colorize())
@@ -513,26 +678,8 @@ impl Repl {
     }
 }
 
-/// Say why an input's python cannot run.
-#[allow(clippy::print_stderr)]
-fn report_refusal(refusal: &Refusal) {
-    match refusal {
-        Refusal::ChangesAnEarlierInput { input, line } => eprintln!(
-            "error: this input changes the python that <by-input-{input}>, line {line} was \
-             transpiled to, which has run already and cannot run again differently"
-        ),
-        Refusal::JoinsAnEarlierInput { input } => eprintln!(
-            "error: this input is transpiled into one statement with <by-input-{input}>, \
-             which has run already"
-        ),
-        Refusal::NotPython(error) => {
-            eprintln!("error: the python this input was transpiled to does not parse: {error}");
-        }
-    }
-}
-
-/// The project's db as the diagnostics of a session read their files: the project's files
-/// through it, and the inputs, which are no file of its, as the text each diagnostic carries.
+/// the project's db as the diagnostics of a session read their files: the project's files
+/// through it, and the inputs, which are no file of its, as the text each diagnostic carries
 struct Inputs<'db>(&'db ProjectDatabase);
 
 impl FileResolver for Inputs<'_> {
@@ -560,5 +707,53 @@ impl FileResolver for Inputs<'_> {
 
     fn current_directory(&self) -> &Path {
         FileResolver::current_directory(self.0)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::process::{Child, Command};
+    use std::time::{Duration, Instant};
+
+    use super::accept;
+
+    /// a process that outlives the test, standing in for the interpreter
+    fn interpreter() -> Child {
+        Command::new("sleep").arg("30").spawn().expect("sleep runs")
+    }
+
+    /// a connection that sends nothing, or something other than the token, does not hold up
+    /// the interpreter's, which is taken as soon as its token arrives
+    #[test]
+    fn accept_takes_the_interpreter_s_connection_whatever_else_connects() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listens");
+        let port = listener.local_addr().expect("a port").port();
+        let mut child = interpreter();
+
+        let _silent = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        let mut endless = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        endless.write_all(&[b'0'; 4096]).expect("sends");
+        let mut interpreter_s = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        interpreter_s
+            .write_all(b"secret\n{\"start\": true}\n")
+            .expect("sends");
+
+        let started = Instant::now();
+        let reader = accept(&listener, "secret", &mut child)
+            .expect("accepts")
+            .expect("a connection");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // what follows the token is left for the session to read
+        let mut rest = String::new();
+        reader
+            .into_inner()
+            .take(16)
+            .read_to_string(&mut rest)
+            .expect("reads");
+        assert_eq!(rest, "{\"start\": true}\n");
+        child.kill().expect("ends");
+        child.wait().expect("ends");
     }
 }
