@@ -384,8 +384,8 @@ mod tests {
         ");
     }
 
-    /// An override with a decorator is its own `def`, not the function the decorator returns,
-    /// which is defined somewhere else entirely.
+    /// an override with a decorator is its own `def`, not the function the decorator returns,
+    /// which is defined somewhere else entirely
     #[test]
     fn implementation_decorated_override_is_its_def() {
         let test = cursor_test(

@@ -2,9 +2,9 @@
 //!
 //! what counts as a usage or an override is `ty_ide`'s and its unit tests cover it. what these
 //! cover is the contract a client reads: each declaration with its ranges, only the counts asked
-//! for, and each count the number of places `textDocument/references` or
-//! `textDocument/implementation` goes to from the declaration's name, which is what a client asks
-//! when the count is clicked
+//! for, and each count the number of places `by/references` finds from the declaration's name
+//! less the imports of it, or the number `textDocument/implementation` goes to, which is what a
+//! client asks when the count is clicked
 
 use std::time::Duration;
 
@@ -12,9 +12,8 @@ use anyhow::Result;
 use lsp_server::ErrorCode;
 use lsp_types::{
     Definition, ImplementationParams, ImplementationRequest, ImplementationResponse,
-    LspRequestMethod, MessageDirection, PartialResultParams, Position, ReferenceContext,
-    ReferenceParams, ReferencesRequest, Request, TextDocumentIdentifier,
-    TextDocumentPositionParams, WorkDoneProgressParams,
+    LspRequestMethod, MessageDirection, PartialResultParams, Position, Request,
+    TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
 };
 use ruff_db::system::SystemPath;
 use ty_server::ClientOptions;
@@ -28,6 +27,16 @@ impl Request for DocumentUsageCounts {
     type Params = serde_json::Value;
     type Result = Option<serde_json::Value>;
     const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/documentUsageCounts");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+/// `by/references`, in json throughout
+enum ClassifiedReferences {}
+
+impl Request for ClassifiedReferences {
+    type Params = serde_json::Value;
+    type Result = Option<serde_json::Value>;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/references");
     const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
 }
 
@@ -168,10 +177,10 @@ fn a_count_is_the_number_of_places_the_request_it_stands_for_goes_to() -> Result
     assert_eq!(
         counts,
         [
-            ("Shape".to_string(), Some(3), Some(1), Some(false)),
+            ("Shape".to_string(), Some(2), Some(1), Some(false)),
             ("area".to_string(), Some(1), Some(1), Some(true)),
             ("describe".to_string(), Some(1), Some(0), Some(false)),
-            ("total".to_string(), Some(2), None, Some(false)),
+            ("total".to_string(), Some(1), None, Some(false)),
         ]
     );
 
@@ -181,18 +190,31 @@ fn a_count_is_the_number_of_places_the_request_it_stands_for_goes_to() -> Result
             position: position(declaration),
         };
         let references = server
-            .send_request_await::<ReferencesRequest>(ReferenceParams {
-                text_document_position_params: at.clone(),
-                work_done_progress_params: WorkDoneProgressParams::default(),
-                partial_result_params: PartialResultParams::default(),
-                context: ReferenceContext {
-                    include_declaration: false,
-                },
-            })
-            .unwrap_or_default();
+            .send_request_await::<ClassifiedReferences>(serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": at.position,
+                "context": { "includeDeclaration": false },
+            }))
+            .expect("references of a declaration");
+        let (imports, uses): (Vec<_>, Vec<_>) = references
+            .as_array()
+            .expect("a list of references")
+            .iter()
+            .partition(|reference| reference["kind"] == "import");
+        // an import names the declaration without using it: find usages lists it, the count
+        // leaves it out
         assert_eq!(
             declaration["references"].as_u64(),
-            Some(references.len() as u64),
+            Some(uses.len() as u64),
+            "{declaration:#}"
+        );
+        // `main.by` imports `Shape` and `total`
+        assert_eq!(
+            imports.len(),
+            usize::from(matches!(
+                declaration["name"].as_str(),
+                Some("Shape" | "total")
+            )),
             "{declaration:#}"
         );
 
@@ -348,8 +370,8 @@ fn a_count_the_client_cancels_while_it_runs_is_answered_once_and_the_next_is_ans
         .expect("an answer for a document");
     let shape = &declarations.as_array().expect("a list of declarations")[0];
     assert_eq!(shape["name"], "Shape");
-    // `total` names it, and `main.by` and every module import it and subclass it
-    assert_eq!(shape["references"].as_u64(), Some(2 * MODULES as u64 + 3));
+    // `total` names it, and `main.by` and every module subclass it (an import is not a usage)
+    assert_eq!(shape["references"].as_u64(), Some(MODULES as u64 + 2));
     assert_eq!(shape["implementations"].as_u64(), Some(MODULES as u64 + 1));
 
     // and the cancelled count does not bring a second answer

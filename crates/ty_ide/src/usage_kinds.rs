@@ -1,5 +1,5 @@
-//! What each reference a search finds does with the name: what an editor's *find usages*
-//! groups them by.
+//! what each reference a search finds does with the name: what an editor's *find usages*
+//! groups them by
 //!
 //! ```py
 //! from shapes.base import Shape        # import
@@ -14,10 +14,10 @@
 //! print(Shape)                         # read
 //! ```
 //!
-//! These are the groups PyCharm's Python sorts usages into, in the order it tries them: a
+//! these are the groups PyCharm's Python sorts usages into, in the order it tries them: a
 //! reference inside an import statement is an import whatever else it is, then the class list of
-//! an `isinstance` call, then a type expression, then a class's bases. What is none of those is a
-//! read or a write of the name, or the declaration itself.
+//! an `isinstance` call, then a type expression, then a class's bases. what is none of those is a
+//! read or a write of the name, or the declaration itself
 
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::find_node::covering_node;
@@ -32,30 +32,30 @@ use ty_python_semantic::types::ide_support::{
 use crate::django_template::is_django_template_path;
 use crate::{Db, ReferenceKind, ReferenceTarget};
 
-/// What a reference does with the name it refers to.
+/// what a reference does with the name it refers to
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UsageKind {
-    /// The name where it is declared: a `def`'s or a `class`'s name, or a first assignment.
+    /// the name where it is declared: a `def`'s or a `class`'s name, or a first assignment
     Declaration,
-    /// In an `import` or a `from ... import` statement.
+    /// in an `import` or a `from ... import` statement
     Import,
-    /// Among the classes an `isinstance` call tests against: its second argument, or an element
-    /// of a tuple there.
+    /// among the classes an `isinstance` call tests against: its second argument, or an element
+    /// of a tuple there
     Isinstance,
-    /// In a type expression: an annotation, a return or `raises` annotation, a type alias's
+    /// in a type expression: an annotation, a return or `raises` annotation, a type alias's
     /// value, a type parameter's bound or default, or an argument a call takes as a type, such
-    /// as `cast`'s first.
+    /// as `cast`'s first
     TypeHint,
-    /// In the parentheses of a class's header, among its bases or its keywords.
+    /// in the parentheses of a class's header, among its bases or its keywords
     Superclass,
-    /// Assigning, deleting or otherwise binding the name.
+    /// assigning, deleting or otherwise binding the name
     Write,
-    /// Reading the name's value, which calling it is.
+    /// reading the name's value, which calling it is
     Read,
 }
 
-/// What each of `targets` does with the name it refers to, in the same order. `program` is the
-/// program the search that found them ran in.
+/// what each of `targets` does with the name it refers to, in the same order. `program` is the
+/// program the search that found them ran in
 pub fn usage_kinds(
     db: &dyn Db,
     program: ProgramFile<'_>,
@@ -68,14 +68,20 @@ pub fn usage_kinds(
         .collect()
 }
 
+/// whether `target`, found by a search that ran in `program`, is in an `import` or a
+/// `from ... import` statement: what [`usage_kinds`] calls a [`UsageKind::Import`], and what a
+/// usage count leaves out, since an import names a declaration without using it
+pub(crate) fn is_import(db: &dyn Db, program: ProgramFile<'_>, target: &ReferenceTarget) -> bool {
+    if is_template(db, target) {
+        return false;
+    }
+    let file = ProgramFile::new(db, target.file(), program.program(db));
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    in_import(covering_node(module.syntax().into(), target.range()).ancestors())
+}
+
 fn usage_kind(db: &dyn Db, file: ProgramFile<'_>, target: &ReferenceTarget) -> UsageKind {
-    // a django template's names are only read, and its text is no python to classify
-    let template = target
-        .file()
-        .path(db)
-        .as_system_path()
-        .is_some_and(is_django_template_path);
-    (!template)
+    (!is_template(db, target))
         .then(|| syntactic_kind(db, file, target.range()))
         .flatten()
         .unwrap_or(match target.kind() {
@@ -85,19 +91,34 @@ fn usage_kind(db: &dyn Db, file: ProgramFile<'_>, target: &ReferenceTarget) -> U
         })
 }
 
-/// The group the syntax around `range` puts a reference in, `None` when it is only a read or a
-/// write.
+/// whether `target` is in a django template, whose names are only read, and whose text is no
+/// python to classify
+fn is_template(db: &dyn Db, target: &ReferenceTarget) -> bool {
+    target
+        .file()
+        .path(db)
+        .as_system_path()
+        .is_some_and(is_django_template_path)
+}
+
+/// whether one of a reference's `ancestors` is an `import` or a `from ... import` statement
+fn in_import<'a>(mut ancestors: impl Iterator<Item = AnyNodeRef<'a>>) -> bool {
+    ancestors.any(|node| {
+        matches!(
+            node,
+            AnyNodeRef::StmtImport(_) | AnyNodeRef::StmtImportFrom(_)
+        )
+    })
+}
+
+/// the group the syntax around `range` puts a reference in, `None` when it is only a read or a
+/// write
 fn syntactic_kind(db: &dyn Db, file: ProgramFile<'_>, range: TextRange) -> Option<UsageKind> {
     let module = parsed_module(db, file.python_file(db)).load(db);
     let covering = covering_node(module.syntax().into(), range);
     let ancestors: Vec<AnyNodeRef<'_>> = covering.ancestors().collect();
 
-    if ancestors.iter().any(|node| {
-        matches!(
-            node,
-            AnyNodeRef::StmtImport(_) | AnyNodeRef::StmtImportFrom(_)
-        )
-    }) {
+    if in_import(ancestors.iter().copied()) {
         return Some(UsageKind::Import);
     }
 
@@ -149,7 +170,7 @@ fn syntactic_kind(db: &dyn Db, file: ProgramFile<'_>, range: TextRange) -> Optio
     kind
 }
 
-/// The group a reference at `range`, inside one of `call`'s arguments or its callee, is in.
+/// the group a reference at `range`, inside one of `call`'s arguments or its callee, is in
 fn call_argument_kind(
     model: &SemanticModel<'_>,
     call: &ast::ExprCall,

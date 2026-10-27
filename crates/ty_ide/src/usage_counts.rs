@@ -4,9 +4,12 @@
 //!
 //! a count is what asking of the declaration's name answers, found by the same
 //! code: [`crate::find_references()`] without the declaration for the usages,
-//! and [`crate::goto_implementation()`] less the declaration itself for the
-//! subclasses and overrides. so the count over a declaration is the number of
-//! places its click goes to
+//! less the imports of it, and [`crate::goto_implementation()`] less the
+//! declaration itself for the subclasses and overrides. an import names the
+//! declaration without using it: *find usages* still lists it, in the `import`
+//! group [`crate::usage_kinds()`] puts it in, but it is not counted. so the
+//! count over a declaration is the number of places its click goes to that are
+//! not imports
 //!
 //! each of those is a search of every file of the project, which asked of each
 //! declaration in turn reads every file once per declaration. the counts are
@@ -41,6 +44,7 @@ use crate::declaration::ClassName;
 use crate::find_references::find_references_to_each;
 use crate::goto_implementation::implementations_at_each;
 use crate::symbols::symbols_for_file;
+use crate::usage_kinds::is_import;
 use crate::{Db, NavigationTarget, SymbolKind};
 
 /// which counts to work out: each is a search of the workspace
@@ -72,8 +76,8 @@ pub struct DeclarationUsages {
     pub full_range: TextRange,
     /// its name where it is declared
     pub name_range: TextRange,
-    /// how many places use it, the declaration itself not among them. `None`
-    /// when not asked for, and for a dunder method
+    /// how many places use it, neither the declaration itself nor an import of
+    /// it among them. `None` when not asked for, and for a dunder method
     pub references: Option<usize>,
     /// how many classes subclass a class, directly or not, and how many members
     /// of those override a method. `None` when not asked for, and for a function
@@ -120,8 +124,12 @@ pub fn document_usage_counts(
             .unzip();
         let found = find_references_to_each(db, file, &offsets, false);
         for (index, references) in counted.into_iter().zip(found) {
-            declarations[index].references =
-                Some(references.map_or(0, |references| references.len()));
+            declarations[index].references = Some(references.map_or(0, |references| {
+                references
+                    .iter()
+                    .filter(|reference| !is_import(db, file, reference))
+                    .count()
+            }));
         }
     }
     if kinds.implementations {
@@ -386,14 +394,61 @@ print(Shape().area(), Square().area())
             )
             .build();
         assert_snapshot!(test.usage_counts(), @"
-        class Shape 2 refs=3 impls=1 <main.Square /main.py:4>
+        class Shape 2 refs=2 impls=1 <main.Square /main.py:4>
         method area 3 refs=1 impls=1 <main.Square /main.py:5>
         function unused 6 refs=0
         ");
     }
 
-    /// A decorated method is counted by its own `def`: what the decorator hands back is defined
-    /// elsewhere, and is neither an override of the method nor overridden by it.
+    /// an import names a declaration without using it, and is not counted, though *find usages*
+    /// lists it. what writes the name outside the scope that declares it does use it, and is
+    /// counted: an assignment through the module or through an instance, one from another method,
+    /// and a function's `global` statement and its assignment
+    #[test]
+    fn an_import_is_not_counted_and_a_write_from_elsewhere_is() {
+        let test = CursorTest::builder()
+            .source(
+                "lib.py",
+                "<CURSOR>
+class Shape:
+    def area(self) -> float:
+        return 0.0
+
+    def freeze(self) -> None:
+        self.area = lambda: 1.0
+
+def make() -> Shape:
+    return Shape()
+
+def reset() -> None:
+    global make
+    make = lambda: Shape()
+",
+            )
+            .source(
+                "main.py",
+                "
+import lib
+from lib import Shape, make
+from lib import make as build
+
+lib.make = build
+shape = Shape()
+shape.area = lambda: 2.0
+",
+            )
+            .build();
+        assert_snapshot!(test.usage_counts(), @"
+        class Shape 2 refs=4 impls=0
+        method area 3 refs=2 impls=0
+        method freeze 6 refs=0 impls=0
+        function make 9 refs=3
+        function reset 12 refs=0
+        ");
+    }
+
+    /// a decorated method is counted by its own `def`: what the decorator hands back is defined
+    /// elsewhere, and is neither an override of the method nor overridden by it
     #[test]
     fn a_decorated_method_is_counted_as_its_def() {
         let test = cursor_test(

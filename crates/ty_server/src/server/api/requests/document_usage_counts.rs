@@ -3,10 +3,12 @@
 //!
 //! the counts an editor draws above each declaration, "3 usages" or "2
 //! overrides", for the whole document at once. each count is what
-//! `textDocument/references` (without the declaration) or
-//! `textDocument/implementation` (less the declaration itself) answers at the
-//! declaration's name, from the same code, so a client goes to as many places as
-//! the count says by sending that request when one is clicked. asking either of
+//! `by/references` (without the declaration, less the references of kind
+//! `import`) or `textDocument/implementation` (less the declaration itself)
+//! answers at the declaration's name, from the same code, so a client goes to as
+//! many places as the count says, and to the imports besides, by sending that
+//! request when one is clicked. an import names a declaration without using it,
+//! so it is listed but not counted. asking either of
 //! those of each declaration instead would be two requests per declaration on
 //! every pass over the document
 //!
@@ -88,9 +90,9 @@ pub(crate) struct DeclarationUsages {
     /// its name, where `textDocument/references` and `textDocument/implementation`
     /// answer for it
     selection_range: Range,
-    /// how many places use it, as `textDocument/references` answers without the
-    /// declaration. there when asked for, except on a dunder method, which the
-    /// language calls rather than its name
+    /// how many places use it, as `by/references` answers without the declaration,
+    /// less its imports. there when asked for, except on a dunder method, which
+    /// the language calls rather than its name
     #[serde(skip_serializing_if = "Option::is_none")]
     references: Option<usize>,
     /// how many classes subclass a class, directly or not, and how many of their

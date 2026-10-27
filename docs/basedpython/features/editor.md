@@ -1303,9 +1303,11 @@ class in `cast`'s first argument in a base list is a `typeHint`. the answer is
 without `includeDeclaration`, both leave out only where the name is declared, in
 the scope that declares it: its `def` or `class`, an annotation of it, or an
 assignment no other assignment of it comes before. what binds it anywhere else
-uses it and stays, as PyCharm's Python counts it: an import of it, an assignment
-to it through its module or through an instance, from another method than the
-one that declares the attribute, or from a function naming it `global`
+stays, as PyCharm's Python lists it: an import of it, an assignment to it
+through its module or through an instance, from another method than the one
+that declares the attribute, or from a function naming it `global`. an import
+names the name without using it, so the [usage counts](#usage-counts) leave it
+out; the writes are uses, and are counted
 
 ## type info
 
@@ -1443,13 +1445,15 @@ each declaration comes with its `name`, its `kind` (`class`, `function` or
 `method`), its whole `range` from its first decorator, its `selectionRange` on
 its name, and the counts named in the request's `counts`:
 
-| count             | what it is                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------------- |
-| `references`      | the places `textDocument/references` finds from the name, the declaration not among them    |
-| `implementations` | of a class or a method, what `textDocument/implementation` finds from the name, less itself |
+| count             | what it is                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `references`      | the places `by/references` finds from the name, the declaration not among them, less those of kind `import` |
+| `implementations` | of a class or a method, what `textDocument/implementation` finds from the name, less itself                 |
 
 so the count is the number of places the click on it goes to, when a client
-sends that request from the name. every declaration has `abstract`, `true` for a
+sends that request from the name, but for the imports: an import names the
+declaration without using it, so *find usages* lists it and the count leaves it
+out. every declaration has `abstract`, `true` for a
 method with implementations that is an `@abstractmethod` or a protocol member
 with no body, so that what overrides it implements it, and `false` otherwise. a count not named is not worked out
 

@@ -1166,7 +1166,7 @@ fn member_implementation_definition<'db>(
     // implementation. If inference cannot produce a function literal, keep the original `def` as a
     // conservative fallback.
     //
-    // This is the function the `def` defines, before any decorator. The name's binding type is
+    // this is the function the `def` defines, before any decorator. the name's binding type is
     // what the decorators return, which for
     //
     // ```py
@@ -1179,7 +1179,7 @@ fn member_implementation_definition<'db>(
     //     def area(self) -> float: ...
     // ```
     //
-    // is `wrapper`, a function defined somewhere else entirely.
+    // is `wrapper`, a function defined somewhere else entirely
     let Some(function) = infer_definition_types(db, definition).function_type(definition) else {
         return Some(ResolvedDefinition::Definition(definition));
     };
@@ -1886,7 +1886,7 @@ pub fn unpacking_target_type<'db>(
     })
 }
 
-/// Whether `call` calls python's `isinstance`, by whatever name it is reached.
+/// whether `call` calls python's `isinstance`, by whatever name it is reached
 pub fn calls_isinstance(model: &SemanticModel<'_>, call: &ast::ExprCall) -> bool {
     matches!(
         call.func.inferred_type(model),
