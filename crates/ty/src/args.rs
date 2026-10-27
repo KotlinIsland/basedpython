@@ -167,6 +167,15 @@ pub(crate) enum Command {
         /// followed by the input being typed.
         #[arg(long, value_name = "PATH")]
         session_file: Option<PathBuf>,
+        /// Tell an editor what the session reads standard input for, on a connection of its own.
+        ///
+        /// `by repl` connects to PORT on the loopback interface and writes a line of JSON there
+        /// each time it waits for an input, the program reads standard input, or an input
+        /// finishes: a console that talks to it through pipes cannot tell otherwise whether a
+        /// line it sends is an input or a line for the program. The first line carries the token
+        /// `BY_REPL_EVENTS_TOKEN` holds, for the editor to know the connection is the session's.
+        #[arg(long, value_name = "PORT")]
+        events: Option<u16>,
     },
 
     /// Start a new project.

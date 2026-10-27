@@ -184,7 +184,8 @@ an interactive session in which you type basedpython, each input checked and tra
 continuation of the inputs before it and run in one python process. it starts where `by run`
 would, with the project staged as `by run` stages it, so the project's modules import as they
 do in a program. `--session-file PATH` keeps `PATH` holding the inputs that ran, for an editor's
-console to complete against. see [the repl](features/repl.md)
+console to complete against, and `--events PORT` tells the console, on a connection to `PORT`,
+whether standard input is read for an input or by the program. see [the repl](features/repl.md)
 
 ## `by build`
 

@@ -13,6 +13,14 @@ not open the socket that makes it reachable.
 
 Equivalent to the `--no-server` command-line argument.
 
+### `BY_REPL_EVENTS_TOKEN`
+
+The token `by repl --events` sends first on the connection it makes to an editor.
+
+An editor listening for a session's events sets this to a value nothing else can guess,
+and takes the connection whose first line carries it as the session's. The program the
+session runs does not see it.
+
 ### `BY_TEST_REPORTER`
 
 report the tests pytest runs under `by run` as service messages, `TeamCity`'s protocol

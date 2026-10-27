@@ -1,9 +1,11 @@
 use by_ir::mangle::mangle;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::time::{Duration, Instant};
 use ty_static::EnvVars;
 
 /// a directory a test builds a project in, which goes when the test passes
@@ -2069,6 +2071,183 @@ fn repl_session_file_holds_the_inputs_that_ran() {
         fs::read_to_string(dir.path().join("session.by")).expect("the session file"),
         "let rate = 0.2\nx = rate * 2\n"
     );
+}
+
+/// A `by repl` session in a project, driven as an editor's console drives one: through pipes,
+/// listening for the session's events on a port of its own with `--events`.
+struct EditorSession {
+    child: Child,
+    stdin: ChildStdin,
+    events: BufReader<TcpStream>,
+}
+
+impl EditorSession {
+    /// The session started in `dir` with `extra` arguments, its connection taken once it has
+    /// sent the token the editor gave it.
+    fn start(dir: &Path, extra: &[&str]) -> Self {
+        let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port to listen on");
+        let port = listener.local_addr().expect("the port").port().to_string();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .env(EnvVars::BY_REPL_EVENTS_TOKEN, "the editor's token")
+            .env("NO_COLOR", "1")
+            .args(["repl", "--python", &python, "--events", &port])
+            .args(extra)
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn by");
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that does not block");
+        let started = Instant::now();
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(status) = child.try_wait().expect("the session") {
+                        let output = child.wait_with_output().expect("the session's output");
+                        panic!(
+                            "the session ended ({status}) without connecting: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(120),
+                        "the session did not connect"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("could not accept the session: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).expect("a blocking stream");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .expect("a read timeout");
+        let stdin = child.stdin.take().expect("stdin");
+        let mut session = Self {
+            child,
+            stdin,
+            events: BufReader::new(stream),
+        };
+        assert_eq!(
+            session.next_event(),
+            serde_json::json!({ "token": "the editor's token" })
+        );
+        session
+    }
+
+    /// The next event the session sent, `null` once it has closed the connection.
+    fn next_event(&mut self) -> serde_json::Value {
+        let mut line = String::new();
+        self.events.read_line(&mut line).expect("an event");
+        if line.is_empty() {
+            return serde_json::Value::Null;
+        }
+        serde_json::from_str(&line).expect("an event is a line of json")
+    }
+
+    /// Wait for `expected`, the next event.
+    #[track_caller]
+    fn expect(&mut self, expected: &serde_json::Value) {
+        assert_eq!(&self.next_event(), expected);
+    }
+
+    /// Send `text` to the session's standard input as it is.
+    fn send(&mut self, text: &str) {
+        self.stdin
+            .write_all(text.as_bytes())
+            .expect("the session reads");
+        self.stdin.flush().expect("the session reads");
+    }
+
+    /// Send `text` as an editor sends an input, framed as a paste.
+    fn send_input(&mut self, text: &str) {
+        self.send(&format!("\x1b[200~{text}\x1b[201~\n"));
+    }
+
+    /// End the session's input, and what it printed and how it ended.
+    fn finish(self) -> (Option<i32>, String, String, Vec<serde_json::Value>) {
+        let Self {
+            child,
+            stdin,
+            mut events,
+        } = self;
+        drop(stdin);
+        let output = child.wait_with_output().expect("the session ends");
+        let mut rest = Vec::new();
+        let mut line = String::new();
+        while events.read_line(&mut line).is_ok_and(|read| read > 0) {
+            rest.push(serde_json::from_str(&line).expect("an event is a line of json"));
+            line.clear();
+        }
+        // python writes its output in text mode, which ends a line with `\r\n` on windows
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+            String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n"),
+            rest,
+        )
+    }
+}
+
+/// with `--events`, an editor is told on a connection of its own what standard input is read
+/// for: an input, the next line of one, or the program, whether it reads with `input()`,
+/// `sys.stdin` or `sys.stdin.buffer` — so a line it sends for the program is sent as the
+/// program's, unframed, and arrives as it was typed — and when each input has finished, and
+/// whether it ran
+#[test]
+fn repl_tells_an_editor_what_standard_input_is_read_for() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut session = EditorSession::start(dir.path(), &[]);
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    session.send_input("name = input('who? ')");
+    session.expect(&serde_json::json!({ "reading": "program" }));
+    session.send("bob\n");
+    session.expect(&serde_json::json!({ "finished": 1, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    // refused: it does not run, and is not part of the session
+    session.send_input("let count: int = name");
+    session.expect(&serde_json::json!({ "finished": 2, "ran": false }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    // an input sent a line at a time waits for the line that completes it
+    session.send("if name:\n");
+    session.expect(&serde_json::json!({ "reading": "continuation" }));
+    session.send("    print(repr(name))\n");
+    session.expect(&serde_json::json!({ "reading": "continuation" }));
+    session.send("\n");
+    session.expect(&serde_json::json!({ "finished": 3, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    session.send_input("import sys\nlines = [sys.stdin.readline(), sys.stdin.buffer.readline()]");
+    session.expect(&serde_json::json!({ "reading": "program" }));
+    session.send("text\n");
+    session.expect(&serde_json::json!({ "reading": "program" }));
+    session.send("bytes\n");
+    session.expect(&serde_json::json!({ "finished": 4, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    // an input that raises has run all the same
+    session.send_input("lines[2]");
+    session.expect(&serde_json::json!({ "finished": 5, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+    session.send_input("lines");
+    session.expect(&serde_json::json!({ "finished": 6, "ran": true }));
+    session.expect(&serde_json::json!({ "reading": "input" }));
+
+    let (status, stdout, stderr, rest) = session.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(stdout, "who? 'bob'\n['text\\n', b'bytes\\n']\n", "{stderr}");
+    assert!(stderr.contains("IndexError"), "{stderr}");
+    // the connection closes with the session
+    assert_eq!(rest, Vec::<serde_json::Value>::new());
 }
 
 /// A project of `.by` tests for pytest to run, with a module they test, checked

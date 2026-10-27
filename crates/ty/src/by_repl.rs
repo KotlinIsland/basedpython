@@ -13,6 +13,10 @@
 //! input, and the program's output is its own. The interpreter is told the port and a token in
 //! its environment, and the first thing it sends is the token, so nothing else on the machine
 //! that finds the port is answered.
+//!
+//! For the same reason an editor that asks with `--events` is told what standard input is
+//! being read for — an input, or the program — on a connection of its own: the interpreter says
+//! so to this process, which passes it on.
 
 use std::fs;
 use std::hash::{BuildHasher, RandomState};
@@ -42,6 +46,8 @@ use ruff_text_size::{TextRange, TextSize};
 use serde_json::{Value, json};
 use ty_project::{Db as _, ProjectDatabase};
 
+use ty_static::EnvVars;
+
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_commands::{BY_REPL_FILENAME, RunTarget, StagedRun, stage_run};
@@ -50,17 +56,27 @@ use crate::by_commands::{BY_REPL_FILENAME, RunTarget, StagedRun, stage_run};
 /// has connected: it does both before it runs anything of the session's.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// What `by repl` is given beyond what it stages the project with.
+pub(crate) struct ReplFlags<'a> {
+    /// `--python`: the interpreter, or the environment holding it
+    pub(crate) python: Option<&'a Path>,
+    /// `--session-file`: where an editor reads the session's source
+    pub(crate) session_file: Option<&'a Path>,
+    /// `--events`: the port on the loopback interface an editor listens for the session's
+    /// events on
+    pub(crate) events: Option<u16>,
+}
+
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_repl(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
-    python_flag: Option<&Path>,
-    session_file: Option<&Path>,
+    flags: &ReplFlags<'_>,
 ) -> anyhow::Result<ExitStatus> {
     let staged = match stage_run(
         min_version,
         lowering,
-        python_flag,
+        flags.python,
         false,
         RunTarget::Session,
     )? {
@@ -75,28 +91,34 @@ pub(crate) fn cmd_repl(
         rebuilder,
         ..
     } = staged;
-    let session_file = session_file.map(|path| cwd.join(path));
+    let session_file = flags.session_file.map(|path| cwd.join(path));
     if let Some(path) = &session_file {
         fs::write(path, "").with_context(|| format!("could not write {}", path.display()))?;
     }
-    let mut repl = Repl::new(&rebuilder, config, session_file)?;
+    let events = flags.events.map(connect_events).transpose()?;
+    let mut repl = Repl::new(&rebuilder, config, session_file, events)?;
 
     let listener =
         TcpListener::bind(("127.0.0.1", 0)).context("could not listen for the session")?;
     let port = listener.local_addr()?.port();
     let token = token();
-    let mut child = Command::new(&interpreter.path)
+    let mut command = Command::new(&interpreter.path);
+    command
         .arg(tree.path().join(BY_REPL_FILENAME))
         .env("BY_REPL_PORT", port.to_string())
         .env("BY_REPL_TOKEN", &token)
-        .current_dir(&cwd)
-        .spawn()
-        .with_context(|| {
-            format!(
-                "could not run `{}`, the interpreter from {}",
-                interpreter.path, interpreter.origin
-            )
-        })?;
+        // the editor's, not the program's
+        .env_remove(EnvVars::BY_REPL_EVENTS_TOKEN)
+        .current_dir(&cwd);
+    if flags.events.is_some() {
+        command.env("BY_REPL_EVENTS", "1");
+    }
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "could not run `{}`, the interpreter from {}",
+            interpreter.path, interpreter.origin
+        )
+    })?;
     // ctrl-c is the interpreter's to answer, with a `KeyboardInterrupt` in the input it is
     // running; this process lives as long as the session does
     ctrlc::set_handler(|| {}).context("could not hand ctrl-c to the session")?;
@@ -117,6 +139,17 @@ pub(crate) fn cmd_repl(
     // `process::exit` skips destructors, and the tree is a temporary directory
     drop(tree);
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The editor's connection for the session's events, to `port` on the loopback interface, with
+/// the token it set in `BY_REPL_EVENTS_TOKEN` sent on it.
+fn connect_events(port: u16) -> anyhow::Result<TcpStream> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .with_context(|| format!("could not connect to the editor's events port, {port}"))?;
+    let token = std::env::var(EnvVars::BY_REPL_EVENTS_TOKEN).ok();
+    writeln!(stream, "{}", json!({ "token": token }))?;
+    stream.flush()?;
+    Ok(stream)
 }
 
 /// A token nothing else can guess, from the process's own random hasher keys.
@@ -193,6 +226,9 @@ struct Repl {
     next: u32,
     /// `--session-file`: where an editor reads the session's source
     session_file: Option<PathBuf>,
+    /// `--events`: the editor's connection, which each event the interpreter reports is
+    /// passed on to
+    events: Option<TcpStream>,
 }
 
 struct RanInput {
@@ -212,6 +248,7 @@ impl Repl {
         rebuilder: &Rebuilder,
         config: Config,
         session_file: Option<PathBuf>,
+        events: Option<TcpStream>,
     ) -> anyhow::Result<Self> {
         let module_dir = tempfile::TempDir::new().context("failed to create temp directory")?;
         // a module name nothing a project imports is called, since the directory is searched
@@ -248,6 +285,7 @@ impl Repl {
             pending: None,
             next: 1,
             session_file,
+            events,
         })
     }
 
@@ -267,6 +305,9 @@ impl Repl {
                 Some(self.run(text)?)
             } else if let Some(number) = message["ran"].as_u64() {
                 self.ran(number)?;
+                None
+            } else if let Some(event) = message.get("event") {
+                self.event(event)?;
                 None
             } else {
                 anyhow::bail!("an unknown message: {line}");
@@ -388,6 +429,16 @@ impl Repl {
         if let Some(path) = &self.session_file {
             fs::write(path, self.session.source())
                 .with_context(|| format!("could not write {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Pass `event`, which the interpreter reported, on to the editor listening for it, if one is.
+    fn event(&mut self, event: &Value) -> anyhow::Result<()> {
+        if let Some(events) = &mut self.events {
+            writeln!(events, "{event}")
+                .and_then(|()| events.flush())
+                .context("the editor stopped listening for the session's events")?;
         }
         Ok(())
     }

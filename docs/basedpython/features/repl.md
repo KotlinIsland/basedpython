@@ -100,14 +100,37 @@ inside a function body included, and runs when the closing marker arrives. this 
 editor sends one
 
 while an input runs, the lines that arrive are the program's: `input()` reads them, as it reads
-python's
+python's, and an editor is told when that is with [`--events`](#in-an-editor)
 
 ## in an editor
 
 an editor's console runs `by repl` as a process and talks to it through its standard streams:
 
 - **sending.** each input is written to `by repl`'s standard input framed, as above, followed by
-    a newline. while the program reads `input()`, a line is written as it is
+    a newline. a line for the program — what `input()` reads — is written as it is, unframed
+
+- **events.** over a pipe a console cannot tell whether `by repl` is waiting for an input or the
+    program is reading standard input, and the two are sent differently. `--events PORT` has
+    `by repl` tell it, on a connection of its own that program output cannot mix with: it
+    connects to `PORT` on the loopback interface (`127.0.0.1`) before the session starts, and
+    writes one line of json there for each event. the first line is
+    `{"token": T}`, where `T` is the value of `BY_REPL_EVENTS_TOKEN` in `by repl`'s environment
+    (`null` when it is unset), for the console to know the connection is the session's; the
+    program does not see the variable. then:
+
+    | event                         | meaning                                                                                                                                                                                                                        |
+    | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+    | `{"reading": "input"}`        | `by repl` waits for the next input: send one, framed                                                                                                                                                                           |
+    | `{"reading": "continuation"}` | an input sent unframed is not whole yet, and `by repl` waits for its next line                                                                                                                                                 |
+    | `{"reading": "program"}`      | the program reads standard input — `input()`, `sys.stdin` or `sys.stdin.buffer` — and the next line is its own: send it unframed                                                                                               |
+    | `{"finished": N, "ran": R}`   | input `N`, as it is numbered in `<by-input-N>`, has finished. `R` is `true` when it ran, which makes it part of the session even when it raised, and `false` when it did not: it was refused, or interrupted before it started |
+
+    `reading` is sent each time standard input is read for that purpose, and `finished` before
+    the `reading` that follows it. what the session printed before an event is in its pipes before
+    the event is sent. a line sent while nothing is reading waits for whatever reads next, as
+    typed-ahead text does in a terminal; a thread of the program's that reads standard input
+    while the session waits for an input reads lines meant for either. the connection closes
+    when the session ends
 
 - **output.** the program's output, the printed values and the tracebacks are the process's
     standard output and standard error, as they are python's. prompts are written only when

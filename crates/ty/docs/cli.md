@@ -288,7 +288,9 @@ by repl [OPTIONS]
 
 <h3 class="cli-reference">Options</h3>
 
-<dl class="cli-reference"><dt id="by-repl--help"><a href="#by-repl--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
+<dl class="cli-reference"><dt id="by-repl--events"><a href="#by-repl--events"><code>--events</code></a> <i>port</i></dt><dd><p>Tell an editor what the session reads standard input for, on a connection of its own.</p>
+<p><code>by repl</code> connects to PORT on the loopback interface and writes a line of JSON there each time it waits for an input, the program reads standard input, or an input finishes: a console that talks to it through pipes cannot tell otherwise whether a line it sends is an input or a line for the program. The first line carries the token <code>BY_REPL_EVENTS_TOKEN</code> holds, for the editor to know the connection is the session's.</p>
+</dd><dt id="by-repl--help"><a href="#by-repl--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd><dt id="by-repl--min-version"><a href="#by-repl--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the session's python must run on [default: the version of the interpreter that will run it]</p>
 </dd><dt id="by-repl--no-unique-loop-bindings"><a href="#by-repl--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
 </dd><dt id="by-repl--python"><a href="#by-repl--python"><code>--python</code></a>, <code>--venv</code> <i>path</i></dt><dd><p>the interpreter to run on, or the environment holding it, as <code>by run</code> takes it</p>

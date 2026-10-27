@@ -148,11 +148,15 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             python,
             lowering,
             session_file,
+            events,
         } => by_repl::cmd_repl(
             min_version.as_deref(),
             &lowering,
-            python.as_deref(),
-            session_file.as_deref(),
+            &by_repl::ReplFlags {
+                python: python.as_deref(),
+                session_file: session_file.as_deref(),
+                events,
+            },
         ),
         Command::Init {
             path,
