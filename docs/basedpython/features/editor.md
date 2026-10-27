@@ -77,6 +77,11 @@ class B(A):
 
 `object`'s members are left out
 
+the name of a `def` written in a class body completes the same way, as the rest
+of the header: `def gre` offers `greet(self, name: str) -> str:`. in a `.by`
+file, taking it also writes `override` before the `def`, unless it is there
+already
+
 ### types
 
 a type position offers the words basedpython spells types with — `literal`,
@@ -121,6 +126,15 @@ these are auto-imports, so turning off `ty.completions.autoImport` turns them
 off too
 
 ### unimported names
+
+a name the file has not imported is offered for import only when what you have
+typed starts where one of its words does — at its start, after a `_`, a `.` or
+any other character that is not a letter or a digit, at an upper-case letter that
+follows a lower-case one, at the last of a run of capitals that a lower-case letter
+follows (`ser` offers `HTTPServer`), or at a letter that follows a digit (`sum`
+offers `md5sum`) — and the rest follows in order. `ret` offers `reveal_type` and `NoReturn` to import, but not
+`secrets` or `urlretrieve`, which merely contain the letters, and which would
+otherwise crowd out `return` and the names in scope
 
 a name the file has not imported still completes past the dot. `Asdf.` offers
 the members of the `Asdf` an import would bind, and accepting one writes that
@@ -175,6 +189,13 @@ it starts meaning what an f-string reads it to mean once the prefix goes on
 a docstring, a `case` pattern and a `str.format` template are not offered the
 conversion, and neither is a string written where a type belongs: an f-string
 is a different thing in each of those places, or no longer legal at all
+
+### dict keys
+
+the key of a subscript completes from what the dict is known to hold. a
+`TypedDict`'s keys come from its type, and a plain dict's from the dict display
+the name was bound to: after `d = {"alpha": 1, "beta": 2}`, `d["` offers
+`alpha` and `beta`
 
 ### enum members and extensions
 

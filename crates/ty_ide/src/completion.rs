@@ -121,6 +121,17 @@ pub fn completion<'db>(
                     .add(CompletionBuilder::keyword(keyword.as_str()).context_specific(true));
             }
         }
+        ContextKind::OverrideName { class, def_keyword } => {
+            add_override_name_completions(
+                &model,
+                class,
+                def_keyword,
+                &context.cursor,
+                source_type,
+                capabilities,
+                &mut completions,
+            );
+        }
         ContextKind::TypeParamModifiers(modifiers) => {
             for &modifier in modifiers {
                 completions.add(CompletionBuilder::keyword(modifier).context_specific(true));
@@ -1001,6 +1012,13 @@ struct Context<'m> {
 #[derive(Debug)]
 enum ContextKind<'m> {
     Keywords(&'static [ContextualKeyword]),
+    /// the name of a `def` written directly in a class body, which names
+    /// either a new member or one the class overrides
+    OverrideName {
+        class: &'m ast::StmtClassDef,
+        /// the `def` keyword, before which an `override` modifier goes
+        def_keyword: TextRange,
+    },
     /// basedpython: the modifiers a type parameter opens with. A type
     /// parameter is being named, so nothing else is valid there.
     TypeParamModifiers(&'static [&'static str]),
@@ -1066,6 +1084,8 @@ impl<'m> Context<'m> {
             ContextKind::Keywords(keywords)
         } else if let Some(modifiers) = cursor.type_param_modifiers(file.file(db).source_type(db)) {
             ContextKind::TypeParamModifiers(modifiers)
+        } else if let Some((class, def_keyword)) = cursor.class_body_def_name() {
+            ContextKind::OverrideName { class, def_keyword }
         } else if cursor.is_in_definition_place() {
             return None;
         } else if let Some(import) = ImportStatement::detect(
@@ -1096,6 +1116,7 @@ impl<'m> Context<'m> {
 
         match self.kind {
             ContextKind::Keywords(_)
+            | ContextKind::OverrideName { .. }
             | ContextKind::TypeParamModifiers(_)
             | ContextKind::Import(_) => CollectionContext {
                 type_checking_block,
@@ -1438,6 +1459,40 @@ impl<'m> ContextCursor<'m> {
                     .is_some_and(|expr| expr.range().contains_range(self.range)),
                 _ => false,
             })
+    }
+
+    /// the class, and the `def` keyword, when the cursor is on the name of a
+    /// `def` written directly in that class's body: `def are<CURSOR>`
+    fn class_body_def_name(&self) -> Option<(&'m ast::StmtClassDef, TextRange)> {
+        let def_keyword = match self.tokens_before {
+            [.., penultimate, _] if self.typed.is_some() => penultimate,
+            [.., last] if self.typed.is_none() => last,
+            _ => return None,
+        };
+        if def_keyword.kind() != TokenKind::Def {
+            return None;
+        }
+        // the `def` being written is a statement of its own, around the cursor
+        // or, before its name is, just ahead of it
+        let mut ancestors = self.covering_node.ancestors().skip_while(|node| {
+            !matches!(
+                node,
+                ast::AnyNodeRef::StmtClassDef(_) | ast::AnyNodeRef::StmtFunctionDef(_)
+            )
+        });
+        let mut next = ancestors.next()?;
+        if let ast::AnyNodeRef::StmtFunctionDef(function) = next {
+            if function.range().start() > def_keyword.start()
+                || !function.name.range().contains_range(self.range)
+            {
+                return None;
+            }
+            next = ancestors.next()?;
+        }
+        match next {
+            ast::AnyNodeRef::StmtClassDef(class) => Some((class, def_keyword.range())),
+            _ => None,
+        }
     }
 
     /// Returns true when the tokens indicate that the definition of a new
@@ -3131,6 +3186,59 @@ fn add_override_completions<'db>(
     }
 }
 
+/// the superclass members a class could override, offered at the name of a
+/// `def` written in its body, each as the rest of the header it would be
+/// written with: `def are` completes to `def area(self) -> float:`
+///
+/// in a basedpython file an override says so, and `missing-override-decorator`
+/// holds one that does not to it, so the completion also writes `override`
+/// before the `def` when it is not there already
+fn add_override_name_completions<'db>(
+    model: &SemanticModel<'db>,
+    class: &ast::StmtClassDef,
+    def_keyword: TextRange,
+    cursor: &ContextCursor<'_>,
+    source_type: PySourceType,
+    capabilities: CompletionCapabilities,
+    completions: &mut Completions<'db>,
+) {
+    let env = &model.program_environment();
+    let Some(class) = class.inferred_type(model) else {
+        return;
+    };
+    let says_override = cursor
+        .tokens_before
+        .iter()
+        .rev()
+        .skip_while(|token| token.range() != def_keyword)
+        .skip(1)
+        .find(|token| !token.kind().is_trivia())
+        .is_some_and(|token| &cursor.source[token.range()] == "override");
+    let write_override = source_type.is_basedpython() && !says_override;
+
+    for member in overridable_members(model.db(), env, class) {
+        let header = format!("{}{}:", member.name, member.signature);
+        let mut builder = Completion::builder(member.name.as_str())
+            .kind(CompletionKind::Method)
+            .label(format!("{}{}", member.name, member.signature))
+            .ty(member.ty)
+            .detail(format!("override {}", member.superclass))
+            .documentation(format!("override `{}.{}`", member.superclass, member.name))
+            .context_specific(true);
+        if write_override {
+            builder = builder.additional_edit(Edit::insertion(
+                "override ".to_string(),
+                def_keyword.start(),
+            ));
+        }
+        completions.add(if capabilities.snippets {
+            builder.snippet(format!("{header}\n$0"))
+        } else {
+            builder.insert(header)
+        });
+    }
+}
+
 /// A statement opener the completion list has to carry itself.
 ///
 /// Either a construct spelled with several keywords, each of which the list
@@ -4108,6 +4216,17 @@ fn add_unimported_completions<'db>(
                 (name, ImportRequest::module(name))
             });
 
+        // basedpython: a name the file has not imported is one the user is
+        // recalling by how it begins, so the letters typed have to start where a
+        // word of it does. `ret` offers `return` and `reveal_type` but not the
+        // import of `secrets` or `urlretrieve`, which only contain the letters in
+        // order, and which would otherwise crowd out the names in scope
+        if let Some(typed) = completions.query.exact.as_deref()
+            && !matches_from_a_word_start(typed, name)
+        {
+            continue;
+        }
+
         // Don't suggest symbols that are already imported.
         if members.satisfies(db, importing_file, &request) {
             continue;
@@ -4141,6 +4260,55 @@ fn add_unimported_completions<'db>(
                 )),
         );
     }
+}
+
+/// whether `typed` matches `name` from the start of one of its words, ignoring case: its first
+/// letter is where a word of `name` starts, and the rest of `typed` follows in order. `rt`
+/// matches `reveal_type` and `NoReturn` but not `secrets`
+///
+/// a word starts at the start of `name` and after a character that is not a letter or a digit,
+/// as `_` and `.` are. within a run of letters and digits, a word starts at an upper-case letter
+/// after a lower-case one (`NoReturn`'s `R`), at the last of a run of upper-case letters when a
+/// lower-case one follows it (`HTTPServer`'s `S`), and at a letter after a digit (`md5sum`'s
+/// `s`)
+fn matches_from_a_word_start(typed: &str, name: &str) -> bool {
+    let mut typed = typed.chars();
+    let Some(first) = typed.next() else {
+        return true;
+    };
+    let rest: Vec<char> = typed.collect();
+    let chars: Vec<char> = name.chars().collect();
+    (0..chars.len()).any(|start| {
+        if !is_word_start(&chars, start) || !chars[start].to_lowercase().eq(first.to_lowercase()) {
+            return false;
+        }
+        let mut remaining = chars[start + 1..].iter();
+        rest.iter().all(|wanted| {
+            remaining.any(|candidate| candidate.to_lowercase().eq(wanted.to_lowercase()))
+        })
+    })
+}
+
+/// whether a word of `chars` starts at `index`, as [`matches_from_a_word_start`] splits words
+fn is_word_start(chars: &[char], index: usize) -> bool {
+    let current = chars[index];
+    let Some(&previous) = index
+        .checked_sub(1)
+        .and_then(|previous| chars.get(previous))
+    else {
+        return true;
+    };
+    if !previous.is_alphanumeric() {
+        return true;
+    }
+    if previous.is_numeric() {
+        return current.is_alphabetic();
+    }
+    if !current.is_uppercase() {
+        return false;
+    }
+    previous.is_lowercase()
+        || (previous.is_uppercase() && chars.get(index + 1).is_some_and(|next| next.is_lowercase()))
 }
 
 /// The aliases the user could be part-way through writing.
@@ -7949,6 +8117,39 @@ if sys.platform == \"not-my-current-platform\":
         );
     }
 
+    /// an unimported name is offered when the letters typed start where one of its words does,
+    /// not when it merely contains them in order
+    #[test]
+    fn auto_import_matches_from_a_word_start() {
+        let builder = completion_test_builder(
+            "\
+ret<CURSOR>
+",
+        );
+
+        let test = builder.build();
+        test.contains("return");
+        assert!(
+            test.completions()
+                .iter()
+                .filter(|completion| completion.module_name.is_some())
+                .all(|completion| super::matches_from_a_word_start("ret", &completion.name)),
+            "an import was offered for a name `ret` does not start a word of",
+        );
+        assert!(super::matches_from_a_word_start("rt", "reveal_type"));
+        assert!(super::matches_from_a_word_start("ret", "NoReturn"));
+        assert!(!super::matches_from_a_word_start("ret", "secrets"));
+        assert!(!super::matches_from_a_word_start("ret", "urlretrieve"));
+        // the last capital of a run of them starts the word it leads, and a letter after a digit
+        // starts one
+        assert!(super::matches_from_a_word_start("ser", "HTTPServer"));
+        assert!(super::matches_from_a_word_start("http", "HTTPServer"));
+        assert!(!super::matches_from_a_word_start("tps", "HTTPServer"));
+        assert!(super::matches_from_a_word_start("sum", "md5sum"));
+        assert!(super::matches_from_a_word_start("ser", "Base64Serializer"));
+        assert!(!super::matches_from_a_word_start("um", "md5sum"));
+    }
+
     #[test]
     fn star_import() {
         let builder = completion_test_builder(
@@ -7959,11 +8160,19 @@ Re<CURSOR>
 ",
         );
 
-        // `ReadableBuffer` is a symbol in `typing`, but it is not re-exported
-        builder
-            .build()
-            .contains("Reversible")
-            .not_contains("ReadableBuffer");
+        // `ReadableBuffer` is a symbol in `typing`, but it is not re-exported, so the star import
+        // does not bring it into scope: it is offered only as an import from `_typeshed`
+        let test = builder.build();
+        test.contains("Reversible");
+        assert!(
+            test.completions()
+                .iter()
+                .all(|completion| completion.name != "ReadableBuffer"
+                    || completion
+                        .module_name
+                        .is_some_and(|module| module.as_str() == "_typeshed")),
+            "Expected `ReadableBuffer` to be offered only as an import from `_typeshed`",
+        );
     }
 
     #[test]
@@ -13315,6 +13524,81 @@ if foo:
         assert_snapshot!(
             test.snapshot(),
             @"override def greet(self, name: str) -> str:"
+        );
+    }
+
+    /// the name of a `def` in a class body offers what the class could override,
+    /// as the rest of the header, and writes `override` before the `def` in a
+    /// basedpython file
+    #[test]
+    fn override_completions_at_a_def_name() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "class A:\n    def total(self, rate: float) -> float:\n        return rate\n\nclass B(A):\n    def to<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import();
+        let test = test.build();
+        let total = test
+            .completions()
+            .iter()
+            .find(|completion| completion.name == "total")
+            .expect("`total` is offered");
+        assert_eq!(
+            total.insert.as_deref(),
+            Some("total(self, rate: float) -> float:")
+        );
+        assert_eq!(
+            total
+                .additional_edit
+                .as_ref()
+                .and_then(|edit| edit.content()),
+            Some("override ")
+        );
+    }
+
+    /// in python the header is all there is to write
+    #[test]
+    fn override_completions_at_a_def_name_in_python() {
+        let test = completion_test_builder(
+            "class A:\n    def total(self) -> int:\n        return 1\n\nclass B(A):\n    def to<CURSOR>",
+        )
+        .skip_auto_import();
+        let test = test.build();
+        let total = test
+            .completions()
+            .iter()
+            .find(|completion| completion.name == "total")
+            .expect("`total` is offered");
+        assert_eq!(total.insert.as_deref(), Some("total(self) -> int:"));
+        assert!(total.additional_edit.is_none());
+    }
+
+    /// a `def` that already says `override` is not given a second one, and a
+    /// `def` outside a class body is still a new name
+    #[test]
+    fn override_completions_at_a_def_name_already_override() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "class A:\n    def total(self) -> int:\n        return 1\n\nclass B(A):\n    override def to<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import();
+        let test = test.build();
+        let total = test
+            .completions()
+            .iter()
+            .find(|completion| completion.name == "total")
+            .expect("`total` is offered");
+        assert!(total.additional_edit.is_none());
+
+        assert!(
+            completion_test_builder("def to<CURSOR>")
+                .build()
+                .completions()
+                .is_empty()
         );
     }
 
