@@ -121,6 +121,27 @@ fn deferred_request_burst_does_not_block_responses() -> Result<()> {
     Ok(())
 }
 
+/// an editor that starts `by repl` or `by run` learns which of their flags the `by` it talks to
+/// takes from `initialize`'s answer, rather than by running it to read its `--help`
+#[test]
+fn initialization_names_the_command_line_flags_an_editor_starts_by_with() -> Result<()> {
+    let server = TestServerBuilder::new()?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let initialization_result = server.initialization_result().unwrap();
+
+    assert_eq!(
+        initialization_result.capabilities.experimental,
+        Some(json!({
+            "repl": { "events": true, "module": true, "sessionFile": true },
+            "run": { "coverage": true, "inBuild": true, "launcher": true, "profile": true },
+        }))
+    );
+
+    Ok(())
+}
+
 /// Tests that the server sends a registration request for diagnostics if workspace diagnostics
 /// are enabled via initialization options and dynamic registration is enabled, even if the
 /// workspace configuration is not supported by the client.

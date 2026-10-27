@@ -605,6 +605,37 @@ impl ResolvedClientCapabilities {
     }
 }
 
+/// the flags of `by`'s commands that an editor starts `by` with, for the `by` this server is
+/// part of: each command by name, and each flag by its long name in camelCase —
+/// `sessionFile` is `--session-file`
+///
+/// `initialize` answers with them under `experimental`, each command an object of its flags
+/// set to `true`, so that an editor knows what the `by` it already talks to takes without
+/// running it to read its `--help`:
+///
+/// ```json
+/// { "repl": { "events": true, "module": true, "sessionFile": true }, "run": { ... } }
+/// ```
+pub const COMMAND_LINE_FLAGS: [(&str, &[&str]); 2] = [
+    ("repl", &["events", "module", "sessionFile"]),
+    ("run", &["coverage", "inBuild", "launcher", "profile"]),
+];
+
+/// [`COMMAND_LINE_FLAGS`], as `initialize` answers with them
+fn command_line_capabilities() -> serde_json::Value {
+    COMMAND_LINE_FLAGS
+        .iter()
+        .map(|(command, flags)| {
+            let flags = flags
+                .iter()
+                .map(|flag| ((*flag).to_owned(), serde_json::Value::Bool(true)))
+                .collect();
+            ((*command).to_owned(), serde_json::Value::Object(flags))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 /// Creates the server capabilities based on the resolved client capabilities and resolved global
 /// settings from the initialization options.
 pub(crate) fn server_capabilities(
@@ -767,6 +798,7 @@ pub(crate) fn server_capabilities(
         }),
         type_hierarchy_provider: Some(true.into()),
         call_hierarchy_provider: Some(true.into()),
+        experimental: Some(command_line_capabilities()),
         ..Default::default()
     }
 }

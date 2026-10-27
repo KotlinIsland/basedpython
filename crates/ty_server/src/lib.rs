@@ -4,6 +4,7 @@ use anyhow::Context;
 use lsp_server::Connection;
 use ruff_db::system::{OsSystem, SystemPathBuf};
 
+pub use crate::capabilities::COMMAND_LINE_FLAGS;
 use crate::db::Db;
 pub use crate::logging::{LogLevel, init_logging};
 pub use crate::server::Server;

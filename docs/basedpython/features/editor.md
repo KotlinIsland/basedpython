@@ -1170,6 +1170,26 @@ continued with `\` — or `invalid`, input no further line can make valid, which
 runs to report why. it is the answer `by repl` gives itself for the lines it
 reads, and needs no document open
 
+## what `by` takes on its command line
+
+an editor starts `by` itself for some things — a console's `by repl`, a run
+configuration's `by run` — and has to know which of their flags the `by` it has
+takes. the language server is that `by`, so `initialize` answers it under
+`experimental`, rather than the editor running `by` to read its `--help`: each
+command by name, and each flag the editor can start it with by its long name in
+camelCase, `true`
+
+```json
+{
+  "repl": { "events": true, "module": true, "sessionFile": true },
+  "run": { "coverage": true, "inBuild": true, "launcher": true, "profile": true }
+}
+```
+
+`sessionFile` is `--session-file`. a flag that is not named — or an answer with
+no `experimental` at all, from a `by` before this — is one this `by` does not
+take
+
 ## suppressing a diagnostic
 
 every diagnostic has two quick fixes that silence it rather than fix it.

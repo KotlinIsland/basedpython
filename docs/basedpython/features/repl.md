@@ -148,7 +148,10 @@ python's, and an editor is told when that is with [`--events`](#in-an-editor)
 
 ## in an editor
 
-an editor's console runs `by repl` as a process and talks to it through its standard streams:
+an editor's console runs `by repl` as a process and talks to it through its standard streams.
+which of its flags the `by` it has takes — `--events` and `--session-file` below, `--module`
+above — is in the language server's answer to `initialize`, under `experimental.repl`: see
+[what `by` takes on its command line](editor.md#what-by-takes-on-its-command-line)
 
 - **sending.** each input is written to `by repl`'s standard input framed, as above, followed by
     a newline. a line for the program — what `input()` reads — is written as it is, unframed

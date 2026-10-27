@@ -991,3 +991,41 @@ fn resolve_bool_arg(yes: bool, no: bool) -> Option<bool> {
         (..) => unreachable!("Clap should make this impossible"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// what the language server tells an editor `by` takes on its command line is what it
+    /// takes: each flag it names is a flag of the command it names it under
+    #[test]
+    fn the_language_server_names_only_flags_the_command_line_takes() {
+        let cli = Cli::command();
+        for (name, flags) in ty_server::COMMAND_LINE_FLAGS {
+            let command = cli
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("`by` has no command `{name}`"));
+            for flag in flags {
+                // `sessionFile` is `--session-file`
+                let long: String = flag
+                    .chars()
+                    .flat_map(|c| {
+                        [
+                            c.is_ascii_uppercase().then_some('-'),
+                            Some(c.to_ascii_lowercase()),
+                        ]
+                    })
+                    .flatten()
+                    .collect();
+                assert!(
+                    command
+                        .get_arguments()
+                        .any(|argument| argument.get_long() == Some(long.as_str())),
+                    "`by {name}` has no `--{long}`, which the language server says it takes as `{flag}`"
+                );
+            }
+        }
+    }
+}
