@@ -151,6 +151,37 @@ positional-only parameter is still passed positionally to `main` even when the
 command line named it with `--`, and a keyword-only one never takes a
 positional slot.
 
+## the guard's line
+
+the guard is written by the transpiler, so no line of the `.by` is its own. it
+runs at the line `main` is defined on, since writing `main` is what asks for it:
+while `main` runs, a traceback names that line for the module's frame and quotes
+`def main` there, and a debugger's stack shows the module at it, where those of a
+`.py` program name its own `main()` call
+
+```by
+let numbers: dict[str, int] = {}
+
+
+def main():
+    print(numbers["missing"])
+```
+
+```console
+$ by run main
+Traceback (most recent call last):
+  File "/project/main.by", line 4, in <module>
+    def main():
+  File "/project/main.by", line 5, in main
+    print(numbers["missing"])
+    ~~~~~^^^^^^^^^^^^^^^^^^^^
+KeyError: 'missing'
+```
+
+a breakpoint on that line stops as `main` is defined and again as the guard calls
+it, as a breakpoint on a `for` line stops on each pass, and stepping over it as
+the guard calls `main` runs the whole of `main`
+
 ## the project entry point
 
 `main` makes a *module* runnable; `run.main` says which module that is for the

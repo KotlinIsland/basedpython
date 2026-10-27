@@ -3129,7 +3129,10 @@ def _relined_one(code, filename, by_line, width):
         _relined(const, filename, by_line, width) if isinstance(const, types.CodeType) else const
         for const in code.co_consts
     )
-    first = by_line(code.co_firstlineno)
+    # a module's code starts at its first line whatever is written there, as python's
+    # own does, rather than at line 0 when the transpiler wrote that line — an import
+    # it needed — on its own. a profile names the module by it, `main.by:1(<module>)`
+    first = 1 if code.co_name == "<module>" else by_line(code.co_firstlineno)
     table = bytearray()
     if sys.version_info >= (3, 11):
         # an entry for each run of up to 8 code units at one line, in the long form,

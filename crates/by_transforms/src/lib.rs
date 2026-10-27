@@ -3251,20 +3251,30 @@ mod cross_file {
         );
     }
 
-    /// The map for one source, spelled with and without a final newline.
-    fn map_both_ways(body: &str) -> (Vec<Option<u32>>, Vec<Option<u32>>) {
-        let mut maps = Vec::new();
+    /// the map for one source, spelled with and without a final newline, and the
+    /// python the one without is transpiled to
+    fn map_both_ways(body: &str) -> (String, Vec<Option<u32>>, Vec<Option<u32>>) {
+        let mut transpiled = Vec::new();
         for src in [body.to_owned(), format!("{body}\n")] {
             let project = project_db(&[("/m.by", &src)]);
             let file = system_path_to_file(project.db(), "/m.by").expect("file not in db");
-            let (_, map) =
+            transpiled.push(
                 transpile_typed_with_map(project.db(), file, &Config::test_default(), None)
-                    .expect("transpile failed");
-            maps.push(map);
+                    .expect("transpile failed"),
+            );
         }
-        let with_newline = maps.pop().expect("two maps");
-        let without = maps.pop().expect("two maps");
-        (without, with_newline)
+        let (_, with_newline) = transpiled.pop().expect("two maps");
+        let (out, without) = transpiled.pop().expect("two maps");
+        (out, without, with_newline)
+    }
+
+    /// the entry of `map` for the line of `out` that is `line`
+    fn mapped(out: &str, map: &[Option<u32>], line: &str) -> Option<u32> {
+        let index = out
+            .lines()
+            .position(|written| written == line)
+            .unwrap_or_else(|| panic!("`{line}` is not in the output:\n{out}"));
+        map[index]
     }
 
     /// A trailing newline terminates the last line; it does not add one. So the
@@ -3279,19 +3289,18 @@ mod cross_file {
     #[test]
     fn a_missing_final_newline_does_not_cost_the_last_line_its_mapping() {
         let body = "def g():\n    print(2)\n\ndef main():\n    g()";
-        let (without, with_newline) = map_both_ways(body);
+        let (out, without, with_newline) = map_both_ways(body);
 
         assert_eq!(
             without, with_newline,
             "the two spellings of one program must map alike"
         );
-        // the last line the user wrote is the last line that maps to source, and
-        // it maps to itself: `    g()` is `.by` line 4
-        let last_mapped = without
-            .iter()
-            .rposition(Option::is_some)
-            .expect("some line maps to source");
-        assert_eq!(without[last_mapped], Some(4), "map:\n{without:?}");
+        // the last line the user wrote maps to itself: `    g()` is `.by` line 4
+        assert_eq!(
+            mapped(&out, &without, "    g()"),
+            Some(4),
+            "map:\n{without:?}"
+        );
     }
 
     /// the same, through the enum lowering — a second table producer, which
@@ -3299,21 +3308,54 @@ mod cross_file {
     #[test]
     fn a_missing_final_newline_maps_the_last_line_through_the_enum_lowering() {
         let body = "enum class Colour:\n    case Red\n    case Green\n\ndef main():\n    print(Colour.Red)";
-        let (without, with_newline) = map_both_ways(body);
+        let (out, without, with_newline) = map_both_ways(body);
 
         assert_eq!(
             without, with_newline,
             "the two spellings of one program must map alike"
         );
-        let last_mapped = without
-            .iter()
-            .rposition(Option::is_some)
-            .expect("some line maps to source");
         assert_eq!(
-            without[last_mapped],
+            mapped(&out, &without, "    print(Colour.Red)"),
             Some(5),
             "`    print(Colour.Red)` is .by line 5, map:\n{without:?}"
         );
+    }
+
+    /// the `__main__` guard the transpiler appends is the call of `main` the author
+    /// asked for by writing `main`, so each line of it is charged to the line `main` is
+    /// defined on, which a traceback and a debugger then name for the module's frame
+    /// while `main` runs, where they named line 0 of the `.by`
+    #[test]
+    fn the_main_guard_is_charged_to_the_line_main_is_defined_on() {
+        for (src, defined_on) in [
+            // a function defined after `main`, so the guard follows lines of another
+            (
+                "import sys\n\n\ndef main():\n    helper()\n\n\ndef helper():\n    print(sys.argv)\n",
+                3,
+            ),
+            // a command line, parsed by lines of the guard's own ahead of the call
+            (
+                "def main(name: str, count: int = 1):\n    print(name * count)\n",
+                0,
+            ),
+            // `asyncio.run`, and the import of `asyncio` the guard needs
+            ("async def main():\n    print(1)\n", 0),
+        ] {
+            let project = project_db(&[("/m.by", src)]);
+            let file = system_path_to_file(project.db(), "/m.by").expect("file not in db");
+            let (out, map) =
+                transpile_typed_with_map(project.db(), file, &Config::test_default(), None)
+                    .expect("transpile failed");
+            let guard = out
+                .lines()
+                .position(|line| line == "if __name__ == \"__main__\":")
+                .unwrap_or_else(|| panic!("no guard in:\n{out}"));
+            assert_eq!(
+                map[guard..],
+                vec![Some(defined_on); out.lines().count() - guard],
+                "the guard of:\n{out}\nis not charged to `.by` line {defined_on}: {map:?}"
+            );
+        }
     }
 
     /// the map is indexed by generated line, so it has to be exactly as long as

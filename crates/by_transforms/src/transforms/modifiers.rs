@@ -39,7 +39,7 @@ use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use std::collections::HashMap;
 
-use super::ast_driver::{AstPass, Fragment, PassContext};
+use super::ast_driver::{AstPass, EpilogueLine, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 use crate::{Config, PythonVersion};
@@ -939,8 +939,10 @@ impl AstPass for ModifiersPass<'_> {
             .map(|name| format!("\"{name}\""))
             .collect::<Vec<_>>();
         if !entries.is_empty() {
-            ctx.epilogue
-                .push(format!("__all__ = [{}]", entries.join(", ")));
+            ctx.epilogue.push(EpilogueLine::unattributed(format!(
+                "__all__ = [{}]",
+                entries.join(", ")
+            )));
         }
 
         // the members tuple is built as the module runs, and a stub never runs. it

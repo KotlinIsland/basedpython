@@ -117,6 +117,36 @@ fn quote_delimiter(text: &str) -> &'static str {
         .unwrap_or("\"")
 }
 
+/// a line of [`PassContext::epilogue`], with the source line it is charged to in the
+/// line table
+pub(crate) struct EpilogueLine {
+    text: String,
+    /// the offset in the source of what the line runs on the author's behalf, whose
+    /// line every location in it then names: a traceback, a debugger's stack and a
+    /// profile read it from the code object `by run` compiles, and a debugger stops
+    /// there. `None` for a line no one place in the source asks for, such as
+    /// `__all__`, which every `export` adds a name to
+    charged_to: Option<TextSize>,
+}
+
+impl EpilogueLine {
+    /// a line no line of the source stands for
+    pub(crate) fn unattributed(text: String) -> Self {
+        Self {
+            text,
+            charged_to: None,
+        }
+    }
+
+    /// a line that runs what the source written at `at` asks for
+    pub(crate) fn charged_to(text: String, at: TextSize) -> Self {
+        Self {
+            text,
+            charged_to: Some(at),
+        }
+    }
+}
+
 /// Mutable state shared across every pass during a single transpile.
 #[derive(Default)]
 pub(crate) struct PassContext {
@@ -187,7 +217,7 @@ pub(crate) struct PassContext {
     pub(crate) errors: Vec<String>,
     /// Lines to append AFTER the spliced body (e.g. modifiers' auto-
     /// generated `__all__ = [...]`). Driver emits each as its own line
-    pub(crate) epilogue: Vec<String>,
+    pub(crate) epilogue: Vec<EpilogueLine>,
     /// The modules a *synthesized* annotation qualifies a class with that the source
     /// never imported under their own names (`decimal` for an inferred
     /// `decimal.Decimal` annotation). The annotation is written as a string
@@ -2254,7 +2284,8 @@ pub(crate) fn run_against_source<'a>(
     ctx.errors.extend(lost);
     // line table for the spliced body, built from the ascending edit list
     // before the descending application sort consumes it. generated lines from
-    // the import prefix (top) and epilogue (bottom) have no source origin
+    // the import prefix (top) have no source origin, and those of the epilogue
+    // (bottom) the one each names
     let mut body_edits = edits.clone();
     body_edits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let body_table = crate::source_map::line_table(source_ref, &body_edits);
@@ -2273,7 +2304,7 @@ pub(crate) fn run_against_source<'a>(
     // under a name of the lowering's own, bound here, ahead of everything that reads it
     let everything_written = std::iter::once(out.as_str())
         .chain(ctx.required_imports.iter().map(String::as_str))
-        .chain(ctx.epilogue.iter().map(String::as_str))
+        .chain(ctx.epilogue.iter().map(|line| line.text.as_str()))
         .collect::<Vec<_>>()
         .join("\n");
     let builtins = written.builtin_imports(&everything_written, config.min_version.minor);
@@ -2323,10 +2354,15 @@ pub(crate) fn run_against_source<'a>(
             out.push('\n');
         }
         for line in &ctx.epilogue {
-            out.push_str(line);
+            out.push_str(&line.text);
             out.push('\n');
         }
-        table.extend(std::iter::repeat_n(None, ctx.epilogue.len()));
+        table.extend(ctx.epilogue.iter().map(|line| {
+            line.charged_to.map(|at| {
+                u32::try_from(crate::newline_count(&source_ref[..usize::from(at)]))
+                    .unwrap_or(u32::MAX)
+            })
+        }));
     }
     // normalise trailing newline. AST-mutation passes splice rendered
     // multi-line statements that may bring their own internal newlines;

@@ -20,7 +20,7 @@ use ruff_python_ast::{
     self as ast, CmpOp, Expr, ModModule, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef,
 };
 
-use super::ast_driver::{AstPass, PassContext};
+use super::ast_driver::{AstPass, EpilogueLine, PassContext};
 use super::repeated_underscore::{WrittenNames, positional_only_count};
 use super::source_util::{is_synthetic_decorator, python_string_literal};
 
@@ -62,7 +62,12 @@ impl AstPass for MainFunction<'_> {
             return;
         }
 
-        ctx.epilogue.push("if __name__ == \"__main__\":".to_owned());
+        // the guard is the call of `main` the author asked for by writing `main`, so
+        // it runs at the line `main` is defined on: a traceback and a debugger's stack
+        // name that line for the module's frame, where a `.py` program names its own
+        // call of `main`, and a debugger stops at a breakpoint on it both as `main`
+        // is defined and as it is called
+        let mut guard = vec!["if __name__ == \"__main__\":".to_owned()];
         let spec: Vec<String> = entry
             .exposed()
             .map(|parameter| parameter.spec_entry(self.written))
@@ -72,28 +77,33 @@ impl AstPass for MainFunction<'_> {
             "main()".to_owned()
         } else {
             ctx.runtime.insert(crate::runtime::MAIN_ARGS);
-            ctx.epilogue
-                .push("    _by_args, _by_kwargs = _by_main_args(main, [".to_owned());
+            guard.push("    _by_args, _by_kwargs = _by_main_args(main, [".to_owned());
             for entry in spec {
-                ctx.epilogue.push(format!("        {entry},"));
+                guard.push(format!("        {entry},"));
             }
             let close = match extra {
                 Some(converter) => format!("    ], {})", converter.spelled(self.written)),
                 None => "    ])".to_owned(),
             };
-            ctx.epilogue.push(close);
+            guard.push(close);
             "main(*_by_args, **_by_kwargs)".to_owned()
         };
         if entry.function.is_async {
-            ctx.epilogue.push(format!(
+            guard.push(format!(
                 "    {}.run({call})",
                 self.written.imported_module("asyncio")
             ));
             ctx.required_imports
                 .push(self.written.import_module("asyncio"));
         } else {
-            ctx.epilogue.push(format!("    {call}"));
+            guard.push(format!("    {call}"));
         }
+        let defined_at = entry.function.name.range.start();
+        ctx.epilogue.extend(
+            guard
+                .into_iter()
+                .map(|line| EpilogueLine::charged_to(line, defined_at)),
+        );
     }
 }
 

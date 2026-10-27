@@ -287,7 +287,11 @@ after the passes run, the driver assembles the output in one pass:
 
 `transpile_typed_with_map` returns a line table (`output line → .by line`,
 `None` for generated lines), composed from the phase-0 table plus the count of
-generated preamble lines. it powers `by run`'s traceback rewriting and the
+generated preamble lines. a line appended after the body is charged to the source
+it runs for, when one place in the source asks for it: each line of the
+[`__main__` guard](../features/main-function.md#the-guards-line) is charged to the
+line `main` is defined on, and the `__all__` an `export` adds a name to is
+generated. it powers `by run`'s traceback rewriting and the
 `.by` source span on transpiler-error diagnostics. the table is line-level only;
 the byte-accurate, bidirectional design is in
 [sourcemaps](sourcemaps.md)

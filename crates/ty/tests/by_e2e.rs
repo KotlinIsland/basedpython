@@ -3141,6 +3141,46 @@ main()
     );
 }
 
+/// the `__main__` guard the transpiler appends calls `main` at the line `main` is
+/// defined on, so a traceback names that line for the module's frame, and quotes it,
+/// where a `.py` program's names its own call of `main`. it named line 0 and quoted
+/// nothing. the module itself starts at line 1 whatever the transpiler wrote there —
+/// the import of `Final` a `let` needs — as python's own module does, which is the
+/// line a profile names it by, where it named line 0
+#[test]
+fn run_reports_the_call_of_main_at_the_line_main_is_defined_on() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "let numbers: dict[str, int] = {}\n\n\ndef main():\n    print(numbers[\"missing\"])\n",
+    )
+    .unwrap();
+    let main = dir.path().canonicalize().unwrap().join("main.by");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "--profile", "run.pstat", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    // python writes its traceback in text mode, which ends a line with `\r\n` on windows
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    assert!(
+        stderr.contains(&format!(
+            "  File \"{0}\", line 4, in <module>\n    def main():\n  File \"{0}\", line 5, in main\n",
+            main.display()
+        )),
+        "the call of `main` is not at the line `main` is defined on:\n{stderr}"
+    );
+    let functions = profiled_functions(&python, &dir.path().join("run.pstat"));
+    let module = functions
+        .iter()
+        .find(|function| function.file == main.display().to_string() && function.name == "<module>")
+        .unwrap_or_else(|| panic!("no <module> of main.by: {functions:#?}"));
+    assert_eq!(module.line, 1, "{functions:#?}");
+}
+
 /// inference recurses with the shape of the expression it is checking, and `run`
 /// checks on the thread it was dispatched to rather than through the rayon pool.
 /// on the stack a process starts with — 1 MiB on windows — a file like this one
@@ -5425,8 +5465,7 @@ fn a_source_without_a_trailing_newline_still_maps_its_last_line() {
         "one entry per generated line:\n{generated}"
     );
 
-    // `    print(helper())` is `.by` line 4, and it is the last line that has a
-    // `.by` line behind it at all
+    // `    print(helper())` is `.by` line 4
     let printed = generated
         .lines()
         .position(|line| line.contains("print(helper())"))
@@ -5437,15 +5476,16 @@ fn a_source_without_a_trailing_newline_still_maps_its_last_line() {
         "the user's last line maps to itself:\n{without:?}\n{generated}"
     );
 
-    // and the entry-point guard `by` appended is prelude, which is what `None`
-    // is for — the fix must not buy the last line back by mapping those
+    // and the entry-point guard `by` appended is charged to the line `main` is
+    // defined on, `.by` line 3, which is what asks for it — the fix must not buy
+    // the last line back by mapping the guard onto it
     let epilogue = generated
         .lines()
         .position(|line| line.starts_with("if __name__ =="))
         .expect("the entry-point guard is appended");
     assert!(
-        without[epilogue..].iter().all(Option::is_none),
-        "the appended guard has no `.by` line behind it:\n{without:?}\n{generated}"
+        without[epilogue..].iter().all(|line| *line == Some(3)),
+        "the appended guard is not at `def main`'s line:\n{without:?}\n{generated}"
     );
     assert!(
         epilogue > printed,
