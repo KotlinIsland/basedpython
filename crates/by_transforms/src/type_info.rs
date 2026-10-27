@@ -799,6 +799,10 @@ pub(crate) trait TypeInfo {
     /// `docs/basedpython/frameworks/index.md`
     fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole>;
 
+    /// basedpython: the `sealed` classes `class_def` is a member of, each by the range of its
+    /// name, which ty types `__sealed_members__` from
+    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> Vec<TextRange>;
+
     /// the inferred annotation to synthesize for a bare class-body assignment
     /// `<name> = <value>` — the promoted display of `value`'s type (`1` →
     /// `"int"`, `[1]` → `"list[int]"`, `int` → `"type[int]"`), with the modules
@@ -1666,6 +1670,10 @@ impl TypeInfo for LoweringModel<'_> {
         let ty = class_def.inferred_type(self)?;
         let class = ty.as_class_literal()?;
         ty_python_semantic::types::class_framework_role(self.db(), class)
+    }
+
+    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> Vec<TextRange> {
+        ty_python_semantic::types::ide_support::sealed_classes_listing(self, class_def)
     }
 
     fn inferred_annotation(

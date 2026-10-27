@@ -3371,6 +3371,45 @@ print(A.__sealed_members__ == (B, C))
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "True");
 }
 
+/// a sealed class declared in a function or class body has its members tuple at
+/// runtime too, assigned in the body that declares it
+#[test]
+fn nested_sealed_class_exposes_members_at_runtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def make():
+    sealed class A
+    class B(A)
+    class C(A)
+    return A, (B, C)
+
+class Outer:
+    sealed class X
+    class Y(X)
+
+sealed, members = make()
+print(sealed.__sealed_members__ == members, Outer.X.__sealed_members__ == (Outer.Y,))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "True True");
+}
+
 #[test]
 fn context_parameters_pass_implicitly_at_runtime() {
     let dir = tempfile::tempdir().expect("tempdir");

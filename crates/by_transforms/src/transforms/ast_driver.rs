@@ -1495,7 +1495,12 @@ pub(crate) fn run_against_source<'a>(
         raises_clause::RaisesGuardPass::new(source_ref, written, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let match_type_pass = match_type::MatchTypePass::new(source_ref, written);
-    let modifiers_pass = modifiers::ModifiersPass::new(source_ref, written, config);
+    let modifiers_pass = modifiers::ModifiersPass::new(
+        source_ref,
+        written,
+        modifiers::collect_sealed_listings(parsed_handle.suite(), &semantic_model),
+        config,
+    );
     let main_function_pass = main_function::MainFunction::new(source_ref, written, config.session);
     let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();

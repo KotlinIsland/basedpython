@@ -119,7 +119,7 @@ bitflags::bitflags! {
     pub struct ClassLiteralFlags: u8 {
         /// basedpython: whether this class is declared `sealed`. A sealed class may
         /// only be subclassed from within its own workspace, and exposes a
-        /// `__sealed_members__` tuple of its same-module direct subclasses.
+        /// `__sealed_members__` tuple of the direct subclasses its own scope declares
         const SEALED = 1 << 0;
         /// Whether this class has any decorators.
         const HAS_DECORATORS = 1 << 1;
@@ -1093,31 +1093,37 @@ impl<'db> StaticClassLiteral<'db> {
         })
     }
 
-    /// basedpython: the module-level direct subclasses of this `sealed` class,
-    /// in source order. These make up the `__sealed_members__` tuple and match
-    /// what the runtime transform emits (it only sees same-file subclasses).
+    /// basedpython: the direct subclasses of this `sealed` class that the scope
+    /// binding it declares — the module for a module-level class, the function
+    /// or class body for one declared there — in source order, one per class
+    /// statement. these are the members of `__sealed_members__`, and the classes
+    /// the transpiler adds to it: it adds each one in that scope, right after its
+    /// class statement, and can name no subclass another scope declares
+    ///
+    /// the class statements are read off the scope's child scopes rather than
+    /// off what its names hold at the end of the scope: a function body that
+    /// ends in `return` has no reachable end, and a name a class statement binds
+    /// may be rebound after it, but the statement is still one that adds a member
     #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn sealed_members(self, db: &'db dyn Db) -> Box<[StaticClassLiteral<'db>]> {
-        let global = ty_python_core::global_scope(db, self.program_file(db));
-        let mut members = Vec::new();
-        for symbol in place_table(db, global).symbols() {
-            let Some(Type::ClassLiteral(ClassLiteral::Static(candidate))) =
-                class_member(db, global, symbol.name()).ignore_possibly_undefined()
-            else {
-                continue;
-            };
-            if candidate == self {
-                continue;
-            }
-            let is_direct_subclass = candidate.explicit_bases(db).iter().any(|base| {
-                base.to_class_type(db)
-                    .is_some_and(|class| class.class_literal(db) == ClassLiteral::Static(self))
-            });
-            if is_direct_subclass {
-                members.push(candidate);
-            }
-        }
-        members.into_boxed_slice()
+        let index = semantic_index(db, self.program_file(db));
+        let scope = self.definition(db).file_scope(db);
+        index
+            .child_scopes(scope)
+            // a generic class's body is a child of its type-parameter scope, which
+            // is the one the class statement opens in the enclosing scope
+            .filter_map(|(_, child)| child.node().as_class_or_class_type_parameters())
+            .filter_map(|class| original_class_type(db, index.expect_single_definition(class)))
+            .filter_map(ClassLiteral::as_static)
+            .filter(|candidate| {
+                *candidate != self
+                    && candidate.explicit_bases(db).iter().any(|base| {
+                        base.to_class_type(db).is_some_and(|class| {
+                            class.class_literal(db) == ClassLiteral::Static(self)
+                        })
+                    })
+            })
+            .collect()
     }
 
     /// Is this class final?
@@ -1997,17 +2003,27 @@ impl<'db> StaticClassLiteral<'db> {
         inherited_generic_context: Option<GenericContext<'db>>,
         name: &str,
     ) -> Option<Type<'db>> {
-        // basedpython: a `sealed` class exposes `__sealed_members__`, a tuple of
-        // its same-module direct subclasses (matching the runtime transform).
+        // basedpython: a `sealed` class exposes `__sealed_members__`, the tuple the
+        // transpiler adds each of its members to as the member's class statement runs.
+        // a statement may run conditionally, more than once, or not at all, and the tuple
+        // can be read before a later one has, so it holds any number of them
         if name == "__sealed_members__" && self.is_sealed(db) {
-            let elements = self.sealed_members(db).iter().map(|member| {
-                SubclassOfType::from(
-                    db,
-                    env,
-                    ClassLiteral::Static(*member).default_specialization(db),
-                )
-            });
-            return Some(Type::heterogeneous_tuple(db, env, elements));
+            let members = self.sealed_members(db);
+            if members.is_empty() {
+                return Some(Type::empty_tuple(db, env));
+            }
+            let member = UnionType::from_elements(
+                db,
+                env,
+                members.iter().map(|member| {
+                    SubclassOfType::from(
+                        db,
+                        env,
+                        ClassLiteral::Static(*member).default_specialization(db),
+                    )
+                }),
+            );
+            return Some(Type::homogeneous_tuple(db, env, member));
         }
 
         // Handle `@functools.total_ordering`: synthesize comparison methods

@@ -36,15 +36,15 @@ ORIGIN: Final = Point(0, 0)
 
 ## class modifiers
 
-| basedpython             | Python output                                       |
-| ----------------------- | --------------------------------------------------- |
-| `final class Foo`       | `@final` + `class Foo`                              |
-| `abstract class Foo`    | `class Foo` (keyword stripped, no decorator)        |
-| `open class Foo`        | `class Foo` (keyword stripped, no decorator)        |
-| `data class Foo`        | `@dataclass(slots=True)` + `class Foo`              |
-| `frozen data class Foo` | `@dataclass(frozen=True, slots=True)` + `class Foo` |
-| `protocol Foo`          | `class Foo(Protocol)` (base added)                  |
-| `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__ = (...)`      |
+| basedpython             | Python output                                             |
+| ----------------------- | --------------------------------------------------------- |
+| `final class Foo`       | `@final` + `class Foo`                                    |
+| `abstract class Foo`    | `class Foo` (keyword stripped, no decorator)              |
+| `open class Foo`        | `class Foo` (keyword stripped, no decorator)              |
+| `data class Foo`        | `@dataclass(slots=True)` + `class Foo`                    |
+| `frozen data class Foo` | `@dataclass(frozen=True, slots=True)` + `class Foo`       |
+| `protocol Foo`          | `class Foo(Protocol)` (base added)                        |
+| `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__` built per subclass |
 
 `dataclass(slots=True)` is new in python 3.10. below it, a `data class` is
 decorated with a runtime helper that makes it slotted the way that option would.

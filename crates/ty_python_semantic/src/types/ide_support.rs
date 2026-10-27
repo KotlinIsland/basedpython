@@ -5261,6 +5261,41 @@ pub fn is_union_special_form(ty: Type) -> bool {
     matches!(ty, Type::SpecialForm(SpecialFormType::Union))
 }
 
+/// basedpython: the `sealed` classes whose `__sealed_members__` the class `class_def` declares
+/// is a member of, each by the range of its name, which is in the same file and scope
+///
+/// the transpiler adds the class to each of their tuples as its statement runs, and the checker
+/// types the tuples from the same members, so the two agree on which classes are members however
+/// a base is written
+pub fn sealed_classes_listing(
+    model: &SemanticModel<'_>,
+    class_def: &ast::StmtClassDef,
+) -> Vec<TextRange> {
+    let db = model.db();
+    let file = db.program_file(model.file());
+    let index = semantic_index(db, file);
+    let Some(ClassLiteral::Static(class)) =
+        original_class_type(db, index.expect_single_definition(class_def))
+    else {
+        return Vec::new();
+    };
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let mut sealed: Vec<TextRange> = Vec::new();
+    for base in class.explicit_bases(db) {
+        if let Some(base) = base.to_class_type(db)
+            && let ClassLiteral::Static(base) = base.class_literal(db)
+            && base.is_sealed(db)
+            && base.sealed_members(db).contains(&class)
+        {
+            let name = base.definition(db).focus_range(db, &module).range();
+            if !sealed.contains(&name) {
+                sealed.push(name);
+            }
+        }
+    }
+    sealed
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

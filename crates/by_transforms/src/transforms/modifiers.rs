@@ -36,10 +36,12 @@ use ruff_python_ast::{
     self as ast, Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias,
 };
 use ruff_python_stdlib::basedpython::visibility_rename;
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
+use std::collections::HashMap;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
+use crate::type_info::TypeInfo;
 use crate::{Config, PythonVersion};
 
 /// basedpython: the visibility a modifier keyword records, read off the
@@ -79,19 +81,6 @@ fn is_class_var(annotation: &Expr) -> bool {
     }
 }
 
-/// Returns the head identifier of a base-class expression: `A` for `A`, and
-/// `A` for the generic form `A[int]`. Other base shapes have no simple name.
-fn base_head_name(base: &Expr) -> Option<&str> {
-    match base {
-        Expr::Name(n) => Some(n.id.as_str()),
-        Expr::Subscript(s) => match s.value.as_ref() {
-            Expr::Name(n) => Some(n.id.as_str()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct Modifiers<'src> {
     source: &'src str,
@@ -121,21 +110,20 @@ pub(crate) struct Modifiers<'src> {
     exports: Vec<String>,
     /// Module-level names renamed by `private` (original → `_original`).
     private_renames: Vec<String>,
-    /// Module-level classes declared `sealed`, in source order. Each gets a
-    /// `<name>.__sealed_members__` tuple of its same-module subclasses.
-    sealed_classes: Vec<String>,
-    /// Module-level `(class name, base head names, statement end offset)`
-    /// triples, in source order. Used to resolve the subclasses of each sealed
-    /// class and to place the `__sealed_members__` assignment after the last one.
-    class_bases: Vec<(String, Vec<String>, TextSize)>,
+    /// for each class statement that is a member of a `sealed` class, keyed by its range,
+    /// the ranges of the names of the sealed classes it is a member of
+    sealed_listings: &'src HashMap<TextRange, Vec<TextRange>>,
+    /// the classes declared `sealed`, in source order
+    sealed_classes: Vec<DeclaredClass>,
+    /// the members of sealed classes, in source order, each with the names of the sealed
+    /// classes it is a member of
+    sealed_members: Vec<(DeclaredClass, &'src [TextRange])>,
     /// Tracks the current class-nesting depth so visibility modifiers can
     /// distinguish module-level declarations from class members.
     class_depth: u32,
 
-    /// Tracks the current function-nesting depth. A class declared inside a
-    /// function body is not a module-level name, so it must not be recorded as
-    /// a sealed subclass (the runtime tuple assignment lives at module scope
-    /// and cannot reference a function-local name).
+    /// tracks the current function-nesting depth, so a declaration inside a
+    /// function body is not taken for a module-level one
     func_depth: u32,
     /// whether the innermost enclosing scope is a class body — where a
     /// visibility keyword names a member — rather than a function body
@@ -143,7 +131,11 @@ pub(crate) struct Modifiers<'src> {
 }
 
 impl<'src> Modifiers<'src> {
-    fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+    fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        sealed_listings: &'src HashMap<TextRange, Vec<TextRange>>,
+    ) -> Self {
         Self {
             source,
             written,
@@ -162,8 +154,9 @@ impl<'src> Modifiers<'src> {
             needs_dataclass_slots: false,
             exports: Vec::new(),
             private_renames: Vec::new(),
+            sealed_listings,
             sealed_classes: Vec::new(),
-            class_bases: Vec::new(),
+            sealed_members: Vec::new(),
             class_depth: 0,
             func_depth: 0,
             class_body: false,
@@ -255,19 +248,9 @@ impl<'src> Modifiers<'src> {
     }
 
     fn process_class(&mut self, class: &StmtClassDef) {
-        // Record module-level class → base-head-names so sealed-member tuples can
-        // be resolved after the whole module has been visited.
-        if self.at_module_level() {
-            let bases = class
-                .arguments
-                .iter()
-                .flat_map(|args| args.args.iter())
-                .filter_map(base_head_name)
-                .map(str::to_owned)
-                .collect();
-            self.class_bases
-                .push((class.name.as_str().to_owned(), bases, class.range().end()));
-        }
+        // the name the class statement binds once the modifiers below are lowered
+        let mut emitted = class.name.as_str().to_owned();
+        let mut sealed = false;
         for dec in &class.decorator_list {
             let Some(name) = self.synthetic_name(dec) else {
                 continue;
@@ -280,13 +263,11 @@ impl<'src> Modifiers<'src> {
                         .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
                 }
                 "sealed" => {
-                    // Remove the modifier prefix; the `__sealed_members__` tuple is
-                    // emitted after the last subclass once they are all known.
+                    // the class gets its `__sealed_members__` tuple, and each member is
+                    // added to it, once every class statement has been seen
                     self.edits
                         .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
-                    if self.at_module_level() {
-                        self.sealed_classes.push(class.name.as_str().to_owned());
-                    }
+                    sealed = true;
                 }
                 "final" => {
                     self.needs_final = true;
@@ -346,17 +327,35 @@ impl<'src> Modifiers<'src> {
                         .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
                     if self.at_module_level() {
                         self.private_renames.push(class.name.as_str().to_owned());
+                        emitted = self.written.module_private(class.name.as_str());
                         self.rename_with_underscore(class.name.range());
                     } else if self.class_body {
                         // a nested class is a member like any other: its
                         // visibility is spelled in its name, which for `private`
                         // is the `__name` python name-mangles out of subclass
                         // scope
+                        if let Some(renamed) = visibility_rename(
+                            class.name.as_str(),
+                            visibility_of(name).name_prefix(),
+                        ) {
+                            emitted = renamed;
+                        }
                         self.rename_with_visibility(&class.name, visibility_of(name));
                     }
                 }
                 _ => {}
             }
+        }
+        let declared = || DeclaredClass {
+            name: class.name.range(),
+            emitted: emitted.clone(),
+            statement: class.range(),
+        };
+        if sealed {
+            self.sealed_classes.push(declared());
+        }
+        if let Some(listing) = self.sealed_listings.get(&class.range()) {
+            self.sealed_members.push((declared(), listing));
         }
     }
 
@@ -744,8 +743,8 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
             }
             Stmt::FunctionDef(f) => {
                 self.process_function(f);
-                // Walk the body with `func_depth` incremented so a class defined
-                // inside the function is not treated as a module-level subclass.
+                // walk the body with `func_depth` incremented so declarations in it
+                // are not treated as module-level ones
                 self.func_depth += 1;
                 let enclosing = std::mem::replace(&mut self.class_body, false);
                 walk_stmt(self, stmt);
@@ -763,6 +762,46 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
         }
         walk_stmt(self, stmt);
     }
+}
+
+/// a class statement, as the `__sealed_members__` tuples need it
+struct DeclaredClass {
+    /// the range of the name the class is written with
+    name: TextRange,
+    /// the name the class statement binds once it is lowered
+    emitted: String,
+    /// the class statement
+    statement: TextRange,
+}
+
+/// basedpython: for each class statement of `stmts` that is a member of a `sealed` class, keyed
+/// by its range, the ranges of the names of the sealed classes it is a member of. `stmts` must
+/// come from the same parse `types` answers for
+pub(crate) fn collect_sealed_listings(
+    stmts: &[Stmt],
+    types: &dyn TypeInfo,
+) -> HashMap<TextRange, Vec<TextRange>> {
+    struct Collector<'a> {
+        types: &'a dyn TypeInfo,
+        listings: HashMap<TextRange, Vec<TextRange>>,
+    }
+    impl<'ast> Visitor<'ast> for Collector<'_> {
+        fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+            if let Stmt::ClassDef(class) = stmt {
+                let listing = self.types.sealed_classes_listing(class);
+                if !listing.is_empty() {
+                    self.listings.insert(class.range(), listing);
+                }
+            }
+            walk_stmt(self, stmt);
+        }
+    }
+    let mut collector = Collector {
+        types,
+        listings: HashMap::new(),
+    };
+    collector.visit_body(stmts);
+    collector.listings
 }
 
 /// The name a module-level `private` symbol is emitted under: one leading
@@ -803,6 +842,8 @@ fn reads_class_cell(body: &[Stmt]) -> bool {
 pub(crate) struct ModifiersPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// see [`collect_sealed_listings`]
+    sealed_listings: HashMap<TextRange, Vec<TextRange>>,
     is_stub: bool,
     /// whether the python the module targets has `dataclass(slots=True)`
     dataclass_slots: bool,
@@ -813,10 +854,16 @@ pub(crate) struct ModifiersPass<'src> {
 }
 
 impl<'src> ModifiersPass<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        sealed_listings: HashMap<TextRange, Vec<TextRange>>,
+        config: &Config,
+    ) -> Self {
         Self {
             source,
             written,
+            sealed_listings,
             is_stub: config.is_stub,
             dataclass_slots: config.min_version >= PythonVersion::PY310,
             dataclass_slots_keep_class_cell: config.min_version >= PythonVersion::PY313,
@@ -836,7 +883,7 @@ impl AstPass for ModifiersPass<'_> {
     }
 
     fn run(&self, module: &mut ruff_python_ast::ModModule, ctx: &mut PassContext) {
-        let mut inner = Modifiers::new(self.source, self.written);
+        let mut inner = Modifiers::new(self.source, self.written, &self.sealed_listings);
         // a stub is never run, so it keeps the option a checker reads
         inner.slots_by_helper = !self.dataclass_slots && !self.is_stub;
         inner.slots_by_helper_for_class_cell =
@@ -846,14 +893,8 @@ impl AstPass for ModifiersPass<'_> {
         }
         let exports = std::mem::take(&mut inner.exports);
         let private_renames = std::mem::take(&mut inner.private_renames);
-        // the members tuple is assigned as the module runs, and a stub never
-        // runs. it declares the classes, which is all a checker reads of them
-        let sealed_classes = if self.is_stub {
-            Vec::new()
-        } else {
-            std::mem::take(&mut inner.sealed_classes)
-        };
-        let class_bases = std::mem::take(&mut inner.class_bases);
+        let sealed_classes = std::mem::take(&mut inner.sealed_classes);
+        let sealed_members = std::mem::take(&mut inner.sealed_members);
 
         if inner.needs_dataclass_slots {
             ctx.runtime.insert(crate::runtime::DATACLASS_SLOTS);
@@ -902,48 +943,87 @@ impl AstPass for ModifiersPass<'_> {
                 .push(format!("__all__ = [{}]", entries.join(", ")));
         }
 
-        for sealed in &sealed_classes {
-            let subclasses: Vec<&str> = class_bases
-                .iter()
-                .filter(|(_, bases, _)| bases.iter().any(|base| base == sealed))
-                .map(|(name, _, _)| name.as_str())
-                .collect();
-            let tuple = match subclasses.as_slice() {
-                [] => "()".to_owned(),
-                [single] => format!("({single},)"),
-                many => format!("({})", many.join(", ")),
-            };
+        // the members tuple is built as the module runs, and a stub never runs. it
+        // declares the classes, which is all a checker reads of them
+        if !self.is_stub {
+            self.add_sealed_members(&sealed_classes, &sealed_members, ctx);
+        }
+    }
+}
 
-            // Place the assignment right after the last subclass (or the sealed
-            // class itself when it has none), so module-level code that follows
-            // can read `__sealed_members__`. The module epilogue runs too late.
-            let anchor_end = class_bases
-                .iter()
-                .filter(|(name, bases, _)| {
-                    name == sealed || bases.iter().any(|base| base == sealed)
-                })
-                .map(|(_, _, end)| *end)
-                .max();
-            let Some(anchor_end) = anchor_end else {
-                continue;
-            };
-            let anchor_end = usize::from(anchor_end);
-
-            let assignment = format!("{sealed}.__sealed_members__ = {tuple}");
-            // Insert at the start of the line after the anchor statement so the
-            // edit never collides with `empty_declarations`' mid-line `: ...`.
-            // Without a blank line in between, that is where the next statement
-            // starts, so the insert is anchored to the statement boundary: a
-            // rewrite of that statement's first expression — a soundness check
-            // wrapping it — would otherwise absorb the assignment into itself.
-            if let Some(rel) = self.source[anchor_end..].find('\n') {
-                let pos = TextSize::try_from(anchor_end + rel + 1).expect("offset fits u32");
-                ctx.statement_inserts
-                    .push((pos, vec![Fragment::Lit(format!("{assignment}\n"))]));
-            } else {
-                let pos = TextSize::try_from(self.source.len()).expect("offset fits u32");
-                ctx.text_edits
-                    .push((TextRange::empty(pos), format!("\n{assignment}\n")));
+impl ModifiersPass<'_> {
+    /// give each sealed class its `__sealed_members__` tuple, right after its class
+    /// statement, and add each member to the tuple of each sealed class it is a member of,
+    /// right after the member's own class statement and in the block it is written in.
+    /// ty decides which classes are members, so a base written through an alias counts
+    ///
+    /// the tuple then holds the members whose statements have run, in the order they ran,
+    /// which is what ty types it as: a member declared under an `if` that is not taken, in
+    /// a loop, or after a `return`, is in it only once its statement has run, and code after
+    /// a member in the same block can read it. a member's statement is in the scope that
+    /// binds the sealed class, so the sealed class's name is bound wherever it runs
+    fn add_sealed_members(
+        &self,
+        sealed_classes: &[DeclaredClass],
+        sealed_members: &[(DeclaredClass, &[TextRange])],
+        ctx: &mut PassContext,
+    ) {
+        // the lines to insert after each class statement, which for a sealed class that is
+        // also a member of another is both its own tuple and its addition to the other's
+        let mut inserts: Vec<(TextRange, Vec<String>)> = Vec::new();
+        let mut insert = |statement: TextRange, line: String| match inserts
+            .iter_mut()
+            .find(|(after, _)| *after == statement)
+        {
+            Some((_, lines)) => lines.push(line),
+            None => inserts.push((statement, vec![line])),
+        };
+        for sealed in sealed_classes {
+            insert(
+                sealed.statement,
+                format!("{}.__sealed_members__ = ()", sealed.emitted),
+            );
+        }
+        for (member, listing) in sealed_members {
+            for name in *listing {
+                let Some(sealed) = sealed_classes.iter().find(|sealed| sealed.name == *name) else {
+                    continue;
+                };
+                insert(
+                    member.statement,
+                    format!(
+                        "{}.__sealed_members__ += ({},)",
+                        sealed.emitted, member.emitted
+                    ),
+                );
+            }
+        }
+        for (statement, lines) in inserts {
+            let indent = super::source_util::line_indent(self.source, statement.start());
+            let mut text = String::new();
+            for line in lines {
+                text.push_str(indent);
+                text.push_str(&line);
+                text.push('\n');
+            }
+            let end = statement.end().to_usize();
+            // at the start of the line after the class statement, so the edit never
+            // collides with `empty_declarations`' mid-line `: ...`. without a blank line
+            // in between, that is where the next statement starts, so the insert is
+            // anchored to the statement boundary: a rewrite of that statement's first
+            // expression — a soundness check wrapping it — would otherwise absorb the
+            // insert into itself
+            match self.source[end..]
+                .find('\n')
+                .and_then(|newline| TextSize::try_from(end + newline + 1).ok())
+            {
+                Some(position) => ctx
+                    .statement_inserts
+                    .push((position, vec![Fragment::Lit(text)])),
+                None => ctx.text_edits.push((
+                    TextRange::empty(self.source.text_len()),
+                    format!("\n{text}"),
+                )),
             }
         }
     }
@@ -994,8 +1074,9 @@ mod tests {
             from typing import final
             @final
             class A: ...
+            A.__sealed_members__ = ()
             class B(A): ...
-            A.__sealed_members__ = (B,)
+            A.__sealed_members__ += (B,)
         "};
         check("sealed final class A\nclass B(A)\n", expected);
         check("final sealed class A\nclass B(A)\n", expected);
@@ -2355,9 +2436,11 @@ mod tests {
             "},
             indoc! {"
                 class A: ...
+                A.__sealed_members__ = ()
                 class B(A): ...
+                A.__sealed_members__ += (B,)
                 class C(A): ...
-                A.__sealed_members__ = (B, C)
+                A.__sealed_members__ += (C,)
             "},
         );
     }
@@ -2376,32 +2459,18 @@ mod tests {
             "},
             indoc! {"
                 class A: ...
+                A.__sealed_members__ = ()
                 def make():
                     class C(A): ...
                 class B(A): ...
-                A.__sealed_members__ = (B,)
+                A.__sealed_members__ += (B,)
             "},
         );
     }
 
-    #[test]
-    fn sealed_class_single_member() {
-        check(
-            indoc! {"
-                sealed class A
-                class B(A)
-            "},
-            indoc! {"
-                class A: ...
-                class B(A): ...
-                A.__sealed_members__ = (B,)
-            "},
-        );
-    }
-
-    /// with no blank line after the last subclass, the members tuple is assigned
-    /// where the next statement starts, and a soundness check wrapping that
-    /// statement's expression keeps it out of the call it opens there
+    /// with no blank line after a member, it is added to the tuple where the next
+    /// statement starts, and a soundness check wrapping that statement's expression
+    /// keeps the addition out of the call it opens there
     #[test]
     fn sealed_members_ahead_of_a_checked_statement() {
         let out = transpile(
@@ -2420,7 +2489,7 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 class B(A): ...
-                A.__sealed_members__ = (B,)
+                A.__sealed_members__ += (B,)
                 _soundness_check(xs[0], str)
             "}),
             "got:\n{out}"
@@ -2434,6 +2503,194 @@ mod tests {
             indoc! {"
                 class A: ...
                 A.__sealed_members__ = ()
+            "},
+        );
+    }
+
+    /// a sealed class declared in a function body gets its members tuple in that
+    /// body, which is the scope that can name it and its subclasses
+    #[test]
+    fn sealed_class_in_function_body() {
+        check(
+            indoc! {"
+                def make():
+                    sealed class A
+                    class B(A)
+                    class C(A)
+                    return A
+            "},
+            indoc! {"
+                def make():
+                    class A: ...
+                    A.__sealed_members__ = ()
+                    class B(A): ...
+                    A.__sealed_members__ += (B,)
+                    class C(A): ...
+                    A.__sealed_members__ += (C,)
+                    return A
+            "},
+        );
+    }
+
+    #[test]
+    fn sealed_class_in_class_body() {
+        check(
+            indoc! {"
+                class Outer:
+                    sealed class A
+                    class B(A)
+                print(Outer.A.__sealed_members__)
+            "},
+            indoc! {"
+                class Outer:
+                    class A: ...
+                    A.__sealed_members__ = ()
+                    class B(A): ...
+                    A.__sealed_members__ += (B,)
+                print(Outer.A.__sealed_members__)
+            "},
+        );
+    }
+
+    /// a subclass declared in a scope nested inside the sealed class's own is not
+    /// a name the sealed class's scope can reach, and a same-named class in another
+    /// scope is not a member of this one
+    #[test]
+    fn sealed_members_are_the_binding_scopes_own() {
+        check(
+            indoc! {"
+                def make():
+                    sealed class A
+                    def inner():
+                        class C(A): ...
+                    class B(A)
+                    return A
+                class A
+                class D(A)
+            "},
+            indoc! {"
+                def make():
+                    class A: ...
+                    A.__sealed_members__ = ()
+                    def inner():
+                        class C(A): ...
+                    class B(A): ...
+                    A.__sealed_members__ += (B,)
+                    return A
+                class A: ...
+                class D(A): ...
+            "},
+        );
+    }
+
+    /// a member is added in the block its statement is written in, right after it,
+    /// so a member whose statement does not run — in a branch not taken, or after a
+    /// `return` — is not added, and code after it in the same block can read it
+    #[test]
+    fn sealed_members_are_added_where_their_statement_runs() {
+        check(
+            indoc! {"
+                sealed class A
+                if flag:
+                    class B(A)
+                else:
+                    pass
+                for _ in range(2):
+                    class C(A)
+                def make(flag):
+                    sealed class D
+                    class E(D)
+                    if flag:
+                        return D
+                    class F(D)
+                    return D
+            "},
+            indoc! {"
+                class A: ...
+                A.__sealed_members__ = ()
+                if flag:
+                    class B(A): ...
+                    A.__sealed_members__ += (B,)
+                else:
+                    pass
+                for _ in range(2):
+                    class C(A): ...
+                    A.__sealed_members__ += (C,)
+                def make(flag):
+                    class D: ...
+                    D.__sealed_members__ = ()
+                    class E(D): ...
+                    D.__sealed_members__ += (E,)
+                    if flag:
+                        return D
+                    class F(D): ...
+                    D.__sealed_members__ += (F,)
+                    return D
+            "},
+        );
+    }
+
+    /// a member is a class whose base is the sealed class, however the base is
+    /// written, as ty decides it
+    #[test]
+    fn sealed_members_through_another_name() {
+        check(
+            indoc! {"
+                sealed class A
+                Base = A
+                class B(Base)
+            "},
+            indoc! {"
+                class A: ...
+                A.__sealed_members__ = ()
+                Base = A
+                class B(Base): ...
+                A.__sealed_members__ += (B,)
+            "},
+        );
+    }
+
+    /// a sealed class that is a member of another gets a tuple of its own and is
+    /// added to the other's
+    #[test]
+    fn sealed_member_of_a_sealed_class() {
+        check(
+            indoc! {"
+                sealed class A
+                sealed class B(A)
+            "},
+            indoc! {"
+                class A: ...
+                A.__sealed_members__ = ()
+                class B(A): ...
+                B.__sealed_members__ = ()
+                A.__sealed_members__ += (B,)
+            "},
+        );
+    }
+
+    /// a `private` class is added under the name it is emitted under, which python
+    /// mangles in a class body as it does the class statement's own
+    #[test]
+    fn private_sealed_class() {
+        check(
+            indoc! {"
+                private sealed class A
+                private class B(A)
+                class Outer:
+                    private sealed class X
+                    private class Y(X)
+            "},
+            indoc! {"
+                class _A: ...
+                _A.__sealed_members__ = ()
+                class _B(_A): ...
+                _A.__sealed_members__ += (_B,)
+                class Outer:
+                    class __X: ...
+                    __X.__sealed_members__ = ()
+                    class __Y(_Outer__X): ...
+                    __X.__sealed_members__ += (__Y,)
             "},
         );
     }
