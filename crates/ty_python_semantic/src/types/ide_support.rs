@@ -4636,6 +4636,42 @@ pub fn inferred_parameter_bound<'db>(
     model: &SemanticModel<'db>,
     parameter: &ast::Parameter,
 ) -> Option<Type<'db>> {
+    inferred_parameter_hole(model, parameter)?
+        .typevar(model.db())
+        .upper_bound(model.db(), &model.program_environment())
+        .filter(|bound| !bound.is_dynamic())
+}
+
+/// basedpython: the `some` holes an inferred signature opens for the unannotated parameters of
+/// `function`, each with the name of its parameter, which is how a type mentioning one is
+/// written: `def twice(value) -> list[value]`
+pub fn inferred_parameter_holes<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+) -> Vec<(BoundTypeVarInstance<'db>, Name)> {
+    function
+        .parameters
+        .iter()
+        .filter_map(|parameter| {
+            let parameter = parameter.as_parameter();
+            let hole = inferred_parameter_hole(model, parameter)?;
+            Some((hole, parameter.name.id.clone()))
+        })
+        .collect()
+}
+
+/// basedpython: whether `ty` is a `some` hole an inferred signature opened, which no annotation
+/// can name: the parameter it is named after writes no `some`
+pub fn is_inferred_parameter_hole<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    ty.is_inferred_parameter_hole(db)
+}
+
+/// the `some` hole an inferred signature opens for the unannotated `parameter`, or `None` when
+/// its type comes from anywhere else
+fn inferred_parameter_hole<'db>(
+    model: &SemanticModel<'db>,
+    parameter: &ast::Parameter,
+) -> Option<BoundTypeVarInstance<'db>> {
     let db = model.db();
     let index = semantic_index(db, db.program_file(model.file()));
     let definition = index.try_definition(parameter)?;
@@ -4647,12 +4683,9 @@ pub fn inferred_parameter_bound<'db>(
     else {
         return None;
     };
-    if !Type::TypeVar(hole).is_inferred_parameter_hole(db) {
-        return None;
-    }
-    hole.typevar(db)
-        .upper_bound(db, &model.program_environment())
-        .filter(|bound| !bound.is_dynamic())
+    Type::TypeVar(hole)
+        .is_inferred_parameter_hole(db)
+        .then_some(hole)
 }
 
 /// basedpython: the default a parameter takes from the method its `def` overrides, written the

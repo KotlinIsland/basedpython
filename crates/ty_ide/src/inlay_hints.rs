@@ -28,11 +28,12 @@ use ty_python_semantic::types::ide_support::{
     BaseTypeArgument, InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails,
     StateRead, WriteSite, hintable_parameter_type, implicit_enum_member_value,
     implicit_type_name_module, inferred_base_type_arguments, inferred_derived_dependencies,
-    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_property_type,
-    inferred_raises, inferred_return_type, inferred_state_reads, inferred_type_param_variance,
-    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
-    is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
-    parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
+    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_parameter_holes,
+    inferred_property_type, inferred_raises, inferred_return_type, inferred_state_reads,
+    inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
+    inlay_hint_call_argument_details, is_composable_function, is_inferred_parameter_hole,
+    is_reveal_type_function, is_union_special_form, numeric_promotion, parameter_stability,
+    trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{
     BoundTypeVarInstance, DisplaySettings, Type, TypeDetail, TypeDisplayDetails,
@@ -1417,6 +1418,11 @@ fn spell_type<'db>(
                 if ty.is_unknown() {
                     editable = false;
                 }
+                // basedpython: an unannotated parameter's inferred type parameter is written by
+                // the parameter's name, which only names it where the parameter writes `some`
+                if is_inferred_parameter_hole(db, *ty) {
+                    editable = false;
+                }
                 let start = target.start().to_usize();
                 let end = target.end().to_usize();
                 // If we skipped over some bytes, push them with no target
@@ -2463,7 +2469,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             file: self.model.program_file(),
             importer: &self.importer,
         };
-        let type_params_in_scope = self.model.type_params_in_signature(function);
+        let mut type_params_in_scope = self.model.type_params_in_signature(function);
+        type_params_in_scope.extend(inferred_parameter_holes(&self.model, function));
         self.push(InlayHint::inferred_return(
             context,
             function,
@@ -10741,9 +10748,10 @@ Source with applied edits:
         ");
     }
 
+    /// basedpython: an unannotated parameter's inferred type parameter is written by the
+    /// parameter's name, and a return type mentioning one is offered as no annotation
     #[test]
-    fn inferred_unknown_type() {
-        // We do not suggest edits/imports for ty-internal types (Unknown), even if they are nested.
+    fn inferred_return_names_an_inferred_parameter_by_its_parameter() {
         let mut test = return_type_hint_test(
             r#"
         def twice(value):
@@ -10752,7 +10760,7 @@ Source with applied edits:
         );
         assert_snapshot!(test.inlay_hints(), @"
 
-        def twice(value)[ -> list[value@twice]]:
+        def twice(value)[ -> list[value]]:
             return [value, value]
 
         ---------------------------------------------
@@ -10764,8 +10772,58 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:22
            |
-        LL | def twice(value)[ -> list[value@twice]]:
+        LL | def twice(value)[ -> list[value]]:
            |                      ^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:2:11
+          |
+        2 | def twice(value):
+          |           ^^^^^
+        info: Source
+         --> main2.py:2:27
+          |
+        2 | def twice(value)[ -> list[value]]:
+          |                           ^^^^^
+        ");
+    }
+
+    #[test]
+    fn inferred_unknown_type() {
+        // we do not suggest edits/imports for ty-internal types (Unknown), even if they are nested
+        let mut test = return_type_hint_test(
+            r#"
+        def firsts(values: list):
+            return [values[0]]
+        "#,
+        );
+        assert_snapshot!(test.inlay_hints(), @"
+
+        def firsts(values: list)[ -> list[Unknown]]:
+            return [values[0]]
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class list[in out Element](MutableSequence[Element]):
+           |       ^^^^
+        info: Source
+          --> main2.py:LL:30
+           |
+        LL | def firsts(values: list)[ -> list[Unknown]]:
+           |                              ^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/ty_extensions/_internal.pyi:LL:1
+           |
+        LL | Unknown: _SpecialForm
+           | ^^^^^^^
+        info: Source
+          --> main2.py:LL:35
+           |
+        LL | def firsts(values: list)[ -> list[Unknown]]:
+           |                                   ^^^^^^^
         ");
 
         // We still suggest edits/imports for a user-defined class named Unknown.
