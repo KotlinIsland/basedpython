@@ -160,7 +160,7 @@ pub(crate) struct StagedRun {
     /// the staged tree, deleted when this is dropped
     pub(crate) tree: tempfile::TempDir,
     /// the project file behind each copy in the tree
-    pub(crate) carried: BTreeMap<PathBuf, PathBuf>,
+    carried: BTreeMap<PathBuf, PathBuf>,
     traceback_entries: Vec<TracebackEntry>,
     /// the means to build the project's db again, unfrozen
     pub(crate) rebuilder: Rebuilder,
@@ -537,7 +537,8 @@ pub(crate) fn cmd_run(
             // said already
             eprintln!(
                 "note: no coverage report was written: the program ended without returning \
-                 to `by run`, as `os._exit` does"
+                 to `by run`, as one that calls `os._exit`, replaces itself with `os.exec*` or \
+                 is killed by a signal does"
             );
         }
     }
@@ -3586,6 +3587,8 @@ def _start_coverage(report):
     """Measure the program with coverage.py, and write what ran to `report` once the
     program has ended: after its other threads and its own `atexit` handlers, which
     python runs before the ones registered ahead of them."""
+    import pathlib
+
     try:
         import coverage
         from coverage.exceptions import CoverageWarning
@@ -3602,8 +3605,14 @@ def _start_coverage(report):
     # the project is. a program run in the tree (`--in-build`) is in the project's
     # directory that the tree's directory is a copy of
     here = os.getcwd()
-    within = os.path.relpath(os.path.realpath(here), _TREE)
-    project_dir = here if within.split(os.sep)[0] == os.pardir else os.path.join(ROOT, within)
+    try:
+        within = pathlib.PurePath(os.path.realpath(here)).relative_to(_TREE)
+    except ValueError:
+        # outside the tree, on another drive than it among them, which `os.path.relpath`
+        # raises for
+        project_dir = here
+    else:
+        project_dir = os.path.join(ROOT, within)
     os.chdir(project_dir)
     try:
         # no data file: what was measured is read back below, and a `.coverage` left
