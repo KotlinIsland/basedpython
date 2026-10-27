@@ -16,6 +16,7 @@ mod source;
 
 use std::fmt;
 
+use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 use ty_module_resolver::{KnownModule, file_to_module};
 
@@ -389,8 +390,32 @@ const VERBOSE_FLAG_NAMES: [&str; 2] = ["X", "VERBOSE"];
 /// `re.VERBOSE`'s bit, for a `flags` argument spelled as a plain integer
 const VERBOSE_FLAG_BIT: i64 = 64;
 
+/// whether the `flags` argument of an `re` call turns on verbose mode, where we can tell, with
+/// `type_of` reading an operand's type. no argument is no flag
+///
+/// flags are combined with `|`, and the combination is verbose if any operand is. any other
+/// operator leaves us unable to say
+pub(crate) fn verbose_flag<'db>(
+    db: &'db dyn Db,
+    flags: Option<&ast::Expr>,
+    type_of: &mut dyn FnMut(&ast::Expr) -> Type<'db>,
+) -> Option<bool> {
+    let Some(flags) = flags else {
+        return Some(false);
+    };
+    if let ast::Expr::BinOp(binop) = flags {
+        if binop.op != ast::Operator::BitOr {
+            return None;
+        }
+        let left = verbose_flag(db, Some(&binop.left), type_of)?;
+        let right = verbose_flag(db, Some(&binop.right), type_of)?;
+        return Some(left || right);
+    }
+    flag_is_verbose(db, type_of(flags))
+}
+
 /// whether one `flags` operand turns on verbose mode, where we can tell
-pub(crate) fn flag_is_verbose<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<bool> {
+fn flag_is_verbose<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<bool> {
     if let Some(literal) = ty.as_enum_literal() {
         let class = literal.enum_class(db);
         return is_regex_flag_class(db, class)

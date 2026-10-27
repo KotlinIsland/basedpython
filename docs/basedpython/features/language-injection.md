@@ -97,6 +97,15 @@ snippet = """
 a fragment is checked on its own, so it sees the standard library but not the
 names around the string it sits in
 
+a pattern handed to one of python's `re` functions is checked by basedpython
+itself: its `invalid-regex` rule compiles it as `re` would, where the pattern is
+a literal and the call's flags say whether it is verbose, and reports what `re`
+would refuse. `by/injections` marks each such fragment
+`"checked": true`, whatever decided its language, so an editor whose own regular
+expression support reports errors too can leave them to basedpython there, and
+report its own everywhere else. with `invalid-regex` turned off, nothing is
+marked
+
 the indentation a triple-quoted string
 [strips](dedent-strings.md) is stripped from the fragment too, which is what
 makes an indented block of basedpython or python a program rather than a syntax

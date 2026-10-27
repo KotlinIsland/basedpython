@@ -145,8 +145,8 @@ impl RefactorKind {
 pub struct RefactorOffer {
     pub kind: RefactorKind,
     pub title: String,
-    /// The range to ask about to have this rewrite again: the range the offer was asked for,
-    /// or, for one of the expressions offered around a caret, that expression.
+    /// the range to ask about to have this rewrite again: the range the offer was asked for,
+    /// or, for one of the expressions offered around a caret, that expression
     pub range: TextRange,
     /// `Ok` holds the rewrite and `Err` why there is none.
     ///
@@ -318,11 +318,11 @@ impl<'db> RefactorContext<'db> {
 /// out, so a caller that will not offer a refactoring should not name it — a client narrowing a
 /// `textDocument/codeAction` with `only` then pays for nothing it asked no question about.
 ///
-/// With `around_caret`, an empty `range` is answered for extracting a variable or a constant
+/// with `around_caret`, an empty `range` is answered for extracting a variable or a constant
 /// with one offer for each expression around the caret, innermost first, each carrying the
 /// expression's range: what an editor offers to choose from when extract is asked for with
-/// nothing selected. Without it a caret extracts nothing, which is what a client asking while
-/// the caret moves wants, rather than an offer for every expression the caret is in.
+/// nothing selected. without it a caret extracts nothing, which is what a client asking while
+/// the caret moves wants, rather than an offer for every expression the caret is in
 pub fn refactors(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -467,9 +467,9 @@ pub(crate) mod test_support {
             Self { db, file, range }
         }
 
-        /// What `kind` offers around the test's caret, one line for each offer: the text it
-        /// is about, its title, and why it is refused when it is. Each offer that applies is
-        /// checked to be the rewrite asking about its own range gives.
+        /// what `kind` offers around the test's caret, one line for each offer: the text it
+        /// is about, its title, and why it is refused when it is. each offer that applies is
+        /// checked to be the rewrite asking about its own range gives
         pub(crate) fn around_caret(&self, kind: RefactorKind) -> String {
             let program_file = self.db.program_file(self.file);
             let source = ruff_db::source::source_text(&self.db, self.file);

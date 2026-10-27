@@ -286,9 +286,9 @@ pub(crate) fn to_lsp_edits(
 /// A client that can resolve an action's edit is sent the action without one, carrying what
 /// `codeAction/resolve` needs to spell it again; any other client is sent `edits` up front. That
 /// saves serialising a rewrite nobody chose, not working it out — the rewrite in hand is how this
-/// refactoring was known to apply at all. An action about another range than the one asked
+/// refactoring was known to apply at all. an action about another range than the one asked
 /// about — an extraction offered around a caret — carries its [`RefactorData`] either way, for
-/// its `range` to tell a client which expression it extracts.
+/// its `range` to tell a client which expression it extracts
 fn refactor_action(
     db: &ProjectDatabase,
     snapshot: &DocumentSnapshot,
@@ -319,7 +319,7 @@ fn refactor_action(
 /// its edit: the refactoring, and the document and range it was offered for.
 ///
 /// `range` is the range the refactoring is about: the range the client asked about, or, for
-/// an extraction offered around a caret, the expression it extracts.
+/// an extraction offered around a caret, the expression it extracts
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct RefactorData {
     pub(crate) uri: Uri,

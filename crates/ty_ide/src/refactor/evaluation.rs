@@ -104,14 +104,14 @@ pub(crate) fn placement_in_statement(
         .unwrap_or(Placement::NotOnce(NotOnce::Opaque))
 }
 
-/// Whether evaluating `expr` has no effect at all: it runs no code of the program's,
+/// whether evaluating `expr` has no effect at all: it runs no code of the program's,
 /// binds nothing and raises nothing, so evaluating something else before it or after it
-/// cannot tell the difference.
+/// cannot tell the difference
 ///
-/// Wider than [`is_pure`], because it asks the checker what the operands are: `a + b`
+/// wider than [`is_pure`], because it asks the checker what the operands are: `a + b`
 /// over two `int`s is python's own addition, and `math.pi` looks a name up in a
 /// module, where the same spelling over values of a class the program wrote could
-/// run any `__add__` or property.
+/// run any `__add__` or property
 pub(crate) fn is_effect_free(model: &SemanticModel<'_>, expr: &Expr) -> bool {
     if is_pure(expr) {
         return true;
@@ -181,10 +181,10 @@ pub(crate) fn is_stable_value(model: &SemanticModel<'_>, expr: &Expr) -> bool {
     !attributes.0
 }
 
-/// Whether the operation `expr` performs on its operands — not the evaluation of the
-/// operands themselves — runs no code of the program's and cannot raise.
+/// whether the operation `expr` performs on its operands — not the evaluation of the
+/// operands themselves — runs no code of the program's and cannot raise
 ///
-/// That is an operator of python's own over builtin scalars that is defined for every
+/// that is an operator of python's own over builtin scalars that is defined for every
 /// pair of values it is given: `+`, `-` and `*` over numbers that python does not convert
 /// to compute them, `+` joining two strings or two byte strings, the bitwise operators
 /// over integers, equality, and ordering among numbers that are not complex or among
@@ -341,8 +341,8 @@ impl Walk<'_, '_> {
         self.effects = true;
     }
 
-    /// The operation `expr` performs once its operands are evaluated, which is an
-    /// effect unless the checker shows it to be one of python's own quiet ones.
+    /// the operation `expr` performs once its operands are evaluated, which is an
+    /// effect unless the checker shows it to be one of python's own quiet ones
     fn operation(&mut self, expr: &Expr) {
         if !operation_is_quiet(self.model, expr) {
             self.effect();

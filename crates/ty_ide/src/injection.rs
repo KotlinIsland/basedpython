@@ -57,11 +57,13 @@ use ruff_python_ast::visitor::source_order::{
 };
 use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_text_size::{Ranged, TextRange};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::SemanticModel;
-use ty_python_semantic::types::ide_support::{call_signature_details, is_re_pattern_parameter};
+use ty_python_semantic::types::ide_support::{
+    call_signature_details, invalid_regex_checks_pattern, is_re_pattern_parameter,
+};
 
 use crate::Db;
 
@@ -104,6 +106,12 @@ pub struct Injection {
     /// What decided the language, which is what an editor shows a user who asks
     /// why a string is being treated as another language.
     pub origin: InjectionOrigin,
+
+    /// whether `by` checks the fragment itself: the pattern of a call to one of
+    /// python's `re` functions that `invalid-regex` compiles as `re` would. an
+    /// editor whose own support for the language reports errors too can leave
+    /// them to `by` here, where reporting them as well would say each twice
+    pub checked: bool,
 }
 
 /// What decided that a fragment is in a particular language.
@@ -175,10 +183,16 @@ pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Injections {
         markers: &markers,
         expectations: Expectations::default(),
         found: Vec::new(),
+        checked: FxHashSet::default(),
     };
     walk_body(&mut finder, module.suite());
 
     let mut found = finder.found;
+    // a string is checked however its language was decided: a marker over an `re` call says
+    // what the pattern already is
+    for injection in &mut found {
+        injection.checked = finder.checked.contains(&injection.ranges);
+    }
     // One string can be reached both ways — a marked statement whose string is
     // also a call argument. Sorting by origin puts the marker the reader wrote
     // closest to the string first, and the duplicate behind it is dropped.
@@ -234,6 +248,9 @@ struct InjectionFinder<'a, 'db> {
     markers: &'a [(TextRange, String)],
     expectations: Expectations<'db>,
     found: Vec<Injection>,
+    /// the text ranges of the string literals `invalid-regex` checks, as
+    /// [`Injection::ranges`] gives them
+    checked: FxHashSet<Box<[TextRange]>>,
 }
 
 impl InjectionFinder<'_, '_> {
@@ -305,6 +322,7 @@ impl InjectionFinder<'_, '_> {
                 language: language.to_string(),
                 ranges: content_ranges(string, self.source, self.dedents),
                 origin: InjectionOrigin::Comment,
+                checked: false,
             });
         }
     }
@@ -322,6 +340,7 @@ impl InjectionFinder<'_, '_> {
                 language,
                 ranges: content_ranges(string, self.source, self.dedents),
                 origin,
+                checked: false,
             });
         }
     }
@@ -385,6 +404,13 @@ impl<'db> SourceOrderVisitor<'db> for InjectionFinder<'_, 'db> {
     fn visit_expr(&mut self, expr: &'db ast::Expr) {
         if let ast::Expr::Call(call) = expr {
             self.mark_call_arguments(call);
+            if let Some(ast::Expr::StringLiteral(pattern)) =
+                call.arguments.find_argument_value("pattern", 0)
+                && invalid_regex_checks_pattern(self.model, call)
+            {
+                self.checked
+                    .insert(content_ranges(pattern, self.source, self.dedents));
+            }
         }
         walk_expr(self, expr);
     }
@@ -694,9 +720,14 @@ mod tests {
                 DiagnosticId::Lint(LintName::of("injection")),
                 Severity::Info,
                 format!(
-                    "{} ({})",
+                    "{} ({}{})",
                     self.injection.language,
-                    self.injection.origin.as_str()
+                    self.injection.origin.as_str(),
+                    if self.injection.checked {
+                        ", checked"
+                    } else {
+                        ""
+                    }
                 ),
             );
             let first = ranges.next().expect("an injection to cover something");
@@ -1151,23 +1182,78 @@ re.split(\",\", \"a,b\")<CURSOR>
 ",
         );
         assert_snapshot!(test.injections(), @r#"
-        info[injection]: PythonRegExp (declared)
+        info[injection]: PythonRegExp (declared, checked)
          --> main.by:4:20
           |
         4 | word = re.compile("(?P<word>\\w+)")
           |                    ^^^^^^^^^^^^^^
 
-        info[injection]: PythonRegExp (declared)
+        info[injection]: PythonRegExp (declared, checked)
          --> main.by:5:10
           |
         5 | replace("a+", "b", "aaa")
           |          ^^
 
-        info[injection]: PythonRegExp (declared)
+        info[injection]: PythonRegExp (declared, checked)
          --> main.by:6:11
           |
         6 | re.split(",", "a,b")
           |           ^
+        "#);
+    }
+
+    /// `invalid-regex` checks a pattern whose text and flags it can read, however the language
+    /// was decided, and leaves the rest to the editor: one whose flags it cannot read, and one
+    /// handed on through a parameter, whose text it does not know at the `re` call
+    #[test]
+    fn a_re_pattern_by_checks_is_marked_checked() {
+        let test = injection_test(
+            "\
+import re
+
+def flags() -> int: ...
+
+re.compile(\"a+\", re.IGNORECASE | re.VERBOSE)
+re.compile(\"a+\", flags())
+# language=RegExp
+re.match(\"b+\", \"bbb\")
+
+def find(pattern: str, text: str):
+    return re.search(pattern, text)
+
+find(\"[0-9]+\", \"abc 123\")
+",
+        );
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: PythonRegExp (declared, checked)
+         --> main.by:5:13
+          |
+        5 | re.compile("a+", re.IGNORECASE | re.VERBOSE)
+          |             ^^
+
+        info[injection]: PythonRegExp (declared)
+         --> main.by:6:13
+          |
+        6 | re.compile("a+", flags())
+          |             ^^
+
+        info[injection]: RegExp (comment, checked)
+         --> main.by:8:11
+          |
+        8 | re.match("b+", "bbb")
+          |           ^^
+
+        info[injection]: RegExp (comment)
+         --> main.by:8:17
+          |
+        8 | re.match("b+", "bbb")
+          |                 ^^^
+
+        info[injection]: PythonRegExp (propagated)
+          --> main.by:13:7
+           |
+        13 | find("[0-9]+", "abc 123")
+           |       ^^^^^^
         "#);
     }
 

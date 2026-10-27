@@ -68,6 +68,11 @@ pub(crate) struct InjectionFragment {
     /// A client shows this when a reader asks why a string is being treated as another language —
     /// `propagated` is the one whose reason is not visible at the string itself.
     origin: String,
+
+    /// whether `by` checks the fragment itself and reports its errors: an `re` pattern that
+    /// `invalid-regex` compiles as `re` would. a client whose own support for the language reports
+    /// errors as well leaves them out here, where they would be said twice
+    checked: bool,
 }
 
 pub(crate) struct InjectionsRequestHandler;
@@ -121,6 +126,7 @@ impl BackgroundDocumentRequestHandler for InjectionsRequestHandler {
                     language: injection.language.clone(),
                     ranges,
                     origin: injection.origin.as_str().to_string(),
+                    checked: injection.checked,
                 })
             })
             .collect();
@@ -163,12 +169,13 @@ mod tests {
                     ),
                 ],
                 origin: "comment".to_string(),
+                checked: false,
             }],
         };
 
         assert_eq!(
             serde_json::to_string(&response).expect("a response to serialise"),
-            r#"{"injections":[{"language":"sql","ranges":[{"start":{"line":1,"character":9},"end":{"line":1,"character":17}},{"start":{"line":1,"character":20},"end":{"line":1,"character":27}}],"origin":"comment"}]}"#
+            r#"{"injections":[{"language":"sql","ranges":[{"start":{"line":1,"character":9},"end":{"line":1,"character":17}},{"start":{"line":1,"character":20},"end":{"line":1,"character":27}}],"origin":"comment","checked":false}]}"#
         );
     }
 }

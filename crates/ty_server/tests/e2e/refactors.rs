@@ -198,9 +198,9 @@ fn resolve_after_an_edit_is_content_modified() -> Result<()> {
     Ok(())
 }
 
-/// Asked explicitly for extractions with nothing selected, the server offers one for each
+/// asked explicitly for extractions with nothing selected, the server offers one for each
 /// expression around the caret, each naming the expression and carrying its range; asked as
-/// the caret moves, it offers none.
+/// the caret moves, it offers none
 #[test]
 fn extraction_at_a_caret_offers_the_expressions_around_it() -> Result<()> {
     let (mut server, file) = server(true)?;

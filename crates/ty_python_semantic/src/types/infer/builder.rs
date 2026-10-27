@@ -12625,27 +12625,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// verbose mode changes how the pattern itself tokenizes, so a guess here
     /// would produce confidently wrong group types.
     fn regex_verbose_flag(&self, flags: Option<&ast::Expr>) -> Option<bool> {
-        let Some(flags) = flags else {
-            return Some(false);
-        };
-        // flags are combined with `|`, and the combination is verbose if any
-        // operand is. any other operator leaves us unable to say
-        if let ast::Expr::BinOp(binop) = flags {
-            if binop.op != ast::Operator::BitOr {
-                return None;
-            }
-            let left = self.regex_verbose_flag(Some(&binop.left))?;
-            let right = self.regex_verbose_flag(Some(&binop.right))?;
-            return Some(left || right);
-        }
         // the argument may not have been inferred yet — the repl callable of
         // `re.sub` is refined before the later arguments are visited — so fall
         // back to a speculative builder when there is no stored type
-        let ty = self.try_expression_type(flags).unwrap_or_else(|| {
-            self.speculate_without_diagnostics()
-                .infer_expression(flags, TypeContext::default())
-        });
-        regex::flag_is_verbose(self.db(), ty)
+        regex::verbose_flag(self.db(), flags, &mut |operand| {
+            self.try_expression_type(operand).unwrap_or_else(|| {
+                self.speculate_without_diagnostics()
+                    .infer_expression(operand, TypeContext::default())
+            })
+        })
     }
 
     fn infer_call_expression_impl(

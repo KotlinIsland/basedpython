@@ -52,11 +52,11 @@ pub(super) fn plan(
     plan_selection(context, &selection, target, Title::Plain)
 }
 
-/// What extracting does at a caret rather than a selection: each expression of the statement
+/// what extracting does at a caret rather than a selection: each expression of the statement
 /// around `offset`, innermost first, with the range a client selects to extract it and the
 /// rewrite — the expressions `by/expressionTypes` answers at the same caret, less a bare name
-/// and those that cannot be bound to a name. When none of them can be extracted, the innermost one's refusal is
-/// the answer, so an editor asking about a caret is told why rather than nothing.
+/// and those that cannot be bound to a name. when none of them can be extracted, the innermost one's refusal is
+/// the answer, so an editor asking about a caret is told why rather than nothing
 pub(super) fn around_caret(
     context: &RefactorContext<'_>,
     offset: TextSize,
@@ -99,8 +99,8 @@ pub(super) fn around_caret(
     available
 }
 
-/// Whether a title names the expression it extracts, which it must when several are offered at
-/// once.
+/// whether a title names the expression it extracts, which it must when several are offered at
+/// once
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Title {
     Plain,
@@ -390,7 +390,7 @@ fn parameter_insertion(parameters: &ast::Parameters, name: &str, value: &str) ->
     }
 }
 
-/// `text` on one line and at most a few dozen characters, for a title to name it by.
+/// `text` on one line and at most a few dozen characters, for a title to name it by
 fn abbreviated(text: &str) -> String {
     const MOST: usize = 40;
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -402,12 +402,12 @@ fn abbreviated(text: &str) -> String {
     shortened
 }
 
-/// What a selection extracts.
+/// what a selection extracts
 enum Extracted<'a> {
-    /// An expression of the tree.
+    /// an expression of the tree
     Expr(&'a Expr),
-    /// Consecutive operands of a chain of one associative operator, `b + c` in `a + b + c`,
-    /// which python groups as `(a + b) + c` and so has no node of its own.
+    /// consecutive operands of a chain of one associative operator, `b + c` in `a + b + c`,
+    /// which python groups as `(a + b) + c` and so has no node of its own
     Run { operands: Vec<&'a Expr> },
 }
 
@@ -419,7 +419,7 @@ struct Selection<'a> {
 }
 
 impl<'a> Selection<'a> {
-    /// The expressions the selection is made of, evaluated in this order.
+    /// the expressions the selection is made of, evaluated in this order
     fn operands(&self) -> Vec<&'a Expr> {
         match &self.extracted {
             Extracted::Expr(expr) => vec![*expr],
@@ -427,7 +427,7 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// The first expression of the selection to be evaluated.
+    /// the first expression of the selection to be evaluated
     fn first(&self) -> &'a Expr {
         match &self.extracted {
             Extracted::Expr(expr) => expr,
@@ -435,7 +435,7 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// A name that says what the selection evaluates to.
+    /// a name that says what the selection evaluates to
     fn suggested_name(&self, python_version_minor: u8) -> String {
         match &self.extracted {
             Extracted::Expr(expr) => suggest_for_expression(expr, python_version_minor),
@@ -446,7 +446,7 @@ impl<'a> Selection<'a> {
 
 /// The expression the selection covers exactly, ignoring surrounding
 /// whitespace and allowing parentheses around it — or, when the selection
-/// covers consecutive operands of an associative chain, those operands.
+/// covers consecutive operands of an associative chain, those operands
 fn selected_expression<'a>(
     context: &'a RefactorContext<'_>,
     range: TextRange,
@@ -517,14 +517,14 @@ fn selected_expression<'a>(
     selected_run(context, trimmed)
 }
 
-/// Consecutive operands of an associative chain that `range` covers exactly, from the first
-/// one's opening parenthesis, if it has one, to the last one's closing parenthesis.
+/// consecutive operands of an associative chain that `range` covers exactly, from the first
+/// one's opening parenthesis, if it has one, to the last one's closing parenthesis
 ///
-/// `a + b + c` is `(a + b) + c`, so `b + c` is no expression of it. Binding `b + c` to a name
+/// `a + b + c` is `(a + b) + c`, so `b + c` is no expression of it. binding `b + c` to a name
 /// and reading `a + value` instead evaluates `a + (b + c)`, which is the same value exactly when
 /// the operator is associative over the operands' types — which the checker is asked, not the
 /// spelling: `+` over integers or over strings is, `+` over floats rounds differently grouped
-/// the other way, and an operator a class defines is anything it likes.
+/// the other way, and an operator a class defines is anything it likes
 fn selected_run<'a>(context: &'a RefactorContext<'_>, range: TextRange) -> Option<Selection<'a>> {
     let covering = covering_node(context.parsed.syntax().into(), range);
     let chain = covering.ancestors().find_map(|node| match node {
@@ -574,9 +574,9 @@ fn selected_run<'a>(context: &'a RefactorContext<'_>, range: TextRange) -> Optio
     })
 }
 
-/// Whether `op` is associative over the values `operands` evaluate to, as the checker reads
+/// whether `op` is associative over the values `operands` evaluate to, as the checker reads
 /// them: integers under `+`, `*` and the bitwise operators, and strings or byte strings — all of
-/// one kind — under `+`.
+/// one kind — under `+`
 fn is_associative(context: &RefactorContext<'_>, op: ast::Operator, operands: &[&Expr]) -> bool {
     let Some(kinds) = operands
         .iter()
@@ -623,8 +623,8 @@ fn is_extractable(expr: &Expr) -> bool {
     }
 }
 
-/// The source of the selection as the value of an assignment, parenthesized where its text
-/// would not parse there on its own.
+/// the source of the selection as the value of an assignment, parenthesized where its text
+/// would not parse there on its own
 fn expression_source(context: &RefactorContext<'_>, selection: &Selection<'_>) -> String {
     let Extracted::Expr(expr) = selection.extracted else {
         let text = &context.source()[selection.replaced];
@@ -887,7 +887,7 @@ mod tests {
     }
 
     /// `a + b + c` is `(a + b) + c`; extracting `b + c` evaluates `a + (b + c)`, which is
-    /// the same value because adding integers is associative.
+    /// the same value because adding integers is associative
     #[test]
     fn operands_of_an_associative_chain() {
         assert_snapshot!(RefactorTest::basedpython(

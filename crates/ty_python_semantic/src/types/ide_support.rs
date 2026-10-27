@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use crate::FxIndexSet;
 use std::ops::ControlFlow;
 
+use crate::lint::LintId;
 use crate::place::{
     ConsideredDefinitions, Place, RequiresExplicitReExport, implicit_builtins_symbol_scope,
     imported_symbol, place_by_id, place_from_bindings,
@@ -3096,8 +3097,8 @@ pub fn string_literal_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> Opti
     }
 }
 
-/// One of the builtin types whose operators are python's own: none of them runs code of the
-/// program's.
+/// one of the builtin types whose operators are python's own: none of them runs code of the
+/// program's
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinScalar {
     Bool,
@@ -3108,15 +3109,15 @@ pub enum BuiltinScalar {
     Bytes,
 }
 
-/// The builtin scalar types `expr` evaluates to, one for each kind a union of them holds, or
-/// `None` when it can evaluate to anything else.
+/// the builtin scalar types `expr` evaluates to, one for each kind a union of them holds, or
+/// `None` when it can evaluate to anything else
 ///
-/// A literal is of its own type exactly, and so is an instance of `final int`, or of a class no
-/// class can subclass, as `bool`. A plain `int` may be an instance of a subclass, whose operators
-/// are the program's own, so it is not one. An operator python applies to values of exactly
+/// a literal is of its own type exactly, and so is an instance of `final int`, or of a class no
+/// class can subclass, as `bool`. a plain `int` may be an instance of a subclass, whose operators
+/// are the program's own, so it is not one. an operator python applies to values of exactly
 /// builtin scalar types is python's own, and makes a value of exactly the builtin type it is
 /// declared to give, as `a + b` of two `final int`s is exactly an `int`, and `not x` is always
-/// exactly a `bool`.
+/// exactly a `bool`
 pub fn builtin_scalar_kinds(
     model: &SemanticModel<'_>,
     expr: &ast::Expr,
@@ -3232,8 +3233,65 @@ pub fn is_re_pattern_parameter<'db>(
             == Some(ty_module_resolver::KnownModule::Re)
 }
 
-/// Whether `expr` evaluates to a module, so that reading an attribute of it looks the name up
-/// in the module's namespace and runs nothing.
+/// whether `invalid-regex` checks the pattern `call` hands one of python's `re` functions, which
+/// it does where the rule is on for the file and not suppressed for the pattern, the pattern's
+/// text is a literal the checker reads, and the call's flags say whether it is verbose: it then
+/// compiles the pattern as `re` would, and reports what `re` would refuse
+///
+/// an editor that injects its own regular expression support into the pattern can leave the
+/// errors to `by` there, and report its own anywhere else
+pub fn invalid_regex_checks_pattern(model: &SemanticModel<'_>, call: &ast::ExprCall) -> bool {
+    let db = model.db();
+    if !db
+        .rule_selection(model.file())
+        .is_enabled(LintId::of(&crate::types::diagnostic::INVALID_REGEX))
+    {
+        return false;
+    }
+    let Some(Type::FunctionLiteral(function)) = call.func.inferred_type(model) else {
+        return false;
+    };
+    if crate::types::regex::RegexCall::from_name(function.name(db).as_str()).is_none()
+        || ty_module_resolver::file_to_module(db, function.program_file(db).resolver_file(db))
+            .and_then(|module| module.known(db))
+            != Some(ty_module_resolver::KnownModule::Re)
+    {
+        return false;
+    }
+    let Some(pattern) = call.arguments.find_argument_value("pattern", 0) else {
+        return false;
+    };
+    // a suppression anywhere in the pattern hides what the rule reports there
+    if crate::suppression::suppressions(db, model.python_file())
+        .find_suppression(
+            pattern.range(),
+            LintId::of(&crate::types::diagnostic::INVALID_REGEX),
+        )
+        .is_some()
+    {
+        return false;
+    }
+    let Some(pattern_ty) = pattern.inferred_type(model) else {
+        return false;
+    };
+    let env = model.program_environment();
+    if crate::types::regex::pattern_source(db, &env, pattern_ty).is_none() {
+        return false;
+    }
+    let flags = function
+        .signature(db)
+        .overloads
+        .iter()
+        .find_map(|signature| signature.parameters().keyword_by_name("flags"))
+        .and_then(|(index, _)| call.arguments.find_argument_value("flags", index));
+    crate::types::regex::verbose_flag(db, flags, &mut |operand| {
+        operand.inferred_type(model).unwrap_or(Type::unknown())
+    })
+    .is_some()
+}
+
+/// whether `expr` evaluates to a module, so that reading an attribute of it looks the name up
+/// in the module's namespace and runs nothing
 pub fn is_module_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
     matches!(expr.inferred_type(model), Some(Type::ModuleLiteral(_)))
 }
@@ -5742,6 +5800,39 @@ def f(
                 "Never to int: false",
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_regex_leaves_a_pattern_whose_report_is_suppressed_unchecked() -> anyhow::Result<()> {
+        let db = TestDbBuilder::new()
+            .with_file(
+                "/src/foo.py",
+                r#"
+import re
+
+re.compile("a(")
+re.compile("a(")  # ty: ignore[invalid-regex]
+re.compile("a(")  # ty: ignore
+re.compile("a(")  # ty: ignore[invalid-argument-type]
+re.compile(
+    "a("  # ty: ignore[invalid-regex]
+)
+"#,
+            )
+            .build()?;
+        let file = system_path_to_file(&db, "/src/foo.py")?;
+        let file = ProgramFile::new(&db, file, db.program_environment().program(&db));
+        let parsed = parsed_module(&db, file.python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, file);
+        let checked: Vec<bool> = parsed
+            .suite()
+            .iter()
+            .filter_map(ast::Stmt::as_expr_stmt)
+            .filter_map(|statement| statement.value.as_call_expr())
+            .map(|call| super::invalid_regex_checks_pattern(&model, call))
+            .collect();
+        assert_eq!(checked, [true, false, false, true, false]);
         Ok(())
     }
 
