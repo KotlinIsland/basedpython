@@ -74,6 +74,17 @@ interpreter for it. discovery runs exactly as above, and the program starts as
 interpreter `by run` chose and runs once, for the program: the version probe is
 still made against the interpreter itself
 
+what a debugger finds in that process is the program under `<runner>`, the
+`_by_runner.py` `by run` writes into the tree it staged. the runner's frames are
+the outermost of the main thread, beneath the program's module, and they are
+by's alone: every frame whose file is `<runner>` is the runner's. the runner
+catches nothing the program raises, so an exception the program does not catch
+leaves the interpreter as it leaves `python main.py` — the program's own
+exception, with the program's frames on top of its traceback — and python
+reports it and exits 1. a debugger that stops where such an exception leaves the
+outermost frame stops in the program by treating the runner's frames as it
+treats `runpy`'s under `python -m`: as the launcher's, not the program's
+
 `--in-build` runs the program in the tree `by run` staged rather than in the
 directory it was typed in. the default is right for an application: a relative
 path on the command line, and anything the program reads or writes beside the

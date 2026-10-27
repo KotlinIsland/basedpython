@@ -3784,13 +3784,12 @@ def main():
     profiler = None
     if "--profile" in written:
         profiler = _start_profile(written["--profile"])
-    try:
-        _run_as_main(module, profiler)
-    except SystemExit:
-        raise
-    except BaseException:
-        sys.excepthook(*sys.exc_info())
-        sys.exit(1)
+    # nothing here catches what the program raises. an exception it does not catch leaves
+    # the interpreter as it leaves `python main.py`: python reports it through the
+    # excepthook above and exits 1. a debugger watching for an exception the program did not
+    # catch then sees the program's own, with the program's frames on top, where catching
+    # it here had it see a `SystemExit` the runner raised in a frame of its own
+    _run_as_main(module, profiler)
 
 
 if __name__ == "__main__":

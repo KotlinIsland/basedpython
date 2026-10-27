@@ -4266,6 +4266,86 @@ main()
     );
 }
 
+/// a debugger stops for an exception the program did not catch as it leaves the outermost
+/// frame, and shows the frames it came through. that has to be the program's own exception,
+/// raised where the program raised it, as it is under `python main.py` — not a `SystemExit`
+/// the runner raised after catching it, whose frames are all the runner's
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn run_lets_an_exception_the_program_did_not_catch_leave_the_interpreter() {
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    // what a debugger listens for: `PY_UNWIND`, in the frame nothing called
+    fs::write(
+        dir.path().join("watch.py"),
+        "\
+import atexit
+import os
+import sys
+
+left = []
+
+
+def unwound(code, offset, exception):
+    if sys._getframe(1).f_back is None:
+        tb = exception.__traceback__
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        raised_in = os.path.basename(tb.tb_frame.f_code.co_filename)
+        left.append(f'{type(exception).__name__} from {raised_in}:{tb.tb_lineno}')
+
+
+monitoring = sys.monitoring
+monitoring.use_tool_id(monitoring.DEBUGGER_ID, 'watch')
+monitoring.register_callback(monitoring.DEBUGGER_ID, monitoring.events.PY_UNWIND, unwound)
+monitoring.set_events(monitoring.DEBUGGER_ID, monitoring.events.PY_UNWIND)
+atexit.register(lambda: print(left))
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import watch
+
+
+def boom() -> None:
+    raise ValueError('bad')
+
+
+print(watch.left)
+boom()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        "[]\n['ValueError from main.by:5']\n",
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("line 5, in boom") && stderr.contains("ValueError: bad"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn run_traceback_of_a_failed_import_shows_no_import_machinery() {
     // python removes its own import machinery from a traceback raised while a
