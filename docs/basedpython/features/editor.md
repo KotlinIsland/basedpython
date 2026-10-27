@@ -55,6 +55,11 @@ too, and one that can be told per completion is told
 `.let` and `.var` spell basedpython bindings; the rest are valid python and are
 offered in `.py` files too
 
+set `ty.completions.postfixTemplates` to `false` (or
+`completions.postfixTemplates` in the initialization options, for a client that
+does not answer `workspace/configuration` with it) to be offered none of them.
+`.await` is not a template but syntax, and is offered either way
+
 ### postfix `await`
 
 [`.await`](await-attribute.md) is not a template — it is real syntax, so it

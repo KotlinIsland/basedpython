@@ -171,6 +171,15 @@ impl ClientOptions {
     }
 
     #[must_use]
+    pub fn with_postfix_templates(mut self, enabled: bool) -> Self {
+        self.workspace
+            .completions
+            .get_or_insert_default()
+            .postfix_templates = Some(enabled);
+        self
+    }
+
+    #[must_use]
     pub fn with_import_style(mut self, style: ImportStyleOption) -> Self {
         self.workspace
             .completions
@@ -478,6 +487,8 @@ impl InlayHintOptions {
 #[serde(rename_all = "camelCase")]
 pub struct CompletionOptions {
     auto_import: Option<bool>,
+    /// whether `.` after an expression offers the postfix templates that rewrite it
+    postfix_templates: Option<bool>,
     /// Whether callable completions should insert parentheses.
     complete_function_parentheses: Option<bool>,
     /// how an auto-import brings in a member of a module the file imports nothing from yet
@@ -507,6 +518,7 @@ impl CompletionOptions {
     fn into_settings(self) -> CompletionSettings {
         CompletionSettings {
             auto_import: self.auto_import.unwrap_or(true),
+            postfix_templates: self.postfix_templates.unwrap_or(true),
             // basedpython defaults this on — see `CompletionSettings::default`
             complete_function_parentheses: self.complete_function_parentheses.unwrap_or(true),
             import_style: match self.import_style {

@@ -1834,3 +1834,35 @@ fn postfix_statement_is_indented_for_how_the_client_inserts_it() -> Result<()> {
 
     Ok(())
 }
+
+/// `completions.postfixTemplates: false` leaves the postfix templates out
+#[test]
+fn postfix_templates_can_be_switched_off() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/main.by");
+    let content = "def f(x: list[int]):\n    x.\n";
+    let labels = |enabled: bool| -> Result<Vec<String>> {
+        let mut server = TestServerBuilder::new()?
+            .with_initialization_options(
+                &ClientOptions::default()
+                    .with_auto_import(false)
+                    .with_postfix_templates(enabled),
+            )
+            .with_workspace(workspace_root, None)?
+            .with_file(main, content)?
+            .build()
+            .wait_until_workspaces_are_initialized();
+        server.open_text_document(main, content, 1);
+        Ok(server
+            .completion_request(&server.file_uri(main), Position::new(1, 6))
+            .into_iter()
+            .map(|item| item.label)
+            .collect())
+    };
+
+    assert!(labels(true)?.iter().any(|label| label == "for"));
+    let without = labels(false)?;
+    assert!(!without.iter().any(|label| label == "for"), "{without:?}");
+    assert!(without.iter().any(|label| label == "append"), "{without:?}");
+    Ok(())
+}

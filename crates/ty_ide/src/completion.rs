@@ -166,6 +166,7 @@ pub fn completion<'db>(
                     source_type,
                     &source,
                     capabilities,
+                    settings.postfix_templates,
                     &mut completions,
                 );
                 if settings.auto_import {
@@ -382,10 +383,10 @@ fn replacing(completions: Vec<Completion<'_>>, typed: TextRange) -> Vec<Completi
 pub struct CompletionCapabilities {
     /// Whether the client supports snippets.
     snippets: bool,
-    /// Whether the client indents each new line of a completion's text as the line the
-    /// completion is accepted on, rather than inserting the text as it is. A completion that
+    /// whether the client indents each new line of a completion's text as the line the
+    /// completion is accepted on, rather than inserting the text as it is. a completion that
     /// opens a line then writes it indented relative to that line, or the client indents it
-    /// twice.
+    /// twice
     adjusts_indentation: bool,
 }
 
@@ -1084,6 +1085,8 @@ pub enum CompletionInsertTextFormat {
 #[derive(Clone, Debug)]
 pub struct CompletionSettings {
     pub auto_import: bool,
+    /// whether `.` after an expression offers the postfix templates that rewrite it
+    pub postfix_templates: bool,
     /// Whether callable completions should insert parentheses.
     pub complete_function_parentheses: bool,
     /// how an auto-import brings a member of a module the file does not import yet into scope
@@ -1110,6 +1113,7 @@ impl Default for CompletionSettings {
     fn default() -> CompletionSettings {
         CompletionSettings {
             auto_import: true,
+            postfix_templates: true,
             // basedpython defaults this on where upstream ty leaves it off. A
             // callable completion exists to be called, and typing the parentheses
             // back is work the editor already knows how to do — the machinery
@@ -4045,6 +4049,7 @@ fn add_postfix_completions<'db>(
     source_type: PySourceType,
     source: &SourceText,
     capabilities: CompletionCapabilities,
+    templates: bool,
     completions: &mut Completions<'db>,
 ) {
     let env = &model.program_environment();
@@ -4068,8 +4073,9 @@ fn add_postfix_completions<'db>(
         );
     }
 
+    // the templates can be switched off, while `.await` is syntax and stays
     let value = expr.value.range();
-    if value.is_empty() {
+    if !templates || value.is_empty() {
         return;
     }
     let Some(text) = source.get(value.start().to_usize()..value.end().to_usize()) else {
@@ -14515,9 +14521,32 @@ count = 3
         );
     }
 
-    /// A client that indents each new line as the line the completion is
+    /// the templates can be switched off; `.await`, which is syntax, stays
+    #[test]
+    fn basedpython_postfix_templates_switched_off() {
+        CursorTest::builder()
+            .source("main.by", "def f(x: list[int]):\n    x.<CURSOR>")
+            .completion_test_builder()
+            .skip_postfix_templates()
+            .build()
+            .not_contains("for")
+            .not_contains("print")
+            .contains("append");
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "from collections.abc import Coroutine\nasync def f(c: Coroutine[None, None, int]):\n    c.<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_postfix_templates()
+            .build()
+            .contains("await")
+            .not_contains("print");
+    }
+
+    /// a client that indents each new line as the line the completion is
     /// accepted on gets the new line indented one level past that line, and
-    /// adds the statement's own indentation itself.
+    /// adds the statement's own indentation itself
     #[test]
     fn basedpython_postfix_statement_indentation_for_a_client_that_adjusts_it() {
         let builder = CursorTest::builder()
@@ -17040,6 +17069,11 @@ raise <CURSOR>
         /// being tested.
         fn skip_auto_import(mut self) -> CompletionTestBuilder {
             self.settings.auto_import = false;
+            self
+        }
+
+        fn skip_postfix_templates(mut self) -> CompletionTestBuilder {
+            self.settings.postfix_templates = false;
             self
         }
 

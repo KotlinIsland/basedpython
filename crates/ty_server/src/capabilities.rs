@@ -234,15 +234,15 @@ impl ResolvedClientCapabilities {
         self.contains(Self::COMPLETION_ITEM_SNIPPET_SUPPORT)
     }
 
-    /// Returns `true` if a completion item can ask the client to indent each new line of its
-    /// text as the line the item is accepted on (`insertTextMode: adjustIndentation`).
+    /// returns `true` if a completion item can ask the client to indent each new line of its
+    /// text as the line the item is accepted on (`insertTextMode: adjustIndentation`)
     pub(crate) const fn supports_completion_item_adjust_indentation(self) -> bool {
         self.contains(Self::COMPLETION_ITEM_ADJUST_INDENTATION)
     }
 
-    /// Returns `true` if the client indents each new line of a completion's text as the line the
+    /// returns `true` if the client indents each new line of a completion's text as the line the
     /// completion is accepted on: a completion that asks it to, where it can be asked, and
-    /// otherwise every one, unless the client says it inserts the text as it is.
+    /// otherwise every one, unless the client says it inserts the text as it is
     ///
     /// a client that says neither is taken to adjust: VS Code says it does, and the client of
     /// the `JetBrains` IDEs says nothing about it and adjusts

@@ -47,6 +47,7 @@ Settings: WorkspaceSettings {
     },
     completions: CompletionSettings {
         auto_import: true,
+        postfix_templates: true,
         complete_function_parentheses: true,
         import_style: FromImport,
     },
