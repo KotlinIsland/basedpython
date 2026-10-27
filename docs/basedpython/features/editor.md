@@ -1952,7 +1952,9 @@ as a module of the project's environment, and each part after it as a member of
 what came before, through submodules and re-exports, so `shapes.Circle`, where
 `shapes/__init__` re-exports it, answers `shapes.base.Circle`. a class with a
 source is answered at its source, and one with only a stub, as `builtins.list`,
-at its stub. the answer is `null` for a name that reaches anything other than a
+at its stub, as is one whose module's source only imports it from where it is
+implemented, as `collections` does `deque` from the C module `_collections`. the
+answer is `null` for a name that reaches anything other than a
 class, or nothing, as `make.<locals>.Local` does. a session of several projects
 is answered from the first whose environment resolves it
 

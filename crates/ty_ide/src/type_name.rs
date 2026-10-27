@@ -13,7 +13,7 @@ use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::Type;
 
 use crate::Db;
-use crate::declaration::{DeclarationAt, single_declaration};
+use crate::declaration::{DeclarationAt, DeclaredKind, declaration, single_declaration};
 use crate::goto::Definitions;
 
 /// the class `type_name` names, as a module of the program `context` is in would import it, with
@@ -31,9 +31,29 @@ pub fn type_declaration(
     if !matches!(ty, Type::ClassLiteral(_)) {
         return None;
     }
-    let definitions = Definitions::from_ty(db, &model.program_environment(), ty)?.map_stubs(db);
-    let declaration = single_declaration(db, &definitions)?;
-    let target = definitions.into_navigation_targets(db).into_iter().next()?;
+    let stub = Definitions::from_ty(db, &model.program_environment(), ty)?;
+    let source = Definitions::new(stub.iter().cloned().collect()).map_stubs(db);
+    // a module's source can import the class from where it is implemented rather than declare it,
+    // as `collections` does `deque` from `_collections`, and that import is not the class's
+    // declaration: its stub declares it then
+    class_declaration(db, &source).or_else(|| class_declaration(db, &stub))
+}
+
+/// the class `definitions` declare, and where: the definitions that declare a class, an import
+/// of one left out, when there is exactly one class among them
+fn class_declaration(db: &dyn Db, definitions: &Definitions<'_>) -> Option<DeclarationAt> {
+    let classes = Definitions::new(
+        definitions
+            .iter()
+            .filter(|resolved| {
+                declaration(db, resolved)
+                    .is_some_and(|declaration| declaration.kind == DeclaredKind::Class)
+            })
+            .cloned()
+            .collect(),
+    );
+    let declaration = single_declaration(db, &classes)?;
+    let target = classes.into_navigation_targets(db).into_iter().next()?;
     Some(DeclarationAt {
         declaration,
         target,
@@ -104,6 +124,19 @@ def make() -> None:
     #[test]
     fn a_builtin_is_its_stub() {
         assert_snapshot!(test().type_declaration("builtins.list"), @"class builtins.list at stdlib/builtins.byi:2659");
+    }
+
+    /// a module whose source imports a class from where it is implemented, as `collections` does
+    /// `deque` from the C module `_collections`, does not declare it: its stub does
+    #[test]
+    fn a_class_whose_source_only_imports_it_is_its_stub() {
+        let test = CursorTest::builder()
+            .source("shelf.pyi", "class Stack: ...\n\nclass Queue: ...\n")
+            .source("shelf.py", "from _shelf import Stack\n\nclass Queue: ...\n")
+            .source("main.py", "<CURSOR>")
+            .build();
+        assert_snapshot!(test.type_declaration("shelf.Stack"), @"class shelf.Stack at /shelf.pyi:1");
+        assert_snapshot!(test.type_declaration("shelf.Queue"), @"class shelf.Queue at /shelf.py:3");
     }
 
     #[test]
