@@ -5,9 +5,9 @@
 //! the runner `by run` stages measures the program, moves each transpiled
 //! module's lines to its `.by` through the sourcemap it already holds, and writes
 //! what it found as JSON (see `_write_coverage` in the runner). A `.py` the
-//! project carries over runs as its project file, but one a test runner compiled
-//! itself runs as the copy it compiled, in a temporary directory that is deleted
-//! when the run ends. The staging knows what each copy is a copy of, so the
+//! project carries over runs as its project file, but one an import hook other
+//! than pytest's assertion rewriter compiled itself runs as the copy it compiled,
+//! in a temporary directory that is deleted when the run ends. the staging knows what each copy is a copy of, so the
 //! report is finished here: every staged copy is put back on the file it was
 //! copied from, and the runner's own files, which belong to no project, are left
 //! out.

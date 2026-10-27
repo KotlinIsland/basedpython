@@ -114,27 +114,39 @@ that machinery and the module's code, and a wrapper's `exec_module` did: a modul
 that failed as it was imported showed `<frozen importlib._bootstrap>` three times
 and the shim once above the line that failed, in every traceback no excepthook
 rewrites. it now shows what python shows for a program it runs itself, the line
-that imported and the line that failed. a module some other loader stands behind
-— a test runner that rewrites assertions — keeps that loader, which python calls
-directly; only its `__file__` is set, as the module is created
+that imported and the line that failed
 
-pytest is that test runner, and it reports a failure from the frames it caught,
-not through the excepthook, so its report used to name the staged `.py` at a line
-of the generated python and quote the generated python. `by run` puts a pytest
-plugin in the tree, `_by_pytest`, declared by a `pytest11` entry point in a
-`_by_pytest-0.dist-info` beside it, so pytest loads it wherever the tree is on
-`sys.path`. once pytest has imported a test module or a `conftest`, and before any
-of its tests runs, the plugin moves the code of every function the module defines
-— the methods of its classes, what a decorator wraps, a fixture's function, and
-the functions nested in each — to the `.by` lines, as the shim's own loader does.
-a failure in a test or a fixture is then reported at the `.by` line, quoting the
-`.by`. the module's top level ran as it was imported, before the plugin saw it, at
-the lines of the generated python: an error it raises, or an import in it fails
-with, is reported in place of pytest's report of it as `by run` reports an error in
-a program, python's traceback with each frame at its `.by` line. pytest's node ids
-still name the staged `.py`, `tests/test_calc.py::test_sum`: they are what pytest
-is given back to run a test again, and what its cache and its `--deselect` read,
-and they have to name a file in the tree pytest runs in
+pytest compiles a test module and a `conftest` itself, to rewrite their
+assertions, from an import hook it puts at the head of `sys.meta_path`. left to
+itself, that hook compiles the staged `.py` at the lines of the generated python: a
+failure would be reported naming it, and a debugger would never stop at a
+breakpoint in the `.by`. `by run` puts a pytest plugin in the tree, `_by_pytest`, declared by a
+`pytest11` entry point in a `_by_pytest-0.dist-info` beside it, so pytest loads it
+wherever the tree is on `sys.path` — after it installs its hook and before it
+imports any test module or `conftest`. the plugin tells the shim how pytest's hook
+compiles a module, and the shim puts its own finder back ahead of the hook. a
+staged module the hook would load is then compiled as the hook compiles it, its
+assertions rewritten, and moved to the `.by` lines like any other: its top level, a
+class body, a comprehension and a lambda as much as a function, from the moment it
+is compiled. a failure in a test or a fixture is reported at the `.by` line,
+quoting the `.by`, a breakpoint on any line of a test module stops there, and an
+error the module's top level raises, or an import in it fails with, is reported in
+place of pytest's report of it as `by run` reports an error in a program, python's
+traceback with each frame at its `.by` line. a hand-written `.py` the build carries
+over is compiled under the project file's path the same way. the module's
+`__file__` stays the staged `.py`, as do pytest's node ids,
+`tests/test_calc.py::test_sum`: pytest checks that a module it imported is the file
+it collected, and a node id is what pytest is given back to run a test again, and
+what its cache and its `--deselect` read, so both have to name a file in the tree
+pytest runs in
+
+a module some other import hook compiles itself keeps that hook's loader, which
+python calls directly; only its `__file__` is set, as the module is created. under
+pytest, once pytest has imported such a module and before any of its tests runs,
+the plugin moves the code of every function the module defines — the methods of
+its classes, what a decorator wraps, a fixture's function, and the functions nested
+in each — to the `.by` lines. its top level ran as it was imported, before the
+plugin saw it, at the lines of the generated python
 
 both tables are keyed by the generated path exactly as the map spells it. the
 shim resolves symlinks before matching a frame's filename against it — a

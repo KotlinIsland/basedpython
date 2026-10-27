@@ -129,8 +129,9 @@ coverage.py configuration (`[tool.coverage]`, `.coveragerc`) applies, except tha
 no `.coverage` data file is written: the report is the result. its `source`,
 `include` and `omit` name the project's files as they are in the project, with
 `--in-build` too, since every module runs as the file it was written as. the one
-exception is a module a test runner compiled itself, which runs as the staged
-copy it compiled: a `source` or an `omit` naming it does not reach it. a `.by`
+exception is a module an import hook other than pytest's assertion rewriter
+compiled itself, which runs as the staged copy it compiled: a `source` or an
+`omit` naming it does not reach it. a `.by`
 module under `source` that never ran is reported as not run, as coverage.py
 reports a `.py` that never ran. a program that
 leaves without returning to `by run` — `os._exit` — leaves no report, and

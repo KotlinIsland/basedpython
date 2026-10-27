@@ -25,6 +25,7 @@ basedpython understands pytest's fixture system. fixture parameters are typed fr
 - fixture functions written in `.by` work correctly: decorators survive, parameter names survive, type injection works at runtime
 - `yield` fixtures transpose correctly
 - `?:` and other basedpython features work inside test bodies and fixtures
+- under `by run pytest`, every line of a `.by` test module or `conftest` runs as that line of the `.by` — its top level, class bodies, comprehensions and lambdas as much as its tests — with pytest's assertion rewriting intact, so a failure is reported, and a debugger stops at a breakpoint, at the line as written
 
 ## limitations and workarounds
 

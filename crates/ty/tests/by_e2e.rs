@@ -2791,6 +2791,52 @@ fn run_pytest_reports_an_error_importing_a_test_module_at_the_by_line() {
     }
 }
 
+/// pytest compiles a test module, and a `conftest`, itself, to rewrite its assertions.
+/// what ran as the module was imported — its top level, a class body, a comprehension
+/// or a lambda there — ran as pytest compiled it, named the staged `.py` and at the
+/// lines of the generated python, so a debugger never stopped at a breakpoint on any
+/// of those lines of the `.by`. the runner compiles such a module as pytest does, and
+/// every line of it runs as the `.by` it was transpiled from, at that line
+#[test]
+fn run_pytest_runs_all_of_a_test_module_at_its_by_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(python) = pytest_project(dir.path()) else {
+        return;
+    };
+    fs::write(
+        dir.path().join("tests/test_where.by"),
+        "import os\nimport sys\n\n\ndef record(name: str):\n    let frame = sys._getframe(1)\n    with open(os.environ[\"WHERE_OUT\"], \"a\") as out:\n        out.write(f\"{name} {frame.f_code.co_filename}:{frame.f_lineno}\\n\")\n\n\nrecord(\"module\")\n\n\nclass TestWhere:\n    record(\"class\")\n\n    def test_method(self):\n        record(\"method\")\n\n\nlet listed = [record(\"comprehension\") for _ in range(1)]\nlet called = (lambda: record(\"lambda\"))()\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tests/conftest.by"),
+        "import os\nimport sys\n\nimport pytest\n\nwith open(os.environ[\"WHERE_OUT\"], \"a\") as out:\n    out.write(f\"conftest {sys._getframe().f_code.co_filename}:{sys._getframe().f_lineno}\\n\")\n\n\n@pytest.fixture\ndef broken() -> int:\n    let value = 0\n    assert value == 1\n    return value\n",
+    )
+    .unwrap();
+    let out = dir.path().join("where.txt");
+    let project = dir.path().canonicalize().unwrap();
+
+    let stdout = run_pytest(
+        dir.path(),
+        &python,
+        &[("WHERE_OUT", out.to_str().expect("a utf-8 path"))],
+    );
+    let recorded = fs::read_to_string(&out)
+        .unwrap_or_else(|error| panic!("nothing was recorded ({error}):\n{stdout}"));
+    let tests = project.join("tests");
+    let expected = [
+        ("conftest", tests.join("conftest.by"), 7),
+        ("module", tests.join("test_where.by"), 11),
+        ("class", tests.join("test_where.by"), 15),
+        ("comprehension", tests.join("test_where.by"), 21),
+        ("lambda", tests.join("test_where.by"), 22),
+        ("method", tests.join("test_where.by"), 18),
+    ]
+    .map(|(name, file, line)| format!("{name} {}:{line}", file.display()))
+    .join("\n");
+    assert_eq!(recorded.trim_end(), expected, "{stdout}");
+}
+
 /// with `BY_TEST_REPORTER=teamcity` the run is reported as the `TeamCity` service
 /// messages an IDE's test runner reads: suites named by the `.by` files and the
 /// classes in them, each test with its node id and its line in the `.by`, a failing
