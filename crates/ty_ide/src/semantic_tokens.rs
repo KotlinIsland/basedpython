@@ -2075,13 +2075,19 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_decorator(decorator);
                 }
 
-                // A basedpython declaration keyword is written ahead of its
-                // target, so it is emitted before it rather than in annotation
-                // position, where the marker standing in for it sits.
+                // a basedpython declaration keyword is mostly written ahead of
+                // its target (`final x: float`), and is then emitted before it
+                // rather than in annotation position, where the marker standing
+                // in for it sits. `final` is also a type form, written in the
+                // annotation (`x: final float`), and is emitted there: tokens are
+                // added in the order they are written
                 let declaration = declaration_keyword(&assignment.annotation);
-                if let Some((keyword, _)) = declaration {
+                let keyword = declaration.map(|(keyword, _)| self.keyword_range(keyword));
+                let ahead_of_target =
+                    |keyword: &TextRange| keyword.start() < assignment.target.start();
+                if let Some(keyword) = keyword.filter(ahead_of_target) {
                     self.add_token(
-                        self.keyword_range(keyword),
+                        keyword,
                         SemanticTokenType::Keyword,
                         SemanticTokenModifier::empty(),
                     );
@@ -2090,6 +2096,14 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.in_target_creating_definition = true;
                 self.visit_expr(&assignment.target);
                 self.in_target_creating_definition = false;
+
+                if let Some(keyword) = keyword.filter(|keyword| !ahead_of_target(keyword)) {
+                    self.add_token(
+                        keyword,
+                        SemanticTokenType::Keyword,
+                        SemanticTokenModifier::empty(),
+                    );
+                }
 
                 match declaration {
                     // only the type the user actually spelled is an annotation;
@@ -8175,6 +8189,33 @@ final c: str = \"x\"
         "c" @ 50..51: Variable [definition]
         "str" @ 53..56: Class
         "\"x\"" @ 59..62: String
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_final_type_form_in_an_annotation() {
+        // `final` written in the annotation is a type form, not a declaration
+        // keyword ahead of the target, and is highlighted where it is written
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    x: final float = 2.0
+    y: list[final float] = []
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "x" @ 14..15: Variable [definition]
+        "final" @ 17..22: Keyword
+        "float" @ 23..28: Class
+        "2.0" @ 31..34: Number
+        "y" @ 39..40: Variable [definition]
+        "list" @ 42..46: Class
+        "final" @ 47..52: Keyword
+        "float" @ 53..58: Class
         "#);
     }
 
