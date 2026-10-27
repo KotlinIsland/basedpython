@@ -948,7 +948,7 @@ impl<'db> StaticClassLiteral<'db> {
         // basedpython classes can gain injected bases (synthetic enum/protocol
         // markers, enum variants) even with no explicit bases in the header, so
         // the fast path only applies to standard python files
-        let is_by = matches!(self.file(db).path(db).extension(), Some("by" | "byi"));
+        let is_by = self.file(db).source_type(db).is_basedpython();
         if !is_by && !self.has_explicit_bases(db) {
             return &[];
         }

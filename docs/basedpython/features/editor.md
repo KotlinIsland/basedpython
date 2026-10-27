@@ -5,6 +5,15 @@ hints, an outline, and the rest of the language-server protocol. this page
 covers the parts that are basedpython's own — the ones you would not find by
 guessing from python
 
+## which dialect a document is
+
+a document is basedpython or python by its path's extension, whatever the uri's
+scheme: `untitled:console-1.by` and `vscode-vfs://github/app/main.by` are
+basedpython, as `app/main.by` is, and `untitled:script.py` is python. a path
+with no extension that says — an editor's `untitled:Untitled-1` — is the
+language the editor opened it in: `basedpython` (or `by`) is basedpython, and
+`python` is python
+
 ## postfix templates
 
 writing `.` after an expression offers a set of templates that rewrite the

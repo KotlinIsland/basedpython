@@ -38,6 +38,10 @@ pub struct TextDocument {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum LanguageId {
     Python,
+    /// what the client calls basedpython, `basedpython` or `by`. a document whose path has no
+    /// extension saying which dialect it is — an editor's `untitled:Untitled-1` — is basedpython
+    /// for it, where one called python is python
+    BasedPython,
     /// A django template. Not python, but the server still has language services
     /// for it — see [`ty_ide::django_template_completions`].
     DjangoTemplate,
@@ -62,15 +66,16 @@ impl LanguageId {
     /// outright, ahead of the path fallback, because a client that says `jinja`
     /// has settled the question that fallback exists to guess at.
     ///
-    /// Editors disagree about what to call python too — `python3`, `py` and
-    /// `basedpython` are all in use — and [`Self::Other`] is a document the
+    /// editors disagree about what to call python too — `python3` and `py` are
+    /// both in use — and [`Self::Other`] is a document the
     /// server never adds to the project, so an id we do not know would leave a
     /// `.py` file with no diagnostics and every service reading the file as last
     /// saved rather than as the client has it. So a path python owns is python,
     /// exactly as a path django owns is a template.
     fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
         match language_id.as_str() {
-            "python" | "by" | "basedpython" => Self::Python,
+            "python" => Self::Python,
+            "by" | "basedpython" => Self::BasedPython,
             "django-html" | "django-txt" | "htmldjango" | "django" => Self::DjangoTemplate,
             "jinja" | "jinja-html" | "jinja2" => Self::Other,
             _ => Self::of_path(path),
@@ -89,6 +94,11 @@ impl LanguageId {
 
     pub(crate) const fn is_django_template(self) -> bool {
         matches!(self, Self::DjangoTemplate)
+    }
+
+    /// whether the document is python of either dialect, which the server adds to the project
+    pub(crate) const fn is_python(self) -> bool {
+        matches!(self, Self::Python | Self::BasedPython)
     }
 }
 
@@ -264,11 +274,12 @@ mod tests {
 
     #[test]
     fn the_editors_python_language_ids_are_python() {
-        for id in ["python", "by", "basedpython"] {
+        assert_eq!(opened("/app/mod.py", "python"), LanguageId::Python);
+        for id in ["by", "basedpython"] {
             assert_eq!(
                 opened("/app/mod.by", id),
-                LanguageId::Python,
-                "`{id}` is python"
+                LanguageId::BasedPython,
+                "`{id}` is basedpython"
             );
         }
     }

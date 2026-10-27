@@ -1575,7 +1575,7 @@ impl Session {
         // script from disk. This ensures both use the saved metadata, so saving changed metadata
         // requests another synchronization.
         if self.use_uv != UseUv::Off
-            && language_id == LanguageId::Python
+            && language_id.is_python()
             && document.notebook().is_none()
             && let DocumentKey::File(system_path) = DocumentKey::from_uri(document.uri())
         {

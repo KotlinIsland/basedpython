@@ -166,6 +166,69 @@ def foo() -> str:
     Ok(())
 }
 
+/// a document is basedpython by the extension of its path whatever the uri's scheme, and by the
+/// language the client opened it in when the path has no extension that says: an editor's
+/// console, `untitled:console-1.by`, and its `untitled:Untitled-1`, which it calls `basedpython`,
+/// both accept a `let`. a document the client calls python is python
+#[test]
+fn a_document_s_dialect_is_its_extension_or_its_language() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .enable_pull_diagnostics(false)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let source = "let rate = 0.2\nprint(rate)\n";
+    let mut by_document = BTreeMap::new();
+    for (uri, language) in [
+        ("untitled:console-1.by", "basedpython"),
+        ("untitled:console-2.by", "python"),
+        ("vscode-vfs://github/app/main.by", "python"),
+        ("untitled:Untitled-3", "basedpython"),
+        ("inmemory://model/4", "by"),
+        ("untitled:Untitled-5", "python"),
+        ("untitled:script-6.py", "basedpython"),
+    ] {
+        server.send_notification::<DidOpenTextDocumentNotification>(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: Uri::parse(uri)?,
+                language_id: LanguageKind::from(language.to_string()),
+                version: 1,
+                text: source.to_string(),
+            },
+        });
+        let diagnostics = server.await_notification::<PublishDiagnosticsNotification>();
+        let messages: Vec<String> = diagnostics
+            .diagnostics
+            .iter()
+            .map(|diagnostic| match &diagnostic.message {
+                Message::String(message) => message.clone(),
+                Message::MarkupContent(content) => content.value.clone(),
+            })
+            .collect();
+        by_document.insert(format!("{uri} ({language})"), messages);
+    }
+
+    insta::assert_debug_snapshot!(by_document, @r#"
+    {
+        "inmemory://model/4 (by)": [],
+        "untitled:Untitled-3 (basedpython)": [],
+        "untitled:Untitled-5 (python)": [
+            "`let` declarations are not valid in .py files",
+        ],
+        "untitled:console-1.by (basedpython)": [],
+        "untitled:console-2.by (python)": [],
+        "untitled:script-6.py (basedpython)": [
+            "`let` declarations are not valid in .py files",
+        ],
+        "vscode-vfs://github/app/main.by (python)": [],
+    }
+    "#);
+
+    Ok(())
+}
+
 #[test]
 fn on_did_open_diagnostics_off() -> Result<()> {
     let workspace_root = SystemPath::new("src");

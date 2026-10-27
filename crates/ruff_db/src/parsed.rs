@@ -47,12 +47,8 @@ pub(super) fn disable_lru(db: &mut dyn Db) {
 }
 
 fn parsed_module_impl(db: &dyn Db, file: File, target_version: PythonVersion) -> Parsed<ModModule> {
-    let ty = file.source_type(db);
-    let is_basedpython = matches!(file.path(db).extension(), Some("by" | "byi"));
-
-    let options = ParseOptions::from(ty)
-        .with_target_version(target_version)
-        .with_basedpython(is_basedpython);
+    // the source type says which dialect the file is, basedpython syntax included
+    let options = ParseOptions::from(file.source_type(db)).with_target_version(target_version);
 
     let source = source_text(db, file);
 

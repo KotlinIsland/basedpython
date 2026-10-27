@@ -50,7 +50,7 @@ pub struct CopiedImport {
 }
 
 impl CopiedImport {
-    /// How [`Importer::import`] is asked for this import.
+    /// How [`Importer::import`](ty_python_semantic::importer::Importer::import) is asked for this import.
     fn request(&self) -> ImportRequest<'_> {
         match &self.member {
             Some(member) if *member == self.name => {
@@ -99,10 +99,7 @@ pub fn copied_imports(
     let importing_file = ImportingFile::File(file.file(db), file.resolver_environment(db));
     let own_module = file_to_module(db, file.resolver_file(db))
         .map(|module| module.name(db).as_str().to_string());
-    let options = ParseOptions::from(file.file(db).source_type(db)).with_basedpython(matches!(
-        file.file(db).path(db).extension(),
-        Some("by" | "byi")
-    ));
+    let options = ParseOptions::from(file.file(db).source_type(db));
 
     let mut seen = FxHashSet::default();
     let mut imports = Vec::new();

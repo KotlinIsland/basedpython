@@ -131,10 +131,16 @@ impl LSPSystem {
     ) -> Option<PySourceType> {
         match document {
             Document::Text(text) => match text.language_id() {
-                LanguageId::Python => {
+                language @ (LanguageId::Python | LanguageId::BasedPython) => {
+                    // the extension says which dialect, when it names one; otherwise the
+                    // language the client opened the document in does
                     let source_type = extension
                         .and_then(PySourceType::try_from_extension)
-                        .unwrap_or(PySourceType::Python);
+                        .unwrap_or(if language == LanguageId::BasedPython {
+                            PySourceType::BasedPython
+                        } else {
+                            PySourceType::Python
+                        });
 
                     // JupyterLab presents notebook virtual documents to language servers as
                     // simple text files rather than serialized `.ipynb` contents. See:

@@ -625,17 +625,29 @@ impl File {
             || path.ends_with("__init__.by")
     }
 
+    /// the kind of source the file holds, which is also the dialect it is parsed as: python or
+    /// basedpython, a module or a stub, or a notebook
+    ///
+    /// an extension that names one decides it, whatever the path's scheme: `untitled:console-1.by`
+    /// is basedpython as `app/main.by` is. a path with no such extension — an editor's
+    /// `untitled:Untitled-1`, a script with none — is what the system says it is, which for a
+    /// language server is the language the editor opened the document in, and python when the
+    /// system does not know either
     pub fn source_type(self, db: &dyn Db) -> PySourceType {
         match self.path(db) {
             FilePath::System(path) => path
                 .extension()
-                .map_or(PySourceType::Python, PySourceType::from_extension),
+                .and_then(PySourceType::try_from_extension)
+                .or_else(|| db.system().source_type(path))
+                .unwrap_or(PySourceType::Python),
             FilePath::Vendored(path) => path
                 .extension()
                 .map_or(PySourceType::Stub, PySourceType::from_extension),
             FilePath::SystemVirtual(path) => path
                 .extension()
-                .map_or(PySourceType::Python, PySourceType::from_extension),
+                .and_then(PySourceType::try_from_extension)
+                .or_else(|| db.system().virtual_path_source_type(path))
+                .unwrap_or(PySourceType::Python),
         }
     }
 }
