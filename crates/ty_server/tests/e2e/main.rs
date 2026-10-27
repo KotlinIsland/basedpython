@@ -201,6 +201,18 @@ pub(crate) enum AwaitResponseError {
     DeserializationError(#[from] serde_json::Error),
 }
 
+/// whether the server cancelled a diagnostic request and asks the client to send it again
+fn asks_to_retrigger(error: &ResponseError) -> bool {
+    error.code == lsp_server::ErrorCode::ServerCancelled as i32
+        && error
+            .data
+            .clone()
+            .and_then(|data| {
+                serde_json::from_value::<lsp_types::DiagnosticServerCancellationData>(data).ok()
+            })
+            .is_some_and(|data| data.retrigger_request)
+}
+
 impl From<ReceiveError> for AwaitResponseError {
     fn from(err: ReceiveError) -> Self {
         match err {
@@ -1145,6 +1157,14 @@ impl TestServer {
     }
 
     /// Send a `workspace/diagnostic` request with optional previous result IDs.
+    ///
+    /// a change the server takes in while it checks the workspace cancels the check, and the
+    /// server answers `ServerCancelled` with `retriggerRequest: true`, which is it asking the
+    /// client to send the request again. this does, as a client does. a test that watches the
+    /// file system meets it whenever a pull overlaps a change the watcher reports, one the test
+    /// made or one the operating system reports late for a file the test wrote before the server
+    /// started
+    #[track_caller]
     pub(crate) fn workspace_diagnostic_request(
         &mut self,
         work_done_token: Option<lsp_types::ProgressToken>,
@@ -1157,8 +1177,16 @@ impl TestServer {
             partial_result_params: PartialResultParams::default(),
         };
 
-        let id = self.send_request::<WorkspaceDiagnosticRequest>(params);
-        self.await_response::<WorkspaceDiagnosticRequest>(&id)
+        loop {
+            let id = self.send_request::<WorkspaceDiagnosticRequest>(params.clone());
+            match self.try_await_response::<WorkspaceDiagnosticRequest>(&id, None) {
+                Ok(report) => return report,
+                Err(AwaitResponseError::RequestFailed(error)) if asks_to_retrigger(&error) => {
+                    tracing::debug!("Retriggering workspace diagnostic request {id}");
+                }
+                Err(error) => panic!("Failed to receive response for request {id}: {error}"),
+            }
+        }
     }
 
     /// Send a `textDocument/definition` request for the document at the given path and position.
