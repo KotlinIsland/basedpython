@@ -3134,8 +3134,16 @@ def main():
         "and the .by line that raised, as it is written:\n{stdout}"
     );
     assert!(
-        !stdout.contains(".py\"") && !stdout.contains("_force_unwrap(a)"),
+        !stdout.contains("main.py\"") && !stdout.contains("_force_unwrap(a)"),
         "no frame may name the generated file or its text:\n{stdout}"
+    );
+    // the helper the transpiler called is by's, and runs from the copy of the runtime at the
+    // tree's root, so its frame is there, at a line of it, rather than at a line of the `.by`
+    // that none of the `.by` is behind
+    assert!(
+        stdout.contains("_by_runtime.py\", line ")
+            && stdout.contains("in _force_unwrap\n    raise RuntimeError("),
+        "the helper's frame is the runtime's, at its own line:\n{stdout}"
     );
     assert!(
         stdout.contains("main.by 14"),
@@ -9914,6 +9922,7 @@ fn run_declares_by_s_own_python_in_the_tree() {
         "_by_pytest.py",
         "_by_repl.py",
         "_by_runner.py",
+        "_by_runtime.py",
         "_by_sourcemap.py",
         "pkg/_by_runtime.py",
     ]

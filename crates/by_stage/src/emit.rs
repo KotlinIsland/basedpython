@@ -207,22 +207,20 @@ pub fn check_and_transpile(
     // copy depends on where it lands, so the config is settled per file rather
     // than once for the build
     let system = ruff_db::Db::system(db);
-    let runtime_wanted = runtime.is_some();
+    let layout = runtime.as_deref();
     let jobs: Vec<Job<'_>> = handles
         .iter()
         .filter(|(_, file)| !unusable.contains(file))
         .map(|(by_path, file)| Job {
             by_path,
             file: *file,
-            runtime_package: if runtime_wanted {
-                RuntimePackage::of(
+            runtime_package: layout.and_then(|layout| {
+                layout.package_of(
                     &transpiled_destination(roots, root, by_path),
                     by_path,
                     system,
                 )
-            } else {
-                None
-            },
+            }),
         })
         .collect();
     let finished = fan_out(jobs, gate == CheckGate::AllErrors, db.clone(), |db, job| {

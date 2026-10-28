@@ -165,8 +165,9 @@ the runtime's helpers — what the emitted python calls for `!!`, a lazy import 
 a soundness check — are named `<by runtime>`, at the line of `_by_runtime.py`
 they start on, as `by build` writes that file, and by their own names:
 `<by runtime>:103(_force_unwrap)`. one helper is then one function whether the
-transpiler wrote it into a module or it ran from the copy of the runtime beside
-a package's modules, and two helpers that share a name, such as two `__init__`
+transpiler wrote it into a module or it ran from a copy of the runtime — beside
+a package's modules, or at the root of the tree `by run` stages, which every
+module in no package imports from — and two helpers that share a name, such as two `__init__`
 methods, stay two. like python's own `<frozen runpy>`, the name is no file: a
 viewer's way to the source opens nothing, where line 0 of the module the helper
 was written into would open that module at its first line, as PyCharm's viewer

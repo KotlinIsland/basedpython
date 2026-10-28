@@ -172,6 +172,7 @@ BY_CODE = [
     "/tmp/.tmpXXXX/_by_pytest.py",
     "/tmp/.tmpXXXX/_by_repl.py",
     "/tmp/.tmpXXXX/_by_runner.py",
+    "/tmp/.tmpXXXX/_by_runtime.py",
     "/tmp/.tmpXXXX/_by_sourcemap.py",
     "/tmp/.tmpXXXX/pkg/_by_runtime.py",
 ]

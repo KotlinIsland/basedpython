@@ -108,12 +108,20 @@ body, so a helper brings the rest of what it needs along
 - `by build`, `by run` and `by compile` stage a tree of their own. they write
     `_by_runtime.py` into each package they stage — a directory with an
     `__init__` — and each module imports what it calls from its package's copy
-- a module at a module root gets the definitions pasted in. a copy at the root
-    would be a top-level module, which a second basedpython wheel built by
-    another version overwrites on install
+- in a `by build` or `by compile` tree, a module at a module root gets the
+    definitions pasted in. a copy at the root would be a top-level module, which
+    a second basedpython wheel built by another version overwrites on install
 - so does a module in a directory that is not a package, a `scripts/` folder
     say, which has no import that works both when it is run and when it is
     imported
+- a tree `by run` stages is run and thrown away, and nothing installs it, so
+    neither reason holds there: `by run` writes a copy at the tree's root, and
+    every module in no package imports from it, which the runner's directory on
+    `sys.path` makes importable from all of them. a helper then runs from a file
+    of its own, at its real lines, where a definition pasted into a module would
+    be lines with no `.by` line behind them, which a traceback and a debugger can
+    only call line 0. the tree's `_by_build.json` says which layout it has, as
+    `runtimeAtRoot`, so a re-stage writes a module as the build did
 - `by transpile <file>` and the language server's `by/transpile` answer with one
     module's text, and `by transpile <dir>` writes into the source tree itself,
     where a file with no `.by` beside it would read as a module the author wrote.

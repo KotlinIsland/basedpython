@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use by_stage::record::BuildRecord;
+use by_stage::runtime::RuntimeLayout;
 use by_transforms::config::Config;
 use lsp_types::{LspRequestMethod, MessageDirection, Request, TextDocumentIdentifier, Uri};
 use ruff_db::system::{SystemPath, SystemPathBuf};
@@ -228,6 +229,7 @@ fn stale_build(server: &TestServer, build: &SystemPath) -> Result<SystemPathBuf>
         &[project.as_std_path().to_path_buf()],
         None,
         false,
+        &RuntimeLayout::shipped(),
         &Config::default(),
     );
     std::fs::write(

@@ -277,7 +277,9 @@ pub(crate) fn stage_run(
     // lifts generated line numbers back to `.by` lines (for traceback rewriting)
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
     let mut staging = Staging::new(tmp.path());
-    let mut layout = RuntimeLayout::default();
+    // the tree is run and thrown away, so the runtime's helpers run from a copy of their own
+    // at its root rather than pasted into a module in no package
+    let mut layout = RuntimeLayout::unshipped();
     let status = render_check_and_transpile(
         &db,
         &handles,
@@ -315,7 +317,7 @@ pub(crate) fn stage_run(
     // configuration would emit different code in exactly the case that matters
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, module.clone(), compiled, &config),
+        &BuildRecord::new(&root, &roots, module.clone(), compiled, &layout, &config),
     )?;
     // the project file behind each copy in the tree, for the runner to run it as
     // and a coverage report to name: the copy is deleted with the tree when the
@@ -1165,7 +1167,7 @@ pub(crate) fn cmd_build(
     // is what the digests beside the map are for
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
-    let mut layout = RuntimeLayout::default();
+    let mut layout = RuntimeLayout::shipped();
     let status = render_check_and_transpile(
         &db,
         &handles,
@@ -1212,7 +1214,7 @@ pub(crate) fn cmd_build(
     // `run` tree does. no entry module: a build is not pointed at one
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, None, false, &config),
+        &BuildRecord::new(&root, &roots, None, false, &layout, &config),
     )?;
     if print_manifest {
         print_build_manifest(&staging, &roots, &root, requirements)?;
@@ -1484,7 +1486,7 @@ pub(crate) fn cmd_compile(
         .collect();
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
-    let mut layout = RuntimeLayout::default();
+    let mut layout = RuntimeLayout::shipped();
     let transpiled = render_check_and_transpile(
         &db,
         &transpilable,
@@ -1663,7 +1665,7 @@ pub(crate) fn cmd_compile(
         let holds_extensions = !emit_c_only && compiled > 0;
         if let Err(error) = stage_build_record(
             &mut staging,
-            &BuildRecord::new(&root, &roots, None, holds_extensions, &tree_config),
+            &BuildRecord::new(&root, &roots, None, holds_extensions, &layout, &tree_config),
         ) {
             break 'compiling Err(error);
         }
@@ -3347,8 +3349,9 @@ def _by_code(origin, compile_source):
     python answers each from the code object. So the code object is named after
     the `.by` path, with every line the `.by` line it came from: the answer is then
     the author's wherever it is read, and the source line python shows beside it is
-    read from the `.by` too. A line the transpiler wrote on its own — a runtime
-    helper — has no `.by` line, and says so as line 0. Columns are the generated
+    read from the `.by` too. A line the transpiler wrote on its own — the scaffolding
+    of a lowering — has no `.by` line, and says so as line 0. The runtime's helpers
+    are not among them: they run from the copy of the runtime the module imports. Columns are the generated
     file's, so every location spans the whole of its `.by` line instead: python
     marks no part of a line a location covers, and reads what it can from the `.by`
     text.
