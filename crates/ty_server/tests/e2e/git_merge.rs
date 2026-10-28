@@ -56,6 +56,7 @@ fn a_project_in_a_repository_is_answered_with_what_is_missing_until_it_is_set_up
             "missingAttributes": ["*.by", "*.byi", "*.py", "*.pyi", "api.lock"],
             "driver": null,
             "driverFound": false,
+            "driverCurrent": false,
         })
     );
 
@@ -64,7 +65,7 @@ fn a_project_in_a_repository_is_answered_with_what_is_missing_until_it_is_set_up
     assert_eq!(state["missingAttributes"], json!([]));
     let driver = git(&root, &["config", "--get", "merge.by.driver"]);
     assert!(
-        driver.ends_with("' merge-driver %O %A %B %L %P %S %X %Y"),
+        driver.contains("' merge-driver %O %A %B %L %P %S %X %Y; "),
         "{driver}"
     );
     assert_eq!(state["driver"], json!(driver));

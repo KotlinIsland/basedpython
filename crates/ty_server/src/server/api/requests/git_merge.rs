@@ -38,6 +38,10 @@ pub(crate) struct GitMergeIntegrationParams {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the answer on the wire, each flag a separate thing an editor shows"
+)]
 pub(crate) struct GitMergeIntegrationState {
     /// whether git merges every path the driver is for with a driver that is there
     enabled: bool,
@@ -55,6 +59,9 @@ pub(crate) struct GitMergeIntegrationState {
     driver: Option<String>,
     /// whether the `by` that command runs is there
     driver_found: bool,
+    /// whether the command is the one setting the integration up writes, with its fallback to
+    /// git's own line merge where `by` does not merge the file
+    driver_current: bool,
 }
 
 pub(crate) struct GitMergeIntegrationHandler;
@@ -115,6 +122,7 @@ impl BackgroundRequestHandler for GitMergeIntegrationHandler {
                 .collect(),
             driver: integration.driver,
             driver_found: integration.driver_found,
+            driver_current: integration.driver_current,
         }))
     }
 }

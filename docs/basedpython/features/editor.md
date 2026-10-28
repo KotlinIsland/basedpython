@@ -1720,12 +1720,16 @@ a merge git runs, where no merge window ever opens for a file git merges cleanly
 `by/gitMergeIntegration` takes `{"uri"?: "…", "enable"?: true}`, a file or
 directory of the project asked about (the first project's without one), and
 answers whether git merges it with [`by merge-driver`](../cli-reference.md#by-merge-driver),
-`{"enabled", "repository", "attributes", "missingAttributes", "driver", "driverFound"}`:
+`{"enabled", "repository", "gitVersion", "gitSupported", "attributes", "missingAttributes", "driver", "driverFound", "driverCurrent"}`:
 whether every path the driver is for is merged by a driver that is there,
-whether the project is in a git work tree, the uri of its `.gitattributes`, the
-patterns git does not merge with the driver, the command `merge.by.driver` runs
-(`null` where it is not set) and whether the `by` it names is there. with
-`"enable": true` it first sets the integration up as
+whether the project is in a git work tree, the version of the git on the language
+server's `PATH` as `git version` writes it, whether that git is 2.44 or later, the
+first that gives a merge driver what `by merge-driver` needs, the uri of its
+`.gitattributes`, the patterns git does not merge with the driver, the command
+`merge.by.driver` runs (`null` where it is not set), whether the `by` it names is
+there, and whether the command is the one setting up writes, with its fallback to
+git's own line merge, rather than one an older `by` wrote. with `"enable": true`
+it first sets the integration up as
 [`by init --git-merge`](../cli-reference.md#by-init) does, the driver naming the
 `by` the language server is, and fails for a project outside a git work tree, for
 a git older than 2.44, and where its `.gitattributes` is there but cannot be read.

@@ -16,10 +16,18 @@
 //! a driver whose `by` is gone is reported as not found, and setting the integration up again
 //! names the `by` that does it
 //!
-//! the driver needs git 2.44 or later: it is the first git to hand a merge driver the labels of
-//! the versions it merges (`%S %X %Y`), and the first whose `git merge-file` takes the diff
-//! algorithm `git merge` uses. an older git is not set up, since there the driver could not
-//! merge a file
+//! until then, git must not be left worse off than without the driver. git takes a driver that
+//! exits non-zero as a conflict, and the file as the driver left it: a `by` that is gone, or one
+//! too old to have `by merge-driver`, exits 127 or 2 without writing anything, which git would
+//! report as a conflict holding ours alone, the other side's changes nowhere in it. so the
+//! command falls back to git's own line merge, as `git merge` runs it, wherever `by` does not
+//! answer for the file itself: `by merge-driver` exits 0 for a clean result and 1 for one it
+//! left conflicted, and anything else is `by` not having merged the file
+//!
+//! the driver and its fallback need git 2.44 or later: it is the first git to hand a merge
+//! driver the labels of the versions it merges (`%S %X %Y`), and the first whose
+//! `git merge-file` takes the diff algorithm `git merge` uses. an older git is not set up, since
+//! there neither the driver nor the fallback could merge a file
 
 use std::fmt::Write as _;
 use std::process::Command;
@@ -34,8 +42,19 @@ const DRIVER: &str = "by";
 /// what git hands the driver: see `by merge-driver`
 const DRIVER_ARGUMENTS: &str = "merge-driver %O %A %B %L %P %S %X %Y";
 
-/// the oldest git the driver merges with: see the module's documentation
+/// what the driver's command runs where `by` did not merge the file: git's own line merge, as
+/// `git merge` runs it and as `by merge-driver` starts with, written over ours
+const FALLBACK: &str = "; status=$?; [ $status -le 1 ] && exit $status; \
+    echo \"by merge-driver did not run: this is git's own line merge\" >&2; \
+    git merge-file --diff-algorithm=histogram --marker-size=%L -L %X -L %S -L %Y %A %O %B";
+
+/// the oldest git the driver and its fallback merge with: see the module's documentation
 const MINIMUM_GIT: (u32, u32) = (2, 44);
+
+/// the command the driver runs `by` at `by` with
+fn driver_command(by: &str) -> String {
+    format!("{} {DRIVER_ARGUMENTS}{FALLBACK}", shell_quote(by))
+}
 
 /// the paths the driver merges, each with a path in the project that the pattern matches, which
 /// git is asked the attribute of
@@ -63,12 +82,19 @@ pub struct GitMergeIntegration {
     pub driver: Option<String>,
     /// whether the `by` the command runs is there
     pub driver_found: bool,
+    /// whether the command is the one setting the integration up writes for that `by`, with
+    /// the fallback to git's own line merge, rather than one an older `by` wrote
+    pub driver_current: bool,
 }
 
 impl GitMergeIntegration {
     /// whether git merges every path the driver is for with a driver that is there
     pub fn is_enabled(&self) -> bool {
-        self.repository && self.missing_attributes.is_empty() && self.driver_found
+        self.repository
+            && self.git_supported()
+            && self.missing_attributes.is_empty()
+            && self.driver_found
+            && self.driver_current
     }
 
     /// whether the git on `PATH` is one the driver can merge with, 2.44 or later
@@ -91,6 +117,7 @@ impl GitMergeIntegration {
                 missing_attributes: MERGED.iter().map(|(pattern, _)| *pattern).collect(),
                 driver: None,
                 driver_found: false,
+                driver_current: false,
             });
         }
         // what git itself makes of every attributes file that applies, rather than of the
@@ -121,6 +148,9 @@ impl GitMergeIntegration {
             .as_deref()
             .and_then(executable_of)
             .is_some_and(|executable| executable_exists(system, &executable));
+        let driver_current = driver.as_deref().is_some_and(|driver| {
+            executable_of(driver).is_some_and(|executable| driver == driver_command(&executable))
+        });
         Ok(Self {
             repository,
             git_version,
@@ -128,6 +158,7 @@ impl GitMergeIntegration {
             missing_attributes,
             driver,
             driver_found,
+            driver_current,
         })
     }
 
@@ -188,10 +219,10 @@ impl GitMergeIntegration {
                 .write_file(&integration.attributes_path, &attributes)
                 .with_context(|| format!("could not write `{}`", integration.attributes_path))?;
         }
-        if !integration.driver_found {
+        if !(integration.driver_found && integration.driver_current) {
             let name = format!("merge.{DRIVER}.name");
             let driver = format!("merge.{DRIVER}.driver");
-            let command = format!("{} {DRIVER_ARGUMENTS}", shell_quote(by.as_str()));
+            let command = driver_command(by.as_str());
             for (key, value) in [
                 (name.as_str(), "by: python imports, and api.lock"),
                 (driver.as_str(), command.as_str()),
