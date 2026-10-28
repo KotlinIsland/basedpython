@@ -23,6 +23,7 @@ use ty_project::{Db as _, ProjectDatabase};
 
 use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{FileRangeExt, ToRangeExt};
+use crate::server::api::requests::api_lock::api_lock_document_diagnostics;
 use crate::session::client::Client;
 use crate::session::{GlobalSettings, OpenDocumentHandle};
 use crate::system::{AnySystemPath, file_to_uri};
@@ -235,6 +236,19 @@ pub(super) fn publish_diagnostics(
     }
 
     let db = session.project_db(document.notebook_or_file_path());
+
+    if let Some(diagnostics) = api_lock_document_diagnostics(
+        db,
+        document.notebook_or_file_path(),
+        session.position_encoding(),
+    ) {
+        client.send_notification::<PublishDiagnosticsNotification>(PublishDiagnosticsParams {
+            uri: document.uri().clone(),
+            diagnostics,
+            version: Some(document.version()),
+        });
+        return;
+    }
 
     let Some(file) = document.notebook_or_file(db) else {
         tracing::info!(

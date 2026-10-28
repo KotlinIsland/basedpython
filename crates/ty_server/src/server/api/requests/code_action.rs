@@ -12,6 +12,7 @@ use crate::document::{RangeExt, ToRangeExt};
 use crate::server::Result;
 use crate::server::api::RequestHandler;
 use crate::server::api::diagnostics::DiagnosticData;
+use crate::server::api::requests::api_lock::{STALE_API_LOCK, is_api_lock, regenerate_api_lock};
 use crate::server::api::requests::execute_command::add_dependency_command;
 
 use crate::server::api::traits::{BackgroundDocumentRequestHandler, RetriableRequestHandler};
@@ -39,6 +40,18 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
         let diagnostics = params.context.diagnostics;
         let only = params.context.only;
         let invoked = params.context.trigger_kind == Some(types::CodeActionTriggerKind::Invoked);
+
+        if let Some(path) = snapshot.document().notebook_or_file_path().as_system()
+            && is_api_lock(db, path)
+        {
+            return Ok(api_lock_actions(
+                db,
+                snapshot,
+                diagnostics,
+                &params.range,
+                only.as_deref(),
+            ));
+        }
 
         let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
@@ -394,6 +407,52 @@ fn range_intersect(range: &lsp_types::Range, other: &lsp_types::Range) -> bool {
     let start = range.start.max(other.start);
     let end = range.end.min(other.end);
     end >= start
+}
+
+/// the quick fix that regenerates the project's stale `api.lock`, for the diagnostic that says
+/// it is stale
+fn api_lock_actions(
+    db: &ProjectDatabase,
+    snapshot: &DocumentSnapshot,
+    diagnostics: Vec<types::Diagnostic>,
+    range: &types::Range,
+    only: Option<&[CodeActionKind]>,
+) -> Option<Vec<CodeActionResponse>> {
+    if !is_requested(only, &CodeActionKind::QuickFix) {
+        return None;
+    }
+    let stale: Vec<types::Diagnostic> = diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.source.as_deref() == Some(DIAGNOSTIC_NAME)
+                && diagnostic.code == Some(Code::String(STALE_API_LOCK.to_string()))
+                && range_intersect(&diagnostic.range, range)
+        })
+        .collect();
+    if stale.is_empty() {
+        return None;
+    }
+    let (title, edit) = regenerate_api_lock(db, snapshot.encoding())?;
+    Some(vec![CodeActionResponse::CodeAction(
+        lsp_types::CodeAction {
+            title: title.to_string(),
+            kind: Some(CodeActionKind::QuickFix),
+            diagnostics: Some(stale),
+            edit: Some(lsp_types::WorkspaceEdit {
+                changes: Some(HashMap::from([(
+                    snapshot.document().uri().clone(),
+                    vec![edit],
+                )])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            is_preferred: Some(true),
+            command: None,
+            disabled: None,
+            data: None,
+            tags: None,
+        },
+    )])
 }
 
 impl RetriableRequestHandler for CodeActionRequestHandler {}

@@ -1,14 +1,16 @@
 use std::borrow::Cow;
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 use lsp_types::DocumentDiagnosticRequest;
 use lsp_types::{
-    DocumentDiagnosticParams, DocumentDiagnosticReport, FullDocumentDiagnosticReport,
+    Diagnostic, DocumentDiagnosticParams, DocumentDiagnosticReport, FullDocumentDiagnosticReport,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
     UnchangedDocumentDiagnosticReport, Uri,
 };
 
 use crate::server::Result;
 use crate::server::api::diagnostics::compute_diagnostics;
+use crate::server::api::requests::api_lock::api_lock_document_diagnostics;
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -35,6 +37,14 @@ impl BackgroundDocumentRequestHandler for DocumentDiagnosticRequestHandler {
     ) -> Result<DocumentDiagnosticReport> {
         if snapshot.global_settings().diagnostic_mode().is_off() {
             return Ok(RelatedFullDocumentDiagnosticReport::default().into());
+        }
+
+        if let Some(items) = api_lock_document_diagnostics(
+            db,
+            snapshot.document().notebook_or_file_path(),
+            snapshot.encoding(),
+        ) {
+            return Ok(report(items, params.previous_result_id.as_deref()));
         }
 
         let diagnostics = snapshot
@@ -82,6 +92,33 @@ impl BackgroundDocumentRequestHandler for DocumentDiagnosticRequestHandler {
 
         Ok(report)
     }
+}
+
+/// a report of `items`, which says they are unchanged where they hash to `previous_result_id`
+fn report(items: Vec<Diagnostic>, previous_result_id: Option<&str>) -> DocumentDiagnosticReport {
+    if items.is_empty() {
+        return RelatedFullDocumentDiagnosticReport::default().into();
+    }
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(&items)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    let result_id = format!("{:016x}", hasher.finish());
+    if previous_result_id == Some(result_id.as_str()) {
+        return RelatedUnchangedDocumentDiagnosticReport {
+            related_documents: None,
+            unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport { result_id },
+        }
+        .into();
+    }
+    RelatedFullDocumentDiagnosticReport {
+        related_documents: None,
+        full_document_diagnostic_report: FullDocumentDiagnosticReport {
+            result_id: Some(result_id),
+            items,
+        },
+    }
+    .into()
 }
 
 impl RetriableRequestHandler for DocumentDiagnosticRequestHandler {

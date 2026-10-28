@@ -1,12 +1,17 @@
-//! a project's `api.lock` over the wire: `by/apiLock`
+//! a project's `api.lock` over the wire: `by/apiLock`, the diagnostic on a stale lockfile and
+//! the quick fix that regenerates it
 
 use anyhow::Result;
 use lsp_server::ErrorCode;
-use lsp_types::{LspRequestMethod, MessageDirection, Request};
+use lsp_types::{
+    CodeActionRequest, Diagnostic, DocumentDiagnosticReport, LanguageKind, LspRequestMethod,
+    MessageDirection, Position, Range, Request, TextDocumentContentChangeEvent,
+    TextDocumentContentChangeWholeDocument,
+};
 use ruff_db::system::SystemPath;
 use serde_json::{Value, json};
 
-use crate::{AwaitResponseError, TestServerBuilder};
+use crate::{AwaitResponseError, TestServer, TestServerBuilder};
 
 enum ApiLock {}
 
@@ -121,5 +126,143 @@ fn a_python_the_lockfile_names_that_by_cannot_read_fails_the_request() -> Result
         }
         other => panic!("expected the request to fail, got {other:?}"),
     }
+    Ok(())
+}
+
+/// a lockfile that is there but is not utf-8 is not one the project lacks
+#[test]
+fn a_lockfile_that_cannot_be_read_fails_the_request() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X = 1\n")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    std::fs::write(
+        server.file_path("project/api.lock").as_std_path(),
+        b"#api-lock:v=1\n#python:3.10\n\xff\n",
+    )?;
+    let id = server.send_request::<ApiLock>(json!({}));
+    match server.try_await_response::<ApiLock>(&id, None) {
+        Err(AwaitResponseError::RequestFailed(error)) => {
+            assert_eq!(error.code, ErrorCode::RequestFailed as i32);
+            assert!(
+                error.message.contains("cannot be read"),
+                "{}",
+                error.message
+            );
+        }
+        other => panic!("expected the request to fail, got {other:?}"),
+    }
+    Ok(())
+}
+
+/// the python a lockfile names is what it is checked for, so one `by` cannot read is reported
+/// where it is named
+#[test]
+fn a_python_the_lockfile_names_that_by_cannot_read_is_reported_on_its_header() -> Result<()> {
+    let lock = "#api-lock:v=1\n#python:three\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    let reported = diagnostics(&mut server, "project/api.lock");
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(
+        reported[0].range,
+        Range::new(Position::new(1, 0), Position::new(1, 13))
+    );
+    assert_eq!(
+        reported[0].code,
+        Some(lsp_types::Code::String("unreadable-api-lock".to_string()))
+    );
+    Ok(())
+}
+
+fn diagnostics(server: &mut TestServer, path: &str) -> Vec<Diagnostic> {
+    match server.document_diagnostic_request(path, None) {
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) => {
+            report.full_document_diagnostic_report.items
+        }
+        DocumentDiagnosticReport::RelatedUnchangedDocumentDiagnosticReport(_) => {
+            panic!("asked without a previous result, the report is full")
+        }
+    }
+}
+
+fn replace(server: &mut TestServer, path: &str, text: &str, version: i32) {
+    server.change_text_document(
+        path,
+        vec![
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: text.to_string(),
+                },
+            ),
+        ],
+        version,
+    );
+}
+
+/// an unsaved edit to a module the lockfile describes makes it stale, at the record that
+/// changed, and the quick fix rewrites it as the server generates it
+#[test]
+fn an_unsaved_edit_makes_the_lockfile_stale_until_it_is_regenerated() -> Result<()> {
+    let lock =
+        "#api-lock:v=1\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X: int = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    assert_eq!(diagnostics(&mut server, "project/api.lock"), vec![]);
+
+    server.open_text_document("project/main.py", "X: int = 1\n", 1);
+    replace(&mut server, "project/main.py", "X: str = \"\"\n", 2);
+    let stale = diagnostics(&mut server, "project/api.lock");
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!(
+        stale[0].range,
+        Range::new(Position::new(4, 0), Position::new(4, 21))
+    );
+    assert_eq!(
+        stale[0].code,
+        Some(lsp_types::Code::String("stale-api-lock".to_string()))
+    );
+
+    let actions = server.send_request_await::<CodeActionRequest>(lsp_types::CodeActionParams {
+        text_document: lsp_types::TextDocumentIdentifier {
+            uri: server.file_uri("project/api.lock"),
+        },
+        range: stale[0].range,
+        context: lsp_types::CodeActionContext {
+            diagnostics: stale,
+            only: Some(vec![lsp_types::CodeActionKind::QuickFix]),
+            trigger_kind: None,
+        },
+        work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+        partial_result_params: lsp_types::PartialResultParams::default(),
+    });
+    let actions = serde_json::to_value(actions)?;
+    assert_eq!(actions[0]["title"], "Regenerate api.lock");
+    let edits = &actions[0]["edit"]["changes"][server.file_uri("project/api.lock").as_str()];
+    assert_eq!(
+        edits[0]["range"],
+        json!({"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 0}})
+    );
+    let regenerated = edits[0]["newText"].as_str().unwrap_or_default().to_string();
+    assert!(
+        regenerated.ends_with("\nmain.X:v=builtins.str\n"),
+        "{regenerated}"
+    );
+
+    replace(&mut server, "project/api.lock", &regenerated, 2);
+    assert_eq!(diagnostics(&mut server, "project/api.lock"), vec![]);
     Ok(())
 }

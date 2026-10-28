@@ -48,8 +48,16 @@ it in step without running the command
     it answers `null` without a project, and fails where the project's
     `api.lock` cannot be read, not being utf-8 among other reasons, or names a
     python version `by` cannot read
+- an `api.lock` the editor opens in the server, whatever language it calls it,
+    is answered when it pulls diagnostics for it (`textDocument/diagnostic`):
+    where it is stale, one warning, `stale-api-lock`, on the first line that
+    differs. the server says that diagnostics depend on other files, so an
+    editor asks again after an edit anywhere
+- `textDocument/codeAction` answers that diagnostic with the quick fix
+    *Regenerate api.lock*, an edit rewriting the whole file as the server
+    generates it
 
-the lockfile is generated for the target the project's `api.lock`
+in each, the lockfile is generated for the target the project's `api.lock`
 names, `#python:3.10` for one written by
 `by generate-api-file --python-version 3.10`, so a lockfile kept for the lowest
 python a library supports is checked and regenerated for that python; with no
