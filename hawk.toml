@@ -120,14 +120,6 @@ reason = "public line-ending settings documentation links to this representation
 
 [[override]]
 lint = "hawk::unnecessary_public"
-crate = "ruff_linter"
-item = "settings::TargetVersion::linter_version"
-kind = "inherent_method"
-level = "expect"
-reason = "preserves the public parser and linter target-version accessor pair"
-
-[[override]]
-lint = "hawk::unnecessary_public"
 crate = "ruff_python_parser"
 item = "Parsed::<T>::has_no_syntax_errors"
 kind = "inherent_method"
@@ -608,7 +600,7 @@ level = "expect"
 reason = "flat and hierarchical symbol collections intentionally share collection APIs"
 
 [[override]]
-lint = "hawk::dead_public"
+lint = "hawk::unnecessary_public"
 crate = "ty_ide"
 item = "symbols::HierarchicalSymbols::get"
 kind = "inherent_method"
