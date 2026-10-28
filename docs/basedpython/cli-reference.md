@@ -14,6 +14,7 @@ in addition to the cli provided by `ty`, `by` includes:
 | command             | what it does                                                       |
 | ------------------- | ------------------------------------------------------------------ |
 | `run`               | transpile and run a module with `python -m <module>`               |
+| `init`              | start a project, or set up git's merges of one                     |
 | `repl`              | an interactive session in basedpython                              |
 | `build`             | transpile every `.by`/`.byi` file and write to `build/`            |
 | `compile`           | compile `.by` files to native CPython extension modules            |
@@ -430,6 +431,46 @@ by generate-api-file --project lib         # the lockfile of the project in lib,
 
 see [api-lock](features/api-lock.md) for the lockfile format and workflow, and
 for what the language server says about a stale lockfile
+
+## `by init`
+
+```sh
+by init my-app                      # a new application in my-app/
+by init my-library --lib            # a new library
+by init --git-merge                 # set up git's merges of the project here
+by init my-app --no-git-merge       # a new project, and leave git as it is
+```
+
+writes a new project: see [packaging](packaging.md#starting-from-scratch). it
+will not write over a `pyproject.toml` that is already there
+
+in a git work tree it also sets up git's merges of the project, with
+[`by merge-driver`](#by-merge-driver) as the merge driver for its python and
+basedpython files and its `api.lock`. on a terminal it asks;
+`--git-merge` sets them up and `--no-git-merge` does not, and without a terminal
+or either flag they are left as they are. `--git-merge` works in a project that is
+already there too, and writes nothing else. what it sets up:
+
+- in the project's `.gitattributes`, `*.by`, `*.byi`, `*.py`, `*.pyi` and
+    `api.lock` with `merge=by`, after whatever lines are there and in their line
+    ending, for each pattern git does not already merge with the driver. commit
+    it: every clone then merges with it. a `.gitattributes` that is there but
+    cannot be read is not written, and nothing is set up
+- in the repository's own git configuration, `merge.by.name` and
+    `merge.by.driver`: `'/path/to/by' merge-driver %O %A %B %L %P %S %X %Y`. the
+    configuration is not committed, so each clone sets it up again. a linked
+    work tree shares its repository's
+
+the driver names the `by` that set it up by the absolute path it was run as: an
+editor's git runs a merge driver without the project's environment on `PATH`, so a
+bare `by` would not be found there. the path is the one it was run by, not where
+its links lead, so a virtual environment's `bin/by`, uv's `~/.local/bin/by` or a
+package manager's link keeps working through an upgrade. a driver whose `by` is
+gone is set up again by running `by init --git-merge` again; a driver whose `by`
+is there is left alone, so running it twice changes nothing
+
+an editor asks the language server the same, `by/gitMergeIntegration`
+(see [merges and diffs](features/editor.md#merges-and-diffs))
 
 ## `by merge-driver`
 

@@ -24,7 +24,7 @@ by <COMMAND>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
 <dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute the slots of a set of edited files in a build tree that already exists</p></dd>
 <dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
-<dt><a href="#by-merge-driver"><code>by merge-driver</code></a></dt><dd><p>Merge a file as git's merge driver</p></dd>
+<dt><a href="#by-merge-driver"><code>by merge-driver</code></a></dt><dd><p>Merge a file as git's merge driver, which <code>by init --git-merge</code> sets up</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
 <dt><a href="#by-help"><code>by help</code></a></dt><dd><p>Print this message or the help of the given subcommand(s)</p></dd>
@@ -324,9 +324,11 @@ by init [OPTIONS] [PATH]
 <h3 class="cli-reference">Options</h3>
 
 <dl class="cli-reference"><dt id="by-init--app"><a href="#by-init--app"><code>--app</code></a></dt><dd><p>Create an application, with an entry point <code>by run</code> uses. The default</p>
+</dd><dt id="by-init--git-merge"><a href="#by-init--git-merge"><code>--git-merge</code></a></dt><dd><p>Set up git's merges of the project, a new one or one already there: <code>by merge-driver</code> as the merge driver for its python and basedpython files and its <code>api.lock</code>, in its <code>.gitattributes</code> and the repository's git configuration. Asked on a terminal without this or <code>--no-git-merge</code></p>
 </dd><dt id="by-init--help"><a href="#by-init--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd><dt id="by-init--lib"><a href="#by-init--lib"><code>--lib</code></a></dt><dd><p>Create a library: no entry point, the same packaging</p>
 </dd><dt id="by-init--name"><a href="#by-init--name"><code>--name</code></a> <i>name</i></dt><dd><p>The project's name [default: the directory's name]</p>
+</dd><dt id="by-init--no-git-merge"><a href="#by-init--no-git-merge"><code>--no-git-merge</code></a></dt><dd><p>Leave git's merges of the project as they are</p>
 </dd><dt id="by-init--python-version"><a href="#by-init--python-version"><code>--python-version</code></a> <i>version</i></dt><dd><p>The python version to target [default: the version of the project environment's interpreter]</p>
 </dd></dl>
 
@@ -435,7 +437,7 @@ by compile [OPTIONS] [FILE]...
 
 ## by merge-driver
 
-Merge a file as git's merge driver.
+Merge a file as git's merge driver, which `by init --git-merge` sets up.
 
 git runs it for each python, basedpython or `api.lock` file both sides of a merge changed, as `by merge-driver %O %A %B %L %P %S %X %Y`. It merges lines as git does, resolves the conflicts whose sides change different things, and adds or drops the imports the merged code needs. `api.lock` is generated, so a merge that changed it on both sides is left conflicted, with how to generate it again.
 

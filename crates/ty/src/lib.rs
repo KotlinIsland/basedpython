@@ -173,6 +173,8 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             lib,
             app: _,
             python_version,
+            git_merge,
+            no_git_merge,
         } => {
             let kind = if lib {
                 by_init::ProjectKind::Library
@@ -181,7 +183,12 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             };
             let version = python_version
                 .unwrap_or_else(|| by_commands::default_project_python_version().to_string());
-            by_init::cmd_init(path.as_deref(), name.as_deref(), kind, &version)
+            let git_merge = match (git_merge, no_git_merge) {
+                (true, _) => by_init::GitMerge::Enable,
+                (_, true) => by_init::GitMerge::Skip,
+                _ => by_init::GitMerge::Ask,
+            };
+            by_init::cmd_init(path.as_deref(), name.as_deref(), kind, &version, git_merge)
         }
         Command::Restage {
             build_directory,

@@ -5073,6 +5073,7 @@ dependencies = [
  "ruff_python_formatter",
  "ruff_python_trivia",
  "ruff_ranged_value",
+ "ruff_source_file",
  "ruff_text_size",
  "rustc-hash",
  "salsa",

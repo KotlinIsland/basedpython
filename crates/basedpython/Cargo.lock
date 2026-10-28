@@ -3814,6 +3814,7 @@ dependencies = [
  "ruff_options_metadata",
  "ruff_python_ast",
  "ruff_ranged_value",
+ "ruff_source_file",
  "ruff_text_size",
  "rustc-hash",
  "salsa",
