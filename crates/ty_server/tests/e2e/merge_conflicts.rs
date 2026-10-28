@@ -131,10 +131,11 @@ fn a_clean_merge_that_dropped_a_needed_import_is_answered_with_the_edit_adding_i
         "merged": "import os\n\nA = os\nC = json\n",
         "uri": uri,
     }));
-    let range = json!({"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}});
+    // where isort sorts it among the imports there are, which are left as they are
+    let start = json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}});
     assert_eq!(
         answer,
-        json!({"edits": [{"range": range, "newText": "import json\nimport os\n"}], "choice": null})
+        json!({"edits": [{"range": start, "newText": "import json\n"}], "choice": null})
     );
     Ok(())
 }
@@ -153,10 +154,36 @@ fn a_merge_with_a_conflict_left_open_is_answered_with_edits_outside_it() -> Resu
         "theirs": "import json\nimport os\n\nA = os\nB = json\nC = json\n\nLIMIT = 3\n",
         "merged": "import os\n\nA = os\nC = json\n\n<<<<<<< ours\nLIMIT = 2\n=======\nLIMIT = 3\n>>>>>>> theirs\n",
     }));
-    let range = json!({"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}});
+    // where isort sorts it among the imports there are, which are left as they are
+    let start = json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}});
     assert_eq!(
         answer,
-        json!({"edits": [{"range": range, "newText": "import json\nimport os\n"}], "choice": null})
+        json!({"edits": [{"range": start, "newText": "import json\n"}], "choice": null})
+    );
+    Ok(())
+}
+
+/// an import added to a module that has none left is set apart from the function after it by
+/// the two blank lines isort writes there
+#[test]
+fn an_import_added_before_a_function_is_set_apart_as_isort_sets_it() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let uri = server.file_uri("project/main.py");
+    let answer = server.send_request_await::<ReconcileMergeImports>(json!({
+        "base": "import json\n\n\ndef b():\n    return json\n\n\ndef c():\n    return 1\n",
+        "ours": "def c():\n    return 1\n",
+        "theirs": "import json\n\n\ndef b():\n    return json\n\n\ndef c():\n    return json\n",
+        "merged": "def c():\n    return json\n",
+        "uri": uri,
+    }));
+    let start = json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}});
+    assert_eq!(
+        answer,
+        json!({"edits": [{"range": start, "newText": "import json\n\n\n"}], "choice": null})
     );
     Ok(())
 }
@@ -168,8 +195,8 @@ fn a_name_imported_from_two_places_is_answered_with_the_choice() -> Result<()> {
         .build()
         .wait_until_workspaces_are_initialized();
     let answer = server.send_request_await::<ReconcileMergeImports>(json!({
-        "base": "from a import x\n\nY = x\n",
-        "ours": "Y = x\n",
+        "base": "from c import x\n\nY = x\n",
+        "ours": "from a import x\n\nY = x\n",
         "theirs": "from b import x\n\nY = x\n",
         "merged": "Y = x\n",
     }));
@@ -180,8 +207,8 @@ fn a_name_imported_from_two_places_is_answered_with_the_choice() -> Result<()> {
             "choice": {
                 "name": "x",
                 "imports": [
-                    {"version": "ours", "statements": []},
-                    {"version": "base", "statements": ["from a import x"]},
+                    {"version": "ours", "statements": ["from a import x"]},
+                    {"version": "base", "statements": ["from c import x"]},
                     {"version": "theirs", "statements": ["from b import x"]},
                 ],
                 "position": {"line": 0, "character": 0},

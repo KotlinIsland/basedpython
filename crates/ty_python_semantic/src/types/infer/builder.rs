@@ -14816,13 +14816,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// basedpython: records a read the semantic index has no record of — one that reads every
     /// binding a scope makes rather than the bindings live at the reading expression. a name in
-    /// an annotation is evaluated lazily, and a name declared `global` is read from the module.
-    /// a nested scope's read of an enclosing one is not among them: the index records that
-    /// itself
+    /// an annotation is evaluated lazily, one in a python file's quoted annotation among them,
+    /// and a name declared `global` is read from the module. a nested scope's read of an
+    /// enclosing one is not among them: the index records that itself
+    ///
+    /// recorded in every file, python's too: whether an import is read is asked of any file by
+    /// [`crate::unread_imports`]
     fn record_whole_scope_read(&self, source: &PlaceLoadSourceKind<'db>) {
-        if !self.is_basedpython_file() {
-            return;
-        }
         let db = self.db();
         match source {
             PlaceLoadSourceKind::Bindings(bindings) if self.is_deferred() => {

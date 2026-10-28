@@ -509,15 +509,16 @@ for a `.by`, `.byi`, `.py` or `.pyi` file it
     `by/reconcileMergeImports` does. a line merge can be clean and still leave a
     file reading a name it no longer imports: ours removes `import json` with the
     last function reading it, theirs adds another reading it. the import is added
-    back, and an import a side removed that nothing mentions is dropped. with
+    back, and an import a side removed that nothing reads is dropped. with
     conflicts left, it does that outside them, with what either side of each
     reads, so that whatever you choose in a conflict has its imports. where the
     versions import one name from different places, the imports of it become a
     conflict, `by` says why on stderr, and the file is left for you
 
 it exits 0 only when nothing is left to resolve. a conflict it does not resolve is
-left as git writes it, so with nothing resolved the file is exactly what `git merge`
-alone would have written. the options `git merge -X` takes are not passed to a
+left as git writes it, in the repository's conflict style, whatever it resolved
+beside it, so with nothing resolved the file is exactly what `git merge` alone
+would have written. the options `git merge -X` takes are not passed to a
 merge driver
 
 `api.lock` is generated from the source (see [api-lock](features/api-lock.md)).

@@ -274,7 +274,7 @@ mod typevar;
 pub(crate) mod underscore_names;
 mod unpacker;
 mod unsafe_union;
-mod unused_imports;
+pub(crate) mod unused_imports;
 mod variance;
 pub(crate) mod visibility;
 mod visitor;
@@ -287,6 +287,23 @@ pub(crate) mod subscript;
 
 pub fn check_types(db: &dyn Db, file: ProgramFile<'_>) -> Vec<Diagnostic> {
     check_types_with(db, file, Vec::new()).0
+}
+
+/// basedpython: the imports of `file` that nothing reads, decided as `unused-import` decides it
+/// for a `.by` file, but for a file of any kind and whatever rules are selected
+pub fn unread_imports(db: &dyn Db, file: ProgramFile<'_>) -> Vec<unused_imports::UnreadImport> {
+    let inferred = inferred_diagnostics(db, file);
+    unused_imports::unread_imports(db, file, &inferred)
+}
+
+/// basedpython: the edits that remove `imports`, some of what [`unread_imports`] answered for
+/// `file`, as the fix of `unused-import` removes them, sorted and without overlaps
+pub fn unread_import_removals(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    imports: &[unused_imports::UnreadImport],
+) -> Vec<ruff_diagnostics::Edit> {
+    unused_imports::unread_import_removals(db, file, imports)
 }
 
 /// [`check_types`], with lint diagnostics worked out elsewhere folded in, and the range of
@@ -306,6 +323,47 @@ pub(crate) fn check_types_with(
     let start = Instant::now();
 
     let index = semantic_index(db, file);
+    let mut diagnostics = inferred_diagnostics(db, file);
+
+    // basedpython: whether a name a lowering writes into code holds there the binding the
+    // checker resolved is asked once the file is inferred
+    for checks in runtime_reads::file_runtime_read_checks(db, file) {
+        diagnostics.extend(&checks.diagnostics);
+    }
+
+    // basedpython: an import may be used only through an extension it makes applicable,
+    // which only the whole file's inference knows
+    let mut unused_imports = TypeCheckDiagnostics::default();
+    unused_imports::report_unused_imports(db, file, &diagnostics, &mut unused_imports);
+    diagnostics.extend(&unused_imports);
+
+    diagnostics.extend_diagnostics(
+        index
+            .semantic_syntax_errors()
+            .iter()
+            .map(|error| Diagnostic::invalid_syntax(source_file, error, error)),
+    );
+
+    report_external(db, source_file, external, &mut diagnostics);
+
+    let template_literal_types = diagnostics.template_literal_types().to_vec();
+    let diagnostics = check_suppressions(db, file.python_file(db), diagnostics);
+
+    let elapsed = start.elapsed();
+    if elapsed >= Duration::from_millis(100) {
+        tracing::info!(
+            "Checking file `{path}` took more than 100ms ({elapsed:?})",
+            path = source_file.path(db)
+        );
+    }
+
+    (diagnostics, template_literal_types)
+}
+
+/// the diagnostics of `file`'s inference, every scope's and every implicit alias's, before
+/// anything worked out from the whole of them is added
+fn inferred_diagnostics(db: &dyn Db, file: ProgramFile<'_>) -> TypeCheckDiagnostics {
+    let source_file = file.file(db);
     let mut diagnostics = TypeCheckDiagnostics::default();
     let mut implicit_aliases = Vec::new();
 
@@ -351,40 +409,7 @@ pub(crate) fn check_types_with(
         );
         implicit_aliases.extend_from_slice(&inference.implicit_aliases);
     }
-
-    // basedpython: whether a name a lowering writes into code holds there the binding the
-    // checker resolved is asked once the file is inferred
-    for checks in runtime_reads::file_runtime_read_checks(db, file) {
-        diagnostics.extend(&checks.diagnostics);
-    }
-
-    // basedpython: an import may be used only through an extension it makes applicable,
-    // which only the whole file's inference knows
-    let mut unused_imports = TypeCheckDiagnostics::default();
-    unused_imports::report_unused_imports(db, file, &diagnostics, &mut unused_imports);
-    diagnostics.extend(&unused_imports);
-
-    diagnostics.extend_diagnostics(
-        index
-            .semantic_syntax_errors()
-            .iter()
-            .map(|error| Diagnostic::invalid_syntax(source_file, error, error)),
-    );
-
-    report_external(db, source_file, external, &mut diagnostics);
-
-    let template_literal_types = diagnostics.template_literal_types().to_vec();
-    let diagnostics = check_suppressions(db, file.python_file(db), diagnostics);
-
-    let elapsed = start.elapsed();
-    if elapsed >= Duration::from_millis(100) {
-        tracing::info!(
-            "Checking file `{path}` took more than 100ms ({elapsed:?})",
-            path = source_file.path(db)
-        );
-    }
-
-    (diagnostics, template_literal_types)
+    diagnostics
 }
 
 /// Apply `file`'s suppression comments to diagnostics computed outside this crate.

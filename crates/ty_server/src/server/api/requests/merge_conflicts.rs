@@ -7,15 +7,18 @@
 //! see [`ty_ide::resolve_file_merge_conflicts`], [`ty_ide::reconcile_file_merge_imports`] and
 //! [`ty_ide::diff_ignored_ranges`] for what is answered
 
+use std::num::NonZeroUsize;
+
 use lsp_types::{LspRequestMethod, MessageDirection, Position, Range, Request, TextEdit, Uri};
-use ruff_db::system::SystemPathBuf;
+use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_python_ast::PySourceType;
 use ruff_source_file::LineIndex;
 use ruff_text_size::TextRange;
 use ty_ide::{
-    ConflictLines, MergeTexts, MergeVersion, ReconciledImports, diff_ignored_ranges,
+    ConflictLines, MergeReader, MergeTexts, MergeVersion, ReconciledImports, diff_ignored_ranges,
     reconcile_file_merge_imports, resolve_file_merge_conflicts,
 };
+use ty_project::Db as _;
 
 use crate::PositionEncoding;
 use crate::document::text_range_to_lsp_range;
@@ -149,13 +152,13 @@ pub(crate) struct ReconcileMergeImportsParams {
     merged: String,
     /// the size of the conflict markers in `merged`, git's 7 by default
     #[serde(default = "default_marker_size")]
-    marker_size: usize,
+    marker_size: NonZeroUsize,
     #[serde(default)]
     uri: Option<Uri>,
 }
 
-const fn default_marker_size() -> usize {
-    7
+const fn default_marker_size() -> NonZeroUsize {
+    NonZeroUsize::MIN.saturating_add(6)
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -227,6 +230,24 @@ impl BackgroundRequestHandler for ReconcileMergeImportsHandler {
                 choice: None,
             });
         };
+        let source_type = path
+            .as_deref()
+            .and_then(SystemPath::extension)
+            .and_then(PySourceType::try_from_extension)
+            .unwrap_or_default();
+        // the merged file read as a file of the project on disk, which git merges
+        let root = db.project().root(db);
+        let Some(mut reader) = MergeReader::new(
+            db.project().metadata(db).clone(),
+            OsSystem::new(root),
+            path.as_deref(),
+            source_type,
+        ) else {
+            return Ok(ReconciledMergeImports {
+                edits: Vec::new(),
+                choice: None,
+            });
+        };
         let texts = MergeTexts {
             base: &params.base,
             ours: &params.ours,
@@ -237,13 +258,7 @@ impl BackgroundRequestHandler for ReconcileMergeImportsHandler {
         let encoding: PositionEncoding = snapshot.position_encoding();
         let range = |range: TextRange| text_range_to_lsp_range(range, merged, &index, encoding);
         Ok(
-            match reconcile_file_merge_imports(
-                db,
-                path.as_deref(),
-                texts,
-                merged,
-                params.marker_size,
-            ) {
+            match reconcile_file_merge_imports(&mut reader, texts, merged, params.marker_size) {
                 ReconciledImports::Edits(edits) => ReconciledMergeImports {
                     edits: edits
                         .into_iter()

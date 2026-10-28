@@ -76,12 +76,14 @@ pub use types::reified_infer::{
 pub use types::runtime_spelling::RuntimeSpelling;
 pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};
 pub use types::template::finite_string_set;
+pub use types::unused_imports::UnreadImport;
 pub use types::visibility::private_symbols;
 pub use types::{
     AnonNamedTupleClass, AnonNamedTupleId, CollectedTest, CollectedTestClass, DisplaySettings,
     FixtureBinding, FixtureExposure, FixtureNameSource, ProgramEnvironment, PytestTest,
     TypeQualifiers, collected_pytest_tests, fixture_bindings_for_parameter,
     fixture_exposures_for_definition, pytest_global_plugin_files, pytest_tests_in_file,
+    unread_import_removals, unread_imports,
 };
 
 pub mod api_lockfile;
