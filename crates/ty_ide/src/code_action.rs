@@ -2,7 +2,9 @@ use crate::add_dependency;
 use crate::add_dependency::AddDependency;
 use crate::completion;
 use crate::django_template::django_template_code_actions;
+use crate::import_order;
 
+use ruff_db::diagnostic::{AddedImport, Diagnostic};
 use ruff_db::system::SystemPathBuf;
 use ruff_db::{files::File, parsed::parsed_module};
 use ruff_diagnostics::Edit;
@@ -119,6 +121,31 @@ pub fn code_actions(
     ));
 
     actions
+}
+
+/// the edits of `diagnostic`'s fix, a diagnostic of `file`, with each import the fix adds placed
+/// where buff's isort configuration sorts it, as the editor's other quick fixes place theirs
+///
+/// the type checker builds the fix without reading that configuration, which would make what it
+/// reports about a file depend on files it doesn't track, so it adds an import where a statement
+/// goes when nothing sorts imports. the diagnostic records what each of those imports imports,
+/// and they are placed again here, for the file as it is now
+pub fn fix_edits(db: &dyn Db, file: ProgramFile<'_>, diagnostic: &Diagnostic) -> Option<Vec<Edit>> {
+    let fix = diagnostic.fix()?;
+    let imports = diagnostic.fix_imports();
+    if imports.is_empty() {
+        return Some(fix.edits().to_vec());
+    }
+    let mut edits: Vec<Edit> = fix
+        .edits()
+        .iter()
+        .filter(|edit| !imports.iter().any(|import| import.edit == **edit))
+        .cloned()
+        .collect();
+    let added: Vec<AddedImport> = imports.iter().map(|import| import.import.clone()).collect();
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+    edits.extend(import_order::importer(db, file, &parsed).placed_edits(&added));
+    Some(edits)
 }
 
 fn unresolved_fixes(

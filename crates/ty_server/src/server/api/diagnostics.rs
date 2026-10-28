@@ -10,7 +10,7 @@ use lsp_types::{
 use ruff_diagnostics::Applicability;
 use ruff_text_size::Ranged;
 use rustc_hash::{FxHashMap, FxHashSet};
-use ty_ide::{Hint, django_template_diagnostics, hints};
+use ty_ide::{Hint, django_template_diagnostics, fix_edits, hints};
 
 use ruff_db::diagnostic::{
     Annotation, DisplayDiagnosticConfig, HyperlinkMode, Severity, SubDiagnostic,
@@ -732,7 +732,7 @@ impl DiagnosticData {
 
         let mut lsp_edits: HashMap<Uri, Vec<lsp_types::TextEdit>> = HashMap::new();
 
-        for edit in fix.edits() {
+        for edit in fix_edits(db, db.program_file(file), diagnostic)? {
             let location = edit
                 .range()
                 .to_lsp_range(db, file, encoding)?

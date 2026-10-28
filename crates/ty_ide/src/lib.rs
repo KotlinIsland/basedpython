@@ -72,7 +72,7 @@ pub use all_symbols::{AllSymbolInfo, all_symbols};
 pub use call_hierarchy::incoming_calls::{IncomingCall, incoming_calls};
 pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};
 pub use call_hierarchy::{CallHierarchyItem, prepare_call_hierarchy};
-pub use code_action::{FileEdit, QuickFix, code_actions};
+pub use code_action::{FileEdit, QuickFix, code_actions, fix_edits};
 pub use complete_statement::{CompletedStatement, StatementEdit, complete_statement};
 pub use completion::{
     AutoImportStyle, Completion, CompletionCapabilities, CompletionCommand,

@@ -239,7 +239,8 @@ statement. how imports are sorted, grouped and split is not an editor setting: i
 is the project's isort configuration, which `buff` reads and fixes
 
 an import any of these write — a completion's, an unresolved name's quick fix's, a
-pasted name's, an inlay hint's — goes where `buff check --select I --fix` would put
+pasted name's, an inlay hint's, or that of a quick fix the type checker offers with a
+diagnostic, such as the `typing` import of `reveal_type` — goes where `buff check --select I --fix` would put
 it, so adding one never leaves the block unsorted. it joins its section of the file's first block of
 imports (future, standard library, third party, first party, local, or the
 sections the configuration defines) in the order isort sorts that section, with a

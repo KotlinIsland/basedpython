@@ -42,7 +42,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "from typing import reveal_type\n"
+            "newText": "from typing import reveal_type\n\n"
           }
         ]
       }

@@ -613,3 +613,92 @@ force-sort-within-sections = true
 
     Ok(())
 }
+
+/// `content` with the quick fix of its `undefined-reveal` diagnostic applied, in a project whose
+/// isort configuration is `isort`
+fn reveal_type_fix_applied(isort: &str, content: &str) -> Result<String> {
+    let main = SystemPath::new("main.py");
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new(""), None)?
+        .with_file(
+            "pyproject.toml",
+            format!(
+                "\
+[project]
+name = \"shop\"
+version = \"0\"
+requires-python = \">=3.11\"
+
+[tool.ruff.lint.isort]
+{isort}
+"
+            ),
+        )?
+        .with_file(main, content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, content, 1);
+    let diagnostics = server.document_diagnostic_request(main, None);
+    let code_action_params = code_actions_at(&server, diagnostics, main, full_range(content));
+    let code_actions = server
+        .send_request_await::<CodeActionRequest>(code_action_params)
+        .unwrap_or_default();
+    Ok(applied(
+        &code_actions,
+        "Import `reveal_type` from `typing`",
+        content,
+    ))
+}
+
+/// the import of a quick fix the type checker builds with a diagnostic goes where buff's isort
+/// configuration sorts it, as the import of the editor's other quick fixes does
+#[test]
+fn a_diagnostic_fix_adds_its_import_statement_where_isort_sorts_it() -> Result<()> {
+    insta::assert_snapshot!(reveal_type_fix_applied("", "\
+import json
+import sys
+
+reveal_type(json, sys)
+")?, @"
+    import json
+    import sys
+    from typing import reveal_type
+
+    reveal_type(json, sys)
+    ");
+    Ok(())
+}
+
+#[test]
+fn a_diagnostic_fix_adds_its_member_where_isort_sorts_it() -> Result<()> {
+    insta::assert_snapshot!(reveal_type_fix_applied("", "\
+from typing import overload, runtime_checkable
+
+reveal_type(overload, runtime_checkable)
+")?, @"
+    from typing import overload, reveal_type, runtime_checkable
+
+    reveal_type(overload, runtime_checkable)
+    ");
+    Ok(())
+}
+
+/// under `force-single-line`, the member a fix adds to a module the file already imports from
+/// is a `from` import of its own
+#[test]
+fn a_diagnostic_fix_adds_a_member_isort_writes_alone_as_a_statement() -> Result<()> {
+    insta::assert_snapshot!(reveal_type_fix_applied("force-single-line = true", "\
+from typing import overload
+from typing import runtime_checkable
+
+reveal_type(overload, runtime_checkable)
+")?, @"
+    from typing import overload
+    from typing import reveal_type
+    from typing import runtime_checkable
+
+    reveal_type(overload, runtime_checkable)
+    ");
+    Ok(())
+}

@@ -4744,13 +4744,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             subscript.value.start(),
                         ) {
                             diag.help("Replace `LiteralString` with `Literal`");
-                            diag.set_fix(Fix::unsafe_edits(
-                                Edit::range_replacement(
-                                    action.symbol_text().to_string(),
-                                    subscript.value.range(),
+                            diag.set_fix_adding_imports(
+                                Fix::unsafe_edits(
+                                    Edit::range_replacement(
+                                        action.symbol_text().to_string(),
+                                        subscript.value.range(),
+                                    ),
+                                    action.import().cloned(),
                                 ),
-                                action.import().cloned(),
-                            ));
+                                action.fix_import(),
+                            );
                         }
                     }
                 }

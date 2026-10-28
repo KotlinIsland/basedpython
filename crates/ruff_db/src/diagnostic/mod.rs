@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::{borrow::Cow, path::Path, sync::Arc};
 
-use ruff_diagnostics::{Applicability, Fix};
+use ruff_diagnostics::{Applicability, Edit, Fix};
 use ruff_source_file::{LineColumn, SourceCode, SourceFile};
 
 use annotate_snippets::Level as AnnotateLevel;
@@ -71,6 +71,7 @@ impl Diagnostic {
             annotations: vec![],
             subs: vec![],
             fix: None,
+            fix_imports: Vec::new(),
             parent: None,
             noqa_offset: None,
             secondary_code: None,
@@ -380,11 +381,34 @@ impl Diagnostic {
 
     /// Set the fix for this diagnostic.
     pub fn set_fix(&mut self, fix: Fix) {
+        self.set_fix_adding_imports(fix, []);
+    }
+
+    /// set the fix for this diagnostic, with what each of its edits that adds an import imports
+    pub fn set_fix_adding_imports(
+        &mut self,
+        fix: Fix,
+        imports: impl IntoIterator<Item = FixImport>,
+    ) {
         debug_assert!(
             self.primary_span().is_some(),
             "Expected a source file for a diagnostic with a fix"
         );
-        Arc::make_mut(&mut self.inner).fix = Some(fix);
+        let inner = Arc::make_mut(&mut self.inner);
+        inner.fix_imports = imports.into_iter().collect();
+        debug_assert!(
+            inner
+                .fix_imports
+                .iter()
+                .all(|import| fix.edits().contains(&import.edit)),
+            "an import's edit is one of the fix's edits"
+        );
+        inner.fix = Some(fix);
+    }
+
+    /// the imports the edits of this diagnostic's fix add
+    pub fn fix_imports(&self) -> &[FixImport] {
+        &self.inner.fix_imports
     }
 
     /// If `fix` is `Some`, set the fix for this diagnostic.
@@ -396,7 +420,9 @@ impl Diagnostic {
 
     /// Remove the fix for this diagnostic.
     pub fn remove_fix(&mut self) {
-        Arc::make_mut(&mut self.inner).fix = None;
+        let inner = Arc::make_mut(&mut self.inner);
+        inner.fix = None;
+        inner.fix_imports.clear();
     }
 
     /// Returns `true` if the diagnostic has a fix that applies at the configured applicability
@@ -568,6 +594,7 @@ struct DiagnosticInner {
     annotations: Vec<Annotation>,
     subs: Vec<SubDiagnostic>,
     fix: Option<Fix>,
+    fix_imports: Vec<FixImport>,
     parent: Option<TextSize>,
     noqa_offset: Option<TextSize>,
     secondary_code: Option<SecondaryCode>,
@@ -639,6 +666,39 @@ impl PartialEq for RenderingSortKey<'_> {
 }
 
 impl Eq for RenderingSortKey<'_> {}
+
+/// an edit of a diagnostic's fix that adds an import, and what it imports
+///
+/// the edit adds the import where a tool that doesn't sort imports puts it. what it imports lets
+/// a tool that does sort them add it where its sorter would instead
+#[derive(Debug, Clone, Eq, PartialEq, Hash, get_size2::GetSize)]
+pub struct FixImport {
+    pub edit: Edit,
+    pub import: AddedImport,
+}
+
+/// an import added to a file, by what it imports rather than where
+#[derive(Debug, Clone, Eq, PartialEq, Hash, get_size2::GetSize)]
+pub enum AddedImport {
+    /// a new import statement: `import module as asname`, or `from module import member as
+    /// asname`, `level` dots up
+    Statement {
+        module: Option<String>,
+        level: u32,
+        member: Option<String>,
+        asname: Option<String>,
+        /// where what is imported has to be available
+        at: TextSize,
+    },
+    /// a member listed by the existing `from` import starting at `import`
+    Member {
+        import: TextSize,
+        member: String,
+        asname: Option<String>,
+        /// where what is imported has to be available
+        at: TextSize,
+    },
+}
 
 /// A collection of information subservient to a diagnostic.
 ///
