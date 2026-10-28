@@ -1,18 +1,23 @@
-//! `by/resolveMergeConflicts` and `by/diffIgnoredRanges`: what an editor's merge and diff tools
-//! ask a language about the texts they compare
+//! `by/resolveMergeConflicts`, `by/reconcileMergeImports` and `by/diffIgnoredRanges`: what an
+//! editor's merge and diff tools ask a language about the texts they compare
 //!
-//! both take texts rather than documents: a merge's base, ours and theirs, and a diff's two sides,
+//! each takes texts rather than documents: a merge's base, ours and theirs, and a diff's two sides,
 //! are versions no file on disk holds. a `uri`, where one is given, names the file the texts are
 //! versions of, which says how they are parsed and which isort configuration sorts their imports.
-//! see [`ty_ide::resolve_file_merge_conflicts`] and [`ty_ide::diff_ignored_ranges`] for what is
-//! answered
+//! see [`ty_ide::resolve_file_merge_conflicts`], [`ty_ide::reconcile_file_merge_imports`] and
+//! [`ty_ide::diff_ignored_ranges`] for what is answered
 
-use lsp_types::{LspRequestMethod, MessageDirection, Range, Request, Uri};
+use lsp_types::{LspRequestMethod, MessageDirection, Position, Range, Request, TextEdit, Uri};
 use ruff_db::system::SystemPathBuf;
 use ruff_python_ast::PySourceType;
 use ruff_source_file::LineIndex;
-use ty_ide::{ConflictLines, MergeTexts, diff_ignored_ranges, resolve_file_merge_conflicts};
+use ruff_text_size::TextRange;
+use ty_ide::{
+    ConflictLines, MergeTexts, MergeVersion, ReconciledImports, diff_ignored_ranges,
+    reconcile_file_merge_imports, resolve_file_merge_conflicts,
+};
 
+use crate::PositionEncoding;
 use crate::document::text_range_to_lsp_range;
 use crate::server::api::Error;
 use crate::server::api::traits::{
@@ -90,11 +95,7 @@ impl BackgroundRequestHandler for ResolveMergeConflictsHandler {
         _client: &Client,
         params: ResolveMergeConflictsParams,
     ) -> crate::server::Result<Vec<Option<String>>> {
-        let path = params
-            .uri
-            .as_ref()
-            .and_then(|uri| uri.to_file_path().ok())
-            .and_then(|path| SystemPathBuf::from_path_buf(path).ok());
+        let path = path_of(params.uri.as_ref());
         let conflicts = params
             .conflicts
             .iter()
@@ -106,17 +107,7 @@ impl BackgroundRequestHandler for ResolveMergeConflictsHandler {
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        // the project the file is in, or the first, whose configuration is read for it
-        let db = path
-            .as_ref()
-            .and_then(|path| {
-                snapshot
-                    .projects()
-                    .iter()
-                    .find(|db| path.starts_with(ty_project::Db::project(*db).root(*db)))
-            })
-            .or_else(|| snapshot.projects().first());
-        let Some(db) = db else {
+        let Some(db) = snapshot.project_for_path(path.as_deref()) else {
             return Ok(vec![None; conflicts.len()]);
         };
         Ok(resolve_file_merge_conflicts(
@@ -133,6 +124,141 @@ impl BackgroundRequestHandler for ResolveMergeConflictsHandler {
 }
 
 impl RetriableRequestHandler for ResolveMergeConflictsHandler {}
+
+fn path_of(uri: Option<&Uri>) -> Option<SystemPathBuf> {
+    uri.and_then(|uri| uri.to_file_path().ok())
+        .and_then(|path| SystemPathBuf::from_path_buf(path).ok())
+}
+
+pub(crate) enum ReconcileMergeImportsRequest {}
+
+impl Request for ReconcileMergeImportsRequest {
+    type Params = ReconcileMergeImportsParams;
+    type Result = ReconciledMergeImports;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/reconcileMergeImports");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReconcileMergeImportsParams {
+    base: String,
+    ours: String,
+    theirs: String,
+    /// the file the merge wrote, every conflict resolved
+    merged: String,
+    #[serde(default)]
+    uri: Option<Uri>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReconciledMergeImports {
+    /// the edits to `merged` that reconcile its imports, in order
+    edits: Vec<TextEdit>,
+    /// where the versions import a name from different places, which there is to choose, and
+    /// then no edits
+    choice: Option<ImportChoice>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportChoice {
+    name: String,
+    /// each version's import statements binding the name, ours, base and theirs in that order
+    imports: Vec<VersionImports>,
+    /// where in `merged` the import belongs
+    position: Position,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VersionImports {
+    version: Version,
+    statements: Vec<String>,
+}
+
+/// one of a merge's three versions, `ours`, `base` or `theirs` on the wire
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Version {
+    Ours,
+    Base,
+    Theirs,
+}
+
+impl From<MergeVersion> for Version {
+    fn from(version: MergeVersion) -> Self {
+        match version {
+            MergeVersion::Ours => Self::Ours,
+            MergeVersion::Base => Self::Base,
+            MergeVersion::Theirs => Self::Theirs,
+        }
+    }
+}
+
+pub(crate) struct ReconcileMergeImportsHandler;
+
+impl RequestHandler for ReconcileMergeImportsHandler {
+    type RequestType = ReconcileMergeImportsRequest;
+}
+
+impl BackgroundRequestHandler for ReconcileMergeImportsHandler {
+    /// no edits and no choice without a project to read the configuration of
+    fn run(
+        snapshot: &SessionSnapshot,
+        _client: &Client,
+        params: ReconcileMergeImportsParams,
+    ) -> crate::server::Result<ReconciledMergeImports> {
+        let path = path_of(params.uri.as_ref());
+        let Some(db) = snapshot.project_for_path(path.as_deref()) else {
+            return Ok(ReconciledMergeImports {
+                edits: Vec::new(),
+                choice: None,
+            });
+        };
+        let texts = MergeTexts {
+            base: &params.base,
+            ours: &params.ours,
+            theirs: &params.theirs,
+        };
+        let merged = &params.merged;
+        let index = LineIndex::from_source_text(merged);
+        let encoding: PositionEncoding = snapshot.position_encoding();
+        let range = |range: TextRange| text_range_to_lsp_range(range, merged, &index, encoding);
+        Ok(
+            match reconcile_file_merge_imports(db, path.as_deref(), texts, merged) {
+                ReconciledImports::Edits(edits) => ReconciledMergeImports {
+                    edits: edits
+                        .into_iter()
+                        .map(|edit| TextEdit {
+                            range: range(edit.range),
+                            new_text: edit.replacement,
+                        })
+                        .collect(),
+                    choice: None,
+                },
+                ReconciledImports::Refused(choice) => ReconciledMergeImports {
+                    edits: Vec::new(),
+                    choice: Some(ImportChoice {
+                        name: choice.name,
+                        imports: choice
+                            .imports
+                            .into_iter()
+                            .map(|(version, statements)| VersionImports {
+                                version: version.into(),
+                                statements,
+                            })
+                            .collect(),
+                        position: range(TextRange::empty(choice.offset)).start,
+                    }),
+                },
+            },
+        )
+    }
+}
+
+impl RetriableRequestHandler for ReconcileMergeImportsHandler {}
 
 pub(crate) enum DiffIgnoredRangesRequest {}
 

@@ -1,4 +1,5 @@
-//! `by/resolveMergeConflicts` and `by/diffIgnoredRanges` over the wire: texts in, no document
+//! `by/resolveMergeConflicts`, `by/reconcileMergeImports` and `by/diffIgnoredRanges` over the
+//! wire: texts in, no document
 
 use anyhow::Result;
 use lsp_server::ErrorCode;
@@ -14,6 +15,15 @@ impl Request for ResolveMergeConflicts {
     type Params = Value;
     type Result = Value;
     const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/resolveMergeConflicts");
+    const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
+}
+
+enum ReconcileMergeImports {}
+
+impl Request for ReconcileMergeImports {
+    type Params = Value;
+    type Result = Value;
+    const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/reconcileMergeImports");
     const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
 }
 
@@ -48,6 +58,39 @@ fn each_conflict_is_answered_with_its_resolution_or_null() -> Result<()> {
     Ok(())
 }
 
+/// a file in a project nested in another is merged as that project sorts its imports: its own
+/// packages are first-party
+#[test]
+fn a_file_of_a_nested_project_is_resolved_as_that_project_sorts_imports() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("outer"), None)?
+        .with_workspace(SystemPath::new("outer/inner"), None)?
+        .with_file(
+            SystemPath::new("outer/pyproject.toml"),
+            "[project]\nname = \"outer\"\n",
+        )?
+        .with_file(
+            SystemPath::new("outer/inner/pyproject.toml"),
+            "[project]\nname = \"inner\"\n",
+        )?
+        .with_file(SystemPath::new("outer/inner/mylib/__init__.py"), "")?
+        .with_file(SystemPath::new("outer/inner/main.py"), "")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let uri = server.file_uri("outer/inner/main.py");
+    let answer = server.send_request_await::<ResolveMergeConflicts>(json!({
+        "base": "import os\n",
+        "ours": "import os\nimport mylib\n",
+        "theirs": "import os\nimport attrs\n",
+        "conflicts": [
+            {"base": {"start": 1, "end": 1}, "ours": {"start": 1, "end": 2}, "theirs": {"start": 1, "end": 2}},
+        ],
+        "uri": uri,
+    }));
+    assert_eq!(answer, json!(["import attrs\n\nimport mylib\n"]));
+    Ok(())
+}
+
 #[test]
 fn lines_that_end_before_they_start_are_invalid_params() -> Result<()> {
     let mut server = TestServerBuilder::new()?
@@ -68,6 +111,61 @@ fn lines_that_end_before_they_start_are_invalid_params() -> Result<()> {
         }
         other => panic!("expected invalid params, got {other:?}"),
     }
+    Ok(())
+}
+
+/// ours removed the last reader of `json` and its import, theirs added another reader, and a
+/// line merge wrote the file without a conflict
+#[test]
+fn a_clean_merge_that_dropped_a_needed_import_is_answered_with_the_edit_adding_it() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.by"), "")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let uri = server.file_uri("project/main.by");
+    let answer = server.send_request_await::<ReconcileMergeImports>(json!({
+        "base": "import json\nimport os\n\nA = os\nB = json\n",
+        "ours": "import os\n\nA = os\n",
+        "theirs": "import json\nimport os\n\nA = os\nB = json\nC = json\n",
+        "merged": "import os\n\nA = os\nC = json\n",
+        "uri": uri,
+    }));
+    let range = json!({"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}});
+    assert_eq!(
+        answer,
+        json!({"edits": [{"range": range, "newText": "import json\nimport os\n"}], "choice": null})
+    );
+    Ok(())
+}
+
+#[test]
+fn a_name_imported_from_two_places_is_answered_with_the_choice() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let answer = server.send_request_await::<ReconcileMergeImports>(json!({
+        "base": "from a import x\n\nY = x\n",
+        "ours": "Y = x\n",
+        "theirs": "from b import x\n\nY = x\n",
+        "merged": "Y = x\n",
+    }));
+    assert_eq!(
+        answer,
+        json!({
+            "edits": [],
+            "choice": {
+                "name": "x",
+                "imports": [
+                    {"version": "ours", "statements": []},
+                    {"version": "base", "statements": ["from a import x"]},
+                    {"version": "theirs", "statements": ["from b import x"]},
+                ],
+                "position": {"line": 0, "character": 0},
+            },
+        })
+    );
     Ok(())
 }
 
