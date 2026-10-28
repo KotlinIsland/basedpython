@@ -9011,6 +9011,249 @@ fn init_refuses_to_write_over_a_project() {
     );
 }
 
+/// `by init --git-merge` in `dir`, with none of the configuration of the machine it runs on
+fn init_git_merge(dir: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["init", "--git-merge"])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by")
+}
+
+/// a project that is already there gets git's merges set up and nothing else, the lines its
+/// `.gitattributes` has are kept, and doing it again changes nothing
+#[test]
+fn init_sets_up_git_merges_of_a_project_already_there() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str]| {
+        let output = git_in(dir.path(), args);
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    let pyproject = "[project]\nname = \"already-here\"\nversion = \"9.9.9\"\n";
+    fs::write(dir.path().join("pyproject.toml"), pyproject).unwrap();
+    fs::write(dir.path().join(".gitattributes"), "*.png binary").unwrap();
+
+    let output = init_git_merge(dir.path());
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("pyproject.toml")).unwrap(),
+        pyproject
+    );
+    assert!(!dir.path().join("src").exists(), "nothing is scaffolded");
+    let attributes = fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
+    assert_eq!(
+        attributes,
+        "*.png binary\n# merged by `by merge-driver`: see `by init --git-merge`\n*.by merge=by\n*.byi merge=by\n*.py merge=by\n*.pyi merge=by\napi.lock merge=by\n"
+    );
+    assert_eq!(
+        git(&["config", "--get", "merge.by.driver"]),
+        format!(
+            "'{}' merge-driver %O %A %B %L %P %S %X %Y",
+            env!("CARGO_BIN_EXE_by")
+        )
+    );
+    let config = fs::read_to_string(dir.path().join(".git/config")).unwrap();
+
+    let again = init_git_merge(dir.path());
+    assert!(again.status.success(), "{again:?}");
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("already"),
+        "{again:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".gitattributes")).unwrap(),
+        attributes
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".git/config")).unwrap(),
+        config
+    );
+
+    // and git merges with it: ours removes the last reader of `json` and its import, theirs
+    // makes another function read it, and the merge imports it
+    fs::write(
+        dir.path().join("m.by"),
+        "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return 1\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["checkout", "-q", "-b", "theirs"]);
+    fs::write(
+        dir.path().join("m.by"),
+        "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n",
+    )
+    .unwrap();
+    git(&["commit", "-q", "-am", "theirs"]);
+    git(&["checkout", "-q", "main"]);
+    fs::write(
+        dir.path().join("m.by"),
+        "import os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return 1\n",
+    )
+    .unwrap();
+    git(&["commit", "-q", "-am", "ours"]);
+    git(&["merge", "-q", "--no-edit", "theirs"]);
+    assert!(
+        fs::read_to_string(dir.path().join("m.by"))
+            .unwrap()
+            .starts_with("import json\nimport os\n")
+    );
+}
+
+#[test]
+fn init_refuses_to_set_up_git_merges_outside_a_repository() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = init_git_merge(dir.path());
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("git init"),
+        "{output:?}"
+    );
+    assert!(
+        !dir.path().join("pyproject.toml").exists(),
+        "nothing is written when the setup is refused"
+    );
+}
+
+/// a git repository holding a project, for setting git's merges of it up
+fn repository_with_a_project() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for args in [
+        ["init", "-q", "-b", "main"].as_slice(),
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "test"],
+    ] {
+        let output = git_in(dir.path(), args);
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"already-here\"\nversion = \"9.9.9\"\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// a `.gitattributes` that is there but cannot be read as text is not written over: its lines
+/// would be lost
+#[test]
+fn init_leaves_a_gitattributes_it_cannot_read_alone() {
+    let dir = repository_with_a_project();
+    let attributes = b"# \xe9t\xe9\n*.png binary\n*.psd filter=lfs diff=lfs merge=lfs -text\n";
+    fs::write(dir.path().join(".gitattributes"), attributes).unwrap();
+    let output = init_git_merge(dir.path());
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(".gitattributes"),
+        "{output:?}"
+    );
+    assert_eq!(
+        fs::read(dir.path().join(".gitattributes")).unwrap(),
+        attributes
+    );
+}
+
+/// a `.gitattributes` written with `\r\n` line endings gets its new lines in them too
+#[test]
+fn init_writes_the_attributes_in_the_files_line_ending() {
+    let dir = repository_with_a_project();
+    fs::write(dir.path().join(".gitattributes"), "*.png binary\r\n").unwrap();
+    let output = init_git_merge(dir.path());
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".gitattributes")).unwrap(),
+        "*.png binary\r\n# merged by `by merge-driver`: see `by init --git-merge`\r\n*.by merge=by\r\n*.byi merge=by\r\n*.py merge=by\r\n*.pyi merge=by\r\napi.lock merge=by\r\n"
+    );
+}
+
+/// a git older than 2.44 gives a merge driver neither the labels nor the diff `by merge-driver`
+/// merges with, so nothing is set up with it
+#[cfg(unix)]
+#[test]
+fn init_refuses_to_set_up_git_merges_with_a_git_older_than_2_44() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = repository_with_a_project();
+    let bin = tempfile::tempdir().expect("tempdir");
+    let git = bin.path().join("git");
+    let real = String::from_utf8(
+        Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .expect("failed to spawn sh")
+            .stdout,
+    )
+    .unwrap();
+    fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" version \"*) echo 'git version 2.39.5'; exit 0;; esac\nexec '{}' \"$@\"\n",
+            real.trim()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("PATH", path)
+        .args(["init", "--git-merge"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("2.44"),
+        "{output:?}"
+    );
+    assert!(!dir.path().join(".gitattributes").exists());
+}
+
+/// a `by` run by a path relative to where it is run from is named by where that path leads from
+/// there, not from the project
+#[cfg(unix)]
+#[test]
+fn init_names_a_by_run_by_a_relative_path_absolutely() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("proj");
+    fs::create_dir(&project).unwrap();
+    let output = git_in(&project, &["init", "-q", "-b", "main"]);
+    assert!(output.status.success(), "{output:?}");
+    fs::create_dir(dir.path().join("bin")).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_by"), dir.path().join("bin/by")).unwrap();
+
+    let output = Command::new("bin/by")
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["init", "proj", "--git-merge"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(output.status.success(), "{output:?}");
+    let driver = git_in(&project, &["config", "--get", "merge.by.driver"]);
+    let driver = String::from_utf8_lossy(&driver.stdout);
+    // the directory `by` was run in, as the process sees it, links and all resolved
+    let by = dir.path().canonicalize().unwrap().join("bin/by");
+    assert!(
+        driver.starts_with(&format!("'{}' merge-driver", by.display())),
+        "{driver}"
+    );
+}
+
 /// a project for the runtime tests: a package whose modules import one another
 /// relatively, a subpackage, a hoisted named tuple and a call to a helper, and a
 /// script in a folder that is no package at all

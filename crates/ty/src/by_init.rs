@@ -7,11 +7,18 @@
 //! checker and the transpiler both target. `by init` writes them consistently, so
 //! that the answer to "how do I ship this" is settled at the point the project is
 //! created rather than discovered afterwards.
+//!
+//! It also sets up git's merges of the project, for a new project or one that is
+//! already there: `by merge-driver` as the driver git runs for its python and
+//! basedpython files and its `api.lock`. See [`ty_project::git_merge`].
 
 use std::fs;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow, bail};
+use ruff_db::system::{OsSystem, SystemPathBuf};
+use ty_project::git_merge::{GitMergeIntegration, invoked_executable};
 
 use crate::ExitStatus;
 
@@ -24,34 +31,153 @@ pub(crate) enum ProjectKind {
     Library,
 }
 
-#[allow(clippy::print_stderr)]
+/// Whether to set up git's merges of the project.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitMerge {
+    /// `--git-merge`
+    Enable,
+    /// `--no-git-merge`
+    Skip,
+    /// neither: asked on a terminal, and not set up otherwise
+    Ask,
+}
+
 pub(crate) fn cmd_init(
     path: Option<&Path>,
     name: Option<&str>,
     kind: ProjectKind,
     python_version: &str,
+    git_merge: GitMerge,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let root = match path {
         Some(path) if path.is_absolute() => path.to_path_buf(),
         Some(path) => cwd.join(path),
-        None => cwd,
+        None => cwd.clone(),
     };
-
-    let project_name = match name {
-        Some(name) => name.to_owned(),
-        None => directory_name(&root)?,
-    };
-    let package = package_name(&project_name);
 
     let pyproject = root.join("pyproject.toml");
-    if pyproject.exists() {
+    let exists = pyproject.exists();
+    let system_root = SystemPathBuf::from_path_buf(root.clone())
+        .map_err(|root| anyhow!("`{}` is not a unicode path", root.display()))?;
+    // the directory git is asked about: the project's, or for a new one, the nearest that is
+    // there, which the project is about to be made in
+    let existing_ancestor = system_root
+        .ancestors()
+        .find(|directory| directory.as_std_path().is_dir())
+        .unwrap_or(&system_root)
+        .to_path_buf();
+    let system = OsSystem::new(&existing_ancestor);
+    let integration = GitMergeIntegration::of(&system, &existing_ancestor)?;
+    let set_up_git_merge = match git_merge {
+        GitMerge::Enable => {
+            if !integration.repository {
+                bail!(
+                    "`{}` is not in a git work tree, so there is no git merge to set up: run \
+                     `git init` first",
+                    root.display()
+                );
+            }
+            true
+        }
+        GitMerge::Skip => false,
+        GitMerge::Ask => integration.repository && !integration.is_enabled() && ask_git_merge()?,
+    };
+    if exists && !set_up_git_merge {
         anyhow::bail!(
-            "`{}` already exists — `by init` will not write over a project that is already there",
+            "`{}` already exists — `by init` will not write over a project that is already \
+             there; `by init --git-merge` sets up git's merges of it",
             pyproject.display()
         );
     }
+    if !exists {
+        scaffold(&root, name, kind, python_version)?;
+    }
+    if set_up_git_merge {
+        let cwd = SystemPathBuf::from_path_buf(cwd)
+            .map_err(|cwd| anyhow!("the current directory `{}` is not unicode", cwd.display()))?;
+        let by = invoked_executable(&system, &cwd)?;
+        let system = OsSystem::new(&system_root);
+        let before = GitMergeIntegration::of(&system, &system_root)?;
+        let after = GitMergeIntegration::enable(&system, &system_root, &by)?;
+        report_git_merge(&before, &after);
+        if !after.is_enabled() {
+            bail!(
+                "git's merges of `{}` are still not set up: git does not read the lines added \
+                 to `{}` for every path, or does not find the `by` it was set up to run",
+                root.display(),
+                after.attributes_path
+            );
+        }
+    }
+    Ok(ExitStatus::Success)
+}
 
+/// asks, on a terminal, whether to set up git's merges, and answers no anywhere else: a script
+/// says what it wants with `--git-merge` or `--no-git-merge`
+#[expect(clippy::print_stderr)]
+fn ask_git_merge() -> anyhow::Result<bool> {
+    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+        return Ok(false);
+    }
+    eprint!(
+        "set up git merges of the project with `by merge-driver`, which resolves what git \
+         cannot about imports and leaves `api.lock` to be generated again? [Y/n] "
+    );
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "" | "y" | "Y" | "yes" | "Yes"))
+}
+
+#[expect(clippy::print_stderr)]
+fn report_git_merge(before: &GitMergeIntegration, after: &GitMergeIntegration) {
+    if before.is_enabled() {
+        eprintln!("git merges already use `by merge-driver`");
+        return;
+    }
+    if !before.missing_attributes.is_empty() {
+        eprintln!(
+            "added `{}` to `{}`: commit it, so that every clone merges them with the driver",
+            before
+                .missing_attributes
+                .iter()
+                .map(|pattern| format!("{pattern} merge=by"))
+                .collect::<Vec<_>>()
+                .join("`, `"),
+            after.attributes_path
+        );
+    }
+    if after.driver != before.driver
+        && let Some(driver) = &after.driver
+    {
+        match &before.driver {
+            Some(replaced) => eprintln!(
+                "replaced `merge.by.driver` in the repository's git configuration, which ran \
+                 `{replaced}`, with `{driver}`"
+            ),
+            None => eprintln!(
+                "set `merge.by.driver` in the repository's git configuration to `{driver}`"
+            ),
+        }
+    }
+}
+
+/// writes a new project at `root`
+#[expect(clippy::print_stderr)]
+fn scaffold(
+    root: &Path,
+    name: Option<&str>,
+    kind: ProjectKind,
+    python_version: &str,
+) -> anyhow::Result<()> {
+    let pyproject = root.join("pyproject.toml");
+
+    let project_name = match name {
+        Some(name) => name.to_owned(),
+        None => directory_name(root)?,
+    };
+    let package = package_name(&project_name);
     let package_root = root.join("src").join(&package);
     fs::create_dir_all(&package_root)
         .with_context(|| format!("could not create {}", package_root.display()))?;
@@ -75,7 +201,7 @@ pub(crate) fn cmd_init(
         eprintln!("run it with `by run`");
     }
     eprintln!("build a wheel with `uv build`");
-    Ok(ExitStatus::Success)
+    Ok(())
 }
 
 /// The entry module of a new application.

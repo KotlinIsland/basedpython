@@ -45,6 +45,7 @@ pub mod api_lock;
 pub mod build_output;
 mod db;
 mod files;
+pub mod git_merge;
 pub mod glob;
 pub mod metadata;
 pub mod parallel;

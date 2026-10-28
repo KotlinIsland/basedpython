@@ -213,6 +213,16 @@ pub(crate) enum Command {
         /// [default: the version of the project environment's interpreter]
         #[arg(long, value_name = "VERSION")]
         python_version: Option<String>,
+        /// Set up git's merges of the project, a new one or one already there:
+        /// `by merge-driver` as the merge driver for its python and basedpython
+        /// files and its `api.lock`, in its `.gitattributes` and the
+        /// repository's git configuration. Asked on a terminal without this or
+        /// `--no-git-merge`.
+        #[arg(long, conflicts_with = "no_git_merge")]
+        git_merge: bool,
+        /// Leave git's merges of the project as they are.
+        #[arg(long)]
+        no_git_merge: bool,
     },
 
     /// Build the project as python.
@@ -369,7 +379,7 @@ pub(crate) enum Command {
         lowering: LoweringArgs,
     },
 
-    /// Merge a file as git's merge driver.
+    /// Merge a file as git's merge driver, which `by init --git-merge` sets up.
     ///
     /// git runs it for each python, basedpython or `api.lock` file both sides of
     /// a merge changed, as `by merge-driver %O %A %B %L %P %S %X %Y`. It merges

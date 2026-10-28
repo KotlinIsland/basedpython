@@ -51,6 +51,7 @@ mod evaluatable_expression;
 mod expression_types;
 mod file_watching;
 mod folding_range;
+mod git_merge;
 mod goto_definition;
 mod hover;
 mod implementation;

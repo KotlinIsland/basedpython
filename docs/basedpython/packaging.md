@@ -37,6 +37,11 @@ my-library/src/my_library/__init__.by
 leave off `--lib` and you also get a `main.by` and a configured entry point, so
 `by run` works immediately
 
+in a git repository, `by init` also asks whether to set up git's merges of the
+project with [`by merge-driver`](cli-reference.md#by-merge-driver); `--git-merge`
+and `--no-git-merge` answer for a script. `by init --git-merge` in a project that
+is already there sets that up and writes nothing else
+
 ## what a build produces
 
 `by build` writes the project to `build/` as python. that is the whole project,

@@ -171,6 +171,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::ApiLockHandler::METHOD => {
             background_request_task::<requests::ApiLockHandler>(req, BackgroundSchedule::Worker)
         }
+        // git's merges of the project, which `by init --git-merge` sets up from the command line
+        requests::GitMergeIntegrationHandler::METHOD => background_request_task::<
+            requests::GitMergeIntegrationHandler,
+        >(req, BackgroundSchedule::Worker),
         // a merge's and a diff's texts, which are versions no document holds
         requests::ResolveMergeConflictsHandler::METHOD => background_request_task::<
             requests::ResolveMergeConflictsHandler,

@@ -1717,6 +1717,20 @@ that name and nothing else, which whatever is chosen replaces. `merged`, or a ve
 edits. [`by merge-driver`](../cli-reference.md#by-merge-driver) does the same for
 a merge git runs, where no merge window ever opens for a file git merges cleanly
 
+`by/gitMergeIntegration` takes `{"uri"?: "…", "enable"?: true}`, a file or
+directory of the project asked about (the first project's without one), and
+answers whether git merges it with [`by merge-driver`](../cli-reference.md#by-merge-driver),
+`{"enabled", "repository", "attributes", "missingAttributes", "driver", "driverFound"}`:
+whether every path the driver is for is merged by a driver that is there,
+whether the project is in a git work tree, the uri of its `.gitattributes`, the
+patterns git does not merge with the driver, the command `merge.by.driver` runs
+(`null` where it is not set) and whether the `by` it names is there. with
+`"enable": true` it first sets the integration up as
+[`by init --git-merge`](../cli-reference.md#by-init) does, the driver naming the
+`by` the language server is, and fails for a project outside a git work tree, for
+a git older than 2.44, and where its `.gitattributes` is there but cannot be read.
+it answers `null` without a project
+
 `by/diffIgnoredRanges` takes `{"text": "…"}` and answers what a diff ignoring
 imports and formatting may ignore in it, `{"imports": [...], "formatting": [...]}`,
 each a list of ranges. `imports` is each import statement, wherever it is.
