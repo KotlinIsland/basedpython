@@ -17,6 +17,7 @@ use std::ops::Range;
 use rustc_hash::FxHashMap;
 
 use ruff_db::PythonFile;
+use ruff_db::diagnostic::{AddedImport, FixImport};
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 
 use crate::types::Type;
@@ -169,7 +170,7 @@ impl<'a> Importer<'a> {
         let request = request.avoid_conflicts(self.db, importing_file, members);
         let mut symbol_text: Box<str> = request.symbol_text().into();
         let Some(response) = self.find(importing_file, &request, members.at) else {
-            let placement = Placement::statement(&request, members.at);
+            let placement = statement_import(&request, members.at);
             let import = self
                 .placed_edits(std::slice::from_ref(&placement))
                 .pop()
@@ -223,27 +224,13 @@ impl<'a> Importer<'a> {
                 }
             }
             ImportResponseKind::Partial(from) => {
-                let module = from.module.as_ref().map(ast::Identifier::as_str);
-                let alone = self
-                    .sorting
-                    .as_ref()
-                    .is_some_and(|sorting| sorting.imports_member_alone(module, request.asname));
                 // a sorter that won't list the member among others writes it in a `from` import
-                // of its own, so that is the statement added
-                let placement = if alone {
-                    Placement::Statement {
-                        module: module.map(str::to_string),
-                        level: from.level,
-                        member: Some(member.to_string()),
-                        asname: request.asname.map(str::to_string),
-                        at: members.at,
-                    }
-                } else {
-                    Placement::Member {
-                        import: from.start(),
-                        member: member.to_string(),
-                        asname: request.asname.map(str::to_string),
-                    }
+                // of its own: placing the member with the sorter's order adds that statement
+                let placement = AddedImport::Member {
+                    import: from.start(),
+                    member: member.to_string(),
+                    asname: request.asname.map(str::to_string),
+                    at: members.at,
                 };
                 let import = self
                     .placed_edits(std::slice::from_ref(&placement))
@@ -534,7 +521,7 @@ impl<'a> Importer<'a> {
     /// the edits that make the additions in `placements`: where the file's import sorter would
     /// make them, or without an order to follow, statements at the top of the file and members
     /// after an import's last
-    fn placed_edits(&self, placements: &[Placement]) -> Vec<Edit> {
+    pub fn placed_edits(&self, placements: &[AddedImport]) -> Vec<Edit> {
         if let Some(sorting) = &self.sorting
             && let Some(edits) = sorting.placed_edits(self, placements)
         {
@@ -630,10 +617,11 @@ impl<'a> Importer<'a> {
         &self,
         order: &O,
         blocks: &ImportBlocks<O>,
-        placements: &[Placement],
+        placements: &[AddedImport],
     ) -> Option<Vec<Edit>> {
         let mut edits = Vec::new();
-        let (statements, members) = combined(placements, order);
+        let placements = self.members_written_alone(order, placements);
+        let (statements, members) = combined(&placements, order);
         if let Some(at) = statements.iter().map(|statement| statement.at).min() {
             edits.extend(self.placed_statements(order, blocks, &statements, at));
         }
@@ -648,6 +636,43 @@ impl<'a> Importer<'a> {
             edits.extend(self.placed_members(order, from, &added)?);
         }
         Some(edits)
+    }
+
+    /// `placements`, with each member added to an existing `from` import that `order`'s sorter
+    /// writes in a `from` import of its own added as that statement instead
+    fn members_written_alone<O: ImportOrdering>(
+        &self,
+        order: &O,
+        placements: &[AddedImport],
+    ) -> Vec<AddedImport> {
+        placements
+            .iter()
+            .map(|placement| match placement {
+                AddedImport::Member {
+                    import,
+                    member,
+                    asname,
+                    at,
+                } if let Some(AstImportKind::ImportFrom(from)) = self
+                    .imports()
+                    .find(|candidate| candidate.stmt.start() == *import)
+                    .map(|candidate| candidate.kind)
+                    && order.imports_member_alone(
+                        from.module.as_ref().map(ast::Identifier::as_str),
+                        asname.as_deref(),
+                    ) =>
+                {
+                    AddedImport::Statement {
+                        module: from.module.as_ref().map(ToString::to_string),
+                        level: from.level,
+                        member: Some(member.clone()),
+                        asname: asname.clone(),
+                        at: *at,
+                    }
+                }
+                placement => placement.clone(),
+            })
+            .collect()
     }
 
     /// `statement` as `order`'s sorter writes it, wrapped to its line length
@@ -1091,11 +1116,11 @@ type ImportBlocks<O> = OnceCell<Box<[ImportBlock<O>]>>;
 trait Sorting {
     /// the edits that make the additions in `placements` where the order puts them, or `None`
     /// when there is no order or the additions can't follow it
-    fn placed_edits(&self, importer: &Importer<'_>, placements: &[Placement]) -> Option<Vec<Edit>>;
-
-    /// whether the order writes `member` (imported `as asname`, if given) from `module` in a
-    /// `from` import of its own
-    fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool;
+    fn placed_edits(
+        &self,
+        importer: &Importer<'_>,
+        placements: &[AddedImport],
+    ) -> Option<Vec<Edit>>;
 }
 
 /// an order found the first time an import is placed, and the import block as it sorts it
@@ -1112,13 +1137,12 @@ impl<O: ImportOrdering, F: Fn() -> Option<O>> LazyOrder<O, F> {
 }
 
 impl<O: ImportOrdering, F: Fn() -> Option<O>> Sorting for LazyOrder<O, F> {
-    fn placed_edits(&self, importer: &Importer<'_>, placements: &[Placement]) -> Option<Vec<Edit>> {
+    fn placed_edits(
+        &self,
+        importer: &Importer<'_>,
+        placements: &[AddedImport],
+    ) -> Option<Vec<Edit>> {
         importer.placed_edits_in(self.order()?, &self.blocks, placements)
-    }
-
-    fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool {
-        self.order()
-            .is_some_and(|order| order.imports_member_alone(module, asname))
     }
 }
 
@@ -1309,44 +1333,21 @@ pub struct ImportAction {
     symbol_text: Box<str>,
     /// what `import` adds, for [`Importer::combined_edits`] to place it together with what
     /// other actions add
-    placement: Option<Placement>,
+    placement: Option<AddedImport>,
 }
 
-/// what an import action adds to the file
-#[derive(Debug, Clone)]
-enum Placement {
-    /// a new import statement: `import module as asname`, or `from module import member as
-    /// asname`, `level` dots up
-    Statement {
-        module: Option<String>,
-        level: u32,
-        member: Option<String>,
-        asname: Option<String>,
-        /// where what is imported has to be available
-        at: TextSize,
-    },
-    /// a member listed by the existing `from` import starting at `import`
-    Member {
-        import: TextSize,
-        member: String,
-        asname: Option<String>,
-    },
-}
-
-impl Placement {
-    /// the statement `request` adds when the file has no import that satisfies it
-    fn statement(request: &ImportRequest<'_>, at: TextSize) -> Self {
-        let member = match (&request.style, request.member) {
-            (ImportStyle::ImportFrom, Some(member)) => Some(member.to_string()),
-            _ => None,
-        };
-        Placement::Statement {
-            module: Some(request.module.to_string()),
-            level: 0,
-            member,
-            asname: request.asname.map(str::to_string),
-            at,
-        }
+/// the statement `request` adds, for a use at `at`, when the file has no import that satisfies it
+fn statement_import(request: &ImportRequest<'_>, at: TextSize) -> AddedImport {
+    let member = match (&request.style, request.member) {
+        (ImportStyle::ImportFrom, Some(member)) => Some(member.to_string()),
+        _ => None,
+    };
+    AddedImport::Statement {
+        module: Some(request.module.to_string()),
+        level: 0,
+        member,
+        asname: request.asname.map(str::to_string),
+        at,
     }
 }
 
@@ -1403,14 +1404,14 @@ fn minimal_edit(old: &str, new: &str, start: TextSize) -> Option<Edit> {
 /// statement's and import's members are sorted by `compare_members`, and `imports_member_alone`
 /// says which member the sorter writes in a `from` import of its own
 fn combined<'p>(
-    placements: &'p [Placement],
+    placements: &'p [AddedImport],
     order: &impl MemberOrder,
 ) -> (Vec<NewStatement<'p>>, Vec<(TextSize, Vec<Member<'p>>)>) {
     let mut statements: Vec<NewStatement> = Vec::new();
     let mut members: Vec<(TextSize, Vec<Member>)> = Vec::new();
     for placement in placements {
         match placement {
-            Placement::Statement {
+            AddedImport::Statement {
                 module,
                 level,
                 member,
@@ -1448,10 +1449,11 @@ fn combined<'p>(
                     at: *at,
                 });
             }
-            Placement::Member {
+            AddedImport::Member {
                 import,
                 member,
                 asname,
+                at: _,
             } => {
                 let added = (member.as_str(), asname.as_deref());
                 match members.iter_mut().find(|(start, _)| start == import) {
@@ -1561,6 +1563,15 @@ impl ImportAction {
     /// Returns an edit to insert an import statement.
     pub fn import(&self) -> Option<&Edit> {
         self.import.as_ref()
+    }
+
+    /// the edit adding the import, and what it imports, for a diagnostic's fix to record with
+    /// [`ruff_db::diagnostic::Diagnostic::set_fix_adding_imports`]
+    pub(crate) fn fix_import(&self) -> Option<FixImport> {
+        Some(FixImport {
+            edit: self.import.clone()?,
+            import: self.placement.clone()?,
+        })
     }
 
     /// Returns the symbol text that should be used.

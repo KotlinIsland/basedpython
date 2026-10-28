@@ -27,7 +27,7 @@ expression: main_diagnostics
         "edits": {
           "file://<temp_dir>/src/foo.py": [
             {
-              "newText": "from typing import reveal_type\n",
+              "newText": "from typing import reveal_type\n\n",
               "range": {
                 "end": {
                   "character": 0,

@@ -6646,13 +6646,16 @@ pub(super) fn autofix_with_literal(
     };
     let source = source_text(context.db(), context.file());
     diagnostic.help("Wrap in `Literal[...]`");
-    diagnostic.set_fix(Fix::unsafe_edits(
-        Edit::range_replacement(
-            format!("{}[{}]", action.symbol_text(), &source[node.range()]),
-            node.range(),
+    diagnostic.set_fix_adding_imports(
+        Fix::unsafe_edits(
+            Edit::range_replacement(
+                format!("{}[{}]", action.symbol_text(), &source[node.range()]),
+                node.range(),
+            ),
+            action.import().cloned(),
         ),
-        action.import().cloned(),
-    ));
+        action.fix_import(),
+    );
 }
 
 pub(super) fn report_undefined_reveal(context: &InferContext, name: &ast::ExprName) {
@@ -6674,7 +6677,7 @@ pub(super) fn report_undefined_reveal(context: &InferContext, name: &ast::ExprNa
     );
     if let Some(edit) = action.import() {
         diagnostic.help(format_args!("Import `reveal_type` from `{module}`"));
-        diagnostic.set_fix(Fix::unsafe_edit(edit.clone()));
+        diagnostic.set_fix_adding_imports(Fix::unsafe_edit(edit.clone()), action.fix_import());
     }
 }
 

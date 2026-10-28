@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use ruff_db::{
-    diagnostic::{Annotation, Diagnostic, Span, SubDiagnostic, SubDiagnosticSeverity},
+    diagnostic::{Annotation, Diagnostic, FixImport, Span, SubDiagnostic, SubDiagnosticSeverity},
     files::{FilePath, FileRange},
     parsed::{ParsedModuleRef, parsed_module, parsed_string_annotation},
     source::{line_index, source_text},
@@ -364,13 +364,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 range.start(),
                             )
                         {
-                            diagnostic.set_fix(Fix::unsafe_edits(
-                                Edit::range_replacement(
-                                    action.symbol_text().to_string(),
-                                    ranges.origin,
+                            diagnostic.set_fix_adding_imports(
+                                Fix::unsafe_edits(
+                                    Edit::range_replacement(
+                                        action.symbol_text().to_string(),
+                                        ranges.origin,
+                                    ),
+                                    action.import().cloned(),
                                 ),
-                                action.import().cloned(),
-                            ));
+                                action.fix_import(),
+                            );
                         }
                     } else {
                         diagnostic.help(format_args!(
@@ -1383,9 +1386,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 && clause.test.as_ref() == Some(test)
                 && !diagnostic.has_applicable_fix(Applicability::DisplayOnly)
             {
-                if let Some(fix) = self.add_assert_never_else(clause, test) {
+                if let Some((fix, import)) = self.add_assert_never_else(clause, test) {
                     diagnostic.help("Add an `else` branch that calls `assert_never`");
-                    diagnostic.set_fix(fix);
+                    diagnostic.set_fix_adding_imports(fix, import);
                 } else {
                     diagnostic.help(
                         "Replace this `elif` with an `else` branch \
@@ -1419,9 +1422,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// Only read a plain variable whose type is a union before the chain, and which narrows
     /// to `Never` when the condition is false. Repeating attribute access or a function call
     /// could have side effects. Returns `None`
-    /// when no such variable or unshadowed runtime import is available.
+    /// when no such variable or unshadowed runtime import is available, and otherwise the fix
+    /// with the import of `assert_never` it adds, if it adds one.
     /// The fix is unsafe because the new branch raises if the static assumptions fail at runtime.
-    fn add_assert_never_else(&self, clause: &ast::ElifElseClause, test: &ast::Expr) -> Option<Fix> {
+    fn add_assert_never_else(
+        &self,
+        clause: &ast::ElifElseClause,
+        test: &ast::Expr,
+    ) -> Option<(Fix, Option<FixImport>)> {
         let db = self.db();
         let first_statement = clause.body.first()?;
         let source = source_text(db, self.file());
@@ -1466,7 +1474,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             line_ending
         };
 
-        Some(Fix::unsafe_edits(
+        let fix = Fix::unsafe_edits(
             Edit::insertion(
                 format!(
                     "{leading_newline}{indentation}else:{line_ending}{body_indentation}{}({}){line_ending}",
@@ -1476,7 +1484,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 end,
             ),
             action.import().cloned(),
-        ))
+        );
+        Some((fix, action.fix_import()))
     }
 
     /// Find a variable tested directly, by a comparison, or by a narrowing function.
