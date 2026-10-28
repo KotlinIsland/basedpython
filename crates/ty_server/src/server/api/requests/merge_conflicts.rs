@@ -145,10 +145,17 @@ pub(crate) struct ReconcileMergeImportsParams {
     base: String,
     ours: String,
     theirs: String,
-    /// the file the merge wrote, every conflict resolved
+    /// the file the merge wrote, which may still have conflicts in markers of `marker_size`
     merged: String,
+    /// the size of the conflict markers in `merged`, git's 7 by default
+    #[serde(default = "default_marker_size")]
+    marker_size: usize,
     #[serde(default)]
     uri: Option<Uri>,
+}
+
+const fn default_marker_size() -> usize {
+    7
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -230,7 +237,13 @@ impl BackgroundRequestHandler for ReconcileMergeImportsHandler {
         let encoding: PositionEncoding = snapshot.position_encoding();
         let range = |range: TextRange| text_range_to_lsp_range(range, merged, &index, encoding);
         Ok(
-            match reconcile_file_merge_imports(db, path.as_deref(), texts, merged) {
+            match reconcile_file_merge_imports(
+                db,
+                path.as_deref(),
+                texts,
+                merged,
+                params.marker_size,
+            ) {
                 ReconciledImports::Edits(edits) => ReconciledMergeImports {
                     edits: edits
                         .into_iter()

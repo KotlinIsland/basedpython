@@ -139,6 +139,28 @@ fn a_clean_merge_that_dropped_a_needed_import_is_answered_with_the_edit_adding_i
     Ok(())
 }
 
+/// a conflict left open stays as it is, and the import a clean part of the merge dropped is added
+/// outside it
+#[test]
+fn a_merge_with_a_conflict_left_open_is_answered_with_edits_outside_it() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let answer = server.send_request_await::<ReconcileMergeImports>(json!({
+        "base": "import json\nimport os\n\nA = os\nB = json\n\nLIMIT = 1\n",
+        "ours": "import os\n\nA = os\n\nLIMIT = 2\n",
+        "theirs": "import json\nimport os\n\nA = os\nB = json\nC = json\n\nLIMIT = 3\n",
+        "merged": "import os\n\nA = os\nC = json\n\n<<<<<<< ours\nLIMIT = 2\n=======\nLIMIT = 3\n>>>>>>> theirs\n",
+    }));
+    let range = json!({"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}});
+    assert_eq!(
+        answer,
+        json!({"edits": [{"range": range, "newText": "import json\nimport os\n"}], "choice": null})
+    );
+    Ok(())
+}
+
 #[test]
 fn a_name_imported_from_two_places_is_answered_with_the_choice() -> Result<()> {
     let mut server = TestServerBuilder::new()?

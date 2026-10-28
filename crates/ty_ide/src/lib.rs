@@ -78,7 +78,7 @@ pub use completion::{
     AutoImportStyle, Completion, CompletionCapabilities, CompletionCommand,
     CompletionInsertTextFormat, CompletionKind, CompletionSettings, completion, smart_completion,
 };
-pub use conflict_markers::{ConflictVersions, ConflictedText};
+pub use conflict_markers::{ConflictSide, ConflictVersions, ConflictedText};
 pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use declaration::{ClassName, Declaration, DeclarationAt, DeclaredKind, declaration_at};
 pub use diff_ignored::{DiffIgnoredRanges, diff_ignored_ranges};
@@ -112,8 +112,9 @@ pub use inlay_hints::{
 pub use markup::MarkupKind;
 pub use merge::{
     ConflictLines, ImportChoice, MergeEdit, MergeTexts, MergeVersion, ReconciledImports,
-    apply_merge_edits, file_import_sorter, reconcile_file_merge_imports, reconcile_merge_imports,
-    resolve_file_merge_conflicts, resolve_merge_conflicts,
+    apply_merge_edits, file_import_sorter, reconcile_conflicted_merge_imports,
+    reconcile_file_merge_imports, reconcile_merge_imports, resolve_file_merge_conflicts,
+    resolve_merge_conflicts,
 };
 pub use method_kind::MethodKind;
 pub use module_rename::{

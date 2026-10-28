@@ -505,11 +505,13 @@ for a `.by`, `.byi`, `.py` or `.pyi` file it
     *resolve simple conflicts* asks `by/resolveMergeConflicts`
     (see [merges and diffs](features/editor.md#merges-and-diffs)): imports both
     sides added, definitions each side added under its own name, and the like
-1. once nothing conflicts, reconciles the imports with the three versions, as
+1. reconciles the imports with the three versions, as
     `by/reconcileMergeImports` does. a line merge can be clean and still leave a
     file reading a name it no longer imports: ours removes `import json` with the
     last function reading it, theirs adds another reading it. the import is added
-    back, and an import a side removed that nothing mentions is dropped. where the
+    back, and an import a side removed that nothing mentions is dropped. with
+    conflicts left, it does that outside them, with what either side of each
+    reads, so that whatever you choose in a conflict has its imports. where the
     versions import one name from different places, the imports of it become a
     conflict, `by` says why on stderr, and the file is left for you
 
