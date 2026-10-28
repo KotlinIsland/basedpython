@@ -130,7 +130,9 @@ pub(super) use hover::HoverRequestHandler;
 pub(super) use injections::InjectionsRequestHandler;
 pub(super) use inlay_hints::InlayHintRequestHandler;
 pub(super) use input_status::InputStatusHandler;
-pub(super) use merge_conflicts::{DiffIgnoredRangesHandler, ResolveMergeConflictsHandler};
+pub(super) use merge_conflicts::{
+    DiffIgnoredRangesHandler, ReconcileMergeImportsHandler, ResolveMergeConflictsHandler,
+};
 pub(super) use module_name::ModuleNameHandler;
 pub(super) use move_members::{
     ExtractSuperclassRequestHandler, PrepareMoveMembersRequestHandler, PullMembersUpRequestHandler,

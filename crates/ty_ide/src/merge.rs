@@ -38,12 +38,15 @@
 
 use std::ops::Range;
 
-use ruff_db::system::SystemPath;
+use ruff_db::system::{System, SystemPath};
 use ruff_python_ast::comparable::{ComparableDecorator, ComparableExpr, ComparableStmt};
 use ruff_python_ast::token::{TokenKind, parenthesized_range};
 use ruff_python_ast::visitor::{self, Visitor};
-use ruff_python_ast::{self as ast, AnyNodeRef, ExprContext, ModModule, PySourceType, Stmt};
+use ruff_python_ast::{
+    self as ast, AnyNodeRef, ExprContext, ModModule, PySourceType, PythonVersion, Stmt,
+};
 use ruff_python_parser::{Parsed, parse_unchecked_source};
+use ruff_python_stdlib::builtins::is_python_builtin;
 use ruff_python_trivia::leading_indentation;
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -1577,6 +1580,561 @@ fn merge_elements<'a>(
     Some(out)
 }
 
+// ── imports after a merge ───────────────────────────────────────────────────────────────────────
+
+/// one of the three versions a merge combines
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeVersion {
+    Ours,
+    Base,
+    Theirs,
+}
+
+/// `range` of a text, replaced by `replacement`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeEdit {
+    pub range: TextRange,
+    pub replacement: String,
+}
+
+/// a name the versions of a merged file import from different places, and the import
+/// statements of each version that bind it, which nothing here chooses between
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportChoice {
+    pub name: String,
+    /// each version's import statements binding the name, in the order ours, base, theirs: none
+    /// for a version that does not import it
+    pub imports: Vec<(MergeVersion, Vec<String>)>,
+    /// where in the merged text the import belongs: after the imports it starts with
+    pub offset: TextSize,
+}
+
+/// what reconciling a merged file's imports with its three versions answers
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconciledImports {
+    /// the edits that reconcile the merged file's imports, in order: none where its imports need
+    /// none, and none where the merged file or one of its versions does not parse, since what it
+    /// imports or reads cannot then be told
+    Edits(Vec<MergeEdit>),
+    /// the versions import a name from different places
+    Refused(ImportChoice),
+}
+
+/// the edits that make the imports of `merged`, the file a merge of `texts` wrote, say what its
+/// code reads, or why they cannot be decided
+///
+/// a line merge can be clean and still leave a broken file: ours removes `import json` with the
+/// last function reading it, theirs adds another that reads it, and the merge writes a file
+/// reading `json` that nothing imports. the three versions' imports say where each name comes
+/// from, so the module-level imports of the merged file are reconciled with them:
+///
+/// - a name the merged file reads, which nothing in it binds and which is not a builtin, is
+///   imported as the versions import it, where exactly one place to import it from is among
+///   their module-level imports. there is nothing to do where none of them imports it, or where
+///   the merged file has a star import, which may bind it
+/// - an import a side removed, which binds a name the merged file does not mention, in its code
+///   or in any string, is removed. an import neither side removed stays, a re-export or an
+///   import for its side effects among them
+/// - refused where the versions import one name from different places and the merged file
+///   needs it, and where the merged file's own imports bind one name to two things: nothing
+///   here can say which the code means
+///
+/// the imports the file starts with are then written as `sort_imports` writes them. where they
+/// have a comment among them, which a sort would have to place, they are left as they are, and
+/// an import added after them
+pub fn reconcile_merge_imports(
+    texts: MergeTexts<'_>,
+    merged: &str,
+    source_type: PySourceType,
+    sort_imports: &dyn Fn(&str) -> Option<String>,
+) -> ReconciledImports {
+    let (Some(base), Some(ours), Some(theirs), Some(result)) = (
+        Version::new(texts.base, source_type),
+        Version::new(texts.ours, source_type),
+        Version::new(texts.theirs, source_type),
+        Version::new(merged, source_type),
+    ) else {
+        return ReconciledImports::Edits(Vec::new());
+    };
+    let module_imports = |version: &Version| imported(&module_import_statements(version.module()));
+    let (b, o, t, m) = (
+        module_imports(&base),
+        module_imports(&ours),
+        module_imports(&theirs),
+        module_imports(&result),
+    );
+    let versions = [
+        (MergeVersion::Ours, &o),
+        (MergeVersion::Base, &b),
+        (MergeVersion::Theirs, &t),
+    ];
+    let section = ImportSection::of(&result);
+    let choice = |name: &str| {
+        ReconciledImports::Refused(ImportChoice {
+            name: name.to_string(),
+            imports: versions
+                .iter()
+                .map(|(version, imports)| {
+                    let mut statements: Vec<String> = imports
+                        .iter()
+                        .filter(|import| import.binds() == name)
+                        .map(Imported::statement)
+                        .collect();
+                    statements.dedup();
+                    (*version, statements)
+                })
+                .collect(),
+            offset: section.end,
+        })
+    };
+
+    for (index, import) in m.iter().enumerate() {
+        if m[..index].iter().any(|earlier| {
+            earlier.binds() == import.binds() && earlier.bound_to() != import.bound_to()
+        }) {
+            return choice(import.binds());
+        }
+    }
+
+    let usage = Usage::of(result.module());
+    let mut added: Vec<&Imported> = Vec::new();
+    if !usage.star && !m.iter().any(|import| import.name == "*") {
+        let mut unbound: Vec<&str> = usage
+            .reads
+            .iter()
+            .filter(|name| {
+                !usage.bound.contains(*name)
+                    && !is_python_builtin(
+                        name,
+                        PythonVersion::latest_ty().minor,
+                        source_type.is_ipynb(),
+                    )
+            })
+            .copied()
+            .collect();
+        unbound.sort_unstable();
+        for name in unbound {
+            let mut places: Vec<&Imported> = Vec::new();
+            for import in versions
+                .iter()
+                .flat_map(|(_, imports)| imports.iter())
+                .filter(|import| import.binds() == name)
+            {
+                if !places
+                    .iter()
+                    .any(|place| place.bound_to() == import.bound_to())
+                {
+                    places.push(import);
+                }
+            }
+            match places.as_slice() {
+                [] => {}
+                [place] => added.push(place),
+                _ => return choice(name),
+            }
+        }
+    }
+
+    let removed_by_a_side =
+        |import: &Imported| b.contains(import) && (!o.contains(import) || !t.contains(import));
+    let dropped: Vec<&Imported> = m
+        .iter()
+        .filter(|import| {
+            import.name != "*"
+                && removed_by_a_side(import)
+                && !result.mentions_outside_imports(import.binds())
+        })
+        .collect();
+
+    if added.is_empty() && dropped.is_empty() {
+        return ReconciledImports::Edits(Vec::new());
+    }
+    ReconciledImports::Edits(section.edits(&result, &added, &dropped, sort_imports))
+}
+
+/// [`reconcile_merge_imports`] for the file at `path` in `db`'s project, read and sorted as
+/// [`resolve_file_merge_conflicts`] reads and sorts it
+pub fn reconcile_file_merge_imports(
+    db: &dyn Db,
+    path: Option<&SystemPath>,
+    texts: MergeTexts<'_>,
+    merged: &str,
+) -> ReconciledImports {
+    let root = db.project().root(db);
+    let source_type = path
+        .and_then(|path| path.extension())
+        .and_then(PySourceType::try_from_extension)
+        .unwrap_or_default();
+    let isort = match path {
+        Some(path) => IsortConfig::for_file(db.system(), path.as_std_path(), root.as_std_path()),
+        None => IsortConfig::for_directory(db.system(), root.as_std_path(), root.as_std_path()),
+    };
+    reconcile_merge_imports(texts, merged, source_type, &|source| {
+        isort.sort(source, source_type)
+    })
+}
+
+/// writes a run of import statements as buff's isort configuration for the file at `path` sorts
+/// them, `project_root` standing in for the directory buff resolves `src` against where no
+/// configuration file says: for a tool that has no project database, as a merge driver has not
+pub fn file_import_sorter<'a>(
+    system: &'a dyn System,
+    path: &SystemPath,
+    project_root: &SystemPath,
+) -> impl Fn(&str) -> Option<String> + 'a {
+    let source_type = path
+        .extension()
+        .and_then(PySourceType::try_from_extension)
+        .unwrap_or_default();
+    let isort = IsortConfig::for_file(system, path.as_std_path(), project_root.as_std_path());
+    move |source| isort.sort(source, source_type)
+}
+
+/// `edits` applied to `text`, which are in order and do not overlap
+pub fn apply_merge_edits(text: &str, edits: &[MergeEdit]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = TextSize::default();
+    for edit in edits {
+        out.push_str(&text[TextRange::new(at, edit.range.start())]);
+        out.push_str(&edit.replacement);
+        at = edit.range.end();
+    }
+    out.push_str(&text[TextRange::new(at, TextSize::of(text))]);
+    out
+}
+
+/// the import statements of a module's own body, not those in a function, a class or a block,
+/// which bind only where they run
+fn module_import_statements(module: &[Stmt]) -> Vec<&Stmt> {
+    module
+        .iter()
+        .filter(|statement| statement.is_import_stmt() || statement.is_import_from_stmt())
+        .collect()
+}
+
+impl Version<'_> {
+    /// whether `name` is a token of the text outside its import statements, or a word in one of
+    /// its strings, where an annotation in quotes, `__all__` and the like name it
+    fn mentions_outside_imports(&self, name: &str) -> bool {
+        let imports: Vec<TextRange> = module_import_statements(self.module())
+            .iter()
+            .map(Ranged::range)
+            .collect();
+        self.parsed.tokens().iter().any(|token| match token.kind() {
+            TokenKind::Identifier => {
+                &self.text[token.range()] == name
+                    && !imports
+                        .iter()
+                        .any(|range| range.contains_range(token.range()))
+            }
+            TokenKind::String | TokenKind::FStringMiddle | TokenKind::TStringMiddle => self.text
+                [token.range()]
+            .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+            .any(|word| word == name),
+            _ => false,
+        })
+    }
+
+    /// whether `statement` has lines of its own: nothing before it on its first line, and only
+    /// whitespace after it on its last
+    fn has_own_lines(&self, statement: &Stmt) -> bool {
+        let line = self.lines.line_index(statement.start()).to_zero_indexed();
+        let after = TextRange::new(statement.end(), self.next_line_start(statement.end()));
+        self.line_start(line) == Some(statement.start()) && self.text[after].trim().is_empty()
+    }
+
+    /// whether a comment is in `range`
+    fn has_comment_in(&self, range: TextRange) -> bool {
+        self.parsed
+            .tokens()
+            .in_range(range)
+            .iter()
+            .any(|token| token.kind() == TokenKind::Comment)
+    }
+}
+
+/// the import statements a module starts with, after its docstring, which is where an import
+/// it needs goes
+struct ImportSection<'a> {
+    statements: &'a [Stmt],
+    /// the lines the statements are on, empty at where an import goes where there are none
+    range: TextRange,
+    /// where what is after the section starts
+    end: TextSize,
+    /// whether something other than an import follows the section on the next line, which an
+    /// import added where there was none is set apart from by a blank line
+    followed: bool,
+}
+
+impl<'a> ImportSection<'a> {
+    fn of(version: &'a Version<'a>) -> Self {
+        let module = version.module();
+        let first = usize::from(module.first().is_some_and(|statement| {
+            statement
+                .as_expr_stmt()
+                .is_some_and(|expr| expr.value.is_string_literal_expr())
+        }));
+        let count = module[first..]
+            .iter()
+            .take_while(|statement| statement.is_import_stmt() || statement.is_import_from_stmt())
+            .count();
+        let statements = &module[first..first + count];
+        let line_start = |offset: TextSize| {
+            let line = version.lines.line_index(offset).to_zero_indexed();
+            version.line_start(line).unwrap_or(offset)
+        };
+        let range = match (statements.first(), statements.last()) {
+            (Some(first), Some(last)) => TextRange::new(
+                line_start(first.start()),
+                version.next_line_start(last.end()),
+            ),
+            _ => match (
+                first.checked_sub(1).and_then(|index| module.get(index)),
+                module.get(first),
+            ) {
+                // after the docstring
+                (Some(docstring), _) => TextRange::empty(version.next_line_start(docstring.end())),
+                // before the first statement, after any comments the module starts with
+                (None, Some(statement)) => TextRange::empty(line_start(statement.start())),
+                (None, None) => TextRange::empty(TextSize::of(version.text)),
+            },
+        };
+        Self {
+            statements,
+            range,
+            end: range.end(),
+            followed: statements.is_empty() && module.get(first).is_some(),
+        }
+    }
+
+    /// whether the section can be written again from its imports: each statement on lines of its
+    /// own, and no comment among them that a sort would have to place
+    fn rewritable(&self, version: &Version) -> bool {
+        !self.statements.is_empty()
+            && self
+                .statements
+                .iter()
+                .all(|statement| version.has_own_lines(statement))
+            && !version.has_comment_in(self.range)
+    }
+
+    fn edits(
+        &self,
+        version: &Version,
+        added: &[&Imported],
+        dropped: &[&Imported],
+        sort_imports: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<MergeEdit> {
+        let write = |imports: &[&Imported]| {
+            let statements: String = imports
+                .iter()
+                .map(|import| import.statement() + "\n")
+                .collect();
+            sort_imports(&statements).unwrap_or(statements)
+        };
+        let rewritable = self.rewritable(version);
+        let mut edits = Vec::new();
+        // a statement outside a section written again loses only what is dropped from it
+        for statement in module_import_statements(version.module()) {
+            let in_section = self
+                .statements
+                .iter()
+                .any(|held| std::ptr::eq(held, statement));
+            if rewritable && in_section {
+                continue;
+            }
+            let imports = imported(&[statement]);
+            let kept: Vec<&Imported> = imports
+                .iter()
+                .filter(|import| !dropped.contains(import))
+                .collect();
+            if kept.len() == imports.len()
+                || !version.has_own_lines(statement)
+                || version.has_comment_in(statement.range())
+            {
+                continue;
+            }
+            let line = version
+                .lines
+                .line_index(statement.start())
+                .to_zero_indexed();
+            let Some(start) = version.line_start(line) else {
+                continue;
+            };
+            let range = TextRange::new(start, version.next_line_start(statement.end()));
+            let replacement = if kept.is_empty() {
+                String::new()
+            } else {
+                write(&kept)
+            };
+            edits.push(MergeEdit { range, replacement });
+        }
+        if rewritable {
+            let imports = imported(&self.statements.iter().collect::<Vec<_>>());
+            let mut kept: Vec<&Imported> = imports
+                .iter()
+                .filter(|import| !dropped.contains(import))
+                .collect();
+            kept.extend(added.iter().copied());
+            edits.push(MergeEdit {
+                range: self.range,
+                replacement: write(&kept),
+            });
+        } else if !added.is_empty() {
+            let mut replacement = write(added);
+            if self.followed {
+                replacement.push('\n');
+            }
+            edits.push(MergeEdit {
+                range: TextRange::empty(self.end),
+                replacement,
+            });
+        }
+        edits.sort_by_key(|edit| edit.range.start());
+        edits
+    }
+}
+
+/// what a module reads and binds, at any depth
+#[derive(Default)]
+struct Usage<'a> {
+    /// the names it reads, and the names its `__all__` lists, which it exports
+    reads: FxHashSet<&'a str>,
+    /// the names it binds anywhere, in any scope
+    bound: FxHashSet<&'a str>,
+    /// whether a star import binds names the source does not tell
+    star: bool,
+}
+
+impl<'a> Usage<'a> {
+    fn of(module: &'a [Stmt]) -> Self {
+        let mut usage = Self::default();
+        usage.visit_body(module);
+        for statement in module {
+            usage.reads.extend(dunder_all_names(statement));
+        }
+        usage
+    }
+}
+
+/// the names a statement adds to `__all__`: `__all__ = [...]`, `__all__ += [...]`,
+/// `__all__.extend([...])` or `__all__.append("…")`
+fn dunder_all_names(statement: &Stmt) -> Vec<&str> {
+    fn strings(expr: &ast::Expr) -> Vec<&str> {
+        let elements = match expr {
+            ast::Expr::List(list) => &list.elts,
+            ast::Expr::Tuple(tuple) => &tuple.elts,
+            _ => return Vec::new(),
+        };
+        elements
+            .iter()
+            .filter_map(|element| Some(element.as_string_literal_expr()?.value.to_str()))
+            .collect()
+    }
+    let is_all = |expr: &ast::Expr| expr.as_name_expr().is_some_and(|name| name.id == "__all__");
+    match statement {
+        Stmt::Assign(assign) if assign.targets.iter().any(is_all) => strings(&assign.value),
+        Stmt::AnnAssign(assign) if is_all(&assign.target) => {
+            assign.value.as_deref().map(strings).unwrap_or_default()
+        }
+        Stmt::AugAssign(assign) if is_all(&assign.target) => strings(&assign.value),
+        Stmt::Expr(expr) => {
+            let Some(call) = expr.value.as_call_expr() else {
+                return Vec::new();
+            };
+            let Some(attribute) = call.func.as_attribute_expr() else {
+                return Vec::new();
+            };
+            if !is_all(&attribute.value) {
+                return Vec::new();
+            }
+            match (attribute.attr.as_str(), &*call.arguments.args) {
+                ("extend", [argument]) => strings(argument),
+                ("append", [argument]) => argument
+                    .as_string_literal_expr()
+                    .map(|string| vec![string.value.to_str()])
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+impl<'a> Visitor<'a> for Usage<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            Stmt::FunctionDef(function) => {
+                self.bound.insert(function.name.as_str());
+            }
+            Stmt::ClassDef(class) => {
+                self.bound.insert(class.name.as_str());
+            }
+            Stmt::Import(import) => {
+                for alias in &import.names {
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+                    // `import a.b` binds `a`
+                    self.bound.insert(bound.split('.').next().unwrap_or(bound));
+                }
+            }
+            Stmt::ImportFrom(import) => {
+                for alias in &import.names {
+                    if alias.asname.is_none() && &alias.name == "*" {
+                        self.star = true;
+                    } else {
+                        self.bound
+                            .insert(alias.asname.as_ref().unwrap_or(&alias.name).as_str());
+                    }
+                }
+            }
+            _ => {}
+        }
+        visitor::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'a ast::Expr) {
+        if let ast::Expr::Name(name) = expr {
+            if name.ctx == ExprContext::Load {
+                self.reads.insert(name.id.as_str());
+            } else {
+                self.bound.insert(name.id.as_str());
+            }
+        }
+        visitor::walk_expr(self, expr);
+    }
+
+    fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
+        self.bound.insert(parameter.name.as_str());
+        visitor::walk_parameter(self, parameter);
+    }
+
+    fn visit_except_handler(&mut self, except_handler: &'a ast::ExceptHandler) {
+        let ast::ExceptHandler::ExceptHandler(handler) = except_handler;
+        if let Some(name) = &handler.name {
+            self.bound.insert(name.as_str());
+        }
+        visitor::walk_except_handler(self, except_handler);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+        let name = match pattern {
+            ast::Pattern::MatchAs(pattern) => pattern.name.as_ref(),
+            ast::Pattern::MatchStar(pattern) => pattern.name.as_ref(),
+            ast::Pattern::MatchMapping(pattern) => pattern.rest.as_ref(),
+            _ => None,
+        };
+        if let Some(name) = name {
+            self.bound.insert(name.as_str());
+        }
+        visitor::walk_pattern(self, pattern);
+    }
+
+    fn visit_type_param(&mut self, type_param: &'a ast::TypeParam) {
+        self.bound.insert(type_param.name().as_str());
+        visitor::walk_type_param(self, type_param);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
@@ -1586,85 +2144,38 @@ mod tests {
 
     use std::ops::Range;
 
-    use super::{ConflictLines, MergeTexts, resolve_merge_conflicts};
+    use super::{
+        ConflictLines, MergeTexts, MergeVersion, ReconciledImports, apply_merge_edits,
+        reconcile_merge_imports, resolve_merge_conflicts,
+    };
+    use crate::ConflictedText;
+
+    fn sort(source: &str) -> Option<String> {
+        sort_import_statements(
+            source,
+            &LinterSettings::default(),
+            None,
+            PySourceType::BasedPython,
+            PythonVersion::PY312,
+        )
+    }
 
     /// the file a merge left with git's diff3 conflict markers in it, each conflict replaced by
     /// what resolves it, or left as git wrote it where nothing does
     fn resolved(conflicted: &str) -> String {
-        let (mut base, mut ours, mut theirs) = (String::new(), String::new(), String::new());
-        let mut conflicts = Vec::new();
-        let mut lines = conflicted.split_inclusive('\n');
-        let mut outside = Vec::new();
-        let count = |text: &str| text.matches('\n').count();
-        while let Some(line) = lines.next() {
-            if !line.starts_with("<<<<<<<") {
-                base.push_str(line);
-                ours.push_str(line);
-                theirs.push_str(line);
-                outside.push(line.to_string());
-                continue;
-            }
-            let start = (count(&base), count(&ours), count(&theirs));
-            let mut target = &mut ours;
-            let mut raw = line.to_string();
-            for line in lines.by_ref() {
-                raw.push_str(line);
-                if line.starts_with("|||||||") {
-                    target = &mut base;
-                } else if line.starts_with("=======") {
-                    target = &mut theirs;
-                } else if line.starts_with(">>>>>>>") {
-                    break;
-                } else {
-                    target.push_str(line);
-                }
-            }
-            conflicts.push((
-                ConflictLines {
-                    base: start.0..count(&base),
-                    ours: start.1..count(&ours),
-                    theirs: start.2..count(&theirs),
-                },
-                raw,
-            ));
-            outside.push(String::new());
-        }
-        let settings = LinterSettings::default();
-        let sort = |source: &str| {
-            sort_import_statements(
-                source,
-                &settings,
-                None,
-                PySourceType::BasedPython,
-                PythonVersion::PY312,
-            )
-        };
+        let text = ConflictedText::parse(conflicted, 7).expect("well formed conflict markers");
+        let versions = text.versions().expect("diff3 conflict markers");
         let resolutions = resolve_merge_conflicts(
             MergeTexts {
-                base: &base,
-                ours: &ours,
-                theirs: &theirs,
+                base: &versions.base,
+                ours: &versions.ours,
+                theirs: &versions.theirs,
             },
-            &conflicts
-                .iter()
-                .map(|(lines, _)| lines.clone())
-                .collect::<Vec<_>>(),
+            &versions.conflicts,
             PySourceType::BasedPython,
             &sort,
         );
-        let mut resolutions = resolutions
-            .into_iter()
-            .zip(conflicts.iter().map(|(_, raw)| raw));
-        outside
-            .iter()
-            .map(|line| {
-                if !line.is_empty() {
-                    return line.clone();
-                }
-                let (resolution, raw) = resolutions.next().expect("a conflict");
-                resolution.unwrap_or_else(|| raw.clone())
-            })
-            .collect()
+        text.write(&resolutions, true)
     }
 
     /// what `git merge` wrote for a branch adding an import, an `__all__` entry, a method and a
@@ -2364,5 +2875,150 @@ def other():
             &|_| None,
         );
         assert_eq!(resolutions, [None]);
+    }
+
+    /// the merged file with its imports reconciled, or the choice that refused it
+    fn reconciled(base: &str, ours: &str, theirs: &str, merged: &str) -> String {
+        let texts = MergeTexts { base, ours, theirs };
+        match reconcile_merge_imports(texts, merged, PySourceType::BasedPython, &sort) {
+            ReconciledImports::Edits(edits) => apply_merge_edits(merged, &edits),
+            ReconciledImports::Refused(choice) => format!("refused: {choice:?}"),
+        }
+    }
+
+    /// ours removed the last function reading `json`, and its import; theirs added another.
+    /// `git merge` writes this without a conflict
+    #[test]
+    fn an_import_a_clean_merge_dropped_that_the_merged_code_reads_is_added_back() {
+        let base = "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n";
+        let ours = "import os\n\n\ndef a():\n    return os.sep\n";
+        let theirs = "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n";
+        let merged = "import os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return json.loads(\"3\")\n";
+        assert_snapshot!(reconciled(base, ours, theirs, merged), @r#"
+        import json
+        import os
+
+
+        def a():
+            return os.sep
+
+
+        def c():
+            return json.loads("3")
+        "#);
+    }
+
+    /// a module with no imports left gets the one it needs before its code, apart from it
+    #[test]
+    fn an_import_is_added_after_the_docstring_where_there_are_no_imports() {
+        let base = "\"\"\"doc\"\"\"\nimport json\n\nX = json\n";
+        let ours = "\"\"\"doc\"\"\"\n";
+        let merged = "\"\"\"doc\"\"\"\nX = json\n";
+        assert_snapshot!(reconciled(base, ours, base, merged), @r#"
+        """doc"""
+        import json
+
+        X = json
+        "#);
+    }
+
+    /// ours stopped reading `json` and removed its import; theirs added `sys` beside it, and the
+    /// conflict was resolved keeping `json`
+    #[test]
+    fn an_import_a_side_removed_that_nothing_reads_is_dropped() {
+        let base = "import json\nimport os\n\nX = json, os\n";
+        let ours = "import os\n\nX = os\n";
+        let theirs = "import json\nimport os\nimport sys\n\nX = json, os, sys\n";
+        let merged = "import json\nimport os\nimport sys\n\nX = os, sys\n";
+        assert_snapshot!(reconciled(base, ours, theirs, merged), @"
+        import os
+        import sys
+
+        X = os, sys
+        ");
+    }
+
+    /// an import nothing reads stays where no side removed it, and one a side removed stays
+    /// where a string names it, as an annotation in quotes does
+    #[test]
+    fn an_import_is_dropped_only_where_a_side_removed_it_and_nothing_names_it() {
+        let base = "import json\nimport os\nimport sys\n";
+        let ours = "import os\nimport sys\n";
+        let merged = "import json\nimport os\nimport sys\n\nX: \"json.JSONDecoder\"\n";
+        assert_eq!(reconciled(base, ours, base, merged), merged);
+    }
+
+    #[test]
+    fn a_name_in_dunder_all_is_read() {
+        let base = "from m import thing\n\n__all__ = [\"thing\"]\n";
+        let ours = "__all__ = [\"thing\"]\n";
+        let merged = "__all__ = [\"thing\"]\n";
+        assert_snapshot!(reconciled(base, ours, base, merged), @r#"
+        from m import thing
+
+        __all__ = ["thing"]
+        "#);
+    }
+
+    /// `open` is the builtin's wherever nothing binds it, and nothing here can say whether the
+    /// code reading it means the builtin or the import a side removed
+    #[test]
+    fn a_builtin_is_not_imported() {
+        let base = "from os import open\n\nX = open\n";
+        let ours = "X = open\n";
+        assert_eq!(reconciled(base, ours, base, ours), ours);
+    }
+
+    #[test]
+    fn a_name_the_versions_import_from_different_places_is_refused() {
+        let base = "from a import x\n\nY = x\n";
+        let theirs = "from b import x\n\nY = x\n";
+        let merged = "Y = x\n";
+        let texts = MergeTexts {
+            base,
+            ours: merged,
+            theirs,
+        };
+        let ReconciledImports::Refused(choice) =
+            reconcile_merge_imports(texts, merged, PySourceType::BasedPython, &sort)
+        else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(choice.name, "x");
+        assert_eq!(
+            choice.imports,
+            vec![
+                (MergeVersion::Ours, vec![]),
+                (MergeVersion::Base, vec!["from a import x".to_string()]),
+                (MergeVersion::Theirs, vec!["from b import x".to_string()]),
+            ]
+        );
+    }
+
+    /// each side added an import of `x` on lines of its own, from a different module, which a
+    /// line merge keeps both of, the later silently winning
+    #[test]
+    fn a_name_the_merged_imports_bind_twice_is_refused() {
+        let base = "import os\n";
+        let ours = "from a import x\nimport os\n";
+        let theirs = "import os\nfrom b import x\n";
+        let merged = "from a import x\nimport os\nfrom b import x\n";
+        assert!(reconciled(base, ours, theirs, merged).starts_with("refused"));
+    }
+
+    /// the imports are left as they are where a comment is among them, and the one the code
+    /// needs is added after them
+    #[test]
+    fn imports_with_a_comment_among_them_are_not_sorted() {
+        let base = "import os  # the os\nimport json\n\nX = json\n";
+        let ours = "import os  # the os\n\nY = 1\n";
+        let merged = "import os  # the os\n\nY = 1\nX = json\n";
+        assert_snapshot!(reconciled(base, ours, base, merged), @"
+        import os  # the os
+        import json
+
+        Y = 1
+        X = json
+        ");
     }
 }

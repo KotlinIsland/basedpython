@@ -1642,7 +1642,7 @@ assigned, and a route whose handler, declaration or application cannot be opened
 ## merges and diffs
 
 an editor's merge and diff tools compare versions of a file no document holds, so
-both requests take texts, and an optional `uri` naming the file they are versions
+these requests take texts, and an optional `uri` naming the file they are versions
 of: its extension says how they are parsed (python without one), and the isort
 configuration buff reads for it sorts imports (the first project's root's
 without one).
@@ -1685,6 +1685,35 @@ in common:
 
 anything else is `null`: lines that are not whole statements or whole elements,
 and two sides that changed one statement, as `LIMIT = 20` and `LIMIT = 30` did.
+
+`by/reconcileMergeImports` takes the merge's three versions, `base`, `ours` and
+`theirs`, and `merged`, the file the merge wrote with every conflict resolved, and
+answers `{"edits": [...], "choice": null}`: the text edits to `merged` that make
+its module-level imports say what its code reads. a line merge can be clean and
+still break a file: ours removes the last function reading `json` and
+`import json` with it, theirs adds another function reading `json`, and git
+writes, without a conflict, a file that reads `json` and does not import it. the
+versions' imports say where each name comes from:
+
+- a name `merged` reads that nothing in it binds, which is not a builtin, is
+    imported as a version imports it, where the versions' module-level imports
+    have exactly one place to import it from. nothing is added where no version
+    imports it, or where `merged` has a star import, which may bind it
+- an import a side removed, binding a name `merged` does not mention, in its code
+    or in any string (an annotation in quotes, `__all__`), is removed. imports no
+    side removed stay, re-exports and imports for their side effects among them.
+    a name `__all__` lists counts as read
+- the imports the file starts with are written as buff's isort configuration
+    for the file sorts them. where a comment is among them, which a sort would
+    have to place, they are left alone and an added import goes after them
+
+where the versions import a name `merged` needs from different places, or
+`merged`'s own imports bind one name to two things, nothing here can say which
+the code means: the answer has no edits and a `choice`,
+`{"name": "x", "imports": [{"version": "ours", "statements": [...]}, {"version": "base", ...}, {"version": "theirs", ...}], "position": {...}}`,
+each version's import statements binding the name, and where in `merged` the
+import belongs. `merged`, or a version, that does not parse is answered with no
+edits
 
 `by/diffIgnoredRanges` takes `{"text": "…"}` and answers what a diff ignoring
 imports and formatting may ignore in it, `{"imports": [...], "formatting": [...]}`,

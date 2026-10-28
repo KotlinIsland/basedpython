@@ -175,6 +175,9 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::ResolveMergeConflictsHandler::METHOD => background_request_task::<
             requests::ResolveMergeConflictsHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::ReconcileMergeImportsHandler::METHOD => background_request_task::<
+            requests::ReconcileMergeImportsHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::DiffIgnoredRangesHandler::METHOD => background_request_task::<
             requests::DiffIgnoredRangesHandler,
         >(req, BackgroundSchedule::Worker),
