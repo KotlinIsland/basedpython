@@ -45,7 +45,6 @@ use ty_project::ProjectDatabase;
 use crate::emit::{CheckGate, Emit, Transpiled, check_and_transpile};
 use crate::project::{BY_SOURCES, Rebuilder, project_sources};
 use crate::record::{BuildRecord, build_identity};
-use crate::runtime::RuntimeLayout;
 use crate::sourcemap::{
     BY_SOURCEMAP_FILENAME, content_digest, describe_module, rewrite_sourcemap_entry,
     sourcemap_key_for,
@@ -376,7 +375,7 @@ fn restage_transpiled(
             // a re-stage writes modules back into a tree the build already laid
             // out, so what it records is thrown away: whatever copy of the runtime
             // a module imports is already sitting where the build put it
-            runtime: Some(&mut RuntimeLayout::default()),
+            runtime: Some(&mut tree.record.runtime_layout()),
             roots: &tree.record.module_roots,
             root: &tree.record.project_root,
         },

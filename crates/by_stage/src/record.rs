@@ -26,6 +26,7 @@ use by_transforms::SoundnessPositions;
 use by_transforms::config::FloatLiteralLowering;
 use by_transforms::config::{Config, PythonVersion};
 
+use crate::runtime::RuntimeLayout;
 use crate::staging::Staging;
 
 /// The name of the record, at the root of the output tree.
@@ -95,16 +96,25 @@ pub struct BuildRecord {
     /// never be re-staged a file at a time. The record says so rather than
     /// leaving a caller to discover it from a failed replacement.
     pub(crate) compiled: bool,
+    /// whether a module in no package imports the copy of the runtime at the tree's root, as
+    /// in a tree nothing ships, rather than having its definitions pasted in
+    ///
+    /// it decides the bytes of every such module, so a re-stage has to lay the runtime out
+    /// as the build did. defaulted, because a tree written before root copies existed pasted
+    /// them in
+    #[serde(default)]
+    pub(crate) runtime_at_root: bool,
     pub(crate) config: ConfigRecord,
 }
 
 impl BuildRecord {
-    /// Describe a build that is about to be written.
+    /// Describe a build that is about to be written, laying the runtime out as `runtime`.
     pub fn new(
         project_root: &Path,
         module_roots: &[PathBuf],
         entry_module: Option<String>,
         compiled: bool,
+        runtime: &RuntimeLayout,
         config: &Config,
     ) -> Self {
         Self {
@@ -113,6 +123,7 @@ impl BuildRecord {
             module_roots: module_roots.to_vec(),
             entry_module,
             compiled,
+            runtime_at_root: runtime.is_unshipped(),
             config: ConfigRecord {
                 min_version: config.min_version.to_string(),
                 soundness: spell_soundness(config.soundness),
@@ -144,6 +155,15 @@ impl BuildRecord {
         })?;
         serde_json::from_str(&contents)
             .map_err(|error| anyhow::anyhow!("`{}` could not be read: {error}", path.display()))
+    }
+
+    /// The runtime layout this build wrote, with nothing recorded in it yet.
+    pub(crate) fn runtime_layout(&self) -> RuntimeLayout {
+        if self.runtime_at_root {
+            RuntimeLayout::unshipped()
+        } else {
+            RuntimeLayout::shipped()
+        }
     }
 
     /// The transpile config this build ran under, rebuilt from the record.
@@ -276,6 +296,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{BuildRecord, ConfigRecord, parse_soundness, spell_soundness};
+    use crate::runtime::RuntimeLayout;
     use by_transforms::SoundnessPositions;
     use by_transforms::config::{Config, FloatLiteralLowering};
     use std::path::{Path, PathBuf};
@@ -290,6 +311,7 @@ mod tests {
             &[PathBuf::from("/p/src")],
             Some("main".to_owned()),
             false,
+            &RuntimeLayout::unshipped(),
             &Config::default(),
         );
         let json: serde_json::Value =
@@ -300,6 +322,7 @@ mod tests {
         assert_eq!(json["moduleRoots"][0], "/p/src");
         assert_eq!(json["entryModule"], "main");
         assert_eq!(json["compiled"], false);
+        assert_eq!(json["runtimeAtRoot"], true);
         assert_eq!(
             json["config"]["minVersion"],
             Config::default().min_version.to_string()
@@ -336,7 +359,14 @@ mod tests {
     /// a tree nobody named an entry point for says so, rather than naming one
     #[test]
     fn a_build_with_no_entry_module_says_null_and_keeps_the_key() {
-        let record = BuildRecord::new(Path::new("/p"), &[], None, false, &Config::default());
+        let record = BuildRecord::new(
+            Path::new("/p"),
+            &[],
+            None,
+            false,
+            &RuntimeLayout::shipped(),
+            &Config::default(),
+        );
         let json: serde_json::Value =
             serde_json::from_str(&record.render()).expect("the record is plain data");
         assert!(json.get("entryModule").is_some(), "the key stays: {json}");
@@ -358,7 +388,14 @@ mod tests {
             ..Config::default()
         };
 
-        let record = BuildRecord::new(Path::new("/p"), &[], None, false, &config);
+        let record = BuildRecord::new(
+            Path::new("/p"),
+            &[],
+            None,
+            false,
+            &RuntimeLayout::shipped(),
+            &config,
+        );
         let parsed: BuildRecord = serde_json::from_str(&record.render())?;
         let recovered = parsed.config()?;
 
@@ -398,6 +435,53 @@ mod tests {
         assert!(serde_json::from_str::<BuildRecord>(json).is_err());
     }
 
+    /// a re-stage lays the runtime out as the build that wrote the tree did: a module in no
+    /// package of a `by run` tree imports the root copy, and one of a `by build` tree has the
+    /// definitions pasted in
+    #[test]
+    fn the_record_keeps_how_the_build_laid_the_runtime_out() {
+        for layout in [RuntimeLayout::unshipped(), RuntimeLayout::shipped()] {
+            let record = BuildRecord::new(
+                Path::new("/p"),
+                &[],
+                None,
+                false,
+                &layout,
+                &Config::default(),
+            );
+            let read: BuildRecord =
+                serde_json::from_str(&record.render()).expect("the record reads back");
+            assert_eq!(
+                read.runtime_layout().is_unshipped(),
+                layout.is_unshipped(),
+                "{}",
+                record.render()
+            );
+        }
+    }
+
+    /// a tree written before root copies existed had the definitions pasted in
+    #[test]
+    fn a_record_without_a_runtime_layout_pasted_the_definitions_in() {
+        let mut json: serde_json::Value = serde_json::from_str(
+            &BuildRecord::new(
+                Path::new("/p"),
+                &[],
+                None,
+                false,
+                &RuntimeLayout::unshipped(),
+                &Config::default(),
+            )
+            .render(),
+        )
+        .expect("the record is plain data");
+        json.as_object_mut()
+            .expect("the record is an object")
+            .remove("runtimeAtRoot");
+        let read: BuildRecord = serde_json::from_value(json).expect("the record reads back");
+        assert!(!read.runtime_layout().is_unshipped());
+    }
+
     #[test]
     fn a_version_the_record_names_that_this_by_cannot_target_is_refused() {
         let record = BuildRecord {
@@ -406,6 +490,7 @@ mod tests {
             module_roots: Vec::new(),
             entry_module: None,
             compiled: false,
+            runtime_at_root: false,
             config: ConfigRecord {
                 min_version: "three point twelve".to_owned(),
                 soundness: "none".to_owned(),

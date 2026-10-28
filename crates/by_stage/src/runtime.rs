@@ -15,6 +15,15 @@
 //! package — which has no import that works both when it is run as a script and
 //! when it is imported
 //!
+//! # a tree nothing ships
+//!
+//! a tree `by run` stages is run and thrown away, and nothing installs it, so neither
+//! reason holds there. a module in no package imports the copy at the tree's root
+//! instead, which the runner's directory on `sys.path` makes importable from every
+//! module of the tree. the helpers then run from a file of their own, at its lines,
+//! rather than as lines of the module the transpiler wrote with no line of the `.by`
+//! behind them, which a traceback and a debugger can only call line 0
+//!
 //! # the import is absolute
 //!
 //! `from pkg._by_runtime import …` rather than `from ._by_runtime import …`: a
@@ -33,11 +42,46 @@ use ruff_db::system::{System, SystemPath};
 /// wrote, and an edit that newly reaches for a helper has to find the copy there
 #[derive(Debug, Default)]
 pub struct RuntimeLayout {
-    /// each package holding a copy
+    /// each package holding a copy, the tree's root as the empty name
     packages: BTreeSet<String>,
+    /// whether a module in no package imports the copy at the tree's root, as in a tree
+    /// nothing ships, rather than having the definitions pasted in
+    root_copy: bool,
 }
 
 impl RuntimeLayout {
+    /// the layout of a tree a distribution may be made of: a copy in each package, and the
+    /// definitions pasted into a module in none
+    pub fn shipped() -> Self {
+        Self::default()
+    }
+
+    /// the layout of a tree nothing ships, which `by run` stages: a copy in each package, and
+    /// one at the tree's root for every module in none
+    pub fn unshipped() -> Self {
+        Self {
+            packages: BTreeSet::new(),
+            root_copy: true,
+        }
+    }
+
+    /// whether this is the layout of a tree nothing ships
+    pub(crate) fn is_unshipped(&self) -> bool {
+        self.root_copy
+    }
+
+    /// the copy the module `source`, landing at `relative` in the module tree, imports the
+    /// runtime from — or `None` for one that gets the definitions pasted in
+    pub(crate) fn package_of(
+        &self,
+        relative: &Path,
+        source: &Path,
+        system: &dyn System,
+    ) -> Option<RuntimePackage> {
+        RuntimePackage::of(relative, source, system)
+            .or_else(|| self.root_copy.then(|| RuntimePackage(String::new())))
+    }
+
     /// record that a module importing `package`'s copy was transpiled, whether or
     /// not the transpile succeeded
     pub(crate) fn record(&mut self, package: &RuntimePackage) {
@@ -78,7 +122,11 @@ impl RuntimePackage {
 
     /// the module the copy is imported as
     pub(crate) fn module(&self) -> String {
-        format!("{}.{}", self.0, by_transforms::runtime::MODULE_NAME)
+        if self.0.is_empty() {
+            by_transforms::runtime::MODULE_NAME.to_owned()
+        } else {
+            format!("{}.{}", self.0, by_transforms::runtime::MODULE_NAME)
+        }
     }
 }
 
@@ -135,7 +183,7 @@ mod tests {
                 .join("src")
                 .join(relative)
                 .with_extension("by");
-            let package = RuntimePackage::of(Path::new(relative), &source, &self.system)?;
+            let package = layout.package_of(Path::new(relative), &source, &self.system)?;
             layout.record(&package);
             Some(package.module())
         }
@@ -212,6 +260,49 @@ mod tests {
             vec![
                 PathBuf::from("one/_by_runtime.py"),
                 PathBuf::from("two/_by_runtime.py")
+            ]
+        );
+    }
+
+    /// in a tree nothing ships, a module at a module root imports the copy at the tree's root
+    #[test]
+    fn an_unshipped_root_module_imports_the_root_copy() {
+        let project = Project::with(&["src/main.by"]);
+        let mut layout = RuntimeLayout::unshipped();
+        assert_eq!(
+            project.record(&mut layout, "main.py").as_deref(),
+            Some("_by_runtime")
+        );
+        assert_eq!(
+            layout.files().collect::<Vec<_>>(),
+            vec![PathBuf::from("_by_runtime.py")]
+        );
+    }
+
+    /// and so does a module in a directory that is not a package, which the runner's
+    /// directory on `sys.path` reaches the root copy from all the same
+    #[test]
+    fn an_unshipped_module_in_no_package_imports_the_root_copy() {
+        let project = Project::with(&["src/scripts/tool.by"]);
+        let mut layout = RuntimeLayout::unshipped();
+        assert_eq!(
+            project.record(&mut layout, "scripts/tool.py").as_deref(),
+            Some("_by_runtime")
+        );
+    }
+
+    /// a package keeps its own copy in a tree nothing ships
+    #[test]
+    fn an_unshipped_package_imports_its_own_copy() {
+        let project = Project::with(&["src/pkg/__init__.py", "src/pkg/a.by", "src/main.by"]);
+        let mut layout = RuntimeLayout::unshipped();
+        project.record(&mut layout, "pkg/a.py");
+        project.record(&mut layout, "main.py");
+        assert_eq!(
+            layout.files().collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("_by_runtime.py"),
+                PathBuf::from("pkg/_by_runtime.py")
             ]
         );
     }
