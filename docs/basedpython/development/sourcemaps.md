@@ -155,6 +155,29 @@ python reports — so it carries the original key alongside the resolved one. a
 consumer that normalises keys has to do the same, or its digest lookup misses
 and every entry reads as stale
 
+## code by writes for itself
+
+built, unlike the rest of this document
+
+a debugger looks for `_by_sourcemap.py` where the program is, so the map also says
+which of the tree's python is `by`'s rather than the program's. it says it after
+the two tables, as names a reader that predates them never reads:
+
+```python
+LAUNCHER = "/tmp/.tmpXXXX/_by_runner.py"
+```
+
+`LAUNCHER` is the script a program in the tree is started through: `by run`
+starts the interpreter on its runner, `_by_runner.py`, which makes the program's
+entry module `__main__` and runs it. none of the runner's frames is the program's,
+and a debugger that launched the file `LAUNCHER` names treats them as python's own
+`runpy` frames under `python -m`. a `by build` or `by compile` tree, which no
+program is started from, says `LAUNCHER = None`. the path is spelled as the
+tables spell theirs, so a consumer that resolves symlinks resolves it too
+
+a re-stage rewrites only the lines of the entry it re-staged, so what the map
+says about by's own code stays as the build wrote it
+
 ## goals
 
 1. **byte-accurate** — map arbitrary `.by` byte offsets ↔ `.py` byte offsets,
