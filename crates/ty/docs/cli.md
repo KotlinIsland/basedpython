@@ -24,6 +24,7 @@ by <COMMAND>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
 <dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute the slots of a set of edited files in a build tree that already exists</p></dd>
 <dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
+<dt><a href="#by-merge-driver"><code>by merge-driver</code></a></dt><dd><p>Merge a file as git's merge driver</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
 <dt><a href="#by-help"><code>by help</code></a></dt><dd><p>Print this message or the help of the given subcommand(s)</p></dd>
@@ -430,6 +431,35 @@ by compile [OPTIONS] [FILE]...
 </dd><dt id="by-compile--soundness"><a href="#by-compile--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd><dt id="by-compile--stamp"><a href="#by-compile--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
 </dd><dt id="by-compile--verbose"><a href="#by-compile--verbose"><code>--verbose</code></a></dt><dd><p>Report every function that was not lowered natively, with the reason</p>
+</dd></dl>
+
+## by merge-driver
+
+Merge a file as git's merge driver.
+
+git runs it for each python, basedpython or `api.lock` file both sides of a merge changed, as `by merge-driver %O %A %B %L %P %S %X %Y`. It merges lines as git does, resolves the conflicts whose sides change different things, and adds or drops the imports the merged code needs. `api.lock` is generated, so a merge that changed it on both sides is left conflicted, with how to generate it again.
+
+<h3 class="cli-reference">Usage</h3>
+
+```
+by merge-driver <BASE> <OURS> <THEIRS> <MARKER_SIZE> <PATH> [BASE_LABEL] [OURS_LABEL] [THEIRS_LABEL]
+```
+
+<h3 class="cli-reference">Arguments</h3>
+
+<dl class="cli-reference"><dt id="by-merge-driver--base"><a href="#by-merge-driver--base"><code>BASE</code></a></dt><dd><p>The common ancestor's version (<code>%O</code>)</p>
+</dd><dt id="by-merge-driver--ours"><a href="#by-merge-driver--ours"><code>OURS</code></a></dt><dd><p>Our version, which the result is written over (<code>%A</code>)</p>
+</dd><dt id="by-merge-driver--theirs"><a href="#by-merge-driver--theirs"><code>THEIRS</code></a></dt><dd><p>Their version (<code>%B</code>)</p>
+</dd><dt id="by-merge-driver--marker_size"><a href="#by-merge-driver--marker_size"><code>MARKER_SIZE</code></a></dt><dd><p>The size of the conflict markers (<code>%L</code>)</p>
+</dd><dt id="by-merge-driver--path"><a href="#by-merge-driver--path"><code>PATH</code></a></dt><dd><p>The path in the work tree the result is for (<code>%P</code>)</p>
+</dd><dt id="by-merge-driver--base_label"><a href="#by-merge-driver--base_label"><code>BASE_LABEL</code></a></dt><dd><p>The common ancestor's conflict label (<code>%S</code>)</p>
+</dd><dt id="by-merge-driver--ours_label"><a href="#by-merge-driver--ours_label"><code>OURS_LABEL</code></a></dt><dd><p>Our conflict label (<code>%X</code>)</p>
+</dd><dt id="by-merge-driver--theirs_label"><a href="#by-merge-driver--theirs_label"><code>THEIRS_LABEL</code></a></dt><dd><p>Their conflict label (<code>%Y</code>)</p>
+</dd></dl>
+
+<h3 class="cli-reference">Options</h3>
+
+<dl class="cli-reference"><dt id="by-merge-driver--help"><a href="#by-merge-driver--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd></dl>
 
 ## by generate-api-file

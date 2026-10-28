@@ -3,6 +3,7 @@ mod by_commands;
 mod by_coverage;
 mod by_init;
 mod by_lowering;
+mod by_merge_driver;
 mod by_project_server;
 mod by_repl;
 mod by_source_encoding;
@@ -244,6 +245,25 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             min_version,
             lowering,
         } => by_commands::cmd_transpile(file.as_ref(), reverse, min_version.as_deref(), &lowering),
+        Command::MergeDriver {
+            base,
+            ours,
+            theirs,
+            marker_size,
+            path,
+            base_label,
+            ours_label,
+            theirs_label,
+        } => by_merge_driver::cmd_merge_driver(&by_merge_driver::DriverArgs {
+            base,
+            ours,
+            theirs,
+            marker_size,
+            path,
+            base_label,
+            ours_label,
+            theirs_label,
+        }),
         Command::GenerateApiFile {
             output,
             stdout,

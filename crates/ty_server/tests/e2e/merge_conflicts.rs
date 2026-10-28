@@ -163,6 +163,7 @@ fn a_name_imported_from_two_places_is_answered_with_the_choice() -> Result<()> {
                     {"version": "theirs", "statements": ["from b import x"]},
                 ],
                 "position": {"line": 0, "character": 0},
+                "bindings": [],
             },
         })
     );
