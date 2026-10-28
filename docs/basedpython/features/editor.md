@@ -1710,10 +1710,12 @@ versions' imports say where each name comes from:
 where the versions import a name `merged` needs from different places, or
 `merged`'s own imports bind one name to two things, nothing here can say which
 the code means: the answer has no edits and a `choice`,
-`{"name": "x", "imports": [{"version": "ours", "statements": [...]}, {"version": "base", ...}, {"version": "theirs", ...}], "position": {...}}`,
-each version's import statements binding the name, and where in `merged` the
-import belongs. `merged`, or a version, that does not parse is answered with no
-edits
+`{"name": "x", "imports": [{"version": "ours", "statements": [...]}, {"version": "base", ...}, {"version": "theirs", ...}], "position": {...}, "bindings": [...]}`:
+each version's import statements binding the name, where in `merged` the import
+belongs, and the ranges of the lines of `merged`'s import statements that bind
+that name and nothing else, which whatever is chosen replaces. `merged`, or a version, that does not parse is answered with no
+edits. [`by merge-driver`](../cli-reference.md#by-merge-driver) does the same for
+a merge git runs, where no merge window ever opens for a file git merges cleanly
 
 `by/diffIgnoredRanges` takes `{"text": "…"}` and answers what a diff ignoring
 imports and formatting may ignore in it, `{"imports": [...], "formatting": [...]}`,

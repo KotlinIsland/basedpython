@@ -169,6 +169,9 @@ pub(crate) struct ImportChoice {
     imports: Vec<VersionImports>,
     /// where in `merged` the import belongs
     position: Position,
+    /// the lines of `merged`'s import statements that bind the name and nothing else, which
+    /// whatever is chosen replaces
+    bindings: Vec<Range>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -251,6 +254,7 @@ impl BackgroundRequestHandler for ReconcileMergeImportsHandler {
                             })
                             .collect(),
                         position: range(TextRange::empty(choice.offset)).start,
+                        bindings: choice.bindings.into_iter().map(range).collect(),
                     }),
                 },
             },

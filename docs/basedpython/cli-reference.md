@@ -18,6 +18,7 @@ in addition to the cli provided by `ty`, `by` includes:
 | `build`             | transpile every `.by`/`.byi` file and write to `build/`            |
 | `compile`           | compile `.by` files to native CPython extension modules            |
 | `generate-api-file` | write a public-api lockfile (see [api-lock](features/api-lock.md)) |
+| `merge-driver`      | the merge driver git runs for python files and `api.lock`          |
 | `transpile`         | transpile a single file to stdout (reads stdin if no file)         |
 
 ## `by run`
@@ -429,6 +430,49 @@ by generate-api-file --project lib         # the lockfile of the project in lib,
 
 see [api-lock](features/api-lock.md) for the lockfile format and workflow, and
 for what the language server says about a stale lockfile
+
+## `by merge-driver`
+
+```sh
+by merge-driver BASE OURS THEIRS MARKER_SIZE PATH [BASE_LABEL OURS_LABEL THEIRS_LABEL]
+```
+
+the merge driver git runs, as `by merge-driver %O %A %B %L %P %S %X %Y`, for each
+file both sides of a merge changed that `.gitattributes` gives to it. git runs a
+merge driver for every such file, conflicting or not, from the command line or
+from an editor that runs git, and for a `git rebase` or `git cherry-pick` as for
+a `git merge`
+
+for a `.by`, `.byi`, `.py` or `.pyi` file it
+
+1. merges lines as `git merge` does: `git merge-file` with the histogram diff
+    `git merge` uses, the repository's `merge.conflictStyle` and git's conflict
+    labels and marker size
+1. resolves each conflict whose sides change different things, as an editor's
+    *resolve simple conflicts* asks `by/resolveMergeConflicts`
+    (see [merges and diffs](features/editor.md#merges-and-diffs)): imports both
+    sides added, definitions each side added under its own name, and the like
+1. once nothing conflicts, reconciles the imports with the three versions, as
+    `by/reconcileMergeImports` does. a line merge can be clean and still leave a
+    file reading a name it no longer imports: ours removes `import json` with the
+    last function reading it, theirs adds another reading it. the import is added
+    back, and an import a side removed that nothing mentions is dropped. where the
+    versions import one name from different places, the imports of it become a
+    conflict, `by` says why on stderr, and the file is left for you
+
+it exits 0 only when nothing is left to resolve. a conflict it does not resolve is
+left as git writes it, so with nothing resolved the file is exactly what `git merge`
+alone would have written. the options `git merge -X` takes are not passed to a
+merge driver
+
+`api.lock` is generated from the source (see [api-lock](features/api-lock.md)).
+git runs a merge driver while other files may still conflict, or not yet be
+written, so there is no source to generate it from: a lockfile both sides changed
+differently is never merged clean. it is left as git's line merge wrote it,
+conflicted even where those lines merged cleanly, and `by` says which
+`by generate-api-file` to run once the rest of the merge is resolved. a lockfile
+only one side changed is not given to a merge driver at all, and may still be
+stale after the merge: the language server reports it
 
 ## `by transpile`
 

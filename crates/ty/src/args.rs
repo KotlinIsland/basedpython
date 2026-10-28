@@ -369,6 +369,33 @@ pub(crate) enum Command {
         lowering: LoweringArgs,
     },
 
+    /// Merge a file as git's merge driver.
+    ///
+    /// git runs it for each python, basedpython or `api.lock` file both sides of
+    /// a merge changed, as `by merge-driver %O %A %B %L %P %S %X %Y`. It merges
+    /// lines as git does, resolves the conflicts whose sides change different
+    /// things, and adds or drops the imports the merged code needs. `api.lock`
+    /// is generated, so a merge that changed it on both sides is left
+    /// conflicted, with how to generate it again.
+    MergeDriver {
+        /// The common ancestor's version (`%O`)
+        base: PathBuf,
+        /// Our version, which the result is written over (`%A`)
+        ours: PathBuf,
+        /// Their version (`%B`)
+        theirs: PathBuf,
+        /// The size of the conflict markers (`%L`)
+        marker_size: usize,
+        /// The path in the work tree the result is for (`%P`)
+        path: PathBuf,
+        /// The common ancestor's conflict label (`%S`)
+        base_label: Option<String>,
+        /// Our conflict label (`%X`)
+        ours_label: Option<String>,
+        /// Their conflict label (`%Y`)
+        theirs_label: Option<String>,
+    },
+
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
     /// surface of the project.
     ///

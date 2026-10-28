@@ -8800,6 +8800,136 @@ fn build_does_not_carry_a_compilers_output_directory() {
     );
 }
 
+// ── merging with git ─────────────────────────────────────────────────────────
+
+/// `git` in `dir`, with none of the configuration of the machine it runs on: a user's
+/// `merge.conflictStyle` would change what a merge writes
+fn git_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("failed to spawn git")
+}
+
+/// a repository whose `file` was `base`, changed to `theirs` on the branch `theirs` and to
+/// `ours` on `main`, with `by merge-driver` set up for it, after `git merge theirs`
+fn merged_with_the_driver(
+    file: &str,
+    base: &str,
+    ours: &str,
+    theirs: &str,
+) -> (tempfile::TempDir, std::process::Output) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str]| {
+        let output = git_in(dir.path(), args);
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    git(&["config", "merge.by.name", "by merge driver"]);
+    let driver = format!(
+        "'{}' merge-driver %O %A %B %L %P %S %X %Y",
+        env!("CARGO_BIN_EXE_by")
+    );
+    git(&["config", "merge.by.driver", &driver]);
+    fs::write(
+        dir.path().join(".gitattributes"),
+        "*.by merge=by\napi.lock merge=by\n",
+    )
+    .unwrap();
+    for (content, branch) in [(base, None), (theirs, Some("theirs")), (ours, Some("main"))] {
+        if let Some(branch) = branch {
+            git(&["checkout", "-q", "-B", branch]);
+        }
+        fs::write(dir.path().join(file), content).unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", branch.unwrap_or("base")]);
+        if branch == Some("theirs") {
+            git(&["checkout", "-q", "HEAD~1"]);
+        }
+    }
+    let output = git_in(dir.path(), &["merge", "--no-edit", "theirs"]);
+    (dir, output)
+}
+
+/// ours removed the last function reading `json` and its import, theirs changed another
+/// function to read it: lines apart, so git's merge is clean, and reads `json` without importing
+/// it
+#[test]
+fn the_merge_driver_imports_what_a_clean_line_merge_dropped() {
+    let (dir, output) = merged_with_the_driver(
+        "m.by",
+        "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return 1\n",
+        "import os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return 1\n",
+        "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n",
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return json.loads(\"3\")\n"
+    );
+}
+
+/// the imports both sides added in one place are resolved, and the limit both changed is left
+/// as git writes it
+#[test]
+fn the_merge_driver_resolves_what_it_can_and_leaves_the_rest_as_git_writes_it() {
+    let (dir, output) = merged_with_the_driver(
+        "m.by",
+        "import os\n\nA = 1\n\nLIMIT = 1\n",
+        "import os\nimport json\n\nA = json\n\nLIMIT = 2\n",
+        "import os\nimport sys\n\nA = 1\n\nLIMIT = 3\nB = sys\n",
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        "import os\nimport json\nimport sys\n\nA = json\n\n<<<<<<< HEAD\nLIMIT = 2\n=======\nLIMIT = 3\nB = sys\n>>>>>>> theirs\n"
+    );
+}
+
+/// the import of a name each side imports from a different module is a conflict, not whichever
+/// line a line merge happens to keep last
+#[test]
+fn the_merge_driver_makes_a_name_imported_from_two_places_a_conflict() {
+    let (dir, output) = merged_with_the_driver(
+        "m.by",
+        "import os\n\nA = os\n\n\ndef f():\n    return 1\n",
+        "from a import x\nimport os\n\nA = os\n\n\ndef f():\n    return 1\n",
+        "import os\nfrom b import x\n\nA = os\n\n\ndef f():\n    return x\n",
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        "import os\n<<<<<<< HEAD\nfrom a import x\n=======\nfrom b import x\n>>>>>>> theirs\n\nA = os\n\n\ndef f():\n    return x\n"
+    );
+}
+
+/// `api.lock` is generated from the source, which may still conflict while git merges: lines
+/// apart, git's merge of it would be clean, and it is still left conflicted
+#[test]
+fn the_merge_driver_leaves_an_api_lock_both_sides_changed_conflicted() {
+    let (dir, output) = merged_with_the_driver(
+        "api.lock",
+        "#api-lock:v=1\n#python:3.10\na:v=int\nm:v=int\nz:v=int\n",
+        "#api-lock:v=1\n#python:3.10\nb:v=int\nm:v=int\nz:v=int\n",
+        "#api-lock:v=1\n#python:3.10\na:v=int\nm:v=int\ny:v=int\n",
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("by generate-api-file --python-version 3.10"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("api.lock")).unwrap(),
+        "#api-lock:v=1\n#python:3.10\nb:v=int\nm:v=int\ny:v=int\n"
+    );
+}
+
 // ── starting a project ───────────────────────────────────────────────────────
 
 /// what `by init` writes has to be a project the rest of the toolchain accepts,

@@ -78,7 +78,7 @@ pub struct MergeTexts<'a> {
 ///
 /// `sort_imports` writes a run of import statements as the project's isort configuration sorts
 /// them, and answers `None` for anything else
-pub(crate) fn resolve_merge_conflicts(
+pub fn resolve_merge_conflicts(
     texts: MergeTexts<'_>,
     conflicts: &[ConflictLines],
     source_type: PySourceType,
@@ -104,7 +104,7 @@ pub(crate) fn resolve_merge_conflicts(
         .collect()
 }
 
-/// `resolve_merge_conflicts` for the file at `path` in `db`'s project, whose extension says
+/// [`resolve_merge_conflicts`] for the file at `path` in `db`'s project, whose extension says
 /// how it is parsed, and whose imports are sorted with the isort configuration buff reads for it:
 /// a project file's, or with no `path` the project root directory's
 pub fn resolve_file_merge_conflicts(
@@ -1607,6 +1607,9 @@ pub struct ImportChoice {
     pub imports: Vec<(MergeVersion, Vec<String>)>,
     /// where in the merged text the import belongs: after the imports it starts with
     pub offset: TextSize,
+    /// the lines of the merged text's import statements that bind the name and nothing else,
+    /// which whatever is chosen replaces
+    pub bindings: Vec<TextRange>,
 }
 
 /// what reconciling a merged file's imports with its three versions answers
@@ -1685,6 +1688,17 @@ pub fn reconcile_merge_imports(
                 })
                 .collect(),
             offset: section.end,
+            bindings: module_import_statements(result.module())
+                .into_iter()
+                .filter(|statement| {
+                    imported(&[statement])
+                        .iter()
+                        .all(|import| import.binds() == name)
+                        && result.has_own_lines(statement)
+                        && !result.has_comment_in(statement.range())
+                })
+                .filter_map(|statement| result.statement_lines(statement))
+                .collect(),
         })
     };
 
@@ -1843,6 +1857,15 @@ impl Version<'_> {
         self.line_start(line) == Some(statement.start()) && self.text[after].trim().is_empty()
     }
 
+    /// the lines `statement` is on, their line endings included
+    fn statement_lines(&self, statement: &Stmt) -> Option<TextRange> {
+        let line = self.lines.line_index(statement.start()).to_zero_indexed();
+        Some(TextRange::new(
+            self.line_start(line)?,
+            self.next_line_start(statement.end()),
+        ))
+    }
+
     /// whether a comment is in `range`
     fn has_comment_in(&self, range: TextRange) -> bool {
         self.parsed
@@ -1954,14 +1977,9 @@ impl<'a> ImportSection<'a> {
             {
                 continue;
             }
-            let line = version
-                .lines
-                .line_index(statement.start())
-                .to_zero_indexed();
-            let Some(start) = version.line_start(line) else {
+            let Some(range) = version.statement_lines(statement) else {
                 continue;
             };
-            let range = TextRange::new(start, version.next_line_start(statement.end()));
             let replacement = if kept.is_empty() {
                 String::new()
             } else {
@@ -3003,7 +3021,19 @@ def other():
         let ours = "from a import x\nimport os\n";
         let theirs = "import os\nfrom b import x\n";
         let merged = "from a import x\nimport os\nfrom b import x\n";
-        assert!(reconciled(base, ours, theirs, merged).starts_with("refused"));
+        let texts = MergeTexts { base, ours, theirs };
+        let ReconciledImports::Refused(choice) =
+            reconcile_merge_imports(texts, merged, PySourceType::BasedPython, &sort)
+        else {
+            panic!("expected a refusal");
+        };
+        // both statements binding `x` are what is chosen between
+        let bindings: Vec<&str> = choice
+            .bindings
+            .iter()
+            .map(|range| &merged[*range])
+            .collect();
+        assert_eq!(bindings, ["from a import x\n", "from b import x\n"]);
     }
 
     /// the imports are left as they are where a comment is among them, and the one the code
