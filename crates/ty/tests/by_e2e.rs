@@ -9810,3 +9810,65 @@ fn check_follows_the_build_to_another_directory_and_keeps_a_package_called_build
         "the sources and the author's own `build/`, and nothing the build wrote"
     );
 }
+
+/// what a launcher given `by run`'s runner finds beside it: the `_by_sourcemap.py` of the tree the
+/// runner is in, and the runner's path as the launcher was handed it
+#[cfg(unix)]
+fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), main).unwrap();
+    let map = dir.path().join("map");
+    let runner = dir.path().join("runner");
+    let launcher = dir.path().join("launcher");
+    fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\n\
+             cp \"$(dirname \"$2\")/_by_sourcemap.py\" '{map}'\n\
+             printf '%s' \"$2\" > '{runner}'\n\
+             exec \"$@\"\n",
+            map = map.display(),
+            runner = runner.display(),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--launcher"])
+        .arg(&launcher)
+        .arg("main")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        fs::read_to_string(&map).expect("the launcher copied the map"),
+        fs::read_to_string(&runner).expect("the launcher was handed the runner"),
+    )
+}
+
+/// the map declares the runner as the script the program is started through, so a launcher — a
+/// debugger — knows the frames under the program's are not the program's without being told
+#[cfg(unix)]
+#[test]
+fn run_declares_its_runner_as_the_launcher() {
+    let (map, runner) = run_through_a_launcher_reading_the_map("print('ran')\n");
+    assert!(
+        map.lines()
+            .any(|line| line == format!("LAUNCHER = \"{runner}\"")),
+        "the launcher is the runner the program was started through:\n{map}"
+    );
+}

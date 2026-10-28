@@ -87,6 +87,11 @@ reports it and exits 1. a debugger that stops where such an exception leaves the
 outermost frame stops in the program by treating the runner's frames as it
 treats `runpy`'s under `python -m`: as the launcher's, not the program's
 
+the tree says which file the runner is, so a launcher need not be told: the
+`_by_sourcemap.py` beside the runner names it as `LAUNCHER`, an absolute path
+spelled as the map's other paths are (see [sourcemaps](development/sourcemaps.md#code-by-writes-for-itself)).
+a `by build` tree, which no program is started from, says `LAUNCHER = None`
+
 a signal that ends the program ends `by run` with 128 and the signal's number,
 as a shell reports it
 

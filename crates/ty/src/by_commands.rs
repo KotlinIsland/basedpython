@@ -32,7 +32,7 @@ use by_stage::project::{
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
 use by_stage::runtime::RuntimeLayout;
-use by_stage::sourcemap::{TracebackEntry, stage_module, write_sourcemap_module};
+use by_stage::sourcemap::{OwnCode, TracebackEntry, stage_module, write_sourcemap_module};
 use by_stage::staging::{Staging, transpiled_destination};
 use by_stage::verbatim::stage_verbatim;
 
@@ -1197,7 +1197,9 @@ pub(crate) fn cmd_build(
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_runtime(&mut staging, &layout)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
-    write_sourcemap_module(&mut staging, &entries)?;
+    // a build is not started through anything of by's: it is imported, or run as python runs
+    // any module
+    write_sourcemap_module(&mut staging, &entries, &OwnCode::default())?;
     // `build/` outlives the build that wrote it and is what a debugger, a test
     // runner or an editor plugin later reads, so it carries the same record a
     // `run` tree does. no entry module: a build is not pointed at one
@@ -1638,7 +1640,7 @@ pub(crate) fn cmd_compile(
         if let Err(error) = stage_by_typed_markers(&db, &mut staging, &roots, &root) {
             break 'compiling Err(error);
         }
-        if let Err(error) = write_sourcemap_module(&mut staging, &entries) {
+        if let Err(error) = write_sourcemap_module(&mut staging, &entries, &OwnCode::default()) {
             break 'compiling Err(error);
         }
         // whether the tree actually *holds* extensions, which is the question a
@@ -1985,7 +1987,13 @@ fn write_traceback_runtime(
     staging: &mut Staging,
     entries: &[TracebackEntry],
 ) -> anyhow::Result<()> {
-    write_sourcemap_module(staging, entries)?;
+    write_sourcemap_module(
+        staging,
+        entries,
+        &OwnCode {
+            launcher: Some(PathBuf::from(BY_RUNNER_FILENAME)),
+        },
+    )?;
     // through the staging, so that a project of its own with this name is
     // reported as the collision it is rather than silently overwritten by a shim
     // it knows nothing about
