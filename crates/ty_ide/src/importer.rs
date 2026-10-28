@@ -3,13 +3,22 @@
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
+    use ruff_db::Db as _;
+    use ruff_linter::linter::{ParseSource, lint_only};
+    use ruff_linter::package::PackageRoot;
+    use ruff_linter::registry::Rule;
+    use ruff_linter::settings::flags::Noqa;
+    use ruff_linter::settings::rule_table::RuleTable;
+    use ruff_linter::source_kind::SourceKind;
+    use ruff_python_ast::PySourceType;
+    use ty_project::Db as _;
 
-    use crate::import_order;
+    use crate::import_order::{self, IsortConfig};
     use crate::tests::{CursorTest, cursor_test};
     use ruff_python_ast::find_node::covering_node;
     use ruff_text_size::{Ranged, TextRange};
     use ty_python_core::ProgramFile;
-    use ty_python_semantic::importer::{ImportRequest, Importer};
+    use ty_python_semantic::importer::{ImportAction, ImportRequest, Importer};
 
     impl CursorTest {
         fn import(&self, module: &str, member: &str) -> String {
@@ -54,7 +63,113 @@ mod tests {
                 );
                 source.replace_range(edit.range().to_std_range(), edit.content().unwrap_or(""));
             }
+            // when buff accepts the file's imports with the symbol written in, it accepts them
+            // with the import added too. a new import set apart from the code after it can't
+            // be checked when the symbol is the first code after it, as the file the importer
+            // sees has none there
+            let mut with_symbol = self.cursor.source.to_string();
+            with_symbol.insert_str(self.cursor.offset.to_usize(), resp.symbol_text());
+            let follows_code =
+                resp.import().is_none_or(|edit| {
+                    self.cursor.parsed.suite().iter().any(|stmt| {
+                        stmt.start() >= edit.start() && stmt.start() <= self.cursor.offset
+                    })
+                });
+            if follows_code && self.unsorted_imports(&with_symbol) == 0 {
+                assert_eq!(
+                    self.unsorted_imports(&source),
+                    0,
+                    "buff reports the imports unsorted once one is added:\n{source}"
+                );
+            }
             source
+        }
+
+        /// The file with everything `requests` import added at once, as
+        /// [`Importer::combined_edits`] adds them, with each request's symbol written on a line
+        /// of its own at the cursor. A file buff accepts the imports of with the symbols written
+        /// in still has imports it accepts once they are added.
+        fn add_all(&self, requests: &[ImportRequest<'_>]) -> String {
+            let (with_symbols, source) = self.add_all_with(&self.importer(), requests);
+            if self.unsorted_imports(&with_symbols) == 0 {
+                assert_eq!(
+                    self.unsorted_imports(&source),
+                    0,
+                    "buff reports the imports unsorted once they are added:\n{source}"
+                );
+            }
+            source
+        }
+
+        /// The file with the symbols `requests` are referred to by written at the cursor, and
+        /// the file with `importer`'s imports of them added too.
+        fn add_all_with(
+            &self,
+            importer: &Importer<'_>,
+            requests: &[ImportRequest<'_>],
+        ) -> (String, String) {
+            let node = covering_node(
+                self.cursor.parsed.syntax().into(),
+                TextRange::empty(self.cursor.offset),
+            )
+            .node();
+            let members = importer.members_in_scope_at(node, self.cursor.offset);
+            let actions: Vec<_> = requests
+                .iter()
+                .map(|request| importer.import(*request, &members))
+                .collect();
+            let symbols: Vec<&str> = actions.iter().map(ImportAction::symbol_text).collect();
+            let mut with_symbols = self.cursor.source.to_string();
+            with_symbols.insert_str(self.cursor.offset.to_usize(), &symbols.join("\n"));
+            let mut source = with_symbols.clone();
+            let mut edits = importer.combined_edits(&actions);
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.start()));
+            for edit in edits {
+                assert!(edit.range().end() <= self.cursor.offset);
+                source.replace_range(edit.range().to_std_range(), edit.content().unwrap_or(""));
+            }
+            (with_symbols, source)
+        }
+
+        /// How many `I001` diagnostics buff's isort check reports for `source` as the contents
+        /// of the cursor's file, with the configuration buff reads for it. buff sorts each cell
+        /// of a notebook on its own, so of a notebook only the cursor's cell is checked, which
+        /// is where an import is added
+        fn unsorted_imports(&self, source: &str) -> usize {
+            let Some(path) = self.cursor.file.path(&self.db).as_system_path() else {
+                return 0;
+            };
+            let source =
+                match self.cursor.source.as_notebook().and_then(|notebook| {
+                    notebook.cell_offsets().containing_range(self.cursor.offset)
+                }) {
+                    Some(cell) => {
+                        let grown = source.len() - self.cursor.source.as_str().len();
+                        &source[cell.start().to_usize()..cell.end().to_usize() + grown]
+                    }
+                    None => source,
+                };
+            let root = self.db.project().root(&self.db);
+            let config =
+                IsortConfig::for_file(self.db.system(), path.as_std_path(), root.as_std_path());
+            let (settings, package) = config.settings();
+            let mut settings = settings.clone();
+            settings.rules = RuleTable::from_iter([Rule::UnsortedImports]);
+            lint_only(
+                path.as_std_path(),
+                package.map(PackageRoot::root),
+                &settings,
+                Noqa::Enabled,
+                &SourceKind::Python {
+                    code: source.to_string(),
+                    is_stub: false,
+                    is_basedpython: false,
+                },
+                PySourceType::Python,
+                ParseSource::None,
+            )
+            .diagnostics
+            .len()
         }
 
         fn importer(&self) -> Importer<'_> {
@@ -70,8 +185,8 @@ mod tests {
         }
     }
 
-    /// A new import goes where buff's isort would sort it: into its section of the block, in
-    /// order among the section's imports, rather than at the top of the block.
+    /// a new import goes where buff's isort would sort it: into its section of the block, in
+    /// order among the section's imports, rather than at the top of the block
     #[test]
     fn sorted_into_its_section() {
         let source = r#"
@@ -132,8 +247,107 @@ import attr
         "#);
     }
 
-    /// A member added to a `from` import is listed where isort orders it: constants, then
-    /// classes, then everything else, each alphabetically.
+    /// a notebook's cells are sorted each on its own, so an import goes into the import block of
+    /// the cell it is used in, sorted there, and the cells before it are left alone
+    #[test]
+    fn a_notebook_import_is_sorted_in_its_cell() {
+        let test = CursorTest::builder()
+            .notebook(
+                "main.ipynb",
+                &[
+                    "import sys",
+                    "import json\nimport os\n\nimport attr\n\n<CURSOR>",
+                ],
+            )
+            .build();
+        assert_snapshot!(test.module("math"), @"
+        import sys
+        import json
+        import math
+        import os
+
+        import attr
+
+        math
+        ");
+        assert_snapshot!(test.import_from("pathlib", "Path"), @"
+        import sys
+        import json
+        import os
+        from pathlib import Path
+
+        import attr
+
+        Path
+        ");
+    }
+
+    /// a new block in a cell without imports goes at the top of the cell, set apart from the
+    /// cell's code as the sorter sets a block apart, and a statement in the next cell is not
+    /// code after it
+    #[test]
+    fn a_notebook_import_starts_a_block_in_its_cell() {
+        let test = CursorTest::builder()
+            .notebook(
+                "main.ipynb",
+                &["import sys", "def f():\n    return <CURSOR>", "x = 1"],
+            )
+            .build();
+        assert_snapshot!(test.module("math"), @"
+        import sys
+        import math
+
+
+        def f():
+            return math
+        x = 1
+        ");
+        let test = CursorTest::builder()
+            .notebook(
+                "main.ipynb",
+                &["import sys", "<CURSOR>", "def g():\n    pass"],
+            )
+            .build();
+        assert_snapshot!(test.module("math"), @"
+        import sys
+        import math
+        math
+        def g():
+            pass
+        ");
+    }
+
+    /// a heading above a cell's first import is that cell's, and a heading in the cell before
+    /// is not taken into its block
+    #[test]
+    fn a_notebook_heading_search_stays_in_its_cell() {
+        let test = CursorTest::builder()
+            .source("ruff.toml", HEADINGS)
+            .notebook(
+                "main.ipynb",
+                &[
+                    "# Standard Library\nimport sys\n\n# Third Party",
+                    "import attr\n\n<CURSOR>",
+                ],
+            )
+            .build();
+        assert_snapshot!(test.module("os"), @"
+        # Standard Library
+        import sys
+
+        # Third Party
+        # Standard Library
+        import os
+
+        # Third Party
+        import attr
+
+        os
+        ");
+    }
+
+    /// a member added to a `from` import is listed where isort orders it: constants, then
+    /// classes, then everything else, each alphabetically
     #[test]
     fn member_sorted_among_members() {
         let test = cursor_test(
@@ -156,7 +370,7 @@ from collections import OrderedDict, deque
         ");
     }
 
-    /// One per line in an import written one per line.
+    /// one per line in an import written one per line
     #[test]
     fn member_sorted_among_members_one_per_line() {
         let test = cursor_test(
@@ -178,8 +392,8 @@ from collections import (
         ");
     }
 
-    /// An import of a section the block has none of yet is set apart by a blank line on each
-    /// side, as isort separates sections.
+    /// an import of a section the block has none of yet is set apart by a blank line on each
+    /// side, as isort separates sections
     #[test]
     fn new_section_is_set_apart() {
         let test = cursor_test(
@@ -213,7 +427,7 @@ import attr
         ");
     }
 
-    /// Comments above an import stay with it, as isort keeps them.
+    /// comments above an import stay with it, as isort keeps them
     #[test]
     fn placed_above_the_comments_of_the_import_after() {
         let test = cursor_test(
@@ -231,6 +445,377 @@ import sys
         # the system
         import sys
 
+        os
+        ");
+    }
+
+    /// A test whose project configures buff with `ruff_toml`, a `ruff.toml`, and whose file is
+    /// `main`.
+    fn configured_test(ruff_toml: &str, main: &str) -> CursorTest {
+        CursorTest::builder()
+            .source("ruff.toml", ruff_toml)
+            .source("main.py", main)
+            .build()
+    }
+
+    const HEADINGS: &str = r#"
+[lint.isort.import-heading]
+standard-library = "Standard Library"
+third-party = "Third Party"
+"#;
+
+    /// A statement of a section before the block's first goes above the heading of that first
+    /// section, under a heading of its own: isort takes the headings directly above a block's
+    /// first import into the block and writes them again.
+    #[test]
+    fn heading_of_a_new_first_section() {
+        let test = configured_test(
+            HEADINGS,
+            "\
+# Third Party
+import attr
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("os"), @"
+        # Standard Library
+        import os
+
+        # Third Party
+        import attr
+
+        os
+        ");
+    }
+
+    /// A statement that joins the block's first section goes under its heading.
+    #[test]
+    fn heading_of_the_first_section_stays_first() {
+        let test = configured_test(
+            HEADINGS,
+            "\
+# Standard Library
+import sys
+
+# Third Party
+import attr
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("os"), @"
+        # Standard Library
+        import os
+        import sys
+
+        # Third Party
+        import attr
+
+        os
+        ");
+    }
+
+    /// A new section after the others is written with its heading.
+    #[test]
+    fn heading_of_a_new_last_section() {
+        let test = configured_test(
+            HEADINGS,
+            "\
+# Standard Library
+import os
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("attr"), @"
+        # Standard Library
+        import os
+
+        # Third Party
+        import attr
+
+        attr
+        ");
+    }
+
+    /// Two members added from a module the file doesn't import yet are one `from` import, with
+    /// no import block to join.
+    #[test]
+    fn members_combined_without_an_import_block() {
+        let test = cursor_test(
+            "\
+x = 1
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.add_all(&[
+            ImportRequest::import_from("pathlib", "PurePath"),
+            ImportRequest::import_from("pathlib", "Path"),
+        ]), @"
+        from pathlib import Path, PurePath
+
+        x = 1
+        PurePath
+        Path
+        ");
+    }
+
+    /// And without an order to follow, as for a file buff has no configuration for.
+    #[test]
+    fn members_combined_without_an_order() {
+        let test = cursor_test(
+            "\
+x = 1
+<CURSOR>
+",
+        );
+        let importer = Importer::new(
+            &test.db,
+            ProgramFile::new(
+                &test.db,
+                test.cursor.file,
+                test.db.program_environment().program(&test.db),
+            ),
+            &test.cursor.parsed,
+        );
+        let (_, source) = test.add_all_with(
+            &importer,
+            &[
+                ImportRequest::import_from("pathlib", "PurePath"),
+                ImportRequest::import_from("pathlib", "Path"),
+            ],
+        );
+        assert_snapshot!(source, @"
+        from pathlib import PurePath, Path
+        x = 1
+        PurePath
+        Path
+        ");
+    }
+
+    /// A member that makes an import too long for its line wraps it, as isort writes it.
+    #[test]
+    fn member_wraps_an_import_past_the_line_length() {
+        let test = configured_test(
+            "line-length = 50\n",
+            "\
+from collections import OrderedDict, deque
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import("collections", "defaultdict"), @"
+        from collections import (
+            OrderedDict,
+            defaultdict,
+            deque,
+        )
+        defaultdict
+        ");
+    }
+
+    /// A new statement too long for its line is written wrapped.
+    #[test]
+    fn new_statement_wrapped_to_the_line_length() {
+        let test = configured_test(
+            "line-length = 40\n",
+            "\
+import os
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.add_all(&[
+            ImportRequest::import_from("collections", "OrderedDict"),
+            ImportRequest::import_from("collections", "defaultdict"),
+        ]), @"
+        import os
+        from collections import (
+            OrderedDict,
+            defaultdict,
+        )
+
+        OrderedDict
+        defaultdict
+        ");
+    }
+
+    /// Between two imports of one line, a statement is written on that line, in order.
+    #[test]
+    fn between_imports_of_one_line() {
+        let test = cursor_test(
+            "\
+import os; import sys
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("re"), @"
+        import os; import re; import sys
+
+        re
+        ");
+    }
+
+    /// Under `force-single-line`, a member is imported by a `from` import of its own.
+    #[test]
+    fn force_single_line() {
+        let test = configured_test(
+            "[lint.isort]\nforce-single-line = true\n",
+            "\
+from collections import OrderedDict
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import_from("collections", "deque"), @"
+        from collections import OrderedDict
+        from collections import deque
+        deque
+        ");
+    }
+
+    /// Without `combine-as-imports`, an aliased member is imported by a `from` import of its
+    /// own.
+    #[test]
+    fn aliased_member_alone_without_combine_as_imports() {
+        let test = cursor_test(
+            "\
+from pathlib import Path
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.add(ImportRequest::import_from_as("pathlib", "PurePath", "PP")), @"
+        from pathlib import Path
+        from pathlib import PurePath as PP
+        PP
+        ");
+    }
+
+    /// With it, an aliased member joins the others.
+    #[test]
+    fn aliased_member_joins_with_combine_as_imports() {
+        let test = configured_test(
+            "[lint.isort]\ncombine-as-imports = true\n",
+            "\
+from pathlib import Path
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.add(ImportRequest::import_from_as("pathlib", "PurePath", "PP")), @"
+        from pathlib import Path, PurePath as PP
+        PP
+        ");
+    }
+
+    /// A section listed in `no-lines-before` follows the section before it without a blank line.
+    #[test]
+    fn no_lines_before() {
+        let test = configured_test(
+            "[lint.isort]\nno-lines-before = [\"third-party\"]\n",
+            "\
+import os
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("attr"), @"
+        import os
+        import attr
+
+        attr
+        ");
+    }
+
+    /// `lines-between-types` sets the `from` imports of a section apart from its plain ones.
+    #[test]
+    fn lines_between_types() {
+        let test = configured_test(
+            "[lint.isort]\nlines-between-types = 1\n",
+            "\
+import os
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import_from("collections", "deque"), @"
+        import os
+
+        from collections import deque
+
+        deque
+        ");
+    }
+
+    /// `from-first` puts a section's `from` imports before its plain ones.
+    #[test]
+    fn from_first() {
+        let test = configured_test(
+            "[lint.isort]\nfrom-first = true\n",
+            "\
+import os
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.import_from("collections", "deque"), @"
+        from collections import deque
+        import os
+
+        deque
+        ");
+    }
+
+    /// An eager import goes before a section's lazy ones, and a lazy one after its eager ones.
+    #[test]
+    fn eager_before_lazy() {
+        let test = cursor_test(
+            "\
+import sys
+lazy import json
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.module("os"), @"
+        import os
+        import sys
+        lazy import json
+
+        os
+        ");
+    }
+
+    /// Statements added at once that go in different places of the block are each placed.
+    #[test]
+    fn several_places_at_once() {
+        let test = cursor_test(
+            "\
+import json
+import sys
+
+import attr
+
+<CURSOR>
+",
+        );
+        assert_snapshot!(test.add_all(&[
+            ImportRequest::module("zlib"),
+            ImportRequest::module("abc"),
+            ImportRequest::module("attrs"),
+            ImportRequest::module("os"),
+        ]), @"
+        import abc
+        import json
+        import os
+        import sys
+        import zlib
+
+        import attr
+        import attrs
+
+        zlib
+        abc
+        attrs
         os
         ");
     }
@@ -355,7 +940,8 @@ from collections import Counter as C
         );
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
-        from collections import Counter as C, defaultdict
+        from collections import Counter as C
+        from collections import defaultdict
         defaultdict
         ");
     }
@@ -467,7 +1053,8 @@ from collections import (
             test.import("collections", "defaultdict"), @"
         from collections import (
             Counter,
-            OrderedDict, defaultdict,
+            OrderedDict,
+            defaultdict,
         )
         defaultdict
         ");
@@ -677,6 +1264,8 @@ from collections import defaultdict
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
+
         def foo():
             collections.defaultdict
         from collections import defaultdict
@@ -775,12 +1364,14 @@ defaultdict = 1
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         defaultdict = 1
         (collections.defaultdict)
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
         defaultdict = 1
         (collections.defaultdict)
         ");
@@ -798,12 +1389,14 @@ collections = 1
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         from collections import defaultdict
+
         collections = 1
         (defaultdict)
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
         collections = 1
         (defaultdict)
         ");
@@ -840,6 +1433,7 @@ defaultdict = 2
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
         collections = 1
         defaultdict = 2
         (collections.defaultdict)
@@ -847,6 +1441,7 @@ defaultdict = 2
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
         collections = 1
         defaultdict = 2
         (collections.defaultdict)
@@ -865,12 +1460,16 @@ def foo():
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
+
         def foo():
             (collections.defaultdict)
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
+
         def foo():
             (defaultdict)
         ");
@@ -888,12 +1487,16 @@ def defaultdict():
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         import collections
+
+
         def defaultdict():
             (collections.defaultdict)
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         import collections
+
+
         def defaultdict():
             (collections.defaultdict)
         ");
@@ -911,12 +1514,16 @@ def collections():
         assert_snapshot!(
             test.import("collections", "defaultdict"), @"
         from collections import defaultdict
+
+
         def collections():
             (defaultdict)
         ");
         assert_snapshot!(
             test.import_from("collections", "defaultdict"), @"
         from collections import defaultdict
+
+
         def collections():
             (defaultdict)
         ");
@@ -1179,9 +1786,10 @@ import numpy as np
         import json
         import re
 
-        import foo
         from whenever import ZonedDateTime
         import numpy as np
+
+        import foo
 
         (foo.Bar)
         ");
@@ -1190,9 +1798,10 @@ import numpy as np
         import json
         import re
 
-        from foo import Bar
         from whenever import ZonedDateTime
         import numpy as np
+
+        from foo import Bar
 
         (Bar)
         ");
@@ -1220,6 +1829,7 @@ else:
         assert_snapshot!(
             test.import("quux", "MAGIC"), @r#"
         import quux
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1230,6 +1840,7 @@ else:
         assert_snapshot!(
             test.import_from("quux", "MAGIC"), @r#"
         import quux
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1265,6 +1876,7 @@ else:
         assert_snapshot!(
             test.import("foo", "MAGIC"), @r#"
         import foo
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1275,6 +1887,7 @@ else:
         assert_snapshot!(
             test.import_from("foo", "MAGIC"), @r#"
         from foo import MAGIC
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1306,6 +1919,7 @@ else:
         assert_snapshot!(
             test.import("bar", "MAGIC"), @r#"
         import bar
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1316,6 +1930,7 @@ else:
         assert_snapshot!(
             test.import_from("bar", "MAGIC"), @r#"
         import bar
+
         if os.getenv("WHATEVER"):
             from foo import MAGIC
         else:
@@ -1355,6 +1970,7 @@ else:
         assert_snapshot!(
             test.import("foo", "MAGIC"), @r#"
         import foo
+
         if os.getenv("WHATEVER"):
             import foo as fubar
         else:
@@ -1365,6 +1981,7 @@ else:
         assert_snapshot!(
             test.import_from("foo", "MAGIC"), @r#"
         from foo import MAGIC
+
         if os.getenv("WHATEVER"):
             import foo as fubar
         else:
@@ -1396,6 +2013,7 @@ else:
         assert_snapshot!(
             test.import("bar", "MAGIC"), @r#"
         import bar
+
         if os.getenv("WHATEVER"):
             import foo as fubar
         else:
@@ -1406,6 +2024,7 @@ else:
         assert_snapshot!(
             test.import_from("bar", "MAGIC"), @r#"
         from bar import MAGIC
+
         if os.getenv("WHATEVER"):
             import foo as fubar
         else:
@@ -1437,6 +2056,7 @@ except ImportError:
         assert_snapshot!(
             test.import("quux", "MAGIC"), @"
         import quux
+
         try:
             from foo import MAGIC
         except ImportError:
@@ -1447,6 +2067,7 @@ except ImportError:
         assert_snapshot!(
             test.import_from("quux", "MAGIC"), @"
         import quux
+
         try:
             from foo import MAGIC
         except ImportError:
@@ -1482,6 +2103,7 @@ except ImportError:
         assert_snapshot!(
             test.import("foo", "MAGIC"), @"
         import foo
+
         try:
             from foo import MAGIC
         except ImportError:
@@ -1492,6 +2114,7 @@ except ImportError:
         assert_snapshot!(
             test.import_from("foo", "MAGIC"), @"
         from foo import MAGIC
+
         try:
             from foo import MAGIC
         except ImportError:
@@ -1523,6 +2146,7 @@ except ImportError:
         assert_snapshot!(
             test.import("bar", "MAGIC"), @"
         import bar
+
         try:
             from foo import MAGIC
         except ImportError:
@@ -1533,6 +2157,7 @@ except ImportError:
         assert_snapshot!(
             test.import_from("bar", "MAGIC"), @"
         import bar
+
         try:
             from foo import MAGIC
         except ImportError:

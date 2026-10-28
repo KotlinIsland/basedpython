@@ -14,6 +14,7 @@ use strum::IntoEnumIterator;
 
 use ruff_linter::settings::types::{PythonVersion, RequiredVersion};
 
+use crate::files::{ConfigurationFiles, HostFiles};
 use crate::options::{Options, validate_required_version};
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +34,11 @@ pub struct Pyproject {
     project: Option<Project>,
 }
 
-fn parse_toml<T: DeserializeOwned>(path: &Path, table_path: &[&str]) -> Result<T> {
+fn parse_toml<T: DeserializeOwned>(
+    files: &dyn ConfigurationFiles,
+    path: &Path,
+    table_path: &[&str],
+) -> Result<T> {
     let _guard = ValueSourceGuard::new(
         ValueSource::File(Arc::new(SystemPathBuf::from_path_buf_lossy(
             path.to_path_buf(),
@@ -41,7 +46,8 @@ fn parse_toml<T: DeserializeOwned>(path: &Path, table_path: &[&str]) -> Result<T
         true,
     );
 
-    let contents = std::fs::read_to_string(path)
+    let contents = files
+        .read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
 
     // Parse the TOML document once into a spanned representation so we can:
@@ -64,40 +70,44 @@ fn parse_toml<T: DeserializeOwned>(path: &Path, table_path: &[&str]) -> Result<T
 }
 
 /// Parse a `ruff.toml` file.
-fn parse_ruff_toml(path: &Path) -> Result<Options> {
-    parse_toml(path, &[])
+fn parse_ruff_toml(files: &dyn ConfigurationFiles, path: &Path) -> Result<Options> {
+    parse_toml(files, path, &[])
 }
 
 /// Parse a `pyproject.toml` file.
-fn parse_pyproject_toml(path: &Path) -> Result<Pyproject> {
-    parse_toml(path, &["tool", "ruff"])
+fn parse_pyproject_toml(files: &dyn ConfigurationFiles, path: &Path) -> Result<Pyproject> {
+    parse_toml(files, path, &["tool", "ruff"])
 }
 
 /// Return `true` if a `pyproject.toml` contains a `[tool.ruff]` section.
-fn ruff_enabled<P: AsRef<Path>>(path: P) -> Result<bool> {
-    let pyproject = parse_pyproject_toml(path.as_ref())?;
+fn ruff_enabled(files: &dyn ConfigurationFiles, path: &Path) -> Result<bool> {
+    let pyproject = parse_pyproject_toml(files, path)?;
     Ok(pyproject.tool.and_then(|tool| tool.ruff).is_some())
 }
 
 /// Return the path to the `pyproject.toml` or `ruff.toml` file in a given
 /// directory.
 pub fn settings_toml<P: AsRef<Path>>(path: P) -> Result<Option<PathBuf>> {
-    let path = path.as_ref();
+    settings_toml_in(&HostFiles, path.as_ref())
+}
+
+/// the `pyproject.toml` or `ruff.toml` file in `path`, a directory of `files`
+fn settings_toml_in(files: &dyn ConfigurationFiles, path: &Path) -> Result<Option<PathBuf>> {
     // Check for `.ruff.toml`.
     let ruff_toml = path.join(".ruff.toml");
-    if ruff_toml.is_file() {
+    if files.is_file(&ruff_toml) {
         return Ok(Some(ruff_toml));
     }
 
     // Check for `ruff.toml`.
     let ruff_toml = path.join("ruff.toml");
-    if ruff_toml.is_file() {
+    if files.is_file(&ruff_toml) {
         return Ok(Some(ruff_toml));
     }
 
     // Check for `pyproject.toml`.
     let pyproject_toml = path.join("pyproject.toml");
-    if pyproject_toml.is_file() && ruff_enabled(&pyproject_toml)? {
+    if files.is_file(&pyproject_toml) && ruff_enabled(files, &pyproject_toml)? {
         return Ok(Some(pyproject_toml));
     }
 
@@ -107,8 +117,16 @@ pub fn settings_toml<P: AsRef<Path>>(path: P) -> Result<Option<PathBuf>> {
 /// Find the path to the `pyproject.toml` or `ruff.toml` file, if such a file
 /// exists.
 pub fn find_settings_toml<P: AsRef<Path>>(path: P) -> Result<Option<PathBuf>> {
-    for directory in path.as_ref().ancestors() {
-        if let Some(pyproject) = settings_toml(directory)? {
+    find_settings_toml_in(&HostFiles, path.as_ref())
+}
+
+/// the closest `pyproject.toml` or `ruff.toml` file of `files` in `path` or a directory above it
+pub fn find_settings_toml_in(
+    files: &dyn ConfigurationFiles,
+    path: &Path,
+) -> Result<Option<PathBuf>> {
+    for directory in path.ancestors() {
+        if let Some(pyproject) = settings_toml_in(files, directory)? {
             return Ok(Some(pyproject));
         }
     }
@@ -145,8 +163,17 @@ fn check_required_version(value: &toml::de::DeTable, table_path: &[&str]) -> Res
 /// Derive target version from `required-version` in `pyproject.toml`, if
 /// such a file exists in an ancestor directory.
 pub fn find_fallback_target_version<P: AsRef<Path>>(path: P) -> Option<PythonVersion> {
-    for directory in path.as_ref().ancestors() {
-        if let Some(fallback) = get_fallback_target_version(directory) {
+    find_fallback_target_version_in(&HostFiles, path.as_ref())
+}
+
+/// the target version the `requires-python` of the closest `pyproject.toml` of `files` in `path`
+/// or a directory above it implies
+pub fn find_fallback_target_version_in(
+    files: &dyn ConfigurationFiles,
+    path: &Path,
+) -> Option<PythonVersion> {
+    for directory in path.ancestors() {
+        if let Some(fallback) = get_fallback_target_version(files, directory) {
             return Some(fallback);
         }
     }
@@ -160,12 +187,18 @@ pub fn find_user_settings_toml() -> Option<PathBuf> {
     use etcetera::BaseStrategy;
 
     let strategy = etcetera::base_strategy::choose_base_strategy().ok()?;
-    let config_dir = strategy.config_dir().join("ruff");
+    user_settings_toml_in(&HostFiles, &strategy.config_dir())
+}
+
+/// the user-specific `pyproject.toml` or `ruff.toml` of `files`, in the `ruff` directory of
+/// `config_dir`, the user's configuration directory
+pub fn user_settings_toml_in(files: &dyn ConfigurationFiles, config_dir: &Path) -> Option<PathBuf> {
+    let config_dir = config_dir.join("ruff");
 
     // Search for a user-specific `.ruff.toml`, then a `ruff.toml`, then a `pyproject.toml`.
     for filename in [".ruff.toml", "ruff.toml", "pyproject.toml"] {
         let path = config_dir.join(filename);
-        if path.is_file() {
+        if files.is_file(&path) {
             return Some(path);
         }
     }
@@ -179,10 +212,9 @@ pub fn find_user_settings_toml() -> Option<PathBuf> {
 }
 
 /// Load `Options` from a `pyproject.toml` or `ruff.toml` file.
-pub(super) fn load_options<P: AsRef<Path>>(path: P) -> Result<Options> {
-    let path = path.as_ref();
+pub(super) fn load_options(files: &dyn ConfigurationFiles, path: &Path) -> Result<Options> {
     if path.ends_with("pyproject.toml") {
-        let pyproject = parse_pyproject_toml(path)?;
+        let pyproject = parse_pyproject_toml(files, path)?;
         let mut ruff = pyproject
             .tool
             .and_then(|tool| tool.ruff)
@@ -196,7 +228,7 @@ pub(super) fn load_options<P: AsRef<Path>>(path: P) -> Result<Options> {
         }
         Ok(ruff)
     } else {
-        let ruff = parse_ruff_toml(path);
+        let ruff = parse_ruff_toml(files, path);
         if let Ok(ruff) = ruff {
             if ruff.target_version.is_none() {
                 debug!("No `target-version` found in `{}`", path.display());
@@ -210,12 +242,15 @@ pub(super) fn load_options<P: AsRef<Path>>(path: P) -> Result<Options> {
 
 /// Extract `target-version` from `pyproject.toml` in the given directory
 /// if the file exists and has `requires-python`.
-fn get_fallback_target_version(dir: &Path) -> Option<PythonVersion> {
+fn get_fallback_target_version(
+    files: &dyn ConfigurationFiles,
+    dir: &Path,
+) -> Option<PythonVersion> {
     let pyproject_path = dir.join("pyproject.toml");
-    if !pyproject_path.exists() {
+    if !files.is_file(&pyproject_path) {
         return None;
     }
-    let parsed_pyproject = parse_pyproject_toml(&pyproject_path);
+    let parsed_pyproject = parse_pyproject_toml(files, &pyproject_path);
 
     let pyproject = match parsed_pyproject {
         Ok(pyproject) => pyproject,
@@ -281,6 +316,7 @@ mod tests {
     use ruff_linter::settings::types::PatternPrefixPair;
     use ruff_ranged_value::{ValueSource, ValueSourceGuard};
 
+    use crate::files::HostFiles;
     use crate::options::{Flake8BuiltinsOptions, LintCommonOptions, LintOptions, Options};
     use crate::pyproject::{Pyproject, Tools, find_settings_toml, parse_pyproject_toml};
 
@@ -545,7 +581,7 @@ per-file-ignores = { "__init__.py" = ["F401"] }
 
         let pyproject =
             find_settings_toml(tempdir.path())?.context("Failed to find pyproject.toml")?;
-        let pyproject = parse_pyproject_toml(&pyproject)?;
+        let pyproject = parse_pyproject_toml(&HostFiles, &pyproject)?;
         let config = pyproject
             .tool
             .context("Expected to find [tool] field")?

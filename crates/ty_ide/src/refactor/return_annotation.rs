@@ -194,6 +194,7 @@ mod tests {
         ---
         from typing import Literal
 
+
         async def f() -> Literal[1]:
             return 1
         ");

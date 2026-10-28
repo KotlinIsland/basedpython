@@ -91,10 +91,11 @@ info[inlay-hint-edit]: Inlay hint edits
 --> main.py:1:1
   |
 1 + from typing import Literal
-2 |
-3 | class Pair[Key, Value]:
-4 |     def __init__(self, key: Key, value: Value) -> None: ...
-5 |
+2 +
+3 |
+4 | class Pair[Key, Value]:
+5 |     def __init__(self, key: Key, value: Value) -> None: ...
+6 |
   - a = Pair(1, 'x')
-6 + a: Pair[Literal[1], Literal["x"]] = Pair(1, 'x')
+7 + a: Pair[Literal[1], Literal["x"]] = Pair(1, 'x')
   |

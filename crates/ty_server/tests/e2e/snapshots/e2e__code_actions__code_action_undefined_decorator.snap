@@ -42,7 +42,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "from warnings import deprecated\n"
+            "newText": "from warnings import deprecated\n\n\n"
           }
         ]
       }
@@ -87,7 +87,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import deprecated\n"
+            "newText": "from typing_extensions import deprecated\n\n\n"
           }
         ]
       }

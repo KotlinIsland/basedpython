@@ -24,6 +24,7 @@ use crate::{Db, SemanticModel};
 use ruff_db::source::{SourceText, source_text};
 use ruff_diagnostics::Edit;
 use ruff_python_ast as ast;
+use ruff_python_ast::helpers::format_import_from;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::Tokens;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal, walk_stmt};
@@ -53,9 +54,9 @@ pub struct Importer<'a> {
     stylist: &'a Stylist<'static>,
     /// The list of visited, top-level runtime imports in the Python AST.
     imports: &'a [AstNodeRef<ast::Stmt>],
-    /// The order an import sorter puts this file's imports in, for imports to be added where it
+    /// the order an import sorter puts this file's imports in, for imports to be added where it
     /// would put them. `None` adds a statement at the top of the file and a member after an
-    /// import's last.
+    /// import's last
     sorting: Option<Box<dyn Sorting + 'a>>,
 }
 
@@ -82,11 +83,11 @@ impl<'a> Importer<'a> {
         }
     }
 
-    /// This importer, adding each import where `order` sorts it: a statement in its section of
-    /// the file's import block and a member among the members of a `from` import.
+    /// this importer, adding each import where `order` sorts it: a statement in its section of
+    /// the file's import block and a member among the members of a `from` import
     ///
     /// `resolve` is called the first time an import is placed, as finding the order can be
-    /// costly; when it returns `None` the imports are added as without an order.
+    /// costly; when it returns `None` the imports are added as without an order
     #[must_use]
     pub fn sorted_by<O, F>(mut self, resolve: F) -> Self
     where
@@ -96,7 +97,7 @@ impl<'a> Importer<'a> {
         self.sorting = Some(Box::new(LazyOrder {
             resolve,
             order: OnceCell::new(),
-            block: OnceCell::new(),
+            blocks: OnceCell::new(),
         }));
         self
     }
@@ -171,7 +172,7 @@ impl<'a> Importer<'a> {
             let placement = Placement::statement(&request, members.at);
             let import = self
                 .placed_edits(std::slice::from_ref(&placement))
-                .and_then(|mut edits| edits.pop())
+                .pop()
                 .unwrap_or_else(|| {
                     self.statement_insertion(members.at)
                         .into_edit(&request.to_string())
@@ -246,7 +247,7 @@ impl<'a> Importer<'a> {
                 };
                 let import = self
                     .placed_edits(std::slice::from_ref(&placement))
-                    .and_then(|mut edits| edits.pop())
+                    .pop()
                     .unwrap_or_else(|| {
                         let imported = request.imported_member();
                         if let Some(insertion) =
@@ -463,14 +464,15 @@ impl<'a> Importer<'a> {
         None
     }
 
-    /// The edits that add everything `actions` import at once.
+    /// the edits that add everything `actions` import at once
     ///
-    /// Each action's own edit is computed as if it were the only import added, so two of them
+    /// each action's own edit is computed as if it were the only import added, so two of them
     /// can land at one place in an order the file's import sorter wouldn't write, or both
-    /// separate themselves from the imports around them. These are placed together instead:
+    /// separate themselves from the imports around them. these are placed together instead:
     /// statements of one section are sorted among each other and separated as the sorter
     /// separates them, two members added to one `from` import are sorted, and two members added
-    /// from a module the file doesn't import yet are listed by one new `from` import.
+    /// from a module the file doesn't import yet are listed by one new `from` import, with or
+    /// without a sorter's order to follow.
     pub fn combined_edits<'b>(
         &self,
         actions: impl IntoIterator<Item = &'b ImportAction>,
@@ -484,72 +486,131 @@ impl<'a> Importer<'a> {
                 (_, None) => {}
             }
         }
-        if let Some(placed) = self.placed_edits(&placements) {
-            edits.extend(placed);
+        edits.extend(self.placed_edits(&placements));
+        edits
+    }
+
+    /// where a new statement goes without a sorter's order: after the last `from __future__`
+    /// import before `at`, or otherwise at the top of the file (or of `at`'s notebook cell)
+    fn statement_insertion(&self, at: TextSize) -> Insertion<'static> {
+        if let Some(future) = self.find_last_future_import(at) {
+            Insertion::end_of_statement(future.stmt, &self.source, self.stylist)
         } else {
-            edits.extend(
-                placements
-                    .iter()
-                    .filter_map(|placement| self.unsorted_edit(placement)),
+            let range = self.cell_at(at).map(|(_, range)| range);
+            Insertion::start_of_file(self.parsed.suite(), &self.source, self.stylist, range)
+        }
+    }
+
+    /// the notebook cell an import for a use at `at` is added to, the one `at` is in, as its
+    /// index among the notebook's cells and its range. `None` for a file that is not a notebook,
+    /// whose imports go in the file as a whole
+    fn cell_at(&self, at: TextSize) -> Option<(usize, TextRange)> {
+        let offsets = self.source.as_notebook()?.cell_offsets();
+        // the end of the last cell is the end of the notebook, which a use at the end of it is
+        // still in
+        offsets
+            .array_windows::<2>()
+            .enumerate()
+            .find(|(_, [start, end])| {
+                *start <= at && (at < *end || *end == TextSize::of(self.source.as_str()))
+            })
+            .map(|(index, [start, end])| (index, TextRange::new(*start, *end)))
+    }
+
+    /// the top-level statements of the cell an import for a use at `at` is added to, or of the
+    /// whole file when it is not a notebook, as a range of the module's body. `None` when `at`
+    /// is in no cell of a notebook
+    fn part_at(&self, at: TextSize) -> Option<Range<usize>> {
+        let body = self.parsed.suite();
+        if self.source.as_notebook().is_none() {
+            return Some(0..body.len());
+        }
+        let (_, cell) = self.cell_at(at)?;
+        let start = body.partition_point(|stmt| stmt.start() < cell.start());
+        let end = body.partition_point(|stmt| stmt.start() < cell.end());
+        Some(start..end)
+    }
+
+    /// The edits that make the additions in `placements`: where the file's import sorter would
+    /// make them, or without an order to follow, statements at the top of the file and members
+    /// after an import's last.
+    fn placed_edits(&self, placements: &[Placement]) -> Vec<Edit> {
+        if let Some(sorting) = &self.sorting
+            && let Some(edits) = sorting.placed_edits(self, placements)
+        {
+            return edits;
+        }
+        let (statements, members) = combined(placements, &Unordered);
+        let mut edits = Vec::new();
+        if let Some(at) = statements.iter().map(|statement| statement.at).min() {
+            let insertion = self.statement_insertion(at);
+            let separator = if insertion.is_inline() {
+                "; "
+            } else {
+                self.stylist.line_ending().as_str()
+            };
+            let text = statements
+                .iter()
+                .map(NewStatement::text)
+                .collect::<Vec<_>>()
+                .join(separator);
+            edits.push(insertion.into_edit(&text));
+        }
+        for (import, added) in members {
+            let Some(stmt) = self
+                .imports()
+                .find(|candidate| candidate.stmt.start() == import)
+            else {
+                continue;
+            };
+            let imported = added
+                .iter()
+                .map(|member| imported_member(*member))
+                .collect::<Vec<_>>()
+                .join(", ");
+            edits.push(
+                if let Some(insertion) = Insertion::existing_import(stmt.stmt, self.tokens) {
+                    insertion.into_edit(&imported)
+                } else {
+                    let from = match stmt.kind {
+                        AstImportKind::ImportFrom(from) => {
+                            format_import_from(from.level, from.module.as_deref())
+                        }
+                        AstImportKind::Import(_) => continue,
+                    };
+                    Insertion::end_of_statement(stmt.stmt, &self.source, self.stylist)
+                        .into_edit(&format!("from {from} import {imported}"))
+                },
             );
         }
         edits
     }
 
-    /// Where a new statement goes without a sorter's order: after the last `from __future__`
-    /// import before `at`, or otherwise at the top of the file (or of `at`'s notebook cell).
-    fn statement_insertion(&self, at: TextSize) -> Insertion<'static> {
-        if let Some(future) = self.find_last_future_import(at) {
-            Insertion::end_of_statement(future.stmt, &self.source, self.stylist)
-        } else {
-            let range = self
-                .source
-                .as_notebook()
-                .and_then(|notebook| notebook.cell_offsets().containing_range(at));
-            Insertion::start_of_file(self.parsed.suite(), &self.source, self.stylist, range)
-        }
-    }
-
-    /// The edit that adds `placement` without a sorter's order: a statement at the top of the
-    /// file, a member after an import's last.
-    fn unsorted_edit(&self, placement: &Placement) -> Option<Edit> {
-        match placement {
-            Placement::Statement { at, .. } => Some(
-                self.statement_insertion(*at)
-                    .into_edit(&placement.statement_text()),
-            ),
-            Placement::Member { import, .. } => {
-                let stmt = self
-                    .imports()
-                    .find(|candidate| candidate.stmt.start() == *import)?;
-                Insertion::existing_import(stmt.stmt, self.tokens)
-                    .map(|insertion| insertion.into_edit(&placement.imported_member()))
-            }
-        }
-    }
-
-    /// The edits that make the additions in `placements` where the file's import sorter would
-    /// make them, or `None` when the importer has no order to follow, or a statement has no
-    /// import block to join, for the caller to add them without one.
-    fn placed_edits(&self, placements: &[Placement]) -> Option<Vec<Edit>> {
-        self.sorting.as_ref()?.placed_edits(self, placements)
-    }
-
-    /// The imports the sorter sorts as one block that new imports join, the run of consecutive
-    /// import statements the module's body starts its imports with, and where `order` sorts
-    /// each of them, worked out once into `block`. `None` when it starts at or after `at`,
-    /// where the imports have to be available.
+    /// the imports the sorter sorts as one block that new imports join, the run of consecutive
+    /// import statements the module's body starts its imports with, or in a notebook the body
+    /// of `at`'s cell, which the sorter sorts on its own, and where `order` sorts each of them,
+    /// worked out once into `blocks`. `None` when it starts at or after `at`, where the imports
+    /// have to be available.
     fn import_block<'b, O: ImportOrdering>(
         &self,
         order: &O,
-        block: &'b ImportBlock<O>,
+        blocks: &'b ImportBlocks<O>,
         at: TextSize,
     ) -> Option<(&'a [ast::Stmt], &'b [O::Position])> {
         let body: &'a [ast::Stmt] = self.parsed.suite();
-        let (range, positions) = block
+        let cell = self.cell_at(at).map_or(0, |(index, _)| index);
+        let part = self.part_at(at)?;
+        let (range, positions) = blocks
             .get_or_init(|| {
-                let start = body.iter().position(is_import)?;
-                let len = body[start..]
+                let parts = self.source.as_notebook().map_or(1, |notebook| {
+                    notebook.cell_offsets().len().saturating_sub(1)
+                });
+                (0..parts).map(|_| OnceCell::new()).collect()
+            })
+            .get(cell)?
+            .get_or_init(|| {
+                let start = part.start + body[part.clone()].iter().position(is_import)?;
+                let len = body[start..part.end]
                     .iter()
                     .take_while(|stmt| is_import(stmt))
                     .count();
@@ -564,93 +625,19 @@ impl<'a> Importer<'a> {
         (statements.first()?.start() < at).then_some((statements, positions.as_slice()))
     }
 
-    /// The edits that make the additions in `placements` where `order` puts them.
+    /// the edits that make the additions in `placements` where `order` puts them
     fn placed_edits_in<O: ImportOrdering>(
         &self,
         order: &O,
-        block: &ImportBlock<O>,
+        blocks: &ImportBlocks<O>,
         placements: &[Placement],
     ) -> Option<Vec<Edit>> {
         let mut edits = Vec::new();
-
-        // Statements: two `from` imports of one module, as a member the file imports nothing
-        // from yet makes, are one statement listing both
-        let mut statements: Vec<NewStatement> = Vec::new();
-        for placement in placements {
-            let Placement::Statement {
-                module,
-                level,
-                member,
-                asname,
-                at,
-            } = placement
-            else {
-                continue;
-            };
-            let joins = member.is_some()
-                && !order.imports_member_alone(module.as_deref(), asname.as_deref());
-            if joins
-                && let Some(existing) = statements.iter_mut().find(|existing| {
-                    existing.module == module.as_deref()
-                        && existing.level == *level
-                        && !existing.members.is_empty()
-                        && !order.imports_member_alone(existing.module, existing.members[0].1)
-                })
-            {
-                if let Some(member) = member {
-                    existing.members.push((member.as_str(), asname.as_deref()));
-                }
-                existing.at = existing.at.min(*at);
-                continue;
-            }
-            statements.push(NewStatement {
-                module: module.as_deref(),
-                level: *level,
-                members: member
-                    .iter()
-                    .map(|member| (member.as_str(), asname.as_deref()))
-                    .collect(),
-                asname: if member.is_some() {
-                    None
-                } else {
-                    asname.as_deref()
-                },
-                at: *at,
-            });
+        let (statements, members) = combined(placements, order);
+        if let Some(at) = statements.iter().map(|statement| statement.at).min() {
+            edits.extend(self.placed_statements(order, blocks, &statements, at));
         }
-        for statement in &mut statements {
-            statement
-                .members
-                .sort_by(|a, b| order.compare_members(*a, *b));
-            statement.members.dedup();
-        }
-        if !statements.is_empty() {
-            let at = statements.iter().map(|statement| statement.at).min()?;
-            edits.extend(self.placed_statements(order, block, &statements, at)?);
-        }
-
-        // Members added to `from` imports the file has
-        let mut by_import: Vec<(TextSize, Vec<Member>)> = Vec::new();
-        for placement in placements {
-            if let Placement::Member {
-                import,
-                member,
-                asname,
-            } = placement
-            {
-                let entry = match by_import.iter_mut().find(|(start, _)| start == import) {
-                    Some(entry) => entry,
-                    None => {
-                        by_import.push((*import, Vec::new()));
-                        by_import.last_mut()?
-                    }
-                };
-                entry.1.push((member.as_str(), asname.as_deref()));
-            }
-        }
-        for (import, mut added) in by_import {
-            added.sort_by(|a, b| order.compare_members(*a, *b));
-            added.dedup();
+        for (import, added) in members {
             let AstImportKind::ImportFrom(from) = self
                 .imports()
                 .find(|candidate| candidate.stmt.start() == import)?
@@ -663,23 +650,90 @@ impl<'a> Importer<'a> {
         Some(edits)
     }
 
-    /// The edits adding `statements` to the file's import block, each in its section, sorted
+    /// `statement` as `order`'s sorter writes it, wrapped to its line length.
+    fn written<O: ImportOrdering>(&self, order: &O, statement: &NewStatement) -> String {
+        let line_ending = self.stylist.line_ending().as_str();
+        let text = statement.text();
+        order
+            .write_statements(&format!("{text}{line_ending}"), self.stylist)
+            .map(|written| {
+                written
+                    .strip_suffix(line_ending)
+                    .unwrap_or(&written)
+                    .to_string()
+            })
+            .unwrap_or(text)
+    }
+
+    /// the edits adding `statements` to the file's import block, each in its section, sorted
     /// among the section's imports and each other, with the blank lines and section headings
-    /// the sorter writes around them.
+    /// the sorter writes around them. Without an import block before `at`, the statements are
+    /// one of their own, where a statement goes without an order.
     fn placed_statements<O: ImportOrdering>(
         &self,
         order: &O,
-        block: &ImportBlock<O>,
+        blocks: &ImportBlocks<O>,
         statements: &[NewStatement],
         at: TextSize,
-    ) -> Option<Vec<Edit>> {
-        let (block, positions) = self.import_block(order, block, at)?;
+    ) -> Vec<Edit> {
+        let source: &str = &self.source;
+        let line_ending = self.stylist.line_ending().as_str();
+        // in a notebook, the imports are sorted, and added, within `at`'s cell
+        let cell = self.cell_at(at).map(|(_, cell)| cell);
 
-        // The sorter's order is total, so in a sorted block a new statement goes before the
-        // first import that sorts after it. In a block that isn't sorted, that is still a place
-        // among the imports it sorts with. Statements that go before the same import are sorted
-        // among each other.
-        let mut slots: Vec<StatementSlot<O::Position>> = Vec::new();
+        let Some((block, positions)) = self.import_block(order, blocks, at) else {
+            let insertion = self.statement_insertion(at);
+            let insertion_is_inline = insertion.is_inline();
+            let text = if insertion_is_inline {
+                statements
+                    .iter()
+                    .map(NewStatement::text)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            } else {
+                let mut added: Vec<_> = statements
+                    .iter()
+                    .map(|statement| (order.position(&statement.sorted_import()), statement))
+                    .collect();
+                added.sort_by(|a, b| a.0.cmp(&b.0));
+                let text = self.separated(order, None, &added, None);
+                text.strip_suffix(line_ending).unwrap_or(&text).to_string()
+            };
+            let mut edit = insertion.into_edit(&text);
+            // a new block is set apart from the statement after it as the sorter sets it apart,
+            // unless that is an import the block runs on into
+            if !insertion_is_inline
+                && let Some(next) = self
+                    .parsed
+                    .suite()
+                    .iter()
+                    .find(|stmt| stmt.start() >= edit.start())
+                && cell.is_none_or(|cell| cell.contains(next.start()))
+                && !is_import(next)
+            {
+                let before_definition =
+                    matches!(next, ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_));
+                let existing = source[TextRange::new(edit.start(), next.start())]
+                    .split_inclusive('\n')
+                    .take_while(|line| line.trim().is_empty())
+                    .count();
+                let missing = order
+                    .blank_lines_after_block(before_definition)
+                    .saturating_sub(existing);
+                if missing > 0 {
+                    let mut text = edit.content().unwrap_or_default().to_string();
+                    text.push_str(&line_ending.repeat(missing));
+                    edit = Edit::insertion(text, edit.start());
+                }
+            }
+            return vec![edit];
+        };
+
+        // the sorter's order is total, so in a sorted block a new statement goes before the
+        // first import that sorts after it. in a block that isn't sorted, that is still a place
+        // among the imports it sorts with. statements that go before the same import are sorted
+        // among each other
+        let mut slots: Vec<StatementSlot<'_, O::Position>> = Vec::new();
         for statement in statements {
             let position = order.position(&statement.sorted_import());
             let after = positions.iter().position(|existing| *existing > position);
@@ -687,126 +741,142 @@ impl<'a> Importer<'a> {
                 Some(slot) => slot,
                 None => {
                     slots.push((after, Vec::new()));
-                    slots.last_mut()?
+                    let Some(slot) = slots.last_mut() else {
+                        continue;
+                    };
+                    slot
                 }
             };
-            slot.1.push((position, statement.text()));
+            slot.1.push((position, statement));
         }
 
-        let source: &str = &self.source;
-        let line_ending = self.stylist.line_ending().as_str();
         let mut edits = Vec::new();
         for (after, mut added) in slots {
             added.sort_by(|a, b| a.0.cmp(&b.0));
             let before = match after {
                 Some(0) => None,
                 Some(after) => Some(after - 1),
-                None => Some(positions.len() - 1),
+                None => positions.len().checked_sub(1),
             };
 
-            // The comments directly above an import are the sorter's to move with it, except
-            // the heading of its section, so statements placed before an import go above them.
-            let floor = before.map_or_else(
-                || source.line_start(block[0].start()),
+            // Between two imports of one line, as in `import os; import sys`, the statements
+            // can only be written on that line
+            if let (Some(before), Some(after)) = (before, after)
+                && !source
+                    .contains_line_break(TextRange::new(block[before].end(), block[after].start()))
+            {
+                let mut text = String::new();
+                for (_, statement) in &added {
+                    text.push_str(&statement.text());
+                    text.push_str("; ");
+                }
+                edits.push(Edit::insertion(text, block[after].start()));
+                continue;
+            }
+
+            // The sorter takes the headings directly above the block's first import into the
+            // block and writes them again, and moves the other comments directly above an import
+            // with it. So the lines between the imports the statements go between, which are
+            // regenerated with them, run from the line after the import before them to the
+            // headings and blank lines above the import after them.
+            let start = before.map_or_else(
+                || {
+                    let mut start = source.line_start(block[0].start());
+                    let top = cell.map_or(TextSize::default(), TextRange::start);
+                    while start > top {
+                        let previous = source.line_start(start - TextSize::from(1));
+                        if !order.is_heading(source[TextRange::new(previous, start)].trim()) {
+                            break;
+                        }
+                        start = previous;
+                    }
+                    start
+                },
                 |before| source.full_line_end(block[before].end()),
             );
-            let anchor = after.map(|after| {
-                let section_heading = order.section_heading(&positions[after]);
-                let mut anchor = source.line_start(block[after].start());
-                while anchor > floor {
-                    let previous = source.line_start(anchor - TextSize::from(1));
-                    let line = source[TextRange::new(previous, anchor)].trim();
-                    if !line.starts_with('#') || Some(line) == section_heading {
-                        break;
+            let end = after.map_or(start, |after| {
+                let mut end = source.line_start(block[after].start());
+                if after > 0 {
+                    while end > start {
+                        let previous = source.line_start(end - TextSize::from(1));
+                        let line = source[TextRange::new(previous, end)].trim();
+                        if !line.starts_with('#') || order.is_heading(line) {
+                            break;
+                        }
+                        end = previous;
                     }
-                    anchor = previous;
                 }
-                anchor
+                end
             });
-            let existing_blank_lines = anchor.map_or(0, |anchor| {
-                source[TextRange::new(floor, anchor)]
-                    .lines()
-                    .filter(|line| line.trim().is_empty())
-                    .count()
-            });
+            let between = &source[TextRange::new(start, end)];
 
-            // The added statements and the blank lines and headings between them and the
-            // imports they go between
-            let mut text = String::new();
-            let mut previous = before.map(|before| &positions[before]);
-            for (position, statement) in &added {
-                let blank_lines =
-                    previous.map_or(0, |previous| order.blank_lines_between(previous, position));
-                for _ in 0..blank_lines {
+            let previous = before.map(|before| &positions[before]);
+            let next = after.map(|after| &positions[after]);
+            let regenerated = between
+                .lines()
+                .all(|line| line.trim().is_empty() || order.is_heading(line.trim()));
+            let edit = if regenerated {
+                let text = self.separated(order, previous, &added, next);
+                minimal_edit(between, &text, start)
+            } else {
+                // a comment between the imports is left where it is, and the statements go
+                // right after the import before them
+                let mut text = String::new();
+                if !source[..start.to_usize()].ends_with(['\n', '\r']) {
                     text.push_str(line_ending);
                 }
-                if previous
-                    .is_none_or(|previous| order.section(previous) != order.section(position))
-                    && after.is_none_or(|after| {
-                        order.section(&positions[after]) != order.section(position)
-                    })
-                    && let Some(heading) = order.section_heading(position)
-                {
-                    text.push_str(heading);
-                    text.push_str(line_ending);
-                }
-                text.push_str(statement);
-                text.push_str(line_ending);
-                previous = Some(position);
-            }
-            let first = &added.first()?.0;
-            let last = &added.last()?.0;
-            let blank_before = before.map_or(0, |before| {
-                order.blank_lines_between(&positions[before], first)
-            });
-            let blank_after = after.map_or(0, |after| {
-                order.blank_lines_between(last, &positions[after])
-            });
-
-            let (offset, text) = match (before, anchor) {
-                // Joins the imports after them: placed above those, as far below the imports
-                // before them as the sorter separates the two, which the lines already there
-                // are.
-                (_, Some(anchor)) if blank_after == 0 && (before.is_none() || blank_before > 0) => {
-                    let text = text
-                        .strip_prefix(&line_ending.repeat(blank_before))
-                        .unwrap_or(&text);
-                    let mut padded =
-                        line_ending.repeat(blank_before.saturating_sub(existing_blank_lines));
-                    padded.push_str(text);
-                    (anchor, padded)
-                }
-                // Placed below the imports before them, as far above the imports after them as
-                // the sorter separates the two.
-                (Some(before), _) => {
-                    let offset = source.full_line_end(block[before].end());
-                    let mut padded = String::new();
-                    if !source[..offset.to_usize()].ends_with(['\n', '\r']) {
-                        padded.push_str(line_ending);
-                    }
-                    padded.push_str(&text);
-                    if anchor.is_some() {
-                        padded.push_str(
-                            &line_ending.repeat(blank_after.saturating_sub(existing_blank_lines)),
-                        );
-                    }
-                    (offset, padded)
-                }
-                // First in the block, in a section of their own.
-                (None, Some(anchor)) => {
-                    let mut padded = text;
-                    padded.push_str(&line_ending.repeat(blank_after));
-                    (anchor, padded)
-                }
-                (None, None) => return None,
+                text.push_str(&self.separated(order, previous, &added, None));
+                Some(Edit::insertion(text, start))
             };
-            edits.push(Edit::insertion(text, offset));
+            edits.extend(edit);
         }
-        Some(edits)
+        edits
     }
 
-    /// The edits listing `added`, sorted, among the members of the existing `from` import
-    /// `from`, each where `order` sorts it.
+    /// `added`, sorted, written as the sorter writes them after the import at `previous` and
+    /// before the import at `next`: each preceded by the blank lines the sorter separates it
+    /// from the statement before with, and by its section's heading when it starts the section,
+    /// and followed by the blank lines and heading the sorter writes above `next`.
+    fn separated<'p, O: ImportOrdering>(
+        &self,
+        order: &O,
+        mut previous: Option<&'p O::Position>,
+        added: &'p [(O::Position, &NewStatement)],
+        next: Option<&O::Position>,
+    ) -> String {
+        let line_ending = self.stylist.line_ending().as_str();
+        let mut text = String::new();
+        let write_before = |text: &mut String,
+                            previous: Option<&O::Position>,
+                            position: &O::Position| {
+            if let Some(previous) = previous {
+                for _ in 0..order.blank_lines_between(previous, position) {
+                    text.push_str(line_ending);
+                }
+            }
+            if previous.is_none_or(|previous| order.section(previous) != order.section(position))
+                && let Some(heading) = order.section_heading(position)
+            {
+                text.push_str(heading);
+                text.push_str(line_ending);
+            }
+        };
+        for (position, statement) in added {
+            write_before(&mut text, previous, position);
+            text.push_str(&self.written(order, statement));
+            text.push_str(line_ending);
+            previous = Some(position);
+        }
+        if let Some(next) = next {
+            write_before(&mut text, previous, next);
+        }
+        text
+    }
+
+    /// the edits listing `added`, sorted, among the members of the existing `from` import
+    /// `from`, each where `order` sorts it. When the import was written as the sorter writes it
+    /// and the sorter would write it differently with the members added, as it wraps an import
+    /// that no longer fits on its line, the import is written again as the sorter writes it.
     fn placed_members<O: ImportOrdering>(
         &self,
         order: &O,
@@ -819,15 +889,12 @@ impl<'a> Importer<'a> {
         let mut edits = Vec::new();
         let mut appended = Vec::new();
         let mut slots: Vec<(usize, Vec<String>)> = Vec::new();
-        for (member, asname) in added {
-            let imported = match asname {
-                Some(asname) => format!("{member} as {asname}"),
-                None => (*member).to_string(),
-            };
+        for member in added {
+            let imported = imported_member(*member);
             let next = names.iter().position(|alias| {
                 order
                     .compare_members(
-                        (member, *asname),
+                        *member,
                         (
                             alias.name.as_str(),
                             alias.asname.as_ref().map(ast::Identifier::as_str),
@@ -844,8 +911,8 @@ impl<'a> Importer<'a> {
             }
         }
         for (next, members) in slots {
-            // Written with the separator the import already puts between its members, so a
-            // member lands on a line of its own in an import that writes one per line.
+            // written with the separator the import already puts between its members, so a
+            // member lands on a line of its own in an import that writes one per line
             let separator = if next + 1 < names.len() {
                 TextRange::new(names[next].end(), names[next + 1].start())
             } else if next > 0 {
@@ -879,6 +946,31 @@ impl<'a> Importer<'a> {
             edits.push(
                 Insertion::existing_import(stmt.stmt, self.tokens)?.into_edit(&appended.join(", ")),
             );
+        }
+
+        let written = |statement: &str| {
+            order
+                .write_statements(&format!("{statement}{line_ending}"), self.stylist)
+                .map(|written| {
+                    written
+                        .strip_suffix(line_ending)
+                        .unwrap_or(&written)
+                        .to_string()
+                })
+        };
+        let original = &source[from.range()];
+        let mut edited = original.to_string();
+        let mut sorted_edits: Vec<&Edit> = edits.iter().collect();
+        sorted_edits.sort_by_key(|edit| std::cmp::Reverse(edit.start()));
+        for edit in sorted_edits {
+            let range = edit.range() - from.start();
+            edited.replace_range(range.to_std_range(), edit.content().unwrap_or_default());
+        }
+        if written(original).as_deref() == Some(original)
+            && let Some(rewritten) = written(&edited)
+            && rewritten != edited
+        {
+            return Some(vec![Edit::range_replacement(rewritten, from.range())]);
         }
         Some(edits)
     }
@@ -986,27 +1078,31 @@ impl<'a> Importer<'a> {
     }
 }
 
-/// The import block new imports join, as the range of the module's body it spans, and where an
+/// the import block new imports join, as the range of the module's body it spans, and where an
 /// order sorts each of its statements. `None` when the module has no import block, or one with
-/// a statement the order can't read.
+/// a statement the order can't read
 type ImportBlock<O> = OnceCell<Option<(Range<usize>, Vec<<O as ImportOrdering>::Position>)>>;
 
-/// An importer's sorting, with the type of its order erased.
+/// the import block of each part of the file sorted on its own: each cell of a notebook, or the
+/// file as a whole
+type ImportBlocks<O> = OnceCell<Box<[ImportBlock<O>]>>;
+
+/// an importer's sorting, with the type of its order erased
 trait Sorting {
-    /// The edits that make the additions in `placements` where the order puts them, or `None`
-    /// when there is no order or the additions can't follow it.
+    /// the edits that make the additions in `placements` where the order puts them, or `None`
+    /// when there is no order or the additions can't follow it
     fn placed_edits(&self, importer: &Importer<'_>, placements: &[Placement]) -> Option<Vec<Edit>>;
 
-    /// Whether the order writes `member` (imported `as asname`, if given) from `module` in a
-    /// `from` import of its own.
+    /// whether the order writes `member` (imported `as asname`, if given) from `module` in a
+    /// `from` import of its own
     fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool;
 }
 
-/// An order found the first time an import is placed, and the import block as it sorts it.
+/// an order found the first time an import is placed, and the import block as it sorts it
 struct LazyOrder<O: ImportOrdering, F> {
     resolve: F,
     order: OnceCell<Option<O>>,
-    block: ImportBlock<O>,
+    blocks: ImportBlocks<O>,
 }
 
 impl<O: ImportOrdering, F: Fn() -> Option<O>> LazyOrder<O, F> {
@@ -1017,7 +1113,7 @@ impl<O: ImportOrdering, F: Fn() -> Option<O>> LazyOrder<O, F> {
 
 impl<O: ImportOrdering, F: Fn() -> Option<O>> Sorting for LazyOrder<O, F> {
     fn placed_edits(&self, importer: &Importer<'_>, placements: &[Placement]) -> Option<Vec<Edit>> {
-        importer.placed_edits_in(self.order()?, &self.block, placements)
+        importer.placed_edits_in(self.order()?, &self.blocks, placements)
     }
 
     fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool {
@@ -1030,8 +1126,8 @@ fn is_import(stmt: &ast::Stmt) -> bool {
     matches!(stmt, ast::Stmt::Import(_) | ast::Stmt::ImportFrom(_))
 }
 
-/// An import statement as a sorter reads it to sort it: an `import` by its first module, a
-/// `from` import by its module and the member `order` lists first.
+/// an import statement as a sorter reads it to sort it: an `import` by its first module, a
+/// `from` import by its module and the member `order` lists first
 fn sorted_import<'a>(stmt: &'a ast::Stmt, order: &impl ImportOrdering) -> Option<SortedImport<'a>> {
     match stmt {
         ast::Stmt::Import(import) => {
@@ -1211,25 +1307,25 @@ enum MemberImportKind<'ast> {
 pub struct ImportAction {
     import: Option<Edit>,
     symbol_text: Box<str>,
-    /// What `import` adds, for [`Importer::combined_edits`] to place it together with what
-    /// other actions add.
+    /// what `import` adds, for [`Importer::combined_edits`] to place it together with what
+    /// other actions add
     placement: Option<Placement>,
 }
 
-/// What an import action adds to the file.
+/// what an import action adds to the file
 #[derive(Debug, Clone)]
 enum Placement {
-    /// A new import statement: `import module as asname`, or `from module import member as
-    /// asname`, `level` dots up.
+    /// a new import statement: `import module as asname`, or `from module import member as
+    /// asname`, `level` dots up
     Statement {
         module: Option<String>,
         level: u32,
         member: Option<String>,
         asname: Option<String>,
-        /// Where what is imported has to be available.
+        /// where what is imported has to be available
         at: TextSize,
     },
-    /// A member listed by the existing `from` import starting at `import`.
+    /// a member listed by the existing `from` import starting at `import`
     Member {
         import: TextSize,
         member: String,
@@ -1238,7 +1334,7 @@ enum Placement {
 }
 
 impl Placement {
-    /// The statement `request` adds when the file has no import that satisfies it.
+    /// the statement `request` adds when the file has no import that satisfies it
     fn statement(request: &ImportRequest<'_>, at: TextSize) -> Self {
         let member = match (&request.style, request.member) {
             (ImportStyle::ImportFrom, Some(member)) => Some(member.to_string()),
@@ -1252,47 +1348,6 @@ impl Placement {
             at,
         }
     }
-
-    /// The statement a [`Placement::Statement`] adds.
-    fn statement_text(&self) -> String {
-        match self {
-            Placement::Statement {
-                module,
-                level,
-                member,
-                asname,
-                ..
-            } => NewStatement {
-                module: module.as_deref(),
-                level: *level,
-                members: member
-                    .iter()
-                    .map(|member| (member.as_str(), asname.as_deref()))
-                    .collect(),
-                asname: if member.is_some() {
-                    None
-                } else {
-                    asname.as_deref()
-                },
-                at: TextSize::default(),
-            }
-            .text(),
-            Placement::Member { .. } => String::new(),
-        }
-    }
-
-    /// The member a [`Placement::Member`] lists: `member`, or `member as asname`.
-    fn imported_member(&self) -> String {
-        match self {
-            Placement::Member {
-                member,
-                asname: Some(asname),
-                ..
-            } => format!("{member} as {asname}"),
-            Placement::Member { member, .. } => member.clone(),
-            Placement::Statement { .. } => String::new(),
-        }
-    }
 }
 
 /// A member of a `from` import, and the name it is imported as.
@@ -1300,14 +1355,161 @@ type Member<'a> = (&'a str, Option<&'a str>);
 
 /// The statements added before the import of the block at the index, or after the block's last
 /// import for `None`, each with where it sorts.
-type StatementSlot<P> = (Option<usize>, Vec<(P, String)>);
+type StatementSlot<'s, P> = (Option<usize>, Vec<(P, &'s NewStatement<'s>)>);
 
-/// An import statement to add: `import module as asname`, or `from module import members`.
+/// `member`, or `member as asname`, as a `from` import lists it
+fn imported_member((member, asname): Member) -> String {
+    match asname {
+        Some(asname) => format!("{member} as {asname}"),
+        None => member.to_string(),
+    }
+}
+
+/// The edit that changes `old`, the text at `start`, to `new`, touching only what differs.
+/// `None` when nothing does.
+fn minimal_edit(old: &str, new: &str, start: TextSize) -> Option<Edit> {
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .find(|((_, a), b)| a != b)
+        .map_or(old.len().min(new.len()), |((index, _), _)| index);
+    let (old_rest, new_rest) = (&old[prefix..], &new[prefix..]);
+    let suffix = old_rest
+        .chars()
+        .rev()
+        .zip(new_rest.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum::<usize>();
+    let old_changed = &old_rest[..old_rest.len() - suffix];
+    let new_changed = &new_rest[..new_rest.len() - suffix];
+    if old_changed.is_empty() && new_changed.is_empty() {
+        return None;
+    }
+    let range = TextRange::at(
+        start + TextSize::of(&old[..prefix]),
+        TextSize::of(old_changed),
+    );
+    Some(if new_changed.is_empty() {
+        Edit::range_deletion(range)
+    } else {
+        Edit::range_replacement(new_changed.to_string(), range)
+    })
+}
+
+/// The statements and members `placements` add, combined: two members a sorter lists together
+/// that a module the file doesn't import yet adds are one statement listing both, and the
+/// members added to one existing `from` import, by its start, are listed together. Each
+/// statement's and import's members are sorted by `compare_members`, and `imports_member_alone`
+/// says which member the sorter writes in a `from` import of its own.
+fn combined<'p>(
+    placements: &'p [Placement],
+    order: &impl MemberOrder,
+) -> (Vec<NewStatement<'p>>, Vec<(TextSize, Vec<Member<'p>>)>) {
+    let mut statements: Vec<NewStatement> = Vec::new();
+    let mut members: Vec<(TextSize, Vec<Member>)> = Vec::new();
+    for placement in placements {
+        match placement {
+            Placement::Statement {
+                module,
+                level,
+                member,
+                asname,
+                at,
+            } => {
+                let joins = member.is_some()
+                    && !order.imports_member_alone(module.as_deref(), asname.as_deref());
+                if joins
+                    && let Some(member) = member
+                    && let Some(existing) = statements.iter_mut().find(|existing| {
+                        existing.module == module.as_deref()
+                            && existing.level == *level
+                            && existing.members.first().is_some_and(|first| {
+                                !order.imports_member_alone(existing.module, first.1)
+                            })
+                    })
+                {
+                    existing.members.push((member.as_str(), asname.as_deref()));
+                    existing.at = existing.at.min(*at);
+                    continue;
+                }
+                statements.push(NewStatement {
+                    module: module.as_deref(),
+                    level: *level,
+                    members: member
+                        .iter()
+                        .map(|member| (member.as_str(), asname.as_deref()))
+                        .collect(),
+                    asname: if member.is_some() {
+                        None
+                    } else {
+                        asname.as_deref()
+                    },
+                    at: *at,
+                });
+            }
+            Placement::Member {
+                import,
+                member,
+                asname,
+            } => {
+                let added = (member.as_str(), asname.as_deref());
+                match members.iter_mut().find(|(start, _)| start == import) {
+                    Some((_, listed)) => listed.push(added),
+                    None => members.push((*import, vec![added])),
+                }
+            }
+        }
+    }
+    for statement in &mut statements {
+        statement
+            .members
+            .sort_by(|a, b| order.compare_members(*a, *b));
+        statement.members.dedup();
+    }
+    for (_, added) in &mut members {
+        added.sort_by(|a, b| order.compare_members(*a, *b));
+        added.dedup();
+    }
+    (statements, members)
+}
+
+/// How a sorter lists the members of a `from` import, as [`combined`] needs to know it.
+trait MemberOrder {
+    fn compare_members(&self, a: Member, b: Member) -> std::cmp::Ordering;
+
+    fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool;
+}
+
+impl<O: ImportOrdering> MemberOrder for O {
+    fn compare_members(&self, a: Member, b: Member) -> std::cmp::Ordering {
+        ImportOrdering::compare_members(self, a, b)
+    }
+
+    fn imports_member_alone(&self, module: Option<&str>, asname: Option<&str>) -> bool {
+        ImportOrdering::imports_member_alone(self, module, asname)
+    }
+}
+
+/// No sorter: members are listed in the order they are added, all in one `from` import.
+struct Unordered;
+
+impl MemberOrder for Unordered {
+    fn compare_members(&self, _: Member, _: Member) -> std::cmp::Ordering {
+        std::cmp::Ordering::Equal
+    }
+
+    fn imports_member_alone(&self, _: Option<&str>, _: Option<&str>) -> bool {
+        false
+    }
+}
+
+/// an import statement to add: `import module as asname`, or `from module import members`
 #[derive(Debug)]
 struct NewStatement<'a> {
     module: Option<&'a str>,
     level: u32,
-    /// The members a `from` import lists, sorted; empty for an `import`.
+    /// the members a `from` import lists, sorted; empty for an `import`
     members: Vec<Member<'a>>,
     asname: Option<&'a str>,
     at: TextSize,

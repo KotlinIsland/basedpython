@@ -16,6 +16,7 @@ use crate::codes::Category;
 use crate::line_width::LineWidthBuilder;
 use crate::package::PackageRoot;
 use crate::rules::isort::block::Block;
+use crate::rules::isort::categorize::SourceRoots;
 use crate::rules::isort::{comments, format_imports};
 use crate::settings::LinterSettings;
 use crate::{Edit, Fix, FixAvailability, Violation};
@@ -165,7 +166,7 @@ pub(crate) fn organize_imports(
         settings.line_length,
         LineWidthBuilder::new(settings.tab_size).add_str(indentation),
         stylist,
-        &settings.src,
+        SourceRoots::host(&settings.src),
         package,
         source_type,
         target_version,

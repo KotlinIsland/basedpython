@@ -42,7 +42,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "import typing\n"
+            "newText": "import typing\n\n"
           }
         ]
       }

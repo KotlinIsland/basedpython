@@ -13568,10 +13568,12 @@ if foo:
             .build()
             .snapshot();
 
-        assert_snapshot!(snapshot, @r"
+        assert_snapshot!(snapshot, @"
         Mapping :: typing :: from typing import Mapping
 
+
         Mapping :: collections.abc :: from collections.abc import Mapping
+
 
         Mapping :: typing_extensions :: from typing_extensions import Mapping
         ");
@@ -16451,6 +16453,7 @@ np.ara<CURSOR>
             .filter(|c| c.name == "name");
         assert_snapshot!(builder.build().snapshot(), @"
         name :: a :: from a import Asdf
+
 
         name :: b :: from b import Asdf
         ");

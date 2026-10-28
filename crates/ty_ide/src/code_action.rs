@@ -1059,7 +1059,8 @@ mod tests {
         help: This is a preferred code action
           |
         1 + from warnings import deprecated
-        2 |
+        2 +
+        3 |
           |
 
         info[code-action]: import typing_extensions.deprecated
@@ -1070,7 +1071,8 @@ mod tests {
         help: This is a preferred code action
           |
         1 + from typing_extensions import deprecated
-        2 |
+        2 +
+        3 |
           |
 
         info[code-action]: Ignore 'unresolved-reference' for this line
@@ -1386,7 +1388,8 @@ mod tests {
         help: This is the only import that resolves the name
           |
         1 + from acme.reports import NamespaceReport
-        2 | NamespaceReport()
+        2 +
+        3 | NamespaceReport()
           |
 
         info[code-action]: Ignore 'unresolved-reference' for this line

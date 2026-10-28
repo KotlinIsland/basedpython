@@ -1,4 +1,5 @@
 pub mod configuration;
+pub mod files;
 pub mod options;
 pub mod pyproject;
 pub mod resolver;

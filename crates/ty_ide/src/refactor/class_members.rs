@@ -1884,6 +1884,8 @@ class Other(Base):
         assert_snapshot!(test.pull_up(&["describe"], "main.Base"), @r#"
         --- /main.py
         from typing import override
+
+
         class Base:
             def describe(self) -> str:
                 return "child"

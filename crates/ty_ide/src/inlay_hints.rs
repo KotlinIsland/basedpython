@@ -3556,19 +3556,20 @@ mod tests {
         --> main.py:1:1
            |
         1  + from typing import Literal
-        2  |
-        3  | def stringify(function):
+        2  +
+        3  |
+        4  | def stringify(function):
            -     def wrapper():
            -         return str(function())
-        4  +     def wrapper() -> str:
-        5  +         return str(object=function())
-        6  |
-        7  |     return wrapper
-        8  |
-        9  | @stringify
+        5  +     def wrapper() -> str:
+        6  +         return str(object=function())
+        7  |
+        8  |     return wrapper
+        9  |
+        10 | @stringify
            - def number():
-        10 + def number() -> Literal[42]:
-        11 |     return 42
+        11 + def number() -> Literal[42]:
+        12 |     return 42
            |
         "#);
 
@@ -4564,18 +4565,19 @@ Source with applied edits:
         --> main.py:1:1
            |
         1  + from typing import Literal
-        2  |
+        2  +
+        3  |
         --------------------------------------------------------------------------------
-        6  | x = 1
+        7  | x = 1
            - y = x
            - z = i(1)
            - w = z
-        7  + y: Literal[1] = x
-        8  + z: int = i(1)
-        9  + w: int = z
-        10 | aa = b'foo'
+        8  + y: Literal[1] = x
+        9  + z: int = i(1)
+        10 + w: int = z
+        11 | aa = b'foo'
            - bb = aa
-        11 + bb: Literal[b"foo"] = aa
+        12 + bb: Literal[b"foo"] = aa
            |
         "#);
     }
@@ -4815,10 +4817,11 @@ Source with applied edits:
         --> main.py:1:1
           |
         1 + from typing import Literal
-        2 |
-        3 | def f(n: int):
+        2 +
+        3 |
+        4 | def f(n: int):
           -     pairs = (1, 'a') * n
-        4 +     pairs: tuple[Literal[1, "a"], ...] = (1, 'a') * n
+        5 +     pairs: tuple[Literal[1, "a"], ...] = (1, 'a') * n
           |
         "#);
     }
@@ -5281,15 +5284,16 @@ Source with applied edits:
         --> main.py:1:1
            |
         1  + from typing import Literal
-        2  |
+        2  +
+        3  |
         --------------------------------------------------------------------------------
-        8  | x = (1, 'abc')
+        9  | x = (1, 'abc')
            - y = x
            - z = (i(1), s('abc'))
            - w = z
-        9  + y: tuple[Literal[1], Literal["abc"]] = x
-        10 + z: tuple[int, str] = (i(1), s('abc'))
-        11 + w: tuple[int, str] = z
+        10 + y: tuple[Literal[1], Literal["abc"]] = x
+        11 + z: tuple[int, str] = (i(1), s('abc'))
+        12 + w: tuple[int, str] = z
            |
         "#);
     }
@@ -5514,17 +5518,18 @@ Source with applied edits:
         ---------------------------------------------
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
-          |
-        1 + from typing import Literal
-        2 |
+           |
+        1  + from typing import Literal
+        2  +
+        3  |
         --------------------------------------------------------------------------------
-        6 | x: int = 1
-          - y = x
-        7 + y: Literal[1] = x
-        8 | z: int = i(1)
-          - w = z
-        9 + w: int = z
-          |
+        7  | x: int = 1
+           - y = x
+        8  + y: Literal[1] = x
+        9  | z: int = i(1)
+           - w = z
+        10 + w: int = z
+           |
         ");
     }
 
@@ -5766,12 +5771,13 @@ Source with applied edits:
         --> main.py:1:1
           |
         1 + from typing import Literal
-        2 |
-        3 | def my_func(command: str):
-        4 |     match command.split():
-        5 |         case ["get", ("a" | "b") as ab]:
+        2 +
+        3 |
+        4 | def my_func(command: str):
+        5 |     match command.split():
+        6 |         case ["get", ("a" | "b") as ab]:
           -             x = ab
-        6 +             x: Literal["a", "b"] = ab
+        7 +             x: Literal["a", "b"] = ab
           |
         "#);
     }
@@ -9233,11 +9239,12 @@ Source with applied edits:
         --> main.py:1:1
            |
         1  + from typing import Literal
-        2  |
+        2  +
+        3  |
         --------------------------------------------------------------------------------
-        13 |         x = None
+        14 |         x = None
            -     y = x
-        14 +     y: Literal[1, 2, 3, "hello"] | None = x
+        15 +     y: Literal[1, 2, 3, "hello"] | None = x
            |
         "#);
     }

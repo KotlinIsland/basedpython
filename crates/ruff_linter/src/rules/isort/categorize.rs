@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::package::PackageRoot;
+use crate::packaging::{HostPackageFiles, PackageFiles};
 use crate::settings::types::IdentifierPattern;
 use crate::warn_user_once;
 use ruff_macros::CacheKey;
@@ -89,11 +90,58 @@ enum Reason<'a> {
     DisabledSection(&'a ImportSection),
 }
 
+/// the `src` roots a module is looked up in to tell whether it is first-party, and the file
+/// system they are looked up in
+#[derive(Clone, Copy)]
+pub(crate) struct SourceRoots<'a> {
+    roots: &'a [PathBuf],
+    files: &'a dyn PackageFiles,
+}
+
+impl<'a> SourceRoots<'a> {
+    pub(crate) fn new(roots: &'a [PathBuf], files: &'a dyn PackageFiles) -> Self {
+        Self { roots, files }
+    }
+
+    /// `roots` on the host's file system
+    pub(crate) fn host(roots: &'a [PathBuf]) -> Self {
+        Self::new(roots, &HostPackageFiles)
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn categorize<'a>(
     module_name: &str,
     is_relative: bool,
     src: &[PathBuf],
+    package: Option<PackageRoot<'_>>,
+    detect_same_package: bool,
+    known_modules: &'a KnownModules,
+    target_version: PythonVersion,
+    no_sections: bool,
+    section_order: &'a [ImportSection],
+    default_section: &'a ImportSection,
+) -> &'a ImportSection {
+    categorize_in(
+        module_name,
+        is_relative,
+        SourceRoots::host(src),
+        package,
+        detect_same_package,
+        known_modules,
+        target_version,
+        no_sections,
+        section_order,
+        default_section,
+    )
+}
+
+/// the section of `module_name`, looking it up in the `src` roots of `src`
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn categorize_in<'a>(
+    module_name: &str,
+    is_relative: bool,
+    src: SourceRoots<'_>,
     package: Option<PackageRoot<'_>>,
     detect_same_package: bool,
     known_modules: &'a KnownModules,
@@ -167,17 +215,17 @@ fn same_package(package: Option<PackageRoot<'_>>, module_base: &str) -> bool {
 /// - The module named `foo.baz` will match `[SRC]` only if `[SRC]/foo/baz`
 ///   is a directory, or `[SRC]/foo/baz.py` exists,
 ///   or `[SRC]/foo/baz.pyi` exists.
-fn match_sources<'a>(paths: &'a [PathBuf], name: &str) -> Option<&'a Path> {
+fn match_sources<'a>(src: SourceRoots<'a>, name: &str) -> Option<&'a Path> {
     let relative_path: PathBuf = name.split('.').collect();
     relative_path.components().next()?;
-    for root in paths {
+    for root in src.roots {
         let candidate = root.join(&relative_path);
-        if candidate.is_dir() {
+        if src.files.is_directory(&candidate) {
             return Some(root);
         }
         if ["py", "pyi", "by", "byi"]
             .into_iter()
-            .any(|extension| candidate.with_extension(extension).is_file())
+            .any(|extension| src.files.is_file(&candidate.with_extension(extension)))
         {
             return Some(root);
         }
@@ -188,7 +236,7 @@ fn match_sources<'a>(paths: &'a [PathBuf], name: &str) -> Option<&'a Path> {
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn categorize_imports<'a>(
     block: ImportBlock<'a>,
-    src: &[PathBuf],
+    src: SourceRoots<'_>,
     package: Option<PackageRoot<'_>>,
     detect_same_package: bool,
     known_modules: &'a KnownModules,
@@ -204,7 +252,7 @@ pub(crate) fn categorize_imports<'a>(
         reason = "categorization only moves entries between unordered import blocks"
     )]
     for (alias, comments) in block.import {
-        let import_type = categorize(
+        let import_type = categorize_in(
             &alias.module_name(),
             false,
             src,
@@ -228,7 +276,7 @@ pub(crate) fn categorize_imports<'a>(
         reason = "categorization only moves entries between unordered import blocks"
     )]
     for (import_from, aliases) in block.import_from {
-        let classification = categorize(
+        let classification = categorize_in(
             &import_from.module_name(),
             import_from.level > 0,
             src,
@@ -252,7 +300,7 @@ pub(crate) fn categorize_imports<'a>(
         reason = "categorization only moves entries between unordered import blocks"
     )]
     for ((import_from, alias), aliases) in block.import_from_as {
-        let classification = categorize(
+        let classification = categorize_in(
             &import_from.module_name(),
             import_from.level > 0,
             src,
@@ -276,7 +324,7 @@ pub(crate) fn categorize_imports<'a>(
         reason = "categorization only moves entries between unordered import blocks"
     )]
     for (import_from, comments) in block.import_from_star {
-        let classification = categorize(
+        let classification = categorize_in(
             &import_from.module_name(),
             import_from.level > 0,
             src,
@@ -429,7 +477,7 @@ impl fmt::Display for KnownModules {
 
 #[cfg(test)]
 mod tests {
-    use crate::rules::isort::categorize::match_sources;
+    use crate::rules::isort::categorize::{SourceRoots, match_sources};
 
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -471,16 +519,19 @@ mod tests {
         let paths = vec![project_dir.clone()];
 
         assert_eq!(
-            match_sources(&paths, "mypackage"),
+            match_sources(SourceRoots::host(&paths), "mypackage"),
             Some(project_dir.as_path())
         );
 
         assert_eq!(
-            match_sources(&paths, "mypackage.module1"),
+            match_sources(SourceRoots::host(&paths), "mypackage.module1"),
             Some(project_dir.as_path())
         );
 
-        assert_eq!(match_sources(&paths, "mypackage.nonexistent",), None);
+        assert_eq!(
+            match_sources(SourceRoots::host(&paths), "mypackage.nonexistent",),
+            None
+        );
     }
 
     /// Tests a src-based Python package layout:
@@ -505,11 +556,14 @@ mod tests {
         let paths = vec![src_dir.clone()];
 
         assert_eq!(
-            match_sources(&paths, "mypackage.module1"),
+            match_sources(SourceRoots::host(&paths), "mypackage.module1"),
             Some(src_dir.as_path())
         );
 
-        assert_eq!(match_sources(&paths, "mypackage.nonexistent"), None);
+        assert_eq!(
+            match_sources(SourceRoots::host(&paths), "mypackage.nonexistent"),
+            None
+        );
     }
 
     /// Tests a nested package layout:
@@ -537,12 +591,15 @@ mod tests {
         let paths = vec![project_dir.clone()];
 
         assert_eq!(
-            match_sources(&paths, "mypackage.subpackage.module2"),
+            match_sources(SourceRoots::host(&paths), "mypackage.subpackage.module2"),
             Some(project_dir.as_path())
         );
 
         assert_eq!(
-            match_sources(&paths, "mypackage.subpackage.nonexistent"),
+            match_sources(
+                SourceRoots::host(&paths),
+                "mypackage.subpackage.nonexistent"
+            ),
             None
         );
     }
@@ -567,16 +624,19 @@ mod tests {
 
         let paths = vec![project_dir.clone()];
         assert_eq!(
-            match_sources(&paths, "namespace.package1"),
+            match_sources(SourceRoots::host(&paths), "namespace.package1"),
             Some(project_dir.as_path())
         );
 
         assert_eq!(
-            match_sources(&paths, "namespace.package1.module1"),
+            match_sources(SourceRoots::host(&paths), "namespace.package1.module1"),
             Some(project_dir.as_path())
         );
 
-        assert_eq!(match_sources(&paths, "namespace.package2.module1"), None);
+        assert_eq!(
+            match_sources(SourceRoots::host(&paths), "namespace.package2.module1"),
+            None
+        );
     }
 
     /// Tests a package with type stubs (.pyi files):
@@ -600,7 +660,7 @@ mod tests {
 
         // Module "mypackage.module1" should match project_dir using .pyi file
         assert_eq!(
-            match_sources(&paths, "mypackage.module1"),
+            match_sources(SourceRoots::host(&paths), "mypackage.module1"),
             Some(project_dir.as_path())
         );
     }
@@ -631,13 +691,13 @@ mod tests {
 
         // Module "mypackage.feature" should match project_dir
         assert_eq!(
-            match_sources(&paths, "mypackage.feature"),
+            match_sources(SourceRoots::host(&paths), "mypackage.feature"),
             Some(project_dir.as_path())
         );
 
         // Module "mypackage.feature.submodule" should match project_dir
         assert_eq!(
-            match_sources(&paths, "mypackage.feature.submodule"),
+            match_sources(SourceRoots::host(&paths), "mypackage.feature.submodule"),
             Some(project_dir.as_path())
         );
     }
@@ -675,13 +735,13 @@ mod tests {
 
         // Module "package1" should match project1_dir
         assert_eq!(
-            match_sources(&paths, "package1"),
+            match_sources(SourceRoots::host(&paths), "package1"),
             Some(project1_dir.as_path())
         );
 
         // Module "package2" should match project2_dir
         assert_eq!(
-            match_sources(&paths, "package2"),
+            match_sources(SourceRoots::host(&paths), "package2"),
             Some(project2_dir.as_path())
         );
 
@@ -690,7 +750,7 @@ mod tests {
 
         // Module "package1" should still match project1_dir
         assert_eq!(
-            match_sources(&paths_reversed, "package1"),
+            match_sources(SourceRoots::host(&paths_reversed), "package1"),
             Some(project1_dir.as_path())
         );
     }
@@ -713,7 +773,7 @@ mod tests {
 
         let paths = vec![project_dir];
 
-        assert_eq!(match_sources(&paths, ""), None);
+        assert_eq!(match_sources(SourceRoots::host(&paths), ""), None);
     }
 
     /// Tests behavior with an empty list of source paths
@@ -721,6 +781,6 @@ mod tests {
     fn test_empty_paths() {
         let paths: Vec<PathBuf> = vec![];
 
-        assert_eq!(match_sources(&paths, "mypackage"), None);
+        assert_eq!(match_sources(SourceRoots::host(&paths), "mypackage"), None);
     }
 }

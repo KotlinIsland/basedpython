@@ -54,7 +54,7 @@ impl PartialOrd for NatOrdStr<'_> {
 }
 
 impl NatOrdStr<'_> {
-    pub(crate) fn into_owned(self) -> NatOrdStr<'static> {
+    fn into_owned(self) -> NatOrdStr<'static> {
         NatOrdStr(Cow::Owned(self.0.into_owned()))
     }
 }
@@ -150,7 +150,7 @@ impl<'a> ModuleKey<'a> {
 }
 
 impl ModuleKey<'_> {
-    /// The key, owning the names it compares.
+    /// the key, owning the names it compares
     pub(crate) fn into_owned(self) -> ModuleKey<'static> {
         ModuleKey {
             force_to_top: self.force_to_top,
@@ -202,8 +202,8 @@ impl<'a> MemberKey<'a> {
 }
 
 impl MemberKey<'_> {
-    /// The key, owning the names it compares.
-    pub(crate) fn into_owned(self) -> MemberKey<'static> {
+    /// the key, owning the names it compares
+    fn into_owned(self) -> MemberKey<'static> {
         MemberKey {
             not_star_import: self.not_star_import,
             member_type: self.member_type,

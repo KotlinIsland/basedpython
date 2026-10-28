@@ -513,7 +513,7 @@ def f(user: User | None):
     Ok(())
 }
 
-/// The text of `content` with the edits of the code action titled `title` applied.
+/// the text of `content` with the edits of the code action titled `title` applied
 fn applied(actions: &[lsp_types::CodeActionResponse], title: &str, content: &str) -> String {
     let action = actions
         .iter()
@@ -547,10 +547,10 @@ fn applied(actions: &[lsp_types::CodeActionResponse], title: &str, content: &str
     lines.join("\n")
 }
 
-/// An import a quick fix adds goes where buff's isort configuration sorts it: here, with
+/// an import a quick fix adds goes where buff's isort configuration sorts it: here, with
 /// `force-sort-within-sections`, among the standard library's imports by module whatever their
 /// kind, and after the project's other import of its own package, which buff finds is
-/// first-party because the package is in the project.
+/// first-party because the package is in the project
 #[test]
 fn an_import_is_added_where_the_project_s_isort_configuration_sorts_it() -> Result<()> {
     let main = SystemPath::new("main.py");

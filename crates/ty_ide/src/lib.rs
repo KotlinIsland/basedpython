@@ -887,6 +887,54 @@ mod tests {
         }
     }
 
+    impl CursorTestBuilder {
+        /// add a notebook at `path` whose code cells hold `cells`, one of which may hold the
+        /// `<CURSOR>`, an offset of the text the cells make together
+        pub(super) fn notebook(
+            &mut self,
+            path: impl Into<SystemPathBuf>,
+            cells: &[&str],
+        ) -> &mut CursorTestBuilder {
+            const MARKER: &str = "<CURSOR>";
+
+            let mut cursor_offset = None;
+            let mut before = TextSize::default();
+            let mut written = Vec::new();
+            for cell in cells {
+                let cell = match cell.find(MARKER) {
+                    Some(at) => {
+                        assert!(
+                            cursor_offset.is_none(),
+                            "more than one cell holds `<CURSOR>`"
+                        );
+                        cursor_offset = Some(
+                            before + TextSize::try_from(at).expect("cell to be smaller than 4GB"),
+                        );
+                        cell.replacen(MARKER, "", 1)
+                    }
+                    None => (*cell).to_string(),
+                };
+                // each cell is followed by the line break the notebook's text joins cells with
+                before += TextSize::of(cell.as_str()) + TextSize::of("\n");
+                written.push(format!(
+                    r#"{{"cell_type": "code", "execution_count": null, "metadata": {{}}, "outputs": [], "source": "{}"}}"#,
+                    cell.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n")
+                ));
+            }
+            self.sources.push(Source {
+                path: path.into(),
+                contents: format!(
+                    r#"{{"cells": [{}], "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5}}"#,
+                    written.join(", ")
+                ),
+                cursor_offset,
+            });
+            self
+        }
+    }
+
     fn add_source(
         sources: &mut Vec<Source>,
         path: impl Into<SystemPathBuf>,

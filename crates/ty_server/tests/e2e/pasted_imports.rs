@@ -50,6 +50,8 @@ def area(r: float) -> float:
 const MAIN: &str = "\
 from pathlib import PurePath
 
+import attr
+
 def f() -> float:
     return math.pi * SCALE
 ";
@@ -94,7 +96,7 @@ fn a_copy_answers_its_imports_and_a_paste_the_ones_it_is_missing() -> Result<()>
     let pasted = server
         .send_request_await::<PastedImports>(serde_json::json!({
             "textDocument": { "uri": server.file_uri(SystemPath::new("src/main.py")) },
-            "range": { "start": { "line": 3, "character": 4 }, "end": { "line": 3, "character": 26 } },
+            "range": { "start": { "line": 5, "character": 4 }, "end": { "line": 5, "character": 26 } },
             "imports": copied,
             "textHash": text_hash(MAIN),
         }))
@@ -109,7 +111,7 @@ fn a_copy_answers_its_imports_and_a_paste_the_ones_it_is_missing() -> Result<()>
     assert_eq!(
         added,
         // `math` joins the standard library's imports, above `pathlib`'s, and `shapes`, which is
-        // the project's own, starts a section of its own below them
+        // the project's own, starts a section of its own below the third-party `attr`
         ["import math\n", "\nfrom shapes import SCALE\n"],
         "{pasted:#}"
     );

@@ -1,12 +1,10 @@
 //! Rules from [isort](https://pypi.org/project/isort/).
 
-use std::path::PathBuf;
-
 use annotate::annotate_imports;
 use block::{Block, Trailer};
 pub(crate) use categorize::categorize;
-use categorize::categorize_imports;
 pub use categorize::{ImportSection, ImportType};
+use categorize::{SourceRoots, categorize_imports};
 use comments::Comment;
 use normalize::normalize_imports;
 use order::order_imports;
@@ -74,7 +72,7 @@ pub(crate) fn format_imports(
     line_length: LineLength,
     indentation_width: LineWidthBuilder,
     stylist: &Stylist,
-    src: &[PathBuf],
+    src: SourceRoots<'_>,
     package: Option<PackageRoot<'_>>,
     source_type: PySourceType,
     target_version: PythonVersion,
@@ -158,7 +156,7 @@ fn format_import_block(
     line_length: LineLength,
     indentation_width: LineWidthBuilder,
     stylist: &Stylist,
-    src: &[PathBuf],
+    src: SourceRoots<'_>,
     package: Option<PackageRoot<'_>>,
     target_version: PythonVersion,
     settings: &Settings,

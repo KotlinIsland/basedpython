@@ -57,7 +57,7 @@ walktr
                 "character": 0
               }
             },
-            "newText": "from inspect import walktree\n"
+            "newText": "from inspect import walktree\n\n"
           }
         ]
       }
@@ -873,7 +873,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from typing import TypedDict\n"
+            "newText": "from typing import TypedDict\n\n"
           }
         ]
       },
@@ -907,7 +907,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from typing import is_typeddict\n"
+            "newText": "from typing import is_typeddict\n\n"
           }
         ]
       },
@@ -941,7 +941,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import TypedDict\n"
+            "newText": "from typing_extensions import TypedDict\n\n"
           }
         ]
       },
@@ -975,7 +975,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from _typeshed._type_checker_internals import TypedDictFallback\n"
+            "newText": "from _typeshed._type_checker_internals import TypedDictFallback\n\n"
           }
         ]
       },
@@ -1009,7 +1009,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import is_typeddict\n"
+            "newText": "from typing_extensions import is_typeddict\n\n"
           }
         ]
       },
@@ -1043,7 +1043,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from logging.config import _FilterConfigurationTypedDict\n"
+            "newText": "from logging.config import _FilterConfigurationTypedDict\n\n"
           }
         ]
       },
@@ -1077,7 +1077,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "from logging.config import _FormatterConfigurationTypedDict\n"
+            "newText": "from logging.config import _FormatterConfigurationTypedDict\n\n"
           }
         ]
       },
@@ -1111,7 +1111,7 @@ TypedDi<CURSOR>
                 "character": 0
               }
             },
-            "newText": "import _typeshed.dbapi\n"
+            "newText": "import _typeshed.dbapi\n\n"
           }
         ]
       }

@@ -241,7 +241,9 @@ resolves it — the closest `ruff.toml`, `.ruff.toml` or `pyproject.toml` with a
 `no-lines-before`, `lines-between-types`, `force-single-line` and the rest apply
 as they do to `buff`. the import has to run before the name it binds is used, so a
 file whose imports all come after that point, or that has none, still gets it at
-the top, below a docstring and any `from __future__` import
+the top, below a docstring and any `from __future__` import. `buff` sorts each cell
+of a notebook on its own, so in a notebook the block an import joins, and the top it
+otherwise goes at, are those of the cell the name is used in
 
 ### names inside a string
 

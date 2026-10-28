@@ -42,7 +42,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "from typing import Literal\n"
+            "newText": "from typing import Literal\n\n"
           }
         ]
       }
@@ -87,7 +87,7 @@ expression: code_actions
                 "character": 0
               }
             },
-            "newText": "from typing_extensions import Literal\n"
+            "newText": "from typing_extensions import Literal\n\n"
           }
         ]
       }

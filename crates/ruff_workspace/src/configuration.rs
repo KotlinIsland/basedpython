@@ -9,7 +9,6 @@ use std::num::{NonZeroU8, NonZeroU16};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use glob::{GlobError, Paths, PatternError, glob};
 use itertools::Itertools;
 use log::debug;
 use regex::Regex;
@@ -46,6 +45,7 @@ use ruff_python_formatter::{
     AssignmentAlignment, DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, QuoteStyle,
 };
 
+use crate::files::{ConfigurationFiles, HostFiles};
 use crate::options::{
     AnalyzeOptions, Flake8AnnotationsOptions, Flake8BanditOptions, Flake8BooleanTrapOptions,
     Flake8BugbearOptions, Flake8BuiltinsOptions, Flake8ComprehensionsOptions,
@@ -531,6 +531,17 @@ impl Configuration {
         path: Option<&Path>,
         project_root: &Path,
     ) -> Result<Self> {
+        Self::from_options_in(&HostFiles, options, path, project_root)
+    }
+
+    /// the configuration `options` read from `path`, as [`Self::from_options`] converts them,
+    /// with the `src` and `namespace-packages` globs matched against `files`
+    pub(crate) fn from_options_in(
+        files: &dyn ConfigurationFiles,
+        options: Options,
+        path: Option<&Path>,
+        project_root: &Path,
+    ) -> Result<Self> {
         warn_about_deprecated_top_level_lint_options(&options.lint_top_level.0, path);
 
         let lint = if let Some(mut lint) = options.lint {
@@ -614,7 +625,7 @@ impl Configuration {
             indent_width: options.indent_width,
             namespace_packages: options
                 .namespace_packages
-                .map(|namespace_package| resolve_src(&namespace_package, project_root))
+                .map(|namespace_package| resolve_src(files, &namespace_package, project_root))
                 .transpose()?,
             preview: options.preview.map(PreviewMode::from),
             required_version: options.required_version,
@@ -622,7 +633,7 @@ impl Configuration {
             show_fixes: options.show_fixes,
             src: options
                 .src
-                .map(|src| resolve_src(&src, project_root))
+                .map(|src| resolve_src(files, &src, project_root))
                 .transpose()?,
             target_version: options.target_version.map(ast::PythonVersion::from),
             per_file_target_version: options.per_file_target_version.map(|versions| {
@@ -699,13 +710,14 @@ impl Configuration {
     #[must_use]
     pub(crate) fn apply_fallbacks(
         mut self,
+        files: &dyn ConfigurationFiles,
         origin: ConfigurationOrigin,
         initial_config_path: &Path,
     ) -> Self {
         if matches!(origin, ConfigurationOrigin::Ancestor) {
             self.target_version = self.target_version.or_else(|| {
                 let dir = initial_config_path.parent()?;
-                let fallback = pyproject::find_fallback_target_version(dir)?;
+                let fallback = pyproject::find_fallback_target_version_in(files, dir)?;
                 debug!("Derived `target-version` from `requires-python`: {fallback:?}");
                 Some(fallback.into())
             });
@@ -1479,21 +1491,20 @@ impl<T: CombinePluginOptions> CombinePluginOptions for Option<T> {
 
 /// Given a list of source paths, which could include glob patterns, resolve the
 /// matching paths.
-fn resolve_src(src: &[String], project_root: &Path) -> Result<Vec<PathBuf>> {
+fn resolve_src(
+    files: &dyn ConfigurationFiles,
+    src: &[String],
+    project_root: &Path,
+) -> Result<Vec<PathBuf>> {
     let expansions = src
         .iter()
         .map(shellexpand::full)
         .collect::<Result<Vec<Cow<'_, str>>, LookupError<VarError>>>()?;
-    let globs = expansions
-        .iter()
-        .map(|path| Path::new(path.as_ref()))
-        .map(|path| fs::normalize_path_to(path, project_root))
-        .map(|path| glob(&path.to_string_lossy()))
-        .collect::<Result<Vec<Paths>, PatternError>>()?;
-    let paths: Vec<PathBuf> = globs
-        .into_iter()
-        .flatten()
-        .collect::<Result<Vec<PathBuf>, GlobError>>()?;
+    let mut paths = Vec::new();
+    for path in &expansions {
+        let path = fs::normalize_path_to(Path::new(path.as_ref()), project_root);
+        paths.extend(files.glob(&path.to_string_lossy())?);
+    }
     Ok(paths)
 }
 

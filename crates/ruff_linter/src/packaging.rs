@@ -23,23 +23,60 @@ use std::path::{Path, PathBuf};
 // Thus, for each file, we iterate up its ancestors, returning the last
 // directory containing an `__init__.py`.
 
+/// the file system packages and modules are looked up in: the host's, or the view of it another
+/// program keeps, as a language server keeps one of its workspace
+pub trait PackageFiles {
+    /// whether `path` is a file
+    fn is_file(&self, path: &Path) -> bool;
+
+    /// whether `path` is a directory
+    fn is_directory(&self, path: &Path) -> bool;
+}
+
+/// the host's file system
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HostPackageFiles;
+
+impl PackageFiles for HostPackageFiles {
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn is_directory(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+}
+
 /// Return `true` if the directory at the given `Path` appears to be a Python
 /// package.
 pub fn is_package(path: &Path, namespace_packages: &[PathBuf]) -> bool {
+    is_package_in(&HostPackageFiles, path, namespace_packages)
+}
+
+/// whether the directory at `path` of `files` is a python package
+fn is_package_in(files: &dyn PackageFiles, path: &Path, namespace_packages: &[PathBuf]) -> bool {
     namespace_packages
         .iter()
         .any(|namespace_package| path.starts_with(namespace_package))
-        || path.join("__init__.py").is_file()
-        || path.join("__init__.pyi").is_file()
-        || path.join("__init__.by").is_file()
-        || path.join("__init__.byi").is_file()
+        || ["__init__.py", "__init__.pyi", "__init__.by", "__init__.byi"]
+            .into_iter()
+            .any(|init| files.is_file(&path.join(init)))
 }
 
 /// Return the package root for the given path to a directory with Python file.
 pub fn detect_package_root<'a>(path: &'a Path, namespace_packages: &[PathBuf]) -> Option<&'a Path> {
+    detect_package_root_in(&HostPackageFiles, path, namespace_packages)
+}
+
+/// the package root of the directory at `path` of `files`, as [`detect_package_root`] finds it
+pub fn detect_package_root_in<'a>(
+    files: &dyn PackageFiles,
+    path: &'a Path,
+    namespace_packages: &[PathBuf],
+) -> Option<&'a Path> {
     let mut current = None;
     for parent in path.ancestors() {
-        if !is_package(parent, namespace_packages) {
+        if !is_package_in(files, parent, namespace_packages) {
             return current;
         }
         current = Some(parent);

@@ -23,6 +23,7 @@ use ruff_linter::package::PackageRoot;
 use ruff_linter::packaging::is_package;
 
 use crate::configuration::Configuration;
+use crate::files::{ConfigurationFiles, HostFiles};
 use crate::pyproject::settings_toml;
 use crate::settings::Settings;
 use crate::{FileResolverSettings, pyproject};
@@ -84,12 +85,12 @@ pub enum Relativity {
 }
 
 impl Relativity {
-    fn resolve(self, path: &Path) -> &Path {
+    fn resolve<'a>(self, path: &'a Path, cwd: &'a Path) -> &'a Path {
         match self {
             Relativity::Parent => path
                 .parent()
                 .expect("Expected pyproject.toml file to be in parent directory"),
-            Relativity::Cwd => &path_dedot::CWD,
+            Relativity::Cwd => cwd,
         }
     }
 }
@@ -346,10 +347,19 @@ pub fn resolve_configuration(
     transformer: &dyn ConfigurationTransformer,
     origin: ConfigurationOrigin,
 ) -> Result<Configuration> {
-    resolve_configuration_with_cache(initial_config_path, transformer, origin, None)
+    resolve_configuration_with_cache(
+        &HostFiles,
+        &path_dedot::CWD,
+        initial_config_path,
+        transformer,
+        origin,
+        None,
+    )
 }
 
 fn resolve_configuration_with_cache(
+    files: &dyn ConfigurationFiles,
+    cwd: &Path,
     initial_config_path: &Path,
     transformer: &dyn ConfigurationTransformer,
     origin: ConfigurationOrigin,
@@ -357,7 +367,7 @@ fn resolve_configuration_with_cache(
 ) -> Result<Configuration> {
     let relativity = Relativity::from(origin);
     let mut configurations = indexmap::IndexMap::new();
-    let mut next = Some(fs::normalize_path(initial_config_path));
+    let mut next = Some(fs::normalize_path_to(initial_config_path, cwd));
     while let Some(path) = next {
         if configurations.contains_key(&path) {
             bail!(format!(
@@ -370,9 +380,9 @@ fn resolve_configuration_with_cache(
             ));
         }
 
-        let project_root = relativity.resolve(&path);
+        let project_root = relativity.resolve(&path, cwd);
         let load = || {
-            let options = pyproject::load_options(&path).with_context(|| {
+            let options = pyproject::load_options(files, &path).with_context(|| {
                 if configurations.is_empty() {
                     format!(
                         "Failed to load configuration `{path}`",
@@ -390,7 +400,7 @@ fn resolve_configuration_with_cache(
                     )
                 }
             })?;
-            Configuration::from_options(options, Some(&path), project_root)
+            Configuration::from_options_in(files, options, Some(&path), project_root)
         };
         let configuration = if let Some(cache) = configuration_cache {
             cache.get_or_try_insert_with(&path, project_root, load)?
@@ -419,7 +429,7 @@ fn resolve_configuration_with_cache(
         configuration = configuration.combine(extend);
     }
 
-    let configuration = configuration.apply_fallbacks(origin, initial_config_path);
+    let configuration = configuration.apply_fallbacks(files, origin, initial_config_path);
 
     Ok(transformer.transform(configuration))
 }
@@ -427,6 +437,8 @@ fn resolve_configuration_with_cache(
 /// Extract the project root (scope) and [`Settings`] from a given
 /// `pyproject.toml`.
 fn resolve_scoped_settings(
+    files: &dyn ConfigurationFiles,
+    cwd: &Path,
     pyproject: &Path,
     transformer: &dyn ConfigurationTransformer,
     origin: ConfigurationOrigin,
@@ -434,9 +446,15 @@ fn resolve_scoped_settings(
 ) -> Result<(PathBuf, Settings)> {
     let relativity = Relativity::from(origin);
 
-    let configuration =
-        resolve_configuration_with_cache(pyproject, transformer, origin, configuration_cache)?;
-    let project_root = relativity.resolve(pyproject);
+    let configuration = resolve_configuration_with_cache(
+        files,
+        cwd,
+        pyproject,
+        transformer,
+        origin,
+        configuration_cache,
+    )?;
+    let project_root = relativity.resolve(pyproject, cwd);
     let settings = configuration.into_settings(project_root)?;
     Ok((project_root.to_path_buf(), settings))
 }
@@ -448,7 +466,21 @@ pub fn resolve_root_settings(
     transformer: &dyn ConfigurationTransformer,
     origin: ConfigurationOrigin,
 ) -> Result<Settings> {
-    let (_project_root, settings) = resolve_scoped_settings(pyproject, transformer, origin, None)?;
+    resolve_root_settings_in(&HostFiles, &path_dedot::CWD, pyproject, transformer, origin)
+}
+
+/// the [`Settings`] the configuration file `pyproject` of `files` resolves to, as
+/// [`resolve_root_settings`] resolves them, with `cwd` standing in for the current directory a
+/// configuration from the user's own settings resolves its paths against
+pub fn resolve_root_settings_in(
+    files: &dyn ConfigurationFiles,
+    cwd: &Path,
+    pyproject: &Path,
+    transformer: &dyn ConfigurationTransformer,
+    origin: ConfigurationOrigin,
+) -> Result<Settings> {
+    let (_project_root, settings) =
+        resolve_scoped_settings(files, cwd, pyproject, transformer, origin, None)?;
     Ok(settings)
 }
 
@@ -501,6 +533,8 @@ pub fn project_files_in_path<'a>(
                 if seen.insert(ancestor) {
                     if let Some(pyproject) = settings_toml(ancestor)? {
                         let (root, settings) = resolve_scoped_settings(
+                            &HostFiles,
+                            &path_dedot::CWD,
                             &pyproject,
                             transformer,
                             ConfigurationOrigin::Ancestor,
@@ -695,6 +729,8 @@ impl ParallelVisitor for PythonFilesVisitor<'_, '_> {
                 {
                     match settings_toml(entry.path()) {
                         Ok(Some(pyproject)) => match resolve_scoped_settings(
+                            &HostFiles,
+                            &path_dedot::CWD,
                             &pyproject,
                             self.transformer,
                             ConfigurationOrigin::Ancestor,
@@ -824,6 +860,8 @@ pub fn project_file_at_path(
         for ancestor in path.ancestors() {
             if let Some(pyproject) = settings_toml(ancestor)? {
                 let (root, settings) = resolve_scoped_settings(
+                    &HostFiles,
+                    &path_dedot::CWD,
                     &pyproject,
                     transformer,
                     ConfigurationOrigin::Unknown,
