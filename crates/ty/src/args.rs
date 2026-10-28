@@ -388,7 +388,8 @@ pub(crate) enum Command {
         /// Path to your project's Python environment or interpreter.
         #[arg(long, value_name = "PATH", alias = "venv")]
         python: Option<SystemPathBuf>,
-        /// Python version to assume when resolving types.
+        /// Python version to generate the lockfile for, which its `#python:` header names.
+        /// Defaults to the version the existing lockfile's header names, or the project's.
         #[arg(long, value_name = "VERSION", alias = "target-version", value_enum)]
         python_version: Option<PythonVersion>,
     },

@@ -37,13 +37,13 @@ use std::fmt::Write;
 
 use ruff_db::files::File;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{PythonVersion, PythonVersionDeserializationError};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::file_to_module;
 use ty_python_core::{
     attribute_scopes, global_scope, place_table, scope::ScopeId, semantic_index, use_def_map,
 };
 
-use crate::Db;
 use crate::dunder_all::dunder_all_names;
 use crate::place::{place_from_bindings, place_from_declarations};
 use crate::types::ProgramEnvironment;
@@ -55,43 +55,101 @@ use crate::types::{
     PropertyInstanceType, Signature, SpecialFormType, Type, TypeQualifiers, TypeVarVariance,
     UnionType,
 };
+use crate::{Db, Program};
 
 const FORMAT_HEADER: &str = "#api-lock:v=1";
+
+/// the header line naming the `by` that wrote the file
+const TOOL_HEADER_PREFIX: &str = "#tool:";
+
+/// the header line naming the python version the file was generated for
+const PYTHON_HEADER_PREFIX: &str = "#python:";
 
 /// module-level dunders that are conventionally part of a module's public api
 const PUBLIC_MODULE_DUNDERS: &[&str] = &["__all__", "__author__", "__doc__", "__version__"];
 
-/// generate the api lockfile contents for the given iterator of files
+/// the python version a lockfile is generated for, which its `#python:` header names: many
+/// typing constructs (`Self`, `Required`, `LiteralString`, …) resolve only on newer targets, so
+/// the same source has a different lockfile for each
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize)]
+pub enum ApiLockTarget {
+    /// `#python:default`: the version the project is checked against
+    Project,
+    /// `#python:3.10`
+    Version(PythonVersion),
+}
+
+impl ApiLockTarget {
+    /// the target the `#python:` header of `lockfile` names, `None` for a lockfile with none
+    pub fn of_lockfile(lockfile: &str) -> Option<Result<Self, PythonVersionDeserializationError>> {
+        let target = lockfile
+            .lines()
+            .nth(Self::header_line(lockfile)?)?
+            .strip_prefix(PYTHON_HEADER_PREFIX)?;
+        Some(match target.trim_end() {
+            "default" => Ok(Self::Project),
+            version => version.parse().map(Self::Version),
+        })
+    }
+
+    /// the line, 0-based, of the `#python:` header of `lockfile`, `None` for a lockfile with none
+    pub fn header_line(lockfile: &str) -> Option<usize> {
+        lockfile
+            .lines()
+            .take_while(|line| line.starts_with('#'))
+            .position(|line| line.starts_with(PYTHON_HEADER_PREFIX))
+    }
+
+    /// the program a lockfile for this target is generated under, from the project's own
+    fn program<'db>(self, db: &'db dyn Db, project: Program<'db>) -> Program<'db> {
+        match self {
+            Self::Project => project,
+            Self::Version(version) => project.at_python_version(db, version),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiLockTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Project => f.write_str("default"),
+            Self::Version(version) => version.fmt(f),
+        }
+    }
+}
+
+/// generate the api lockfile contents for `files`, read as modules of `program` at `target`
 ///
 /// non-first-party files (stdlib, site-packages, vendored) are skipped — only
 /// project code contributes to the lockfile.
 ///
-/// `python_version` is recorded in the header so a downstream reader can
-/// see what target the lockfile was generated against (typing constructs
-/// like `Self`, `Required`, `NotRequired` resolve differently per
-/// version)
+/// `target` is recorded in the header so a downstream reader can see what
+/// target the lockfile was generated against
 pub fn generate_api_lockfile<'db, I>(
     db: &'db dyn Db,
-    env: &ProgramEnvironment<'db>,
+    program: Program<'db>,
     files: I,
-    python_version: &str,
+    target: ApiLockTarget,
 ) -> String
 where
     I: IntoIterator<Item = File>,
 {
     use std::fmt::Write as _;
 
+    let program = target.program(db, program);
+    let env = &ProgramEnvironment::from_program(program);
     let mut lines: Vec<String> = Vec::new();
     let mut visited_classes: FxHashSet<ClassLiteral<'db>> = FxHashSet::default();
     let mut module_count: usize = 0;
 
     for file in files {
-        let Some(module) = file_to_module(db, db.program_file(file).resolver_file(db)) else {
+        let program_file = program.program_file(db, file);
+        let Some(module) = file_to_module(db, program_file.resolver_file(db)) else {
             continue;
         };
 
         let module_name = module.name(db).as_str().to_string();
-        let scope = global_scope(db, db.program_file(file));
+        let scope = global_scope(db, program_file);
         emit_module_scope(
             db,
             env,
@@ -108,12 +166,37 @@ where
 
     let mut out = String::from(FORMAT_HEADER);
     out.push('\n');
-    let _ = writeln!(out, "#tool:by={}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(out, "#python:{python_version}");
+    let _ = writeln!(out, "{TOOL_HEADER_PREFIX}by={}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(out, "{PYTHON_HEADER_PREFIX}{target}");
     let _ = writeln!(out, "#modules:{module_count}");
     out.push_str(&lines.join("\n"));
     out.push('\n');
     out
+}
+
+/// the first line of `committed`, 0-based, at which it says something other than `generated`,
+/// or `None` where the two say the same: the lockfile is up to date
+///
+/// the `#tool:` header line is not compared. it names the `by` that wrote the file, and two
+/// versions of `by` that write the same records describe the same api: were it compared, a
+/// lockfile would go stale with every upgrade, and flip between the versions of everyone
+/// working on the project, without the api changing. line endings are not compared either,
+/// since a checkout can turn them into `\r\n`
+///
+/// a `committed` that stops short of `generated` differs at the line after its last
+pub fn first_stale_line(committed: &str, generated: &str) -> Option<usize> {
+    fn compared(text: &str) -> impl Iterator<Item = (usize, &str)> {
+        text.lines()
+            .enumerate()
+            .filter(|(_, line)| !line.starts_with(TOOL_HEADER_PREFIX))
+    }
+    let mut generated_lines = compared(generated).map(|(_, line)| line);
+    for (index, line) in compared(committed) {
+        if generated_lines.next() != Some(line) {
+            return Some(index);
+        }
+    }
+    generated_lines.next().map(|_| committed.lines().count())
 }
 
 fn emit_module_scope<'db>(
@@ -127,7 +210,7 @@ fn emit_module_scope<'db>(
     let use_def_map = use_def_map(db, scope);
     let table = place_table(db, scope);
     let scope_file = scope.file(db);
-    let all_names = dunder_all_names(db, db.program_file(scope_file));
+    let all_names = dunder_all_names(db, scope.program_file(db));
 
     for (symbol_id, declarations, bindings) in use_def_map.all_reachable_symbols() {
         let symbol = table.symbol(symbol_id);
@@ -346,8 +429,7 @@ fn emit_instance_attributes<'db>(
     qualified_prefix: &str,
     lines: &mut Vec<String>,
 ) {
-    let file = body_scope.file(db);
-    let index = semantic_index(db, db.program_file(file));
+    let index = semantic_index(db, body_scope.program_file(db));
 
     let mut seen: FxHashSet<String> = FxHashSet::default();
     for function_scope_id in attribute_scopes(db, body_scope) {
@@ -383,8 +465,7 @@ fn lookup_instance_attribute<'db>(
     class_body_scope: ScopeId<'db>,
     name: &str,
 ) -> Option<(Type<'db>, TypeQualifiers)> {
-    let file = class_body_scope.file(db);
-    let index = semantic_index(db, db.program_file(file));
+    let index = semantic_index(db, class_body_scope.program_file(db));
 
     // try declarations first across all attribute scopes
     for function_scope_id in attribute_scopes(db, class_body_scope) {
@@ -916,8 +997,8 @@ fn render_reexport<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type
         }
         Type::TypeAlias(TypeAliasType::PEP695(alias))
         | Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::PEP695(alias))) => {
-            let file = alias.rhs_scope(db).file(db);
-            let module = file_to_module(db, db.program_file(file).resolver_file(db))
+            let program_file = alias.rhs_scope(db).program_file(db);
+            let module = file_to_module(db, program_file.resolver_file(db))
                 .map(|m| format!("{}.", m.name(db).as_str()))
                 .unwrap_or_default();
             format!("{module}{}", alias.name(db))
@@ -1007,8 +1088,7 @@ fn render_class_base<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Ty
 
 fn qualified_class_name<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> String {
     let class_name = class.name(db).as_str();
-    let class_file = class.file(db);
-    if let Some(module) = file_to_module(db, db.program_file(class_file).resolver_file(db)) {
+    if let Some(module) = file_to_module(db, class.program_file(db).resolver_file(db)) {
         format!("{}.{}", module.name(db).as_str(), class_name)
     } else {
         class_name.to_string()
@@ -1067,4 +1147,63 @@ fn is_public_class_member(name: &str) -> bool {
         return true;
     }
     !name.starts_with('_')
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_python_ast::PythonVersion;
+
+    use super::{ApiLockTarget, first_stale_line};
+
+    const LOCK: &str = "#api-lock:v=1\n#tool:by=0.0.5\n#python:3.10\n#modules:1\nm.X:v=int\n";
+
+    #[test]
+    fn the_target_is_what_the_python_header_names() {
+        assert_eq!(
+            ApiLockTarget::of_lockfile(LOCK),
+            Some(Ok(ApiLockTarget::Version(PythonVersion::PY310)))
+        );
+        assert_eq!(
+            ApiLockTarget::of_lockfile("#api-lock:v=1\n#python:default\n"),
+            Some(Ok(ApiLockTarget::Project))
+        );
+        assert!(matches!(
+            ApiLockTarget::of_lockfile("#python:three\n"),
+            Some(Err(_))
+        ));
+        // a record is not a header, whatever it holds
+        assert_eq!(
+            ApiLockTarget::of_lockfile("m.X:v=int\n#python:3.10\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn only_the_tool_that_wrote_a_lockfile_does_not_make_it_stale() {
+        let other_tool = LOCK.replace("by=0.0.5", "by=0.0.6");
+        assert_eq!(first_stale_line(LOCK, &other_tool), None);
+        assert_eq!(first_stale_line(&LOCK.replace('\n', "\r\n"), LOCK), None);
+    }
+
+    #[test]
+    fn a_lockfile_is_stale_from_the_first_line_that_differs() {
+        assert_eq!(
+            first_stale_line(LOCK, &LOCK.replace("m.X:v=int", "m.X:v=str")),
+            Some(4)
+        );
+        assert_eq!(
+            first_stale_line(LOCK, &LOCK.replace("3.10", "3.11")),
+            Some(2)
+        );
+        // a record the lockfile does not have yet is missing after its last line
+        assert_eq!(
+            first_stale_line(LOCK, &format!("{LOCK}m.Y:v=int\n")),
+            Some(5)
+        );
+        // and one it has that is gone is stale where it is
+        assert_eq!(
+            first_stale_line(&format!("{LOCK}m.Y:v=int\n"), LOCK),
+            Some(5)
+        );
+    }
 }

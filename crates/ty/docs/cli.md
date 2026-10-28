@@ -450,7 +450,7 @@ by generate-api-file [OPTIONS]
 </dd><dt id="by-generate-api-file--output"><a href="#by-generate-api-file--output"><code>--output</code></a>, <code>-o</code> <i>path</i></dt><dd><p>Where to write the lockfile. Defaults to <code>api.lock</code> in the project root</p>
 </dd><dt id="by-generate-api-file--project"><a href="#by-generate-api-file--project"><code>--project</code></a> <i>project</i></dt><dd><p>Run the command within the given project directory</p>
 </dd><dt id="by-generate-api-file--python"><a href="#by-generate-api-file--python"><code>--python</code></a>, <code>--venv</code> <i>path</i></dt><dd><p>Path to your project's Python environment or interpreter</p>
-</dd><dt id="by-generate-api-file--python-version"><a href="#by-generate-api-file--python-version"><code>--python-version</code></a>, <code>--target-version</code> <i>version</i></dt><dd><p>Python version to assume when resolving types</p>
+</dd><dt id="by-generate-api-file--python-version"><a href="#by-generate-api-file--python-version"><code>--python-version</code></a>, <code>--target-version</code> <i>version</i></dt><dd><p>Python version to generate the lockfile for, which its <code>#python:</code> header names. Defaults to the version the existing lockfile's header names, or the project's</p>
 <p>Possible values:</p>
 <ul>
 <li><code>3.7</code></li>

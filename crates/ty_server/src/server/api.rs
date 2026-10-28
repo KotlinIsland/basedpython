@@ -167,6 +167,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::EndpointsHandler::METHOD => {
             background_request_task::<requests::EndpointsHandler>(req, BackgroundSchedule::Worker)
         }
+        // the project's api lockfile, which is generated from every module rather than read
+        requests::ApiLockHandler::METHOD => {
+            background_request_task::<requests::ApiLockHandler>(req, BackgroundSchedule::Worker)
+        }
         // a merge's and a diff's texts, which are versions no document holds
         requests::ResolveMergeConflictsHandler::METHOD => background_request_task::<
             requests::ResolveMergeConflictsHandler,

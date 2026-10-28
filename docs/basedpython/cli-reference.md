@@ -255,11 +255,9 @@ relative to where you typed it — mirroring the *module* tree. a
 src-layout project's `src/package_name/main.by` is the module
 `package_name.main`, so it lands at `build/package_name/main.py` — `build/` is a
 directory you can put on `sys.path` as it stands, and `run.main` names a module
-the same way an import does. `by generate-api-file` does not read `build/` as
-first-party source — it is regenerated on every build. `by check` still walks it,
-though, so a project that keeps its output beside its sources will see
-diagnostics reported against generated python; exclude it with
-`src.exclude = ["build"]` if that is in the way
+the same way an import does. the build leaves a `.by-manifest` at the top of what
+it writes, which keeps the output out of the project: `by check` does not check
+it, and `by generate-api-file` does not describe it
 
 alongside the python it writes `build/_by_sourcemap.py`, mapping each generated
 line back to the `.by` line it came from, with a digest of both files so a tool
@@ -422,13 +420,15 @@ another, and `by run --compiled` imports what this wrote
 ## `by generate-api-file`
 
 ```sh
-by generate-api-file                       # writes ./api.lock
+by generate-api-file                       # writes api.lock in the project root
 by generate-api-file --stdout              # writes lockfile to stdout
 by generate-api-file -o public.lock        # custom output path
 by generate-api-file --python-version 3.10 # target a specific python version
+by generate-api-file --project lib         # the lockfile of the project in lib, lib/api.lock
 ```
 
-see [api-lock](features/api-lock.md) for the lockfile format and workflow
+see [api-lock](features/api-lock.md) for the lockfile format and workflow, and
+for what the language server says about a stale lockfile
 
 ## `by transpile`
 

@@ -41,6 +41,7 @@ pub use uv::{
     uv_test_env_vars,
 };
 
+pub mod api_lock;
 pub mod build_output;
 mod db;
 mod files;

@@ -657,12 +657,7 @@ impl Session {
     }
 
     /// Selects a project to use for analysis of the given document (identified
-    /// by path).
-    ///
-    /// When the given document path is a system path, we select the project registered under the
-    /// closest containing workspace folder. Otherwise, we select the first project by workspace-root
-    /// path whose import search paths contain the file. If no project matches, or the path is virtual,
-    /// we select the project associated with the workspace root path that sorts first lexicographically.
+    /// by path): see [`select_project`].
     ///
     /// Returns a tuple where the first element is the workspace root of the
     /// selected project and the second element is the state object for the selected project.
@@ -672,19 +667,12 @@ impl Session {
         &self,
         path: &AnySystemPath,
     ) -> Option<(&SystemPath, &ProjectState)> {
-        path.as_system()
-            .and_then(|path| {
-                self.projects
-                    .range(..=path.to_path_buf())
-                    .rfind(|(root, _)| path.starts_with(root))
-                    .or_else(|| {
-                        self.projects
-                            .iter()
-                            .find(|(_, project)| project.db.program_for_dependency(path).is_some())
-                    })
-            })
-            .or_else(|| self.projects.first_key_value())
-            .map(|(workspace_root, project)| (workspace_root.as_path(), project))
+        select_project(
+            self.projects.iter(),
+            |project| &project.db,
+            path.as_system().map(SystemPathBuf::as_path),
+        )
+        .map(|(workspace_root, project)| (workspace_root.as_path(), project))
     }
 
     /// applies `changes` to the project holding `path`
@@ -1498,6 +1486,7 @@ impl Session {
     /// Creates a snapshot of the current state of the [`Session`].
     pub(crate) fn snapshot_session(&self) -> SessionSnapshot {
         SessionSnapshot {
+            workspace_roots: self.projects.keys().cloned().collect(),
             projects: self
                 .projects
                 .values()
@@ -1906,6 +1895,35 @@ impl DocumentRequestTarget {
     }
 }
 
+/// Selects, of `projects` keyed and sorted by workspace root, the project to use for analysis of
+/// the file at `path`, or of a file the server is asked about at no path.
+///
+/// When `path` is given, we select the project registered under the closest containing workspace
+/// folder. Otherwise, we select the first project by workspace-root path whose import search paths
+/// contain the file. If no project matches, or there is no path, we select the project associated
+/// with the workspace root path that sorts first lexicographically.
+///
+/// Returns None when no projects exist.
+fn select_project<'a, P>(
+    mut projects: impl DoubleEndedIterator<Item = (&'a SystemPathBuf, &'a P)> + Clone,
+    db: impl Fn(&P) -> &ProjectDatabase,
+    path: Option<&SystemPath>,
+) -> Option<(&'a SystemPathBuf, &'a P)> {
+    path.and_then(|path| {
+        // a root above `path` sorts before it, and the closest such root last
+        projects
+            .clone()
+            .rev()
+            .find(|(root, _)| path.starts_with(root))
+            .or_else(|| {
+                projects
+                    .clone()
+                    .find(|(_, project)| db(project).program_for_dependency(path).is_some())
+            })
+    })
+    .or_else(move || projects.next())
+}
+
 /// An immutable snapshot of the current state of [`Session`].
 pub(crate) struct SessionSnapshot {
     index: Arc<Index>,
@@ -1922,6 +1940,9 @@ pub(crate) struct SessionSnapshot {
     /// question from what [`Self::open_documents`] answers.
     native_system: Arc<dyn System + 'static + Send + Sync + RefUnwindSafe>,
 
+    /// The workspace root each of [`Self::projects`] is registered under, in the same order.
+    workspace_roots: Vec<SystemPathBuf>,
+
     /// IMPORTANT: It's important that the databases come last, or at least,
     /// after any `Arc` that we try to extract or mutate in-place using `Arc::into_inner`
     /// and that relies on Salsa's cancellation to guarantee that there's now only a
@@ -1937,6 +1958,19 @@ pub(crate) struct SessionSnapshot {
 impl SessionSnapshot {
     pub(crate) fn projects(&self) -> &[ProjectDatabase] {
         &self.projects
+    }
+
+    /// The project the session analyses the file at `path` in, as it would were the file open,
+    /// or the first project for a request that names no file: see [`select_project`].
+    ///
+    /// Returns None when no projects exist.
+    pub(crate) fn project_for_path(&self, path: Option<&SystemPath>) -> Option<&ProjectDatabase> {
+        select_project(
+            self.workspace_roots.iter().zip(&self.projects),
+            |db| db,
+            path,
+        )
+        .map(|(_, db)| db)
     }
 
     pub(crate) fn index(&self) -> &Index {

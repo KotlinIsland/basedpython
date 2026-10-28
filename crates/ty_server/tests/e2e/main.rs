@@ -28,6 +28,7 @@
 //! [`await_notification`]: TestServer::await_notification
 
 mod alignment_groups;
+mod api_lock;
 mod build_output;
 mod build_trees;
 mod call_hierarchy;

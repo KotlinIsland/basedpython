@@ -510,3 +510,122 @@ fn writes_to_file_by_default() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// the project's lockfile is in its root, wherever the command runs from
+#[test]
+fn writes_to_the_root_of_the_project_it_is_given() -> anyhow::Result<()> {
+    let case = CliTest::with_file("project/m.py", "X: int = 1\n")?;
+
+    let status = api_lockfile_command(&case)
+        .args(["--project", "project"])
+        .status()?;
+    assert!(status.success());
+
+    assert!(!case.root().join("api.lock").exists());
+    let contents = std::fs::read_to_string(case.root().join("project/api.lock"))?;
+    assert!(
+        contents.ends_with("m.X:v=builtins.int\n"),
+        "missing body line: {contents}"
+    );
+
+    Ok(())
+}
+
+fn stdout_of(command: &mut Command) -> anyhow::Result<String> {
+    let output = command.output()?;
+    anyhow::ensure!(output.status.success(), "{output:?}");
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+/// a build output is recognised by the manifest the build leaves in it, not by its name: a
+/// package the author calls `build` is part of the api, and what a build wrote is not
+#[test]
+fn a_package_named_build_is_described_and_a_build_output_is_not() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        ("mypkg/__init__.py", ""),
+        ("mypkg/build/__init__.py", "def compile_it() -> None: ...\n"),
+        ("out/.by-manifest", "mypkg/__init__.py\n"),
+        ("out/mypkg/__init__.py", "def generated() -> None: ...\n"),
+    ])?;
+
+    let lockfile = stdout_of(api_lockfile_command(&case).arg("--stdout"))?;
+    assert!(
+        lockfile.contains("\nmypkg.build.compile_it:d()->None\n"),
+        "{lockfile}"
+    );
+    assert!(!lockfile.contains("generated"), "{lockfile}");
+    Ok(())
+}
+
+/// a module whose public api depends on the python it is read for
+const VERSIONED: &str = "\
+import sys
+
+if sys.version_info >= (3, 11):
+    X: int = 1
+else:
+    X: str = \"\"
+";
+
+/// without `--python-version`, the lockfile is regenerated for the python its header names
+#[test]
+fn regenerates_for_the_python_the_existing_lockfile_names() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        ("main.py", VERSIONED),
+        (
+            "api.lock",
+            "#api-lock:v=1\n#tool:by=0.0.0\n#python:3.10\n#modules:1\nmain.X:v=builtins.int\n",
+        ),
+    ])?;
+
+    let printed = stdout_of(api_lockfile_command(&case).arg("--stdout"))?;
+    assert!(
+        printed.contains("\n#python:3.10\n#modules:1\nmain.X:v=builtins.str\n"),
+        "{printed}"
+    );
+
+    let status = api_lockfile_command(&case).status()?;
+    assert!(status.success());
+    assert_eq!(
+        std::fs::read_to_string(case.root().join("api.lock"))?,
+        printed
+    );
+
+    let other =
+        stdout_of(api_lockfile_command(&case).args(["--stdout", "--python-version", "3.12"]))?;
+    assert!(
+        other.contains("\n#python:3.12\n#modules:1\nmain.X:v=builtins.int\n"),
+        "{other}"
+    );
+    Ok(())
+}
+
+/// a lockfile whose python is not known is not regenerated for a guess
+#[test]
+fn refuses_a_lockfile_whose_python_it_cannot_read() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        ("main.py", "X: int = 1\n"),
+        ("api.lock", "#api-lock:v=1\n#python:three\n"),
+    ])?;
+    std::fs::write(case.root().join("public.lock"), b"#python:3.10\n\xff\n")?;
+
+    let output = api_lockfile_command(&case).output()?;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("names a python version by cannot read"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(case.root().join("api.lock"))?,
+        "#api-lock:v=1\n#python:three\n"
+    );
+
+    let output = api_lockfile_command(&case)
+        .args(["-o", "public.lock"])
+        .output()?;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("--python-version"), "{stderr}");
+    Ok(())
+}

@@ -65,6 +65,19 @@ impl<'db> Program<'db> {
         )
     }
 
+    /// the same program on python `version`: what the same files mean to an interpreter of that
+    /// version, resolving the same modules against the same search paths
+    #[must_use]
+    pub fn at_python_version(self, db: &'db dyn Db, version: PythonVersion) -> Self {
+        let resolver_environment = ResolverEnvironment::new(db, version, self.search_paths(db));
+        Program::new(
+            db,
+            self.python_platform(db).clone(),
+            resolver_environment,
+            self.assumptions(db),
+        )
+    }
+
     pub fn python_version(self, db: &'db dyn Db) -> PythonVersion {
         self.resolver_environment(db).python_version(db)
     }

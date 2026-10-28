@@ -6,10 +6,21 @@ committed alongside the source and reviewed as a diff: any change to the
 public api shows up as a line-level change in the lockfile
 
 ```sh
-by generate-api-file               # writes ./api.lock
+by generate-api-file               # writes api.lock in the project root
 by generate-api-file --stdout      # writes to stdout
 by generate-api-file -o public.lock
 ```
+
+the project is the one the current directory is in, or the one `--project`
+names, and its lockfile is `api.lock` in its root directory wherever the command
+runs from
+
+the lockfile is regenerated for the python its `#python:` header names, so
+`by generate-api-file --python-version 3.10` once and `by generate-api-file`
+after that keep it for 3.10. `--python-version` names another, and with no
+lockfile, or one with no header, it is generated for the version the project is
+checked against. the command fails where the lockfile cannot be read, or names a
+python version `by` cannot read, rather than guess what it is for
 
 ## workflow
 
@@ -18,6 +29,41 @@ by generate-api-file -o public.lock
     is non-empty
 - during code review, the diff is the api change. a reviewer who
     approves the diff has approved the api change
+
+## in an editor
+
+the lockfile is generated code: any edit to the source can change it, not only a
+merge. the language server (`by server`) generates it from the project as the
+editor has it, unsaved edits included, and incrementally, so an editor can keep
+it in step without running the command
+
+- `by/apiLock` takes `{"uri"?: "…"}`, a file or directory of the project
+    whose lockfile is asked for, the project the server analyses that file in
+    (the first project's without one), and answers
+    `{"uri", "text", "python", "exists", "staleLine"}`: where the project keeps
+    its lockfile, the lockfile as the server generates it now, the target that
+    lockfile is generated for as its `#python:` header names it, whether the
+    project has an `api.lock`, and the line, 0-based, at which that `api.lock`
+    first says something else, `null` where it is up to date or there is none.
+    it answers `null` without a project, and fails where the project's
+    `api.lock` cannot be read, not being utf-8 among other reasons, or names a
+    python version `by` cannot read
+
+the lockfile is generated for the target the project's `api.lock`
+names, `#python:3.10` for one written by
+`by generate-api-file --python-version 3.10`, so a lockfile kept for the lowest
+python a library supports is checked and regenerated for that python; with no
+`api.lock`, or `#python:default`, it is the version the project is checked
+against. it is the same text the command writes for that target, byte for byte
+
+### what makes a lockfile stale
+
+every line counts except `#tool:by=…`, which names the `by` that wrote the
+file. two versions of `by` that write the same records describe the same api: if
+the line counted, every upgrade of `by` would make every lockfile stale, and a
+project worked on with two versions of `by` would never be up to date, with no
+change to its api. the format line, the target and the module count do count.
+line endings do not, since a checkout may have turned them into `\r\n`
 
 ## record grammar
 
@@ -71,8 +117,10 @@ record. fields are colon-separated, and the records are sorted lexicographically
 - any symbol whose simple name starts with `_` (unless it's one of the
     conventional public dunders above)
 - stdlib, site-packages, and other non-first-party modules
-- output from `by build` — the `build/` directory is not considered first-party
-    source for lockfile purposes
+- output from `by build` and `by compile`, which a build marks with a
+    `.by-manifest`: it is not part of the project, whatever the directory is
+    called. a package of the project's own called `build` is described like any
+    other
 
 ## determinism and stability
 

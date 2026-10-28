@@ -35,14 +35,20 @@ use ruff_db::system::{OsSystem, System, SystemPath, SystemPathBuf};
 use ruff_db::{STACK_SIZE, max_parallelism};
 use ruff_diagnostics::Applicability;
 use ruff_python_ast::script::ScriptTag;
+use ruff_ranged_value::RangedValue;
 use salsa::Database;
+use ty_project::api_lock::{api_lock_target, read_api_lock};
+use ty_project::metadata::options::EnvironmentOptions;
+use ty_project::metadata::python_version::SupportedPythonVersion;
 use ty_project::metadata::settings::TerminalSettings;
+use ty_project::metadata::value::RelativePathBuf;
 use ty_project::watch::ProjectWatcher;
 use ty_project::{
     ChangeResult, CollectReporter, Db, Project, ScriptEnvironmentAvailability, UseUv,
     UvSyncProgress, UvWorkspace, watch,
 };
 use ty_project::{ProjectDatabase, ProjectMetadata, ProjectReloadResult};
+use ty_python_semantic::api_lockfile::ApiLockTarget;
 use ty_python_semantic::{fix_all_diagnostics, suppress_all_diagnostics};
 use ty_static::EnvVars;
 
@@ -259,12 +265,6 @@ fn run_generate_api_file(
     python: Option<SystemPathBuf>,
     python_version: Option<crate::python_version::PythonVersion>,
 ) -> anyhow::Result<ExitStatus> {
-    use ruff_ranged_value::RangedValue;
-    use ty_project::metadata::options::EnvironmentOptions;
-    use ty_project::metadata::value::RelativePathBuf;
-    use ty_python_semantic::ProgramEnvironment;
-    use ty_python_semantic::api_lockfile::generate_api_lockfile;
-
     let cwd = {
         let cwd = std::env::current_dir().context("Failed to get the current working directory")?;
         SystemPathBuf::from_path_buf(cwd).map_err(|path| {
@@ -303,60 +303,44 @@ fn run_generate_api_file(
     project_metadata.set_override_options(cli_options);
 
     let db = ProjectDatabase::fallible(project_metadata, system)?;
-    let project = db.project();
-
-    // walk first-party files only. exclude transpiler build output
-    // (`out/`, `build/`, `dist/`) and editor artefacts so the lockfile
-    // tracks user source rather than regenerated artefacts
-    let indexed = project.files(&db);
-    let mut first_party_files: Vec<_> = indexed
-        .iter()
-        .filter(|file| {
-            let path = file.path(&db);
-            // only system paths in first-party search paths
-            let ruff_db::files::FilePath::System(system_path) = path else {
-                return false;
-            };
-            // skip any file whose path passes through a build-output dir
-            let path_str = system_path.as_str();
-            for excluded in ["/out/", "/build/", "/dist/"] {
-                if path_str.contains(excluded) {
-                    return false;
-                }
-            }
-            if path_str.starts_with("out/")
-                || path_str.starts_with("build/")
-                || path_str.starts_with("dist/")
-            {
-                return false;
-            }
-            ty_module_resolver::file_to_module(
-                &db,
-                ty_python_semantic::Db::program_file(&db, *file).resolver_file(&db),
-            )
-            .and_then(|module| module.search_path(&db).cloned())
-            .is_some_and(|sp| sp.is_first_party())
-        })
-        .collect();
-    first_party_files.sort_by_key(|file| file.path(&db).as_str().to_string());
-
-    let python_version_str = python_version
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "default".to_owned());
-    let env = first_party_files
-        .first()
-        .map(|file| ProgramEnvironment::from_file(ty_python_semantic::Db::program_file(&db, *file)))
-        .unwrap_or_else(|| ProgramEnvironment::from_program(db.project().program(&db)));
-    let lockfile = generate_api_lockfile(&db, &env, first_party_files, &python_version_str);
+    // the lockfile the command regenerates, which `--stdout` prints rather than writes
+    let output_path = match output {
+        Some(output) => SystemPath::absolute(
+            SystemPathBuf::from_path_buf(output).map_err(|path| {
+                anyhow!(
+                    "The output path `{}` contains non-Unicode characters",
+                    path.display()
+                )
+            })?,
+            &cwd,
+        ),
+        None => db.project().api_lock_path(&db),
+    };
+    let target = match python_version {
+        // the project's settings are already at `--python-version`, which the header names
+        Some(version) => ApiLockTarget::Version(ruff_python_ast::PythonVersion::from(
+            SupportedPythonVersion::from(version),
+        )),
+        None => {
+            let existing =
+                read_api_lock(ruff_db::Db::system(&db), &output_path).with_context(|| {
+                    format!(
+                        "Failed to read `{output_path}`, whose `#python:` header names the \
+                        python to generate it for; pass `--python-version` to name one"
+                    )
+                })?;
+            api_lock_target(existing.as_deref())
+                .with_context(|| format!("`{output_path}` names a python version by cannot read"))?
+        }
+    };
+    let lockfile = db.project().api_lock(&db, target);
 
     if stdout {
-        use std::io::Write;
         let mut out = std::io::stdout().lock();
         out.write_all(lockfile.as_bytes())?;
     } else {
-        let output_path = output.unwrap_or_else(|| std::path::PathBuf::from("api.lock"));
-        std::fs::write(&output_path, lockfile)
-            .with_context(|| format!("Failed to write {}", output_path.display()))?;
+        std::fs::write(output_path.as_std_path(), lockfile)
+            .with_context(|| format!("Failed to write {output_path}"))?;
     }
 
     std::mem::forget(db);

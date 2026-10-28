@@ -13,6 +13,7 @@ module. For example, see `super::type_hierarchy`.
 */
 
 mod alignment_groups;
+pub(super) mod api_lock;
 mod build_output;
 mod call_hierarchy_incoming_calls;
 mod call_hierarchy_outgoing_calls;
@@ -88,6 +89,7 @@ mod workspace_diagnostic;
 mod workspace_symbols;
 
 pub(super) use alignment_groups::AlignmentGroupsRequestHandler;
+pub(super) use api_lock::ApiLockHandler;
 pub(super) use build_output::BuildOutputRequestHandler;
 pub(super) use call_hierarchy_incoming_calls::CallHierarchyIncomingCallsRequestHandler;
 pub(super) use call_hierarchy_outgoing_calls::CallHierarchyOutgoingCallsRequestHandler;
