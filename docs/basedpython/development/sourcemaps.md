@@ -165,6 +165,16 @@ the two tables, as names a reader that predates them never reads:
 
 ```python
 LAUNCHER = "/tmp/.tmpXXXX/_by_runner.py"
+
+BY_CODE = [
+    "/tmp/.tmpXXXX/_by_coverage_plugin.py",
+    "/tmp/.tmpXXXX/_by_project.py",
+    "/tmp/.tmpXXXX/_by_pytest.py",
+    "/tmp/.tmpXXXX/_by_repl.py",
+    "/tmp/.tmpXXXX/_by_runner.py",
+    "/tmp/.tmpXXXX/_by_sourcemap.py",
+    "/tmp/.tmpXXXX/pkg/_by_runtime.py",
+]
 ```
 
 `LAUNCHER` is the script a program in the tree is started through: `by run`
@@ -172,8 +182,19 @@ starts the interpreter on its runner, `_by_runner.py`, which makes the program's
 entry module `__main__` and runs it. none of the runner's frames is the program's,
 and a debugger that launched the file `LAUNCHER` names treats them as python's own
 `runpy` frames under `python -m`. a `by build` or `by compile` tree, which no
-program is started from, says `LAUNCHER = None`. the path is spelled as the
-tables spell theirs, so a consumer that resolves symlinks resolves it too
+program is started from, says `LAUNCHER = None`
+
+`BY_CODE` is every file of by's own python in the tree: the runner and the
+plugins it gives pytest and coverage.py, the module `by repl` runs, the module
+naming the project, the map itself, and each copy of the runtime's helpers. none
+of it is the program's code, though it sits in the tree beside the program's, so
+a debugger that steps through only the program's own code leaves these files
+out as it leaves out the standard library, by what the map says rather than by
+their names. a `by build` or `by compile` tree lists the map and its copies of the
+runtime
+
+every path is spelled as the tables spell theirs, so a consumer that resolves
+symlinks resolves these too
 
 a re-stage rewrites only the lines of the entry it re-staged, so what the map
 says about by's own code stays as the build wrote it

@@ -9811,10 +9811,11 @@ fn check_follows_the_build_to_another_directory_and_keeps_a_package_called_build
     );
 }
 
-/// what a launcher given `by run`'s runner finds beside it: the `_by_sourcemap.py` of the tree the
-/// runner is in, and the runner's path as the launcher was handed it
+/// what a launcher given `by run`'s runner finds beside it, in a project of `files`: the
+/// `_by_sourcemap.py` of the tree the runner is in, the runner's path as the launcher was handed
+/// it, and every python file in the tree
 #[cfg(unix)]
-fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
+fn run_through_a_launcher_reading_the_map(files: &[(&str, &str)]) -> (String, String, String) {
     use std::os::unix::fs::PermissionsExt as _;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -9823,9 +9824,14 @@ fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
         "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
-    fs::write(dir.path().join("main.by"), main).unwrap();
+    for (path, text) in files {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
     let map = dir.path().join("map");
     let runner = dir.path().join("runner");
+    let tree = dir.path().join("tree");
     let launcher = dir.path().join("launcher");
     fs::write(
         &launcher,
@@ -9833,9 +9839,11 @@ fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
             "#!/bin/sh\n\
              cp \"$(dirname \"$2\")/_by_sourcemap.py\" '{map}'\n\
              printf '%s' \"$2\" > '{runner}'\n\
+             find \"$(dirname \"$2\")\" -name '*.py' > '{tree}'\n\
              exec \"$@\"\n",
             map = map.display(),
             runner = runner.display(),
+            tree = tree.display(),
         ),
     )
     .unwrap();
@@ -9857,6 +9865,7 @@ fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
     (
         fs::read_to_string(&map).expect("the launcher copied the map"),
         fs::read_to_string(&runner).expect("the launcher was handed the runner"),
+        fs::read_to_string(&tree).expect("the launcher listed the tree"),
     )
 }
 
@@ -9865,10 +9874,64 @@ fn run_through_a_launcher_reading_the_map(main: &str) -> (String, String) {
 #[cfg(unix)]
 #[test]
 fn run_declares_its_runner_as_the_launcher() {
-    let (map, runner) = run_through_a_launcher_reading_the_map("print('ran')\n");
+    let (map, runner, _) = run_through_a_launcher_reading_the_map(&[("main.by", "print('ran')\n")]);
     assert!(
         map.lines()
             .any(|line| line == format!("LAUNCHER = \"{runner}\"")),
         "the launcher is the runner the program was started through:\n{map}"
     );
+}
+
+/// the map lists every file of by's own python in the tree — the runner, its plugins, the
+/// runtime's helpers — so a debugger stepping through only the program's code leaves them out
+/// as it leaves out the standard library, without knowing their names
+#[cfg(unix)]
+#[test]
+fn run_declares_by_s_own_python_in_the_tree() {
+    let (map, runner, tree) = run_through_a_launcher_reading_the_map(&[
+        ("main.by", "import pkg.util\n\nprint(pkg.util.x)\n"),
+        ("pkg/__init__.py", ""),
+        ("pkg/util.by", "x = 1\n"),
+    ]);
+    let root = Path::new(&runner)
+        .parent()
+        .expect("the runner is in the tree");
+    let listed: Vec<&str> = map
+        .lines()
+        .skip_while(|line| *line != "BY_CODE = [")
+        .skip(1)
+        .take_while(|line| *line != "]")
+        .map(|line| {
+            line.trim()
+                .strip_prefix('"')
+                .and_then(|line| line.strip_suffix("\","))
+                .expect("a path as the map spells one")
+        })
+        .collect();
+    let expected: Vec<String> = [
+        "_by_coverage_plugin.py",
+        "_by_project.py",
+        "_by_pytest.py",
+        "_by_repl.py",
+        "_by_runner.py",
+        "_by_sourcemap.py",
+        "pkg/_by_runtime.py",
+    ]
+    .iter()
+    .map(|file| root.join(file).display().to_string())
+    .collect();
+    assert_eq!(listed, expected, "{map}");
+    for file in &listed {
+        assert!(
+            tree.lines().any(|line| line == *file),
+            "{file} is a file of the tree:\n{tree}"
+        );
+    }
+    for program in ["main.py", "pkg/util.py", "pkg/__init__.py"] {
+        let program = root.join(program).display().to_string();
+        assert!(
+            tree.lines().any(|line| line == program) && !listed.contains(&program.as_str()),
+            "{program} is the program's:\n{map}"
+        );
+    }
 }

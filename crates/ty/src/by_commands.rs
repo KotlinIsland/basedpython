@@ -306,7 +306,7 @@ pub(crate) fn stage_run(
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_runtime(&mut staging, &layout)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
-    write_traceback_runtime(&mut staging, &traceback_entries)?;
+    write_traceback_runtime(&mut staging, &traceback_entries, &layout)?;
     // what this build *was*, written into the build itself. a tree that is going
     // to be staged again one file at a time — which is what a debugger's reload
     // does — has to be able to say which transpiler and which configuration wrote
@@ -1199,7 +1199,14 @@ pub(crate) fn cmd_build(
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     // a build is not started through anything of by's: it is imported, or run as python runs
     // any module
-    write_sourcemap_module(&mut staging, &entries, &OwnCode::default())?;
+    write_sourcemap_module(
+        &mut staging,
+        &entries,
+        &OwnCode {
+            launcher: None,
+            files: layout.files().collect(),
+        },
+    )?;
     // `build/` outlives the build that wrote it and is what a debugger, a test
     // runner or an editor plugin later reads, so it carries the same record a
     // `run` tree does. no entry module: a build is not pointed at one
@@ -1640,7 +1647,11 @@ pub(crate) fn cmd_compile(
         if let Err(error) = stage_by_typed_markers(&db, &mut staging, &roots, &root) {
             break 'compiling Err(error);
         }
-        if let Err(error) = write_sourcemap_module(&mut staging, &entries, &OwnCode::default()) {
+        let own = OwnCode {
+            launcher: None,
+            files: layout.files().collect(),
+        };
+        if let Err(error) = write_sourcemap_module(&mut staging, &entries, &own) {
             break 'compiling Err(error);
         }
         // whether the tree actually *holds* extensions, which is the question a
@@ -1986,12 +1997,19 @@ const BY_RUNNER_FILENAME: &str = "_by_runner.py";
 fn write_traceback_runtime(
     staging: &mut Staging,
     entries: &[TracebackEntry],
+    layout: &RuntimeLayout,
 ) -> anyhow::Result<()> {
     write_sourcemap_module(
         staging,
         entries,
         &OwnCode {
             launcher: Some(PathBuf::from(BY_RUNNER_FILENAME)),
+            files: MACHINERY_FILES
+                .iter()
+                .chain([&BY_PROJECT_FILENAME])
+                .map(PathBuf::from)
+                .chain(layout.files())
+                .collect(),
         },
     )?;
     // through the staging, so that a project of its own with this name is
