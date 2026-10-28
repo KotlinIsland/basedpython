@@ -49,10 +49,18 @@ it in step without running the command
     `api.lock` cannot be read, not being utf-8 among other reasons, or names a
     python version `by` cannot read
 - an `api.lock` the editor opens in the server, whatever language it calls it,
-    is answered when it pulls diagnostics for it (`textDocument/diagnostic`):
-    where it is stale, one warning, `stale-api-lock`, on the first line that
-    differs. the server says that diagnostics depend on other files, so an
-    editor asks again after an edit anywhere
+    has diagnostics like any other document, which the editor pulls
+    (`textDocument/diagnostic`) or the server publishes
+    (`textDocument/publishDiagnostics`): where it is stale, one warning,
+    `stale-api-lock`, on the first line that differs, and where it cannot be
+    checked, one warning, `unreadable-api-lock`, on the `#python:` header naming
+    a python version `by` cannot read. an edit to a module changes them, so 200
+    ms after the last of a run of edits to a python or basedpython document, or
+    after one is closed, which reads it from disk again, while another document is
+    open, the server sends a client that supports it
+    `workspace/diagnostic/refresh`, since not every editor acts on the
+    `interFileDependencies` the server declares, and publishes again the
+    diagnostics of every document the client does not pull
 - `textDocument/codeAction` answers that diagnostic with the quick fix
     *Regenerate api.lock*, an edit rewriting the whole file as the server
     generates it
