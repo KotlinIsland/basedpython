@@ -98,6 +98,10 @@ pub struct OwnCode {
     /// makes the program's entry module `__main__` and runs it. `None` for a tree no program
     /// is started from
     pub launcher: Option<PathBuf>,
+    /// every file of `by`'s own python in the tree, relative to it, the launcher and the map
+    /// itself among them. a debugger that steps through only the program's own code leaves
+    /// these out, as it leaves out the standard library
+    pub files: Vec<PathBuf>,
 }
 
 /// write the sourcemap module beside the generated python it describes
@@ -162,6 +166,26 @@ pub(crate) fn render_sourcemap_module(
             |launcher| py_str_literal(&tree.join(launcher).to_string_lossy())
         )
     );
+
+    map_src.push_str(
+        "\n# every file of by's own python in this tree, none of which is the program's code:\n\
+         # the launcher, the runtime's helpers, this map\n\
+         BY_CODE = [\n",
+    );
+    let mut files: Vec<PathBuf> = std::iter::once(PathBuf::from(BY_SOURCEMAP_FILENAME))
+        .chain(own.launcher.iter().cloned())
+        .chain(own.files.iter().cloned())
+        .collect();
+    files.sort();
+    files.dedup();
+    for file in files {
+        let _ = writeln!(
+            map_src,
+            "    {},",
+            py_str_literal(&tree.join(file).to_string_lossy())
+        );
+    }
+    map_src.push_str("]\n");
     map_src
 }
 
@@ -442,14 +466,15 @@ mod tests {
     fn the_launcher_is_declared_after_the_tables() {
         let own = OwnCode {
             launcher: Some(PathBuf::from("_by_runner.py")),
+            files: Vec::new(),
         };
         let existing = render_sourcemap_module(
             &[entry("/build/a.py", "/src/a.by", "a", "A")],
             Path::new("/build"),
             &own,
         );
-        let launcher = format!("LAUNCHER = {}\n", in_tree(Path::new("_by_runner.py")));
-        assert!(existing.ends_with(&launcher), "{existing}");
+        let launcher = format!("\nLAUNCHER = {}\n", in_tree(Path::new("_by_runner.py")));
+        assert!(existing.contains(&launcher), "{existing}");
         assert_eq!(
             super::sourcemap_key_for(&existing, Path::new("_by_runner.py")),
             None,
@@ -458,7 +483,47 @@ mod tests {
         let rewritten =
             rewrite_sourcemap_entry(&existing, &entry("/build/a.py", "/src/a.by", "a2", "A2"))
                 .expect("a is in the map");
-        assert!(rewritten.ends_with(&launcher), "{rewritten}");
+        assert!(rewritten.contains(&launcher), "{rewritten}");
+    }
+
+    /// by's own files are listed whole, the launcher and the map among them, and a re-stage
+    /// leaves the list as it was: none of its lines is an entry's
+    #[test]
+    fn by_s_own_files_are_declared_after_the_tables() {
+        let runtime = Path::new("pkg").join("_by_runtime.py");
+        let own = OwnCode {
+            launcher: Some(PathBuf::from("_by_runner.py")),
+            files: vec![runtime.clone(), PathBuf::from("_by_repl.py")],
+        };
+        let existing = render_sourcemap_module(
+            &[entry("/build/a.py", "/src/a.by", "a", "A")],
+            Path::new("/build"),
+            &own,
+        );
+        let listed = format!(
+            "BY_CODE = [\n    {},\n    {},\n    {},\n    {},\n]\n",
+            in_tree(Path::new("_by_repl.py")),
+            in_tree(Path::new("_by_runner.py")),
+            in_tree(Path::new("_by_sourcemap.py")),
+            in_tree(&runtime),
+        );
+        assert!(existing.ends_with(&listed), "{existing}");
+        for file in [
+            Path::new("_by_repl.py"),
+            Path::new("_by_runner.py"),
+            &runtime,
+        ] {
+            assert_eq!(
+                super::sourcemap_key_for(&existing, file),
+                None,
+                "{} is no entry of the tables",
+                file.display()
+            );
+        }
+        let rewritten =
+            rewrite_sourcemap_entry(&existing, &entry("/build/a.py", "/src/a.by", "a2", "A2"))
+                .expect("a is in the map");
+        assert!(rewritten.ends_with(&listed), "{rewritten}");
     }
 
     /// a tree no program is started from says so, rather than leaving a reader to tell a map
@@ -470,7 +535,7 @@ mod tests {
             Path::new("/build"),
             &OwnCode::default(),
         );
-        assert!(existing.ends_with("LAUNCHER = None\n"), "{existing}");
+        assert!(existing.contains("\nLAUNCHER = None\n"), "{existing}");
     }
 
     /// a file the map has never heard of is not part of this build, and saying so
