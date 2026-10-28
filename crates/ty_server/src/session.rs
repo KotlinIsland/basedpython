@@ -144,6 +144,10 @@ pub(crate) struct Session {
     /// to change. See [`HeldRequest`].
     held_requests: Vec<HeldRequest>,
 
+    /// When to ask the client to pull every document's diagnostics again, after an edit that can
+    /// change what another document says: see [`Session::diagnostics_may_have_changed`]
+    diagnostic_refresh: DiagnosticRefresh,
+
     /// Registrations is a set of LSP methods that have been dynamically registered with the
     /// client.
     registrations: HashSet<String>,
@@ -241,6 +245,7 @@ impl Session {
             in_test,
             suspended_workspace_diagnostics_requests: Vec::new(),
             held_requests: Vec::new(),
+            diagnostic_refresh: DiagnosticRefresh::default(),
             revision: 0,
             registrations: HashSet::new(),
             file_watcher: LspFileWatcher::new(resolved_client_capabilities),
@@ -396,6 +401,55 @@ impl Session {
                     data: None,
                 },
             );
+        }
+    }
+
+    /// Asks the client, shortly, to pull the diagnostics of every document it shows again: an
+    /// edit to one module can change what another module, or the project's `api.lock`, is
+    /// reported as, and so can closing a module with unsaved edits, which reads it from disk
+    /// again. a client pulls a document's diagnostics when that document changes, not others'.
+    ///
+    /// `interFileDependencies` says so too, but a client may not act on it, as the one in
+    /// `IntelliJ` does not; `workspace/diagnostic/refresh` is what every client that supports it
+    /// acts on. The diagnostics of the documents the client does not pull are published to it
+    /// again instead. Either goes out [`DiagnosticRefresh::DELAY`] after the last of a run of
+    /// changes, so that a burst of typing asks once, and only while a document is open whose
+    /// diagnostics the client would not otherwise be given: one other than the document
+    /// `changed`, which the client pulls itself, or is published, as it changes.
+    pub(crate) fn diagnostics_may_have_changed(&mut self, changed: Changed) {
+        let others_open = match changed {
+            Changed::Edited => self.file_document_handles().nth(1).is_some(),
+            Changed::Closed => self.file_document_handles().next().is_some(),
+        };
+        if others_open {
+            self.diagnostic_refresh.schedule(std::time::Instant::now());
+        }
+    }
+
+    /// Sees to the diagnostic refresh [`Session::diagnostics_may_have_changed`] scheduled, once
+    /// it is due: asks a client that supports it to pull every document's diagnostics again, and
+    /// publishes again the diagnostics of each document the client does not pull.
+    pub(crate) fn send_due_diagnostic_refresh(&mut self, client: &Client) {
+        if self.diagnostic_refresh.take_due(std::time::Instant::now()) {
+            if self
+                .client_capabilities()
+                .supports_workspace_diagnostic_refresh()
+            {
+                client.send_request::<lsp_types::DiagnosticRefreshRequest>(self, (), |_, ()| {});
+            }
+            publish_all_document_diagnostics(self, client);
+        }
+    }
+
+    /// When the main loop next has something to do without a message: answer the longest-held
+    /// request, or ask the client to refresh its diagnostics.
+    pub(crate) fn next_deadline(&self) -> Option<std::time::Instant> {
+        match (
+            self.held_requests_deadline(),
+            self.diagnostic_refresh.deadline(),
+        ) {
+            (Some(held), Some(refresh)) => Some(held.min(refresh)),
+            (held, refresh) => held.or(refresh),
         }
     }
 
@@ -2253,6 +2307,48 @@ impl SuspendedWorkspaceDiagnosticRequest {
 /// cancels the request, as it cancels any other.
 const HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// what happened to a python document that can change what other documents say
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Changed {
+    /// the client changed its text, and still has it open
+    Edited,
+    /// the client closed it, and the server reads it from disk again
+    Closed,
+}
+
+/// When to ask the client to refresh its diagnostics: once for a run of changes, [`Self::DELAY`]
+/// after the last of them.
+#[derive(Debug, Default)]
+struct DiagnosticRefresh {
+    due: Option<std::time::Instant>,
+}
+
+impl DiagnosticRefresh {
+    /// How long after the last of a run of changes the client is asked to refresh its
+    /// diagnostics.
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+    /// A change at `now`, which puts the refresh off until [`Self::DELAY`] after it.
+    fn schedule(&mut self, now: std::time::Instant) {
+        self.due = Some(now + Self::DELAY);
+    }
+
+    /// Whether the refresh is due at `now`. Once it is, it is not due again until another change
+    /// schedules it.
+    fn take_due(&mut self, now: std::time::Instant) -> bool {
+        let due = self.due.is_some_and(|due| due <= now);
+        if due {
+            self.due = None;
+        }
+        due
+    }
+
+    /// When the refresh is due, if a change scheduled it.
+    fn deadline(&self) -> Option<std::time::Instant> {
+        self.due
+    }
+}
+
 /// A document request that named a text the session did not hold, waiting for it.
 ///
 /// Asked again, whole, each time the session changes, rather than told what changed: the check
@@ -2399,6 +2495,12 @@ impl OpenDocumentHandle {
 
     pub(crate) fn is_django_template(&self) -> bool {
         self.language_id().is_django_template()
+    }
+
+    /// whether the document is python of either dialect, a change to which can change what
+    /// another document says
+    pub(crate) fn is_python(&self) -> bool {
+        self.language_id().is_python()
     }
 
     fn is_cell(&self) -> bool {
@@ -2707,8 +2809,29 @@ mod tests {
     use ty_project::{ProjectDatabase, ProjectMetadata};
     use ty_python_core::program::UseDefaultStrategy;
 
-    use super::{DocumentRequestTarget, Index};
+    use super::{DiagnosticRefresh, DocumentRequestTarget, Index};
     use crate::system::{AnySystemPath, LSPSystem, WorkspaceTrust};
+
+    /// a run of changes, each sooner after the last than the delay, asks once, after the last
+    #[test]
+    fn a_run_of_changes_asks_for_one_diagnostic_refresh_after_the_last() {
+        let start = std::time::Instant::now();
+        let at = |millis| start + std::time::Duration::from_millis(millis);
+        let mut refresh = DiagnosticRefresh::default();
+        assert!(!refresh.take_due(at(0)));
+
+        refresh.schedule(at(0));
+        refresh.schedule(at(150));
+        refresh.schedule(at(300));
+        assert!(!refresh.take_due(at(450)), "a change puts the refresh off");
+        assert_eq!(refresh.deadline(), Some(at(500)));
+        assert!(refresh.take_due(at(500)));
+        assert!(!refresh.take_due(at(1000)), "the run asks once");
+        assert_eq!(refresh.deadline(), None);
+
+        refresh.schedule(at(1000));
+        assert!(refresh.take_due(at(1200)), "the next run asks again");
+    }
 
     #[test]
     fn closed_cached_stub_resolves_to_vendored_file() -> anyhow::Result<()> {

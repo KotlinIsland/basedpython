@@ -8,8 +8,8 @@ use crate::server::Result;
 use crate::server::api::LSPResult;
 use crate::server::api::diagnostics::publish_diagnostics_if_needed;
 use crate::server::api::traits::{NotificationHandler, SyncNotificationHandler};
-use crate::session::Session;
 use crate::session::client::Client;
+use crate::session::{Changed, Session};
 
 pub(crate) struct DidChangeTextDocumentHandler;
 
@@ -41,6 +41,9 @@ impl SyncNotificationHandler for DidChangeTextDocumentHandler {
             .with_failure_code(ErrorCode::InternalError)?;
 
         publish_diagnostics_if_needed(&document, session, client);
+        if document.is_python() {
+            session.diagnostics_may_have_changed(Changed::Edited);
+        }
 
         Ok(())
     }

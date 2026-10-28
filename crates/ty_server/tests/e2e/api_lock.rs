@@ -5,8 +5,8 @@ use anyhow::Result;
 use lsp_server::ErrorCode;
 use lsp_types::{
     CodeActionRequest, Diagnostic, DocumentDiagnosticReport, LanguageKind, LspRequestMethod,
-    MessageDirection, Position, Range, Request, TextDocumentContentChangeEvent,
-    TextDocumentContentChangeWholeDocument,
+    MessageDirection, Position, PublishDiagnosticsNotification, PublishDiagnosticsParams, Range,
+    Request, TextDocumentContentChangeEvent, TextDocumentContentChangeWholeDocument,
 };
 use ruff_db::system::SystemPath;
 use serde_json::{Value, json};
@@ -263,6 +263,124 @@ fn an_unsaved_edit_makes_the_lockfile_stale_until_it_is_regenerated() -> Result<
     );
 
     replace(&mut server, "project/api.lock", &regenerated, 2);
+    assert_eq!(diagnostics(&mut server, "project/api.lock"), vec![]);
+    Ok(())
+}
+
+/// a client that does not act on `interFileDependencies` is asked to pull every document's
+/// diagnostics again after a run of edits, and then finds the lockfile stale. that the run asks
+/// once is `DiagnosticRefresh`'s to show: how far apart the edits arrive is not this test's to say
+#[test]
+fn a_run_of_edits_asks_the_client_to_pull_the_lockfile_diagnostics_again() -> Result<()> {
+    let lock =
+        "#api-lock:v=1\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X: int = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(true)
+        .enable_workspace_diagnostic_refresh(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    server.open_text_document("project/main.py", "X: int = 1\n", 1);
+    assert_eq!(diagnostics(&mut server, "project/api.lock"), vec![]);
+
+    for (version, text) in [
+        "X: s = 1\n",
+        "X: st = 1\n",
+        "X: str = 1\n",
+        "X: str = \"\"\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        replace(
+            &mut server,
+            "project/main.py",
+            text,
+            2 + i32::try_from(version)?,
+        );
+    }
+    server.await_diagnostic_refresh();
+    assert_eq!(diagnostics(&mut server, "project/api.lock").len(), 1);
+    Ok(())
+}
+
+/// a client that does not pull diagnostics is published the lockfile's as it opens it, and again
+/// after a run of edits to a module it describes
+#[test]
+fn a_client_that_does_not_pull_diagnostics_is_published_the_lockfile_diagnostics() -> Result<()> {
+    let lock =
+        "#api-lock:v=1\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X: int = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(false)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let api_lock = server.file_uri("project/api.lock");
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    let published = server.await_notification::<PublishDiagnosticsNotification>();
+    assert_eq!(published.uri, api_lock);
+    assert_eq!(published.diagnostics, vec![]);
+
+    // the module is published as it is opened, and as it is edited
+    server.open_text_document("project/main.py", "X: int = 1\n", 1);
+    replace(&mut server, "project/main.py", "X: str = \"\"\n", 2);
+    for _ in 0..2 {
+        let published = server.await_notification::<PublishDiagnosticsNotification>();
+        assert_ne!(published.uri, api_lock);
+    }
+    // and then every open document is published again, in no particular order
+    let mut republished: Vec<_> = (0..2)
+        .map(|_| server.await_notification::<PublishDiagnosticsNotification>())
+        .collect();
+    republished.retain(|published| published.uri == api_lock);
+    let [
+        PublishDiagnosticsParams {
+            diagnostics: stale, ..
+        },
+    ] = republished.as_slice()
+    else {
+        panic!("the lockfile is published again once: {republished:?}");
+    };
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!(
+        stale[0].range,
+        Range::new(Position::new(4, 0), Position::new(4, 21))
+    );
+    assert_eq!(
+        stale[0].code,
+        Some(lsp_types::Code::String("stale-api-lock".to_string()))
+    );
+    Ok(())
+}
+
+/// closing a module with unsaved edits reads it from disk again, which changes what the lockfile
+/// open beside it is reported as, and the client is asked to pull its diagnostics again
+#[test]
+fn closing_an_unsaved_module_asks_the_client_to_pull_the_lockfile_diagnostics_again() -> Result<()>
+{
+    let lock =
+        "#api-lock:v=1\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X: int = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(true)
+        .enable_workspace_diagnostic_refresh(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    server.open_text_document("project/main.py", "X: int = 1\n", 1);
+    replace(&mut server, "project/main.py", "X: str = \"\"\n", 2);
+    server.await_diagnostic_refresh();
+    assert_eq!(diagnostics(&mut server, "project/api.lock").len(), 1);
+
+    server.close_text_document("project/main.py");
+    server.await_diagnostic_refresh();
     assert_eq!(diagnostics(&mut server, "project/api.lock"), vec![]);
     Ok(())
 }

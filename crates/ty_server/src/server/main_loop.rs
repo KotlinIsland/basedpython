@@ -212,7 +212,7 @@ impl Server {
                 Event::PollUvEnvironments { project_root } => {
                     self.session.poll_uv_sync(&client, &project_root);
                 }
-                Event::HeldRequestDue => {}
+                Event::DeadlinePassed => {}
             }
         }
 
@@ -227,6 +227,11 @@ impl Server {
         // the ones that end early — and a request held for a text the last event supplied
         // should not wait for the event after it.
         self.session.release_held_requests(&Client::new(
+            self.main_loop_sender.clone(),
+            self.connection.sender.clone(),
+        ));
+
+        self.session.send_due_diagnostic_refresh(&Client::new(
             self.main_loop_sender.clone(),
             self.connection.sender.clone(),
         ));
@@ -259,7 +264,7 @@ impl Server {
         uv_sync.select(
             &self.connection.receiver,
             &self.main_loop_receiver,
-            self.session.held_requests_deadline(),
+            self.session.next_deadline(),
         )
     }
 
@@ -407,8 +412,9 @@ pub(crate) enum Event {
         project_root: SystemPathBuf,
     },
 
-    /// A held request has waited as long as it may. Answered on the way to the next event.
-    HeldRequestDue,
+    /// A held request has waited as long as it may, or a diagnostic refresh is due. Each is
+    /// seen to on the way to the next event.
+    DeadlinePassed,
 }
 
 pub(crate) struct SendRequest {
@@ -430,8 +436,8 @@ impl std::fmt::Debug for SendRequest {
 struct UvSyncWakeups(Vec<(SystemPathBuf, crossbeam::channel::Receiver<()>)>);
 
 impl UvSyncWakeups {
-    /// Waits for a main-loop action, project wakeup, or client message, in that order — or, when
-    /// a request is held, for its `deadline`.
+    /// Waits for a main-loop action, project wakeup, or client message, in that order — or until
+    /// `deadline`, when a request is held or a diagnostic refresh is due.
     ///
     /// Polling uv can wait for worker database snapshots, so the actions the workers queued are
     /// handled before uv results are applied, and both before new requests are accepted.
@@ -452,7 +458,7 @@ impl UvSyncWakeups {
             Some(deadline) => match select.select_deadline(deadline) {
                 Ok(operation) => operation,
                 Err(crossbeam::channel::SelectTimeoutError) => {
-                    return Ok(Some(Event::HeldRequestDue));
+                    return Ok(Some(Event::DeadlinePassed));
                 }
             },
         };
