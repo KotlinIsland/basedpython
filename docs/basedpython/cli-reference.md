@@ -137,7 +137,7 @@ compiled itself, which runs as the staged copy it compiled: a `source` or an
 `omit` naming it does not reach it. a `.by`
 module under `source` that never ran is reported as not run, as coverage.py
 reports a `.py` that never ran. a program that
-leaves without returning to `by run` — `os._exit` — leaves no report, and
+leaves without returning to `by run` — on `os._exit`, an `os.exec*` or a signal — leaves no report, and
 `--compiled` cannot be combined with it, since a native module runs no python
 lines to measure
 
