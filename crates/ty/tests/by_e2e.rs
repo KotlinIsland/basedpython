@@ -9052,12 +9052,13 @@ fn init_sets_up_git_merges_of_a_project_already_there() {
         attributes,
         "*.png binary\n# merged by `by merge-driver`: see `by init --git-merge`\n*.by merge=by\n*.byi merge=by\n*.py merge=by\n*.pyi merge=by\napi.lock merge=by\n"
     );
-    assert_eq!(
-        git(&["config", "--get", "merge.by.driver"]),
-        format!(
-            "'{}' merge-driver %O %A %B %L %P %S %X %Y",
+    let driver = git(&["config", "--get", "merge.by.driver"]);
+    assert!(
+        driver.starts_with(&format!(
+            "'{}' merge-driver %O %A %B %L %P %S %X %Y; ",
             env!("CARGO_BIN_EXE_by")
-        )
+        )),
+        "{driver}"
     );
     let config = fs::read_to_string(dir.path().join(".git/config")).unwrap();
 
@@ -9105,6 +9106,68 @@ fn init_sets_up_git_merges_of_a_project_already_there() {
             .unwrap()
             .starts_with("import json\nimport os\n")
     );
+}
+
+/// a driver whose `by` is gone, or too old to have `by merge-driver`, leaves what git's own line
+/// merge writes, conflict markers and all, rather than a conflict holding ours alone; and setting
+/// the integration up again names a `by` that is there
+#[test]
+fn a_driver_whose_by_does_not_merge_falls_back_to_git_and_is_set_up_again() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str]| {
+        let output = git_in(dir.path(), args);
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "test"]);
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"p\"\n",
+    )
+    .unwrap();
+    assert!(init_git_merge(dir.path()).status.success());
+    let by = env!("CARGO_BIN_EXE_by");
+    let driver = git(&["config", "--get", "merge.by.driver"]);
+
+    for (gone, version_without_it) in [
+        ("/nonexistent/by", false),
+        // `by version` takes no arguments, which is how a `by` without the subcommand fails
+        (by, true),
+    ] {
+        let stale = if version_without_it {
+            driver.replace("merge-driver", "version")
+        } else {
+            driver.replace(by, gone)
+        };
+        git(&["config", "merge.by.driver", &stale]);
+        git(&["checkout", "-q", "-B", "main"]);
+        fs::write(dir.path().join("m.by"), "import os\n\nLIMIT = 1\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-B", "theirs"]);
+        fs::write(dir.path().join("m.by"), "import os\n\nLIMIT = 3\n").unwrap();
+        git(&["commit", "-q", "-am", "theirs"]);
+        git(&["checkout", "-q", "main"]);
+        fs::write(dir.path().join("m.by"), "import os\n\nLIMIT = 2\n").unwrap();
+        git(&["commit", "-q", "-am", "ours"]);
+        let merge = git_in(dir.path(), &["merge", "--no-edit", "theirs"]);
+        assert!(!merge.status.success(), "{merge:?}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("m.by")).unwrap(),
+            "import os\n\n<<<<<<< HEAD\nLIMIT = 2\n=======\nLIMIT = 3\n>>>>>>> theirs\n",
+            "{merge:?}"
+        );
+        git(&["merge", "--abort"]);
+    }
+
+    git(&[
+        "config",
+        "merge.by.driver",
+        &driver.replace(by, "/nonexistent/by"),
+    ]);
+    assert!(init_git_merge(dir.path()).status.success());
+    assert_eq!(git(&["config", "--get", "merge.by.driver"]), driver);
 }
 
 #[test]

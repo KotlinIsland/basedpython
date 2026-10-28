@@ -457,17 +457,29 @@ already there too, and writes nothing else. what it sets up:
     it: every clone then merges with it. a `.gitattributes` that is there but
     cannot be read is not written, and nothing is set up
 - in the repository's own git configuration, `merge.by.name` and
-    `merge.by.driver`: `'/path/to/by' merge-driver %O %A %B %L %P %S %X %Y`. the
-    configuration is not committed, so each clone sets it up again. a linked
-    work tree shares its repository's
+    `merge.by.driver`: `'/path/to/by' merge-driver %O %A %B %L %P %S %X %Y`,
+    followed by a fallback. the configuration is not committed, so each clone
+    sets it up again. a linked work tree shares its repository's
 
 the driver names the `by` that set it up by the absolute path it was run as: an
 editor's git runs a merge driver without the project's environment on `PATH`, so a
 bare `by` would not be found there. the path is the one it was run by, not where
 its links lead, so a virtual environment's `bin/by`, uv's `~/.local/bin/by` or a
-package manager's link keeps working through an upgrade. a driver whose `by` is
-gone is set up again by running `by init --git-merge` again; a driver whose `by`
-is there is left alone, so running it twice changes nothing
+package manager's link keeps working through an upgrade. git takes a driver
+that fails as a conflict holding ours alone, the other side's changes nowhere in
+the file, so where `by merge-driver` does not merge the file, because its `by` is
+gone or is too old to have the subcommand, the command runs git's own line merge
+instead, exactly as `git merge` would without the driver, and says so on stderr.
+`by init --git-merge` again sets up a driver whose `by` is gone, or whose command
+an older `by` wrote, with the `by` that runs it, and says which command it
+replaced; a current driver whose `by` is there is left alone, so running it twice
+changes nothing
+
+it needs git 2.44 or later, the first git that gives a merge driver the labels of
+the versions it merges and whose `git merge-file` takes the diff algorithm
+`git merge` uses. with an older git nothing is set up, since neither the driver
+nor its fallback could merge a file. it fails, having said what it wrote, where
+git still does not merge every path with the driver afterwards
 
 an editor asks the language server the same, `by/gitMergeIntegration`
 (see [merges and diffs](features/editor.md#merges-and-diffs))
