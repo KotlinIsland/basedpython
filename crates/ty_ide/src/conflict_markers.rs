@@ -16,7 +16,16 @@
 //! place, so that a conflict is at known lines in each of them and everything around it is the
 //! merge's: what [`crate::resolve_merge_conflicts`] takes
 
+use ruff_text_size::{TextRange, TextSize};
+
 use crate::ConflictLines;
+
+/// a side of a merge's conflicts
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConflictSide {
+    Ours,
+    Theirs,
+}
 
 /// a text with conflict markers in it
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +122,6 @@ impl ConflictedText {
     }
 
     /// how many conflicts there are
-    #[cfg(test)]
     pub(crate) fn conflicts(&self) -> usize {
         self.pieces
             .iter()
@@ -166,6 +174,84 @@ impl ConflictedText {
         Some(versions)
     }
 
+    /// the text with each conflict replaced by `side`'s section of it: what the file would be
+    /// were every conflict resolved to that side
+    pub(crate) fn side(&self, side: ConflictSide) -> String {
+        self.pieces
+            .iter()
+            .map(|piece| match (piece, side) {
+                (Piece::Merged(text), _) => text.as_str(),
+                (Piece::Conflict(conflict), ConflictSide::Ours) => &conflict.ours,
+                (Piece::Conflict(conflict), ConflictSide::Theirs) => &conflict.theirs,
+            })
+            .collect()
+    }
+
+    /// `range` of [`Self::side`]'s ours, as a range of this text: `None` for one that is not
+    /// all in lines the merge took without a conflict, which nothing outside a conflict may
+    /// change
+    pub(crate) fn range_from_ours(&self, range: TextRange) -> Option<TextRange> {
+        let mut ours = TextSize::default();
+        let mut here = TextSize::default();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Merged(text) => {
+                    let end = ours + TextSize::of(text.as_str());
+                    if ours <= range.start() && range.end() <= end {
+                        return Some(range - ours + here);
+                    }
+                    ours = end;
+                    here += TextSize::of(text.as_str());
+                }
+                Piece::Conflict(conflict) => {
+                    ours += TextSize::of(conflict.ours.as_str());
+                    here += TextSize::of(Self::conflict_text(conflict).as_str());
+                }
+            }
+        }
+        None
+    }
+
+    /// `offset` of [`Self::side`]'s ours, as an offset of this text, or for one inside a
+    /// conflict, the start of the conflict's first marker
+    pub(crate) fn offset_from_ours(&self, offset: TextSize) -> TextSize {
+        if let Some(range) = self.range_from_ours(TextRange::empty(offset)) {
+            return range.start();
+        }
+        let mut ours = TextSize::default();
+        let mut here = TextSize::default();
+        for piece in &self.pieces {
+            let (ours_len, here_len) = match piece {
+                Piece::Merged(text) => (TextSize::of(text.as_str()), TextSize::of(text.as_str())),
+                Piece::Conflict(conflict) => (
+                    TextSize::of(conflict.ours.as_str()),
+                    TextSize::of(Self::conflict_text(conflict).as_str()),
+                ),
+            };
+            if matches!(piece, Piece::Conflict(_)) && offset <= ours + ours_len {
+                return here;
+            }
+            ours += ours_len;
+            here += here_len;
+        }
+        here
+    }
+
+    /// a conflict as it is written, markers and all
+    fn conflict_text(conflict: &Conflict) -> String {
+        let mut out = String::new();
+        out.push_str(&conflict.ours_marker);
+        out.push_str(&conflict.ours);
+        if let Some((marker, base)) = &conflict.base {
+            out.push_str(marker);
+            out.push_str(base);
+        }
+        out.push_str(&conflict.separator);
+        out.push_str(&conflict.theirs);
+        out.push_str(&conflict.theirs_marker);
+        out
+    }
+
     /// the text with each conflict replaced by its resolution, in order, and those without one
     /// written as they were, with the base's section where `with_base` says and it has one
     pub fn write(&self, resolutions: &[Option<String>], with_base: bool) -> String {
@@ -179,15 +265,15 @@ impl ConflictedText {
                         out.push_str(resolution);
                         continue;
                     }
-                    out.push_str(&conflict.ours_marker);
-                    out.push_str(&conflict.ours);
-                    if with_base && let Some((marker, base)) = &conflict.base {
-                        out.push_str(marker);
-                        out.push_str(base);
+                    if with_base {
+                        out.push_str(&Self::conflict_text(conflict));
+                    } else {
+                        out.push_str(&conflict.ours_marker);
+                        out.push_str(&conflict.ours);
+                        out.push_str(&conflict.separator);
+                        out.push_str(&conflict.theirs);
+                        out.push_str(&conflict.theirs_marker);
                     }
-                    out.push_str(&conflict.separator);
-                    out.push_str(&conflict.theirs);
-                    out.push_str(&conflict.theirs_marker);
                 }
             }
         }
@@ -197,7 +283,9 @@ impl ConflictedText {
 
 #[cfg(test)]
 mod tests {
-    use super::ConflictedText;
+    use ruff_text_size::{TextRange, TextSize};
+
+    use super::{ConflictSide, ConflictedText};
     use crate::ConflictLines;
 
     const CONFLICTED: &str = "\
@@ -241,6 +329,31 @@ c
             "a\n<<<<<<< HEAD\nB1\n=======\nB2\nB3\n>>>>>>> feature\nc\n"
         );
         assert_eq!(text.write(&[Some("B\n".to_string())], true), "a\nB\nc\n");
+    }
+
+    #[test]
+    fn a_range_outside_the_conflicts_of_one_side_is_the_same_text_here() {
+        let text = ConflictedText::parse(CONFLICTED, 7).expect("well formed");
+        let ours = text.side(ConflictSide::Ours);
+        assert_eq!(ours, "a\nB1\nc\n");
+        assert_eq!(text.side(ConflictSide::Theirs), "a\nB2\nB3\nc\n");
+        let c = TextRange::new(TextSize::new(5), TextSize::new(7));
+        assert_eq!(&ours[c], "c\n");
+        assert_eq!(
+            text.range_from_ours(c).map(|range| &CONFLICTED[range]),
+            Some("c\n")
+        );
+        // `B1` is in the conflict, and so is a range reaching into it
+        assert_eq!(
+            text.range_from_ours(TextRange::new(TextSize::new(2), TextSize::new(4))),
+            None
+        );
+        assert_eq!(
+            text.range_from_ours(TextRange::new(TextSize::new(0), TextSize::new(4))),
+            None
+        );
+        assert_eq!(text.offset_from_ours(TextSize::new(3)), TextSize::new(2));
+        assert_eq!(text.offset_from_ours(TextSize::new(2)), TextSize::new(2));
     }
 
     #[test]

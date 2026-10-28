@@ -8891,6 +8891,23 @@ fn the_merge_driver_resolves_what_it_can_and_leaves_the_rest_as_git_writes_it() 
     );
 }
 
+/// the import a clean part of the merge dropped goes back while a conflict nothing resolves is
+/// left open beside it: resolving the conflict leaves a file that imports what it reads
+#[test]
+fn the_merge_driver_imports_what_the_merge_dropped_around_an_open_conflict() {
+    let (dir, output) = merged_with_the_driver(
+        "m.by",
+        "import json\nimport os\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return 3\n\n\nLIMIT = 1\n",
+        "import os\n\n\ndef c():\n    return 3\n\n\nLIMIT = 2\n",
+        "import json\nimport os\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n\n\nLIMIT = 3\n",
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        "import json\nimport os\n\n\ndef c():\n    return json.loads(\"3\")\n\n\n<<<<<<< HEAD\nLIMIT = 2\n=======\nLIMIT = 3\n>>>>>>> theirs\n"
+    );
+}
+
 /// the import of a name each side imports from a different module is a conflict, not whichever
 /// line a line merge happens to keep last
 #[test]

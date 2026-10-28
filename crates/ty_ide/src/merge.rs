@@ -53,6 +53,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashSet;
 
 use crate::Db;
+use crate::conflict_markers::{ConflictSide, ConflictedText};
 use crate::import_order::IsortConfig;
 use crate::refactor::evaluation::is_pure;
 
@@ -1651,12 +1652,72 @@ pub fn reconcile_merge_imports(
     source_type: PySourceType,
     sort_imports: &dyn Fn(&str) -> Option<String>,
 ) -> ReconciledImports {
-    let (Some(base), Some(ours), Some(theirs), Some(result)) = (
+    reconcile(texts, &[merged], source_type, sort_imports)
+}
+
+/// [`reconcile_merge_imports`] for a merged file that still has conflicts nothing resolved
+///
+/// the file is read as it would be with each conflict resolved to ours, and as it would be
+/// resolved to theirs, so that whatever is chosen in a conflict has the imports it needs: a name
+/// either side of a conflict reads is read, and an import either side of one mentions is
+/// mentioned. the edits are to the lines the merge took without a conflict: one that would
+/// change a conflict's lines is left out, the imports of a file whose imports are themselves in
+/// a conflict among them
+pub fn reconcile_conflicted_merge_imports(
+    texts: MergeTexts<'_>,
+    merged: &ConflictedText,
+    source_type: PySourceType,
+    sort_imports: &dyn Fn(&str) -> Option<String>,
+) -> ReconciledImports {
+    let ours = merged.side(ConflictSide::Ours);
+    let theirs = merged.side(ConflictSide::Theirs);
+    match reconcile(texts, &[&ours, &theirs], source_type, sort_imports) {
+        ReconciledImports::Edits(edits) => ReconciledImports::Edits(
+            edits
+                .into_iter()
+                .filter_map(|edit| {
+                    Some(MergeEdit {
+                        range: merged.range_from_ours(edit.range)?,
+                        replacement: edit.replacement,
+                    })
+                })
+                .collect(),
+        ),
+        ReconciledImports::Refused(choice) => ReconciledImports::Refused(ImportChoice {
+            offset: merged.offset_from_ours(choice.offset),
+            bindings: choice
+                .bindings
+                .iter()
+                .filter_map(|range| merged.range_from_ours(*range))
+                .collect(),
+            ..choice
+        }),
+    }
+}
+
+/// [`reconcile_merge_imports`] for a merged file that reads as each of `variants`, the edits,
+/// and where a choice goes, as edits to the first
+fn reconcile(
+    texts: MergeTexts<'_>,
+    variants: &[&str],
+    source_type: PySourceType,
+    sort_imports: &dyn Fn(&str) -> Option<String>,
+) -> ReconciledImports {
+    let (Some(base), Some(ours), Some(theirs)) = (
         Version::new(texts.base, source_type),
         Version::new(texts.ours, source_type),
         Version::new(texts.theirs, source_type),
-        Version::new(merged, source_type),
     ) else {
+        return ReconciledImports::Edits(Vec::new());
+    };
+    let Some(readings) = variants
+        .iter()
+        .map(|variant| Version::new(variant, source_type))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return ReconciledImports::Edits(Vec::new());
+    };
+    let Some(result) = readings.first() else {
         return ReconciledImports::Edits(Vec::new());
     };
     let module_imports = |version: &Version| imported(&module_import_statements(version.module()));
@@ -1664,14 +1725,14 @@ pub fn reconcile_merge_imports(
         module_imports(&base),
         module_imports(&ours),
         module_imports(&theirs),
-        module_imports(&result),
+        module_imports(result),
     );
     let versions = [
         (MergeVersion::Ours, &o),
         (MergeVersion::Base, &b),
         (MergeVersion::Theirs, &t),
     ];
-    let section = ImportSection::of(&result);
+    let section = ImportSection::of(result);
     let choice = |name: &str| {
         ReconciledImports::Refused(ImportChoice {
             name: name.to_string(),
@@ -1702,31 +1763,48 @@ pub fn reconcile_merge_imports(
         })
     };
 
-    for (index, import) in m.iter().enumerate() {
-        if m[..index].iter().any(|earlier| {
-            earlier.binds() == import.binds() && earlier.bound_to() != import.bound_to()
-        }) {
-            return choice(import.binds());
+    let imports_of_readings: Vec<Vec<Imported>> = readings.iter().map(module_imports).collect();
+    for imports in &imports_of_readings {
+        for (index, import) in imports.iter().enumerate() {
+            if imports[..index].iter().any(|earlier| {
+                earlier.binds() == import.binds() && earlier.bound_to() != import.bound_to()
+            }) {
+                return choice(import.binds());
+            }
         }
     }
 
-    let usage = Usage::of(result.module());
-    let mut added: Vec<&Imported> = Vec::new();
-    if !usage.star && !m.iter().any(|import| import.name == "*") {
-        let mut unbound: Vec<&str> = usage
-            .reads
+    // a name is needed where a reading reads it and binds it nowhere
+    let usages: Vec<Usage> = readings
+        .iter()
+        .map(|reading| Usage::of(reading.module()))
+        .collect();
+    let star = usages.iter().any(|usage| usage.star)
+        || imports_of_readings
             .iter()
+            .flatten()
+            .any(|import| import.name == "*");
+    let mut added: Vec<&Imported> = Vec::new();
+    if !star {
+        let mut unbound: Vec<&str> = usages
+            .iter()
+            .flat_map(|usage| {
+                usage
+                    .reads
+                    .iter()
+                    .filter(|name| !usage.bound.contains(*name))
+            })
             .filter(|name| {
-                !usage.bound.contains(*name)
-                    && !is_python_builtin(
-                        name,
-                        PythonVersion::latest_ty().minor,
-                        source_type.is_ipynb(),
-                    )
+                !is_python_builtin(
+                    name,
+                    PythonVersion::latest_ty().minor,
+                    source_type.is_ipynb(),
+                )
             })
             .copied()
             .collect();
         unbound.sort_unstable();
+        unbound.dedup();
         for name in unbound {
             let mut places: Vec<&Imported> = Vec::new();
             for import in versions
@@ -1756,23 +1834,27 @@ pub fn reconcile_merge_imports(
         .filter(|import| {
             import.name != "*"
                 && removed_by_a_side(import)
-                && !result.mentions_outside_imports(import.binds())
+                && !readings
+                    .iter()
+                    .any(|reading| reading.mentions_outside_imports(import.binds()))
         })
         .collect();
 
     if added.is_empty() && dropped.is_empty() {
         return ReconciledImports::Edits(Vec::new());
     }
-    ReconciledImports::Edits(section.edits(&result, &added, &dropped, sort_imports))
+    ReconciledImports::Edits(section.edits(result, &added, &dropped, sort_imports))
 }
 
 /// [`reconcile_merge_imports`] for the file at `path` in `db`'s project, read and sorted as
-/// [`resolve_file_merge_conflicts`] reads and sorts it
+/// [`resolve_file_merge_conflicts`] reads and sorts it, and [`reconcile_conflicted_merge_imports`]
+/// where `merged` still has conflicts, in markers of `marker_size` characters
 pub fn reconcile_file_merge_imports(
     db: &dyn Db,
     path: Option<&SystemPath>,
     texts: MergeTexts<'_>,
     merged: &str,
+    marker_size: usize,
 ) -> ReconciledImports {
     let root = db.project().root(db);
     let source_type = path
@@ -1783,9 +1865,13 @@ pub fn reconcile_file_merge_imports(
         Some(path) => IsortConfig::for_file(db.system(), path.as_std_path(), root.as_std_path()),
         None => IsortConfig::for_directory(db.system(), root.as_std_path(), root.as_std_path()),
     };
-    reconcile_merge_imports(texts, merged, source_type, &|source| {
-        isort.sort(source, source_type)
-    })
+    let sort_imports = |source: &str| isort.sort(source, source_type);
+    match ConflictedText::parse(merged, marker_size) {
+        Some(conflicted) if conflicted.conflicts() > 0 => {
+            reconcile_conflicted_merge_imports(texts, &conflicted, source_type, &sort_imports)
+        }
+        _ => reconcile_merge_imports(texts, merged, source_type, &sort_imports),
+    }
 }
 
 /// writes a run of import statements as buff's isort configuration for the file at `path` sorts
@@ -2164,7 +2250,7 @@ mod tests {
 
     use super::{
         ConflictLines, MergeTexts, MergeVersion, ReconciledImports, apply_merge_edits,
-        reconcile_merge_imports, resolve_merge_conflicts,
+        reconcile_conflicted_merge_imports, reconcile_merge_imports, resolve_merge_conflicts,
     };
     use crate::ConflictedText;
 
@@ -3050,5 +3136,67 @@ def other():
         Y = 1
         X = json
         ");
+    }
+
+    /// the merged file as the driver leaves it with a conflict nothing resolves, its imports
+    /// reconciled outside the conflict
+    fn reconciled_conflicted(base: &str, ours: &str, theirs: &str, merged: &str) -> String {
+        let texts = MergeTexts { base, ours, theirs };
+        let conflicted = ConflictedText::parse(merged, 7).expect("well formed markers");
+        match reconcile_conflicted_merge_imports(
+            texts,
+            &conflicted,
+            PySourceType::BasedPython,
+            &sort,
+        ) {
+            ReconciledImports::Edits(edits) => apply_merge_edits(merged, &edits),
+            ReconciledImports::Refused(choice) => format!("refused: {choice:?}"),
+        }
+    }
+
+    /// ours removed the last reader of `json` and its import, theirs made another function read
+    /// it, and both changed the limit: the import goes back, and the conflict stays as it is
+    #[test]
+    fn an_import_is_added_back_around_a_conflict_left_open() {
+        let base = "import json\nimport os\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return 3\n\n\nLIMIT = 1\n";
+        let ours = "import os\n\n\ndef c():\n    return 3\n\n\nLIMIT = 2\n";
+        let theirs = "import json\nimport os\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n\n\nLIMIT = 3\n";
+        let merged = "import os\n\n\ndef c():\n    return json.loads(\"3\")\n\n\n<<<<<<< HEAD\nLIMIT = 2\n=======\nLIMIT = 3\n>>>>>>> theirs\n";
+        assert_snapshot!(reconciled_conflicted(base, ours, theirs, merged), @r#"
+        import json
+        import os
+
+
+        def c():
+            return json.loads("3")
+
+
+        <<<<<<< HEAD
+        LIMIT = 2
+        =======
+        LIMIT = 3
+        >>>>>>> theirs
+        "#);
+    }
+
+    /// what either side of an open conflict reads is read: theirs's side reads `sys`, which ours
+    /// removed the import of
+    #[test]
+    fn what_a_side_of_an_open_conflict_reads_keeps_its_import() {
+        let base = "import os\nimport sys\n\nA = os\nLIMIT = sys\n";
+        let ours = "import os\n\nA = os\nLIMIT = 2\n";
+        let theirs = "import os\nimport sys\n\nA = os\nLIMIT = sys, 3\n";
+        let merged = "import os\nimport sys\n\nA = os\n<<<<<<< HEAD\nLIMIT = 2\n=======\nLIMIT = sys, 3\n>>>>>>> theirs\n";
+        assert_eq!(reconciled_conflicted(base, ours, theirs, merged), merged);
+    }
+
+    /// imports that are themselves in a conflict are the conflict's: nothing touches them
+    #[test]
+    fn imports_in_an_open_conflict_are_left_as_they_are() {
+        let base = "import os\n\nA = os\n";
+        let ours = "import os\nimport re\n\nA = os, json\n";
+        let theirs = "import json\nimport os\n\nA = os\n";
+        let merged = "<<<<<<< HEAD\nimport os\nimport re\n=======\nimport json\nimport os\n>>>>>>> theirs\n\nA = os, json\n";
+        assert_eq!(reconciled_conflicted(base, ours, theirs, merged), merged);
     }
 }

@@ -112,8 +112,9 @@ pub use inlay_hints::{
 pub use markup::MarkupKind;
 pub use merge::{
     ConflictLines, ImportChoice, MergeEdit, MergeTexts, MergeVersion, ReconciledImports,
-    apply_merge_edits, file_import_sorter, reconcile_file_merge_imports, reconcile_merge_imports,
-    resolve_file_merge_conflicts, resolve_merge_conflicts,
+    apply_merge_edits, file_import_sorter, reconcile_conflicted_merge_imports,
+    reconcile_file_merge_imports, reconcile_merge_imports, resolve_file_merge_conflicts,
+    resolve_merge_conflicts,
 };
 pub use method_kind::MethodKind;
 pub use module_rename::{

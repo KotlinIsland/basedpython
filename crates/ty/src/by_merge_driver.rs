@@ -10,9 +10,10 @@
 //!    the repository's `merge.conflictStyle`, which `git merge-file` reads itself, and the
 //!    marker size and labels git hands the driver
 //! 2. each conflict resolved where [`ty_ide::resolve_merge_conflicts`] resolves it
-//! 3. once nothing conflicts, the imports reconciled with the three versions by
-//!    [`ty_ide::reconcile_merge_imports`]: a clean merge can still drop an import the merged code
-//!    reads
+//! 3. the imports reconciled with the three versions by [`ty_ide::reconcile_merge_imports`]: a
+//!    clean merge can still drop an import the merged code reads. where conflicts are left, by
+//!    [`ty_ide::reconcile_conflicted_merge_imports`], with what either side of each needs and
+//!    outside them, so that whatever is chosen in a conflict has its imports
 //!
 //! the result is clean only when nothing is left: a conflict nothing resolved stays as git
 //! writes it, and a name the versions import from different places becomes a conflict over its
@@ -32,7 +33,8 @@ use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use ty_ide::{
     ConflictedText, MergeEdit, MergeTexts, MergeVersion, ReconciledImports, apply_merge_edits,
-    file_import_sorter, reconcile_merge_imports, resolve_merge_conflicts,
+    file_import_sorter, reconcile_conflicted_merge_imports, reconcile_merge_imports,
+    resolve_merge_conflicts,
 };
 use ty_project::api_lock::API_LOCK_FILE_NAME;
 use ty_python_semantic::api_lockfile::ApiLockTarget;
@@ -98,8 +100,9 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
     let system = OsSystem::new(&cwd);
     let sort_imports = file_import_sorter(&system, &path, &cwd);
 
-    let merged = if line_merge.conflicts == 0 {
-        merged
+    // the merged text, and whether conflicts are left in it
+    let (merged, conflicted) = if line_merge.conflicts == 0 {
+        (merged, false)
     } else {
         let has_base = ConflictedText::parse(&merged, args.marker_size)
             .is_some_and(|conflicted| conflicted.has_base());
@@ -126,15 +129,12 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
             &sort_imports,
         );
         if resolutions.iter().all(Option::is_none) {
-            write(&args.ours, merged.as_bytes())?;
-            return Ok(ExitStatus::Failure);
+            // exactly what git wrote, in the repository's conflict style
+            (merged, true)
+        } else {
+            let left = resolutions.iter().any(Option::is_none);
+            (conflicted.write(&resolutions, has_base), left)
         }
-        let written = conflicted.write(&resolutions, has_base);
-        if resolutions.iter().any(Option::is_none) {
-            write(&args.ours, written.as_bytes())?;
-            return Ok(ExitStatus::Failure);
-        }
-        written
     };
 
     let texts = MergeTexts {
@@ -142,10 +142,23 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
         ours: &ours,
         theirs: &theirs,
     };
-    match reconcile_merge_imports(texts, &merged, source_type, &sort_imports) {
+    // with conflicts left, the imports are reconciled with what either side of each needs, and
+    // only outside them: whatever is chosen in a conflict then has its imports
+    let reconciled = if conflicted {
+        let text = ConflictedText::parse(&merged, args.marker_size)
+            .ok_or_else(|| anyhow!("the merged text has conflict markers that do not close"))?;
+        reconcile_conflicted_merge_imports(texts, &text, source_type, &sort_imports)
+    } else {
+        reconcile_merge_imports(texts, &merged, source_type, &sort_imports)
+    };
+    match reconciled {
         ReconciledImports::Edits(edits) => {
             write(&args.ours, apply_merge_edits(&merged, &edits).as_bytes())?;
-            Ok(ExitStatus::Success)
+            Ok(if conflicted {
+                ExitStatus::Failure
+            } else {
+                ExitStatus::Success
+            })
         }
         ReconciledImports::Refused(choice) => {
             // the conflict takes the place of the merged file's imports of the name, so that
