@@ -26,18 +26,19 @@ dedenting fires when *all* of these hold:
 
 - the string is triple-quoted (`"""` or `'''`)
 - the opening quote is immediately followed by a newline (`"""\n`)
-- the final line before the closing quote is whitespace-only
+- the closing quotes sit on a line of their own, after nothing but whitespace
 
 inline triple-quoted strings (`"""one line"""`) and strings without a
 newline after the opening quote are left untouched. the rule applies
-uniformly to plain strings, raw (`r"""..."""`), f-strings (`f"""..."""`),
-t-strings (`t"""..."""`), and prefixed combinations
+to plain strings, raw (`r"""..."""`), f-strings (`f"""..."""`) and
+t-strings (`t"""..."""`). a bytes literal is never dedented, and nor is a
+string written beside another in an implicit concatenation
 
 ## closing-quote indent rule
 
 the closing `"""` must be indented **no more** than the content's common
 leading indent. otherwise the rewrite has no consistent dedent depth and
-the transpiler raises an error:
+the transpiler raises an error, and the checker reports a syntax error:
 
 ```by
 text = """
@@ -53,8 +54,11 @@ case
 
 ## relationship to PEP 750 / `textwrap.dedent`
 
-the resulting string is identical to what `textwrap.dedent` would produce,
-but there is no runtime call. the rewrite preserves embedded f-string
+there is no runtime call, and the result is not what `textwrap.dedent` would
+produce: the opening newline and the line the closing quotes sit on are dropped,
+so `textwrap.dedent("\n    a\n    ")` is `"\na\n"` and the same text written
+this way is `"a"`. a `\` that continues a line joins the next line after that
+line's indent has been stripped. the rewrite preserves embedded f-string
 interpolations:
 
 ```by
