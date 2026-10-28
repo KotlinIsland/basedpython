@@ -1688,35 +1688,48 @@ anything else is `null`: lines that are not whole statements or whole elements,
 and two sides that changed one statement, as `LIMIT = 20` and `LIMIT = 30` did.
 
 `by/reconcileMergeImports` takes the merge's three versions, `base`, `ours` and
-`theirs`, and `merged`, the file the merge wrote with every conflict resolved, and
-answers `{"edits": [...], "choice": null}`: the text edits to `merged` that make
-its module-level imports say what its code reads. a line merge can be clean and
-still break a file: ours removes the last function reading `json` and
+`theirs`, `merged`, the file the merge wrote, and `markerSize`, the size of the
+conflict markers it may still have (7, as git writes them, without one; at least
+1), and answers `{"edits": [...], "choice": null}`: the text edits to `merged`
+that make its module-level imports say what its code reads. a line merge can be
+clean and still break a file: ours removes the last function reading `json` and
 `import json` with it, theirs adds another function reading `json`, and git
 writes, without a conflict, a file that reads `json` and does not import it. the
-versions' imports say where each name comes from:
+versions' imports say where each name comes from, and the type checker says what
+`merged` reads:
 
-- a name `merged` reads that nothing in it binds, which is not a builtin, is
-    imported as a version imports it, where the versions' module-level imports
-    have exactly one place to import it from. nothing is added where no version
-    imports it, or where `merged` has a star import, which may bind it
-- an import a side removed, binding a name `merged` does not mention, in its code
-    or in any string (an annotation in quotes, `__all__`), is removed. imports no
-    side removed stay, re-exports and imports for their side effects among them.
-    a name `__all__` lists counts as read
-- the imports the file starts with are written as buff's isort configuration
-    for the file sorts them. where a comment is among them, which a sort would
-    have to place, they are left alone and an added import goes after them
+- a name `merged` reads where nothing binds it, resolved as go to definition
+    resolves it where it is read, is imported as the versions import it, where
+    ours and theirs between them import it from exactly one place, or, where
+    neither does, the base does. a parameter of another function binds nothing
+    where module code reads the name. nothing is added where no version imports
+    it, or where `merged` has a star import, which may bind it. a name `__all__`
+    lists that the module does not bind counts as read
+- an import a side removed that nothing in `merged` reads, as the type checker's
+    `unused-import` decides it, is removed: a mention in a docstring or a comment
+    is not a read, and in a python file an annotation in quotes is. imports no
+    side removed stay, re-exports and imports for their side effects among them
+- an added import goes where buff's isort configuration for the file sorts it, as
+    the editor's other quick fixes add theirs, in the file's line ending; a removed
+    one goes as `unused-import`'s fix removes it. no other line is written again,
+    so imports a file keeps out of isort's order stay as they are
 
-where the versions import a name `merged` needs from different places, or
-`merged`'s own imports bind one name to two things, nothing here can say which
-the code means: the answer has no edits and a `choice`,
+`merged` is read as a file of its project, so what its imports give it is what
+the project gives it. where it still has conflicts, it is read as it would be
+with each resolved to ours and with each resolved to theirs, so that whatever is
+chosen has its imports, and only lines outside the conflicts are edited
+
+where ours and theirs import a name `merged` needs from different places, or
+`merged`'s imports bind one name to two things where no version bound it to both,
+nothing here can say which the code means: the answer has no edits and a `choice`,
 `{"name": "x", "imports": [{"version": "ours", "statements": [...]}, {"version": "base", ...}, {"version": "theirs", ...}], "position": {...}, "bindings": [...]}`:
-each version's import statements binding the name, where in `merged` the import
-belongs, and the ranges of the lines of `merged`'s import statements that bind
-that name and nothing else, which whatever is chosen replaces. `merged`, or a version, that does not parse is answered with no
-edits. [`by merge-driver`](../cli-reference.md#by-merge-driver) does the same for
-a merge git runs, where no merge window ever opens for a file git merges cleanly
+each version's import statements binding the name, as it writes them with any
+comment on their line, where in `merged` the import belongs, and the ranges of the
+lines of `merged`'s import statements that bind that name and nothing else, which
+whatever is chosen replaces. `merged`, or a version, that does not parse is
+answered with no edits. [`by merge-driver`](../cli-reference.md#by-merge-driver)
+does the same for a merge git runs, where no merge window ever opens for a file
+git merges cleanly
 
 `by/gitMergeIntegration` takes `{"uri"?: "…", "enable"?: true}`, a file or
 directory of the project asked about (the first project's without one), and

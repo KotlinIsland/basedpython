@@ -8822,6 +8822,18 @@ fn merged_with_the_driver(
     ours: &str,
     theirs: &str,
 ) -> (tempfile::TempDir, std::process::Output) {
+    merged_with_the_driver_configured(file, base, ours, theirs, &[])
+}
+
+/// [`merged_with_the_driver`] in a repository with `config` set too
+fn merged_with_the_driver_configured(
+    file: &str,
+    base: impl AsRef<[u8]>,
+    ours: impl AsRef<[u8]>,
+    theirs: impl AsRef<[u8]>,
+    config: &[(&str, &str)],
+) -> (tempfile::TempDir, std::process::Output) {
+    let (base, ours, theirs) = (base.as_ref(), ours.as_ref(), theirs.as_ref());
     let dir = tempfile::tempdir().expect("tempdir");
     let git = |args: &[&str]| {
         let output = git_in(dir.path(), args);
@@ -8836,6 +8848,9 @@ fn merged_with_the_driver(
         env!("CARGO_BIN_EXE_by")
     );
     git(&["config", "merge.by.driver", &driver]);
+    for (key, value) in config {
+        git(&["config", key, value]);
+    }
     fs::write(
         dir.path().join(".gitattributes"),
         "*.by merge=by\napi.lock merge=by\n",
@@ -8921,7 +8936,81 @@ fn the_merge_driver_makes_a_name_imported_from_two_places_a_conflict() {
     assert!(!output.status.success(), "{output:?}");
     assert_eq!(
         fs::read_to_string(dir.path().join("m.by")).unwrap(),
-        "import os\n<<<<<<< HEAD\nfrom a import x\n=======\nfrom b import x\n>>>>>>> theirs\n\nA = os\n\n\ndef f():\n    return x\n"
+        "<<<<<<< HEAD\nfrom a import x\n=======\nfrom b import x\n>>>>>>> theirs\nimport os\n\nA = os\n\n\ndef f():\n    return x\n"
+    );
+}
+
+/// both sides added the same lines before the line each changed differently: a conflict left
+/// beside one the driver resolves is written as git writes it, with those lines outside it, in
+/// the default style and in `zdiff3`
+#[test]
+fn a_conflict_left_beside_a_resolved_one_is_as_git_writes_it_in_every_style() {
+    let base = "import os\n\n\ndef f():\n    return 1\n";
+    let ours = "import os\nimport json\n\n\ndef f():\n    x = 1\n    y = 2\n    return 2\n";
+    let theirs = "import os\nimport sys\n\n\ndef f():\n    x = 1\n    y = 2\n    return 3\n";
+    let (dir, output) = merged_with_the_driver_configured("m.by", base, ours, theirs, &[]);
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        "import os\nimport json\nimport sys\n\n\ndef f():\n    x = 1\n    y = 2\n<<<<<<< HEAD\n    return 2\n=======\n    return 3\n>>>>>>> theirs\n"
+    );
+    let (dir, output) = merged_with_the_driver_configured(
+        "m.by",
+        base,
+        ours,
+        theirs,
+        &[("merge.conflictStyle", "zdiff3")],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let merged = fs::read_to_string(dir.path().join("m.by")).unwrap();
+    assert!(
+        merged.starts_with("import os\nimport json\nimport sys\n\n\ndef f():\n    x = 1\n    y = 2\n<<<<<<< HEAD\n    return 2\n||||||| "),
+        "{merged}"
+    );
+    assert!(
+        merged.ends_with("\n    return 1\n=======\n    return 3\n>>>>>>> theirs\n"),
+        "{merged}"
+    );
+}
+
+/// a file written with `\r\n` line endings gets the import the merge dropped in them too
+#[test]
+fn the_merge_driver_writes_an_import_in_the_files_line_ending() {
+    let crlf = |text: &str| text.replace('\n', "\r\n");
+    let (dir, output) = merged_with_the_driver_configured(
+        "m.by",
+        crlf(
+            "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return 1\n",
+        ),
+        crlf("import os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return 1\n"),
+        crlf(
+            "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef b():\n    return json.dumps(1)\n\n\ndef c():\n    return json.loads(\"3\")\n",
+        ),
+        &[("core.autocrlf", "false")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("m.by")).unwrap(),
+        crlf(
+            "import json\nimport os\n\n\ndef a():\n    return os.sep\n\n\ndef c():\n    return json.loads(\"3\")\n"
+        )
+    );
+}
+
+/// a file that is not utf-8 is merged as git merges it, its bytes as they are
+#[test]
+fn the_merge_driver_merges_a_file_that_is_not_utf8_as_git_does() {
+    let (dir, output) = merged_with_the_driver_configured(
+        "m.by",
+        b"# \xe9t\xe9\nA = 1\n\n\nB = 1\n".as_slice(),
+        b"# \xe9t\xe9\nA = 2\n\n\nB = 1\n".as_slice(),
+        b"# \xe9t\xe9\nA = 1\n\n\nB = 3\n".as_slice(),
+        &[],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read(dir.path().join("m.by")).unwrap(),
+        b"# \xe9t\xe9\nA = 2\n\n\nB = 3\n"
     );
 }
 

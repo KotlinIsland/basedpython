@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use crate::logging::Verbosity;
@@ -395,7 +396,7 @@ pub(crate) enum Command {
         /// Their version (`%B`)
         theirs: PathBuf,
         /// The size of the conflict markers (`%L`)
-        marker_size: usize,
+        marker_size: NonZeroUsize,
         /// The path in the work tree the result is for (`%P`)
         path: PathBuf,
         /// The common ancestor's conflict label (`%S`)

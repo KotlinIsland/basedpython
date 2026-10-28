@@ -16,6 +16,8 @@
 //! place, so that a conflict is at known lines in each of them and everything around it is the
 //! merge's: what [`crate::resolve_merge_conflicts`] takes
 
+use std::num::NonZeroUsize;
+
 use ruff_text_size::{TextRange, TextSize};
 
 use crate::ConflictLines;
@@ -65,9 +67,9 @@ pub struct ConflictVersions {
 impl ConflictedText {
     /// `text` read with markers of `marker_size` characters, `None` where a conflict is opened
     /// and not closed, in order, by markers of that size
-    pub fn parse(text: &str, marker_size: usize) -> Option<Self> {
+    pub fn parse(text: &str, marker_size: NonZeroUsize) -> Option<Self> {
         let marker = |line: &str, character: char| {
-            let rest = line.strip_prefix(&*character.to_string().repeat(marker_size))?;
+            let rest = line.strip_prefix(&*character.to_string().repeat(marker_size.get()))?;
             // a longer run is not this marker, whatever it starts with
             (rest.is_empty() || rest.starts_with([' ', '\n', '\r'])).then_some(())
         };
@@ -139,12 +141,20 @@ impl ConflictedText {
 
     /// the three versions, `None` where a conflict does not say what the base had
     pub fn versions(&self) -> Option<ConflictVersions> {
+        self.resolved_versions(&[])
+    }
+
+    /// [`Self::versions`] with each conflict that has a resolution, in order, resolved: its
+    /// resolution in all three versions, and not among their conflicts. merged again, the
+    /// versions give the conflicts left as a line merge writes them, in any conflict style
+    pub fn resolved_versions(&self, resolutions: &[Option<String>]) -> Option<ConflictVersions> {
         let mut versions = ConflictVersions {
             base: String::new(),
             ours: String::new(),
             theirs: String::new(),
             conflicts: Vec::new(),
         };
+        let mut resolutions = resolutions.iter();
         let lines = |text: &str| text.matches('\n').count();
         for piece in &self.pieces {
             match piece {
@@ -155,6 +165,12 @@ impl ConflictedText {
                 }
                 Piece::Conflict(conflict) => {
                     let (_, base) = conflict.base.as_ref()?;
+                    if let Some(Some(resolution)) = resolutions.next() {
+                        versions.base.push_str(resolution);
+                        versions.ours.push_str(resolution);
+                        versions.theirs.push_str(resolution);
+                        continue;
+                    }
                     let start = (
                         lines(&versions.base),
                         lines(&versions.ours),
@@ -283,10 +299,15 @@ impl ConflictedText {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use ruff_text_size::{TextRange, TextSize};
 
     use super::{ConflictSide, ConflictedText};
     use crate::ConflictLines;
+
+    /// git's default marker size
+    const SEVEN: NonZeroUsize = NonZeroUsize::new(7).expect("not zero");
 
     const CONFLICTED: &str = "\
 a
@@ -303,7 +324,7 @@ c
 
     #[test]
     fn each_version_has_its_own_section_of_each_conflict() {
-        let text = ConflictedText::parse(CONFLICTED, 7).expect("well formed");
+        let text = ConflictedText::parse(CONFLICTED, SEVEN).expect("well formed");
         assert_eq!(text.conflicts(), 1);
         assert!(text.has_base());
         let versions = text.versions().expect("a base section");
@@ -322,7 +343,7 @@ c
 
     #[test]
     fn a_conflict_is_written_back_as_it_was_or_as_resolved() {
-        let text = ConflictedText::parse(CONFLICTED, 7).expect("well formed");
+        let text = ConflictedText::parse(CONFLICTED, SEVEN).expect("well formed");
         assert_eq!(text.write(&[None], true), CONFLICTED);
         assert_eq!(
             text.write(&[None], false),
@@ -333,7 +354,7 @@ c
 
     #[test]
     fn a_range_outside_the_conflicts_of_one_side_is_the_same_text_here() {
-        let text = ConflictedText::parse(CONFLICTED, 7).expect("well formed");
+        let text = ConflictedText::parse(CONFLICTED, SEVEN).expect("well formed");
         let ours = text.side(ConflictSide::Ours);
         assert_eq!(ours, "a\nB1\nc\n");
         assert_eq!(text.side(ConflictSide::Theirs), "a\nB2\nB3\nc\n");
@@ -358,9 +379,10 @@ c
 
     #[test]
     fn markers_of_another_size_are_lines_like_any_other() {
-        let text = ConflictedText::parse(CONFLICTED, 9).expect("no conflict");
+        let text = ConflictedText::parse(CONFLICTED, NonZeroUsize::new(9).expect("not zero"))
+            .expect("no conflict");
         assert_eq!(text.conflicts(), 0);
         assert_eq!(text.write(&[], true), CONFLICTED);
-        assert_eq!(ConflictedText::parse("<<<<<<< HEAD\nx\n", 7), None);
+        assert_eq!(ConflictedText::parse("<<<<<<< HEAD\nx\n", SEVEN), None);
     }
 }

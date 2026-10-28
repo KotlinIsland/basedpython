@@ -38,7 +38,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ImportingFile, ModuleName, resolve_module};
 use ty_python_core::definition::{Definition, DefinitionCategory, DefinitionKind};
 use ty_python_core::place::ScopedPlaceId;
-use ty_python_core::scope::{FileScopeId, ScopeKind};
+use ty_python_core::scope::{FileScopeId, ScopeId, ScopeKind};
 use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{ProgramFile, ScopedDefinitionId, SemanticIndex, semantic_index};
 
@@ -83,35 +83,7 @@ pub(crate) fn report_unused_imports(
         return;
     }
 
-    let index = semantic_index(db, file);
-    let checked_scopes = || {
-        index.scope_ids().filter(|scope| {
-            matches!(
-                index.scope(scope.file_scope_id(db)).kind(),
-                ScopeKind::Module | ScopeKind::Function
-            )
-        })
-    };
-    // most files read every import they make, which the semantic index alone can tell: an
-    // import is only ever unused when the index records no read of it
-    let unread_import = checked_scopes().any(|scope| {
-        index
-            .use_def_map(scope.file_scope_id(db))
-            .definitions_with_usage()
-            .any(|(_, definition, is_used)| !is_used && definition.kind(db).is_import())
-    });
-    if !unread_import {
-        return;
-    }
-
-    let uses = Uses::new(db, file, index, &parsed, inferred);
-    let unused_by_scope: Vec<_> = checked_scopes()
-        .filter_map(|scope| {
-            let file_scope = scope.file_scope_id(db);
-            let unused = unused_in_scope(db, index, file_scope, &parsed, &uses, source_file);
-            (!unused.is_empty()).then_some((scope, unused))
-        })
-        .collect();
+    let unused_by_scope = unused_by_scope(db, file, &parsed, inferred);
     if unused_by_scope.is_empty() {
         return;
     }
@@ -137,7 +109,11 @@ pub(crate) fn report_unused_imports(
         })
     });
     let source = source_text(db, source_file);
-    let removals = Removals::new(&parsed, source.as_str(), removed);
+    let removals = Removals::new(
+        &parsed,
+        source.as_str(),
+        removed.map(|import| (import.statement, import.alias_index)),
+    );
 
     for (infer_context, unused, at_module) in scopes {
         for import in &unused {
@@ -145,6 +121,113 @@ pub(crate) fn report_unused_imports(
         }
         diagnostics.extend(&infer_context.finish());
     }
+}
+
+/// an import nothing reads: see [`unread_imports`]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadImport {
+    /// the import statement
+    pub statement: TextRange,
+    /// which of the statement's aliases makes the binding nothing reads
+    pub alias_index: usize,
+    /// the name the alias binds
+    pub binding: TextRange,
+    /// whether the import is in the module's own scope rather than in a function's
+    pub at_module: bool,
+}
+
+/// the imports of `file` nothing reads, as `unused-import` decides it for a `.by` file, for a
+/// file of any kind and whatever rules are selected. `inferred` holds the diagnostics of the
+/// whole file's inference. a file that does not parse has none, as it has no `unused-import`
+pub(crate) fn unread_imports(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    inferred: &TypeCheckDiagnostics,
+) -> Vec<UnreadImport> {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+    if parsed.has_syntax_errors() {
+        return Vec::new();
+    }
+    unused_by_scope(db, file, &parsed, inferred)
+        .into_iter()
+        .flat_map(|(scope, unused)| {
+            let at_module = scope.file_scope_id(db).is_global();
+            unused.into_iter().map(move |import| UnreadImport {
+                statement: import.statement,
+                alias_index: import.alias_index,
+                binding: import.binding,
+                at_module,
+            })
+        })
+        .collect()
+}
+
+/// the edits that remove `imports`, imports of `file` [`unread_imports`] answered, as the fix of
+/// `unused-import` removes them: an alias from its statement, and a statement that loses every
+/// alias with it, sorted and without overlaps
+pub(crate) fn unread_import_removals(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    imports: &[UnreadImport],
+) -> Vec<Edit> {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+    let source = source_text(db, file.file(db));
+    let removals = Removals::new(
+        &parsed,
+        source.as_str(),
+        imports
+            .iter()
+            .map(|import| (import.statement, import.alias_index)),
+    );
+    // the statements deleted next to one another share their edits
+    let mut edits: Vec<Edit> = imports
+        .iter()
+        .filter_map(|import| removals.edits(import.statement))
+        .flatten()
+        .collect();
+    edits.sort_by_key(|edit| (edit.start(), edit.end()));
+    edits.dedup();
+    edits
+}
+
+/// the imports nothing reads in each of the scopes `unused-import` checks, a module's and its
+/// functions', leaving out the scopes that have none
+fn unused_by_scope<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    parsed: &ParsedModuleRef,
+    inferred: &TypeCheckDiagnostics,
+) -> Vec<(ScopeId<'db>, Vec<UnusedImport>)> {
+    let source_file = file.file(db);
+    let index = semantic_index(db, file);
+    let checked_scopes = || {
+        index.scope_ids().filter(|scope| {
+            matches!(
+                index.scope(scope.file_scope_id(db)).kind(),
+                ScopeKind::Module | ScopeKind::Function
+            )
+        })
+    };
+    // most files read every import they make, which the semantic index alone can tell: an
+    // import is only ever unused when the index records no read of it
+    let unread_import = checked_scopes().any(|scope| {
+        index
+            .use_def_map(scope.file_scope_id(db))
+            .definitions_with_usage()
+            .any(|(_, definition, is_used)| !is_used && definition.kind(db).is_import())
+    });
+    if !unread_import {
+        return Vec::new();
+    }
+
+    let uses = Uses::new(db, file, index, parsed, inferred);
+    checked_scopes()
+        .filter_map(|scope| {
+            let file_scope = scope.file_scope_id(db);
+            let unused = unused_in_scope(db, index, file_scope, parsed, &uses, source_file);
+            (!unused.is_empty()).then_some((scope, unused))
+        })
+        .collect()
 }
 
 /// every read of a binding the file makes, from both the semantic index and inference
@@ -615,17 +698,18 @@ struct Run<'a> {
 }
 
 impl<'a> Removals<'a> {
-    fn new<'i>(
+    /// the removals of `removed`, each an import statement and the index of one of its aliases
+    fn new(
         parsed: &'a ParsedModuleRef,
         source: &'a str,
-        removed: impl Iterator<Item = &'i UnusedImport>,
+        removed: impl Iterator<Item = (TextRange, usize)>,
     ) -> Self {
         let mut wanted: FxHashMap<TextSize, Vec<usize>> = FxHashMap::default();
-        for import in removed {
+        for (statement, alias_index) in removed {
             wanted
-                .entry(import.statement.start())
+                .entry(statement.start())
                 .or_default()
-                .push(import.alias_index);
+                .push(alias_index);
         }
 
         let mut suites = Suites {

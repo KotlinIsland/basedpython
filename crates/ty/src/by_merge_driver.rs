@@ -24,18 +24,22 @@
 //! changed it differently, it is never clean: the driver leaves git's line merge in it, conflict
 //! or not, and says how to generate it again
 
+use std::io::Write as _;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_python_ast::PySourceType;
+use ruff_source_file::{LineEnding, find_newline};
 use ruff_text_size::TextRange;
 use ty_ide::{
-    ConflictedText, MergeEdit, MergeTexts, MergeVersion, ReconciledImports, apply_merge_edits,
-    file_import_sorter, reconcile_conflicted_merge_imports, reconcile_merge_imports,
-    resolve_merge_conflicts,
+    ConflictedText, ImportWriter, MergeEdit, MergeReader, MergeTexts, MergeVersion,
+    ReconciledImports, apply_merge_edits, file_import_writer, reconcile_conflicted_merge_imports,
+    reconcile_merge_imports, resolve_merge_conflicts,
 };
+use ty_project::ProjectMetadata;
 use ty_project::api_lock::API_LOCK_FILE_NAME;
 use ty_python_semantic::api_lockfile::ApiLockTarget;
 
@@ -47,7 +51,7 @@ pub(crate) struct DriverArgs {
     /// ours, and where the result is written
     pub(crate) ours: PathBuf,
     pub(crate) theirs: PathBuf,
-    pub(crate) marker_size: usize,
+    pub(crate) marker_size: NonZeroUsize,
     /// the path, relative to the top of the work tree, the result is for
     pub(crate) path: PathBuf,
     pub(crate) base_label: Option<String>,
@@ -55,20 +59,25 @@ pub(crate) struct DriverArgs {
     pub(crate) theirs_label: Option<String>,
 }
 
-#[allow(clippy::print_stderr)]
+/// what the driver says on stderr. a merge driver's stderr may be closed, as an editor's git
+/// may leave it, and the result is written by then: nothing said is worth failing the merge for
+fn say(message: &str) {
+    let _ = writeln!(std::io::stderr().lock(), "{message}");
+}
+
 pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> {
     let read = |path: &Path| {
         std::fs::read(path).with_context(|| format!("could not read `{}`", path.display()))
     };
     let (base, ours, theirs) = (read(&args.base)?, read(&args.ours)?, read(&args.theirs)?);
-    let line_merge = git_merge_file(args, false)?;
+    let line_merge = git_merge_file(args, [&args.ours, &args.base, &args.theirs], false)?;
 
     if args.path.file_name().and_then(|name| name.to_str()) == Some(API_LOCK_FILE_NAME) {
         if ours == theirs {
             return Ok(ExitStatus::Success);
         }
         write(&args.ours, &line_merge.text)?;
-        eprintln!("{}", api_lock_advice(&args.path, &ours, &theirs));
+        say(&api_lock_advice(&args.path, &ours, &theirs));
         return Ok(ExitStatus::Failure);
     }
 
@@ -98,21 +107,26 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
     // git runs a merge driver at the top of the work tree, which `%P` is relative to
     let path = cwd.join(path);
     let system = OsSystem::new(&cwd);
-    let sort_imports = file_import_sorter(&system, &path, &cwd);
+    let directory = path.parent().unwrap_or(&cwd);
+    let metadata = ProjectMetadata::discover(directory, &system)
+        .with_context(|| format!("could not read the project `{}` is in", args.path.display()))?;
+    let root = metadata.root().to_path_buf();
+    let imports = file_import_writer(&system, &path, &root);
+    let sort_imports = |statements: &str| imports.sort(statements);
+    let mut reader = MergeReader::new(metadata, system.clone(), Some(&path), source_type)
+        .ok_or_else(|| anyhow!("could not read `{}` as python", args.path.display()))?;
 
     // the merged text, and whether conflicts are left in it
     let (merged, conflicted) = if line_merge.conflicts == 0 {
         (merged, false)
     } else {
-        let has_base = ConflictedText::parse(&merged, args.marker_size)
-            .is_some_and(|conflicted| conflicted.has_base());
-        // the conflicts are read with their base's lines, which the default style leaves out
-        let diff3 = if has_base {
-            merged.clone()
-        } else {
-            String::from_utf8(git_merge_file(args, true)?.text)
-                .context("`git merge-file --diff3` wrote text that is not utf-8")?
-        };
+        // the conflicts are read with their base's lines, as `diff3` writes them: the default
+        // style leaves them out, and `zdiff3` moves lines both sides share out of a conflict
+        // while its base's section keeps them
+        let diff3 = String::from_utf8(
+            git_merge_file(args, [&args.ours, &args.base, &args.theirs], true)?.text,
+        )
+        .context("`git merge-file --diff3` wrote text that is not utf-8")?;
         let conflicted = ConflictedText::parse(&diff3, args.marker_size)
             .ok_or_else(|| anyhow!("`git merge-file` wrote conflict markers that do not close"))?;
         let versions = conflicted
@@ -132,8 +146,32 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
             // exactly what git wrote, in the repository's conflict style
             (merged, true)
         } else {
-            let left = resolutions.iter().any(Option::is_none);
-            (conflicted.write(&resolutions, has_base), left)
+            // the versions with each resolution in all three, merged again: the conflicts left
+            // are then exactly as git writes them, in the repository's conflict style
+            let resolved = conflicted.resolved_versions(&resolutions).ok_or_else(|| {
+                anyhow!("`git merge-file --diff3` wrote a conflict without its base")
+            })?;
+            let directory = tempfile::tempdir()
+                .context("could not make a directory for the resolved versions")?;
+            let file = |name: &str, text: &str| -> anyhow::Result<PathBuf> {
+                let path = directory.path().join(name);
+                write(&path, text.as_bytes())?;
+                Ok(path)
+            };
+            let (resolved_ours, resolved_base, resolved_theirs) = (
+                file("ours", &resolved.ours)?,
+                file("base", &resolved.base)?,
+                file("theirs", &resolved.theirs)?,
+            );
+            let merge = git_merge_file(
+                args,
+                [&resolved_ours, &resolved_base, &resolved_theirs],
+                false,
+            )?;
+            let conflicts_left = merge.conflicts > 0;
+            let text = String::from_utf8(merge.text)
+                .context("`git merge-file` wrote text that is not utf-8")?;
+            (text, conflicts_left)
         }
     };
 
@@ -147,9 +185,9 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
     let reconciled = if conflicted {
         let text = ConflictedText::parse(&merged, args.marker_size)
             .ok_or_else(|| anyhow!("the merged text has conflict markers that do not close"))?;
-        reconcile_conflicted_merge_imports(texts, &text, source_type, &sort_imports)
+        reconcile_conflicted_merge_imports(texts, &text, &mut reader)
     } else {
-        reconcile_merge_imports(texts, &merged, source_type, &sort_imports)
+        reconcile_merge_imports(texts, &merged, &mut reader)
     };
     match reconciled {
         ReconciledImports::Edits(edits) => {
@@ -171,17 +209,26 @@ pub(crate) fn cmd_merge_driver(args: &DriverArgs) -> anyhow::Result<ExitStatus> 
                     replacement: String::new(),
                 })
                 .collect();
+            let line_ending =
+                find_newline(&merged).map_or(LineEnding::Lf, |(_, line_ending)| line_ending);
             edits.push(MergeEdit {
                 range: TextRange::empty(choice.offset),
-                replacement: import_conflict(args, &choice.imports, conflict_style_has_base()?),
+                replacement: import_conflict(
+                    args,
+                    &choice.imports,
+                    conflict_style_has_base()?,
+                    line_ending,
+                ),
             });
+            // the conflict goes before a binding it replaces that starts where it does
+            edits.sort_by_key(|edit| (edit.range.start(), !edit.range.is_empty()));
             write(&args.ours, apply_merge_edits(&merged, &edits).as_bytes())?;
-            eprintln!(
+            say(&format!(
                 "by: `{}` is imported from different places by the versions merged into `{}`: \
                  the conflict among its imports is which one the code means",
                 choice.name,
                 args.path.display()
-            );
+            ));
             Ok(ExitStatus::Failure)
         }
     }
@@ -204,10 +251,14 @@ impl LineMerge {
     }
 }
 
-/// git's line merge of the three versions, as `git merge` merges a file: with the histogram
-/// diff, which `git merge` uses where `git merge-file` defaults to myers, and in the
+/// git's line merge of `files`, ours, base and theirs, as `git merge` merges a file: with the
+/// histogram diff, which `git merge` uses where `git merge-file` defaults to myers, and in the
 /// repository's `merge.conflictStyle`, or `diff3` where `diff3` says
-fn git_merge_file(args: &DriverArgs, diff3: bool) -> anyhow::Result<LineMerge> {
+fn git_merge_file(
+    args: &DriverArgs,
+    [ours, base, theirs]: [&Path; 3],
+    diff3: bool,
+) -> anyhow::Result<LineMerge> {
     let mut command = Command::new("git");
     command
         .arg("merge-file")
@@ -223,7 +274,7 @@ fn git_merge_file(args: &DriverArgs, diff3: bool) -> anyhow::Result<LineMerge> {
     {
         command.args(["-L", ours, "-L", base, "-L", theirs]);
     }
-    command.arg(&args.ours).arg(&args.base).arg(&args.theirs);
+    command.arg(ours).arg(base).arg(theirs);
     let output = command.output().context("could not run `git merge-file`")?;
     // the number of conflicts, at most 127, or negative for an error
     match output.status.code() {
@@ -250,24 +301,30 @@ fn conflict_style_has_base() -> anyhow::Result<bool> {
 }
 
 /// the conflict over a name the versions import from different places: each side's imports of
-/// it, and the base's where the conflict style shows it
+/// it, and the base's where the conflict style shows it, its lines ending in `line_ending`
 fn import_conflict(
     args: &DriverArgs,
     imports: &[(MergeVersion, Vec<String>)],
     with_base: bool,
+    line_ending: LineEnding,
 ) -> String {
+    let newline = line_ending.as_str();
     let marker = |character: char, label: Option<&str>| {
-        let marker = character.to_string().repeat(args.marker_size);
+        let marker = character.to_string().repeat(args.marker_size.get());
         match label {
-            Some(label) if !label.is_empty() => format!("{marker} {label}\n"),
-            _ => format!("{marker}\n"),
+            Some(label) if !label.is_empty() => format!("{marker} {label}{newline}"),
+            _ => format!("{marker}{newline}"),
         }
     };
     let statements = |wanted: MergeVersion| -> String {
         imports
             .iter()
             .filter(|(version, _)| *version == wanted)
-            .flat_map(|(_, statements)| statements.iter().map(|statement| format!("{statement}\n")))
+            .flat_map(|(_, statements)| {
+                statements
+                    .iter()
+                    .map(|statement| format!("{statement}{newline}"))
+            })
             .collect()
     };
     let mut out = marker('<', args.ours_label.as_deref());

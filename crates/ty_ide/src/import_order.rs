@@ -133,6 +133,29 @@ impl<'a> IsortConfig<'a> {
         }
     }
 
+    /// isort's default configuration, for a file no configuration file applies to, its modules
+    /// looked up on `system`
+    pub(crate) fn defaults(system: &'a dyn System) -> Self {
+        let settings = Arc::new(LinterSettings::default());
+        let target_version = settings.unresolved_target_version.linter_version();
+        Self {
+            settings,
+            package_root: None,
+            target_version,
+            system,
+        }
+    }
+
+    /// the order this configuration sorts imports in, as the editor's quick fixes place them
+    pub(crate) fn into_order(self) -> ImportOrder<SystemFiles<'a>> {
+        ImportOrder::new(
+            self.settings,
+            self.package_root,
+            self.target_version,
+            SystemFiles(self.system),
+        )
+    }
+
     /// the linter settings buff reads, and the package root of the file they are for
     #[cfg(test)]
     pub(crate) fn settings(&self) -> (&LinterSettings, Option<&Path>) {
@@ -174,7 +197,7 @@ impl PackageFiles for ProjectFiles<'_> {
 }
 
 /// the files of a [`System`], looked at each time they are asked about
-struct SystemFiles<'a>(&'a dyn System);
+pub(crate) struct SystemFiles<'a>(&'a dyn System);
 
 impl PackageFiles for SystemFiles<'_> {
     fn is_file(&self, path: &Path) -> bool {
