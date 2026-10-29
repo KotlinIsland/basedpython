@@ -2112,6 +2112,36 @@ pub(crate) fn evaluate_with_reading<'db>(
     })
 }
 
+/// basedpython: whether `reachability` is unreachable whatever the environment, for code made
+/// unreachable by a call that never returns rather than by a literal `return` or `raise`
+///
+/// Only the calls are decided — whether each returns, which is read off what its callee
+/// declares or its body does — and every other predicate is left open, a `sys.version_info` or
+/// `sys.platform` check, `TYPE_CHECKING`, or a condition only the types it tests decide. So code
+/// after `exit()` is unreachable in every environment, and code in a branch only a version check
+/// rules out is not.
+pub(crate) fn is_unreachable_in_every_environment<'db>(
+    db: &'db dyn Db,
+    use_def: &UseDefMap<'db>,
+    reachability: ScopedReachabilityConstraintId,
+) -> bool {
+    let predicates = use_def.predicates();
+    walk_decision_diagram(
+        use_def.reachability_constraints(),
+        reachability,
+        |_, atom, _| {
+            let predicate = &predicates[atom];
+            ControlFlow::Continue(match predicate.node {
+                PredicateNode::IsNonTerminalCall(call) => {
+                    analyze_non_terminal_call(db, call).negate_if(!predicate.is_positive)
+                }
+                _ => Truthiness::Ambiguous,
+            })
+        },
+    )
+    .is_always_false()
+}
+
 /// walks `constraints` from `id` to the terminals it reaches, taking at each node the branch for
 /// the truthiness `decide` gives the node's predicate, and returns their reachability. `decide`
 /// can instead break with the reachability of the node it was given, which ends that path there.
