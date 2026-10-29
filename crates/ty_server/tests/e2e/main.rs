@@ -37,6 +37,7 @@ mod check_workspace;
 mod classified_references;
 mod closed_documents;
 mod code_actions;
+mod command_line;
 mod commands;
 mod complete_statement;
 mod completions;
@@ -129,7 +130,7 @@ use tempfile::TempDir;
 use ty_project::UseUv;
 #[cfg(feature = "test-uv")]
 use ty_project::uv_test_env_vars;
-use ty_server::{ClientOptions, LogLevel, Server, init_logging};
+use ty_server::{ClientOptions, CommandLine, LogLevel, Server, init_logging};
 
 /// Number of times to retry receiving a message before giving up
 const RETRY_COUNT: usize = 5;
@@ -282,6 +283,10 @@ pub(crate) struct TestServer {
 
 impl TestServer {
     /// Create a new test server with the given workspace configurations
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one caller, the builder, which has each of these to hand"
+    )]
     fn new(
         workspaces: Vec<(WorkspaceFolder, Option<ClientOptions>)>,
         test_context: TestContext,
@@ -290,6 +295,7 @@ impl TestServer {
         env_vars: Vec<(String, Option<String>)>,
         project_server_directory: Option<SystemPathBuf>,
         watch_file_system: bool,
+        command_line: CommandLine,
     ) -> Self {
         setup_tracing();
 
@@ -324,6 +330,7 @@ impl TestServer {
                 true,
                 project_server_directory,
                 watch_file_system,
+                Arc::new(command_line),
             ) {
                 Ok(server) => {
                     if let Err(err) = server.run() {
@@ -1444,6 +1451,7 @@ pub(crate) struct TestServerBuilder {
     env_vars: Vec<(String, Option<String>)>,
     project_server_directory: Option<SystemPathBuf>,
     watch_file_system: bool,
+    command_line: CommandLine,
 }
 
 impl TestServerBuilder {
@@ -1479,6 +1487,7 @@ impl TestServerBuilder {
             env_vars: Vec::new(),
             project_server_directory: None,
             watch_file_system: false,
+            command_line: CommandLine::default(),
         })
     }
 
@@ -1860,6 +1869,13 @@ impl TestServerBuilder {
         self
     }
 
+    /// Start the server as a `by` whose command line `command_line` describes, which `by server`
+    /// describes from its own parser.
+    pub(crate) fn with_command_line(mut self, command_line: CommandLine) -> Self {
+        self.command_line = command_line;
+        self
+    }
+
     /// Build the test server
     pub(crate) fn build(self) -> TestServer {
         TestServer::new(
@@ -1870,6 +1886,7 @@ impl TestServerBuilder {
             self.env_vars,
             self.project_server_directory,
             self.watch_file_system,
+            self.command_line,
         )
     }
 }

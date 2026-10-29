@@ -1191,6 +1191,52 @@ camelCase, `true`
 no `experimental` at all, from a `by` before this — is one this `by` does not
 take
 
+### completing `by` in a terminal
+
+an editor that completes `by` typed in its terminal asks `by/commandLine`, with
+no parameters, for the whole command line: every command and argument `--help`
+shows, described from the parser `by` parses its own arguments with, so the
+answer is always the command line of the `by` the server is. a command has its
+`name`, its `aliases`, its one-line `help`, its `options`, its `positionals` and
+its `subcommands`, each a command again:
+
+```json
+{
+  "name": "run",
+  "aliases": [],
+  "help": "Transpile and run a module with `python -m <module>`.",
+  "options": [
+    { "long": "python", "short": null, "aliases": [], "help": "…",
+      "value": { "name": "PATH", "kind": "path", "hint": "any" }, "repeatable": false },
+    { "long": "compiled", "short": null, "aliases": [], "help": "…",
+      "value": null, "repeatable": false }
+  ],
+  "positionals": [
+    { "help": "…", "value": { "name": "MODULE", "kind": "module" },
+      "required": false, "repeatable": false, "trailing": false },
+    { "help": "…", "value": { "name": "ARGS", "kind": "text" },
+      "required": false, "repeatable": true, "trailing": true }
+  ],
+  "subcommands": []
+}
+```
+
+an option with no `value` is a flag. a positional that is `trailing` takes
+everything after it, options included: after `by run`'s module, those are the
+arguments of the program it runs, which `by` does not interpret. a value's
+`kind` says how to complete it:
+
+- `module` — a module of the project by its dotted name: each `module` of the
+    `modules` `by/runModules` answers for the project the terminal is in
+- `rule` — a rule by its name, each `name` `by/rules` answers, or `all`
+- `path`, with a `hint` of `any`, `file`, `directory` or `executable` — a path,
+    which the editor completes from the file system
+- `choice` — one of its `choices`, each a `name` and its `help`
+- `text` — anything, which nothing completes
+
+no argument of `by`'s own takes a test id: the node ids `by/testItems` answers
+are pytest's, which a program `by run` runs is handed among its own arguments
+
 ## suppressing a diagnostic
 
 every diagnostic has two quick fixes that silence it rather than fix it.

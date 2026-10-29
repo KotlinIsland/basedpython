@@ -147,6 +147,10 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::RulesHandler::METHOD => {
             background_request_task::<requests::RulesHandler>(req, BackgroundSchedule::Worker)
         }
+        // what `by` takes on its command line, which no project changes
+        requests::CommandLineHandler::METHOD => {
+            sync_request_task::<requests::CommandLineHandler>(req)
+        }
         // a question about the text a `by repl` console holds, with no document behind it
         requests::InputStatusHandler::METHOD => {
             background_request_task::<requests::InputStatusHandler>(req, BackgroundSchedule::Worker)
