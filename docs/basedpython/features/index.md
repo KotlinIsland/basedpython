@@ -75,6 +75,8 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [sound types](sound-types.md) — infer precise types instead of gradual ones
 - [precise unsolved type variables](precise-unsolved-typevars.md) — an unsolved type variable is
     `Never`, not `Unknown`
+- [lexical return callable type variables](lexical-return-callable-typevars.md) — a type variable
+    only a returned callable mentions still belongs to the function
 - [regex group types](regex-groups.md) — type a match from the pattern it came from
 - [boolean conditions](conditions.md) — catch a test that conflates two members, or asks nothing
 - [refutable unpacking](refutable-unpacking.md) — catch `a, b = ...` over a value of unknown length
