@@ -1,5 +1,8 @@
 use crate::Db;
-use crate::reachability::{analyze_non_terminal_call, is_range_reachable, is_reachable};
+use crate::reachability::{
+    analyze_non_terminal_call, is_range_reachable, is_reachable,
+    is_unreachable_in_every_environment,
+};
 use get_size2::GetSize;
 use itertools::Itertools;
 use ruff_db::parsed::parsed_module;
@@ -22,7 +25,8 @@ pub struct UnreachableRange {
 /// Classification for unreachable-code hints.
 ///
 /// `Unconditional` means the code is unreachable regardless of the checked
-/// Python version or platform, for example after a terminal statement:
+/// Python version or platform, for example after a terminal statement, or after a
+/// call that never returns:
 ///
 /// ```python
 /// def test():
@@ -53,8 +57,13 @@ pub enum UnreachableKind {
 ///
 /// A reachable statement can itself be partly unreachable: in `print(exit())` the call to
 /// `print` is never made, because its argument never returns. The parts of a statement that
-/// Python evaluates after a call that never returns are reported too, under the current
-/// analysis, as the code after such a call is; see [`ranges_evaluated_after`] for what they are.
+/// Python evaluates after a call that never returns are reported too; see
+/// [`ranges_evaluated_after`] for what they are.
+///
+/// Code is unconditionally unreachable when it is so in every environment: after a `return`, or
+/// after a call that never returns, which [`is_unreachable_in_every_environment`] decides. Code
+/// that only a version or platform check, `TYPE_CHECKING`, or a condition's type rules out is
+/// unreachable under the current analysis.
 #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
 pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[UnreachableRange]> {
     let index = semantic_index(db, file);
@@ -90,7 +99,9 @@ pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[Unreachabl
                     .into_iter()
                     .map(|range| UnreachableRange {
                         range,
-                        kind: UnreachableKind::CurrentAnalysis,
+                        // the call never returns whatever the environment, as code after it
+                        // reads too
+                        kind: UnreachableKind::Unconditional,
                     }),
             );
         }
@@ -101,7 +112,9 @@ pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[Unreachabl
                 .filter_map(|(range, constraint)| {
                     (!is_reachable(db, use_def, constraint)).then_some(UnreachableRange {
                         range,
-                        kind: if constraint == ScopedReachabilityConstraintId::ALWAYS_FALSE {
+                        kind: if constraint == ScopedReachabilityConstraintId::ALWAYS_FALSE
+                            || is_unreachable_in_every_environment(db, use_def, constraint)
+                        {
                             UnreachableKind::Unconditional
                         } else {
                             UnreachableKind::CurrentAnalysis
@@ -798,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_noreturn_tail_as_current_analysis_unreachable() -> anyhow::Result<()> {
+    fn reports_noreturn_tail_as_always_unreachable() -> anyhow::Result<()> {
         let source = r#"
             from typing_extensions import NoReturn
 
@@ -811,7 +824,7 @@ mod tests {
             "#;
 
         assert_snapshot!(UnreachableTest::new().render(source)?, @r#"
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:9:5
           |
         9 |     print("dead")
@@ -888,19 +901,19 @@ mod tests {
             "#;
 
         assert_snapshot!(UnreachableTest::new().render(source)?, @"
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:10
           |
         3 |     print(exit())
           |          ^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:17
           |
         3 |     print(exit())
           |                 ^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:4:5
           |
         4 |     return
@@ -929,55 +942,55 @@ mod tests {
             "#;
 
         assert_snapshot!(UnreachableTest::new().render(source)?, @"
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:5
           |
         3 |     x = a + exit() + b
           |     ^^^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:11
           |
         3 |     x = a + exit() + b
           |           ^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:20
           |
         3 |     x = a + exit() + b
           |                    ^^^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:6:6
           |
         6 |     g(a, exit(), a)
           |      ^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:6:8
           |
         6 |     g(a, exit(), a)
           |        ^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:6:16
           |
         6 |     g(a, exit(), a)
           |                ^^^^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:9:5
           |
         9 |     return [y for y in exit()]
           |     ^^^^^^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:9:12
           |
         9 |     return [y for y in exit()]
           |            ^^^^^^^^^^^
 
-        info[unreachable-code]: Code is unreachable
+        info[unreachable-code]: Code is always unreachable
          --> src/main.py:9:30
           |
         9 |     return [y for y in exit()]

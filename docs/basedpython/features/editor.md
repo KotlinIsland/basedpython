@@ -1947,10 +1947,11 @@ chosen. both take `textHash`
 code that can never run is reported as a hint: one diagnostic per range, with
 severity `4` (hint), the tag `1` (`Unnecessary`) and no code, for an editor to
 grey out. its message is `Code is always unreachable` where no environment could
-reach it — after a `return`, a `raise`, a `continue` — and
+reach it — after a `return`, a `raise`, a `continue`, or a call that never
+returns — and
 `Code is unreachable\nThis may depend on your current environment and settings`
-where the analysis decides it, such as a `sys.version_info` branch or the code
-after a call that never returns
+where the environment or the types decide it, such as a `sys.version_info` or
+`sys.platform` branch, `TYPE_CHECKING`, or a condition a type rules out
 
 a call that never returns ends the flow where it is made, inside a larger
 expression too. what the statement would have evaluated after it is reported as
