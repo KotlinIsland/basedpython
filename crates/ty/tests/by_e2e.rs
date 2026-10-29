@@ -3122,7 +3122,8 @@ def main():
         .output()
         .expect("failed to spawn by");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by run failed:\n{stderr}");
     assert!(
