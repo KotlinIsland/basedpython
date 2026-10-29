@@ -50,6 +50,7 @@ pub mod ast_node_ref;
 mod builder;
 mod db;
 pub mod definition;
+pub mod evaluation_order;
 pub mod expression;
 pub mod fluid;
 pub mod frozen;

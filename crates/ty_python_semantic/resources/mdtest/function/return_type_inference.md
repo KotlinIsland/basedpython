@@ -921,20 +921,20 @@ reveal_type(alternating(3))  # revealed: int
 
 ### Divergent
 
-A function that would never return normally should still be analyzed without errors:
+A function that would never return normally should still be analyzed without errors. Each of these
+calls itself before it reaches its `return`, so the `return` is never reached and the function
+returns `Never`:
 
 ```py
 def divergent():
     return divergent()
 
-# Should ideally be `Never`
-reveal_type(divergent())  # revealed: Divergent
+reveal_type(divergent())  # revealed: Never
 
 def expanding(x):
     return (expanding(x), expanding(x))
 
-# Should ideally be `Never` or `tuple[Never, Never]`
-reveal_type(expanding(5))  # revealed: tuple[Divergent, Divergent]
+reveal_type(expanding(5))  # revealed: Never
 ```
 
 ### Mutual recursion

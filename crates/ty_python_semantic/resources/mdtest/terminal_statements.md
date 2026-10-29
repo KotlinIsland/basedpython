@@ -989,21 +989,56 @@ def f() -> NoReturn:
     sys.exit(1)
 ```
 
-Let's try cases where the function annotated with `NoReturn` is some sub-expression.
+### Calls inside a larger expression
+
+A call to a function annotated with `NoReturn` ends the flow wherever its statement certainly makes
+it, inside a larger expression too: the operand of `+`, the test of a conditional expression, an
+argument of another call, the value of an assignment.
 
 ```py
 from typing import NoReturn
 import sys
 
-# TODO: this is currently not yet supported
-# error: [invalid-return-type]
 def _() -> NoReturn:
     3 + sys.exit(1)
 
-# TODO: this is currently not yet supported
-# error: [invalid-return-type]
 def _() -> NoReturn:
     3 if sys.exit(1) else 4
+
+def _() -> NoReturn:
+    print(sys.exit(1))
+
+def _() -> NoReturn:
+    x = sys.exit(1)
+```
+
+A call that the statement makes on one path only does not end the flow:
+
+```py
+def _(flag: bool) -> NoReturn:  # error: [invalid-return-type]
+    flag or sys.exit(1)
+
+def _(flag: bool) -> NoReturn:  # error: [invalid-return-type]
+    3 if flag else sys.exit(1)
+
+def _() -> NoReturn:  # error: [invalid-return-type]
+    f = lambda: sys.exit(1)
+```
+
+Nor does a generic call whose result is only specialized to `Never` inside a larger expression, as
+it does at the level of a statement: the `Never` may be an artifact of inference rather than a call
+that does not return.
+
+```py
+from typing import Never, TypeVar
+
+T = TypeVar("T")
+
+def first(xs: list[T]) -> T:
+    return xs[0]
+
+def _(xs: list[Never]) -> NoReturn:  # error: [invalid-return-type]
+    print(first(xs))
 ```
 
 ### Type narrowing

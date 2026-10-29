@@ -362,9 +362,10 @@ class X(Protocol):
 ```
 
 a statement that calls a function which returns `Never` ends the flow, as a call to a `NoReturn`
-function does, and the code after it is unreachable. a function returns `Never` when no path through
-its body reaches a `return` or its end without passing a `raise`, a loop that never exits, or a
-call that cannot return either. a function that only ever calls itself never returns, since each
+function does, and the code after it is unreachable — wherever in the statement the call is made, as
+long as the statement certainly makes it (see [unreachable code](editor.md#unreachable-code)). a
+function returns `Never` when no path through its body reaches a `return` or its end without
+passing a `raise`, a loop that never exits, or a call that cannot return either. a function that only ever calls itself never returns, since each
 call makes another until `RecursionError`
 
 ```python
@@ -377,8 +378,9 @@ def f() -> int:
     die()           # no `invalid-return-type`: the end of `f` is unreachable
 ```
 
-a `return` whose value never finishes evaluating, such as `return sys.exit(1)`, is the exception: the
-function returns `Never`, but a call to it is still treated as one that can return
+a call that cannot return ends the flow inside a larger expression too, so a `return` whose value
+never finishes evaluating, such as `return sys.exit(1)`, is never reached, and the function returns
+`Never` as one that exits before its `return` does
 
 a generator returns a generator: its `yield` expressions supply the yield type and its `return`
 statements the third type argument. the send type is the one thing the body does not determine, so

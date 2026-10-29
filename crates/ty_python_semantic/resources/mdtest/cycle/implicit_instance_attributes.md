@@ -544,7 +544,8 @@ class Base:
 
 ## Non-returning initializers do not define instance attributes
 
-An assignment whose initializer never returns cannot make its target attribute present.
+An assignment whose initializer never returns cannot make its target attribute present. The store is
+never made, so it is not checked either.
 
 ```py
 from typing import NoReturn
@@ -555,7 +556,7 @@ def fail() -> NoReturn:
 class C:
     def initialize(self):
         if not hasattr(self, "x"):
-            self.x = fail()  # error: [invalid-assignment]
+            self.x = fail()
 
 C().x  # error: [unresolved-attribute]
 ```

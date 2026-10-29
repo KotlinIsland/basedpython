@@ -49,6 +49,7 @@ use crate::definition::{
     ParameterDefinitionNodeRef, ParameterName, StarImportDefinitionNodeRef,
     TypeMatchCaptureDefinitionNodeRef, WithItemDefinitionNodeRef, repeats_underscore,
 };
+use crate::evaluation_order;
 use crate::expression::{Expression, ExpressionContext, ExpressionKind};
 use crate::fluid::{FluidUse, FluidUseRole};
 use crate::frozen::{FrozenMap, FrozenSet};
@@ -4074,6 +4075,77 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         expression
     }
 
+    /// records that the flow goes on past `call_expr` only if the call returns
+    fn record_non_terminal_call(
+        &mut self,
+        callable: Expression<'db>,
+        call_expr: Expression<'db>,
+        is_await: bool,
+        is_nested: bool,
+    ) {
+        let predicate = Predicate {
+            node: PredicateNode::IsNonTerminalCall(CallableAndCallExpr::new(
+                self.db, callable, call_expr, is_await, is_nested,
+            )),
+            is_positive: true,
+        };
+
+        let predicate_id = self.add_predicate(PredicateOrLiteral::Predicate(predicate));
+        let narrowing_constraint = self
+            .current_use_def_map_mut()
+            .narrowing_constraints
+            .add_atom(predicate_id);
+
+        let reachability_constraint = self
+            .current_reachability_constraints_mut()
+            .add_atom(predicate_id);
+        self.current_use_def_map_mut()
+            .record_non_terminal_call_constraints(reachability_constraint, narrowing_constraint);
+    }
+
+    /// records a non-terminal-call constraint for a call a statement certainly makes inside a
+    /// larger expression, `exit()` in `print(exit())`, once that expression has been visited
+    ///
+    /// whether such a call returns is read off its callee's definition (see
+    /// `CallableAndCallExpr::is_nested`), not inferred, so the callee and the call are not
+    /// registered as standalone expressions: inference of the statement itself infers them in
+    /// place, with the type context the enclosing expression gives them
+    fn record_terminal_call_candidate(&mut self, expression: &'ast ast::Expr) {
+        let Some(StatementCall { call, is_await }) = StatementCall::from_expression(expression)
+        else {
+            return;
+        };
+        if self.is_method_call_on_fluid_candidate(call) {
+            return;
+        }
+        let scope = self.current_scope_id();
+        let callable = Expression::new(
+            self.db,
+            scope,
+            AstNodeRef::new(self.module, call.func.as_ref()),
+            None,
+            ExpressionKind::Callee,
+        );
+        let call_expr = Expression::new(
+            self.db,
+            scope,
+            AstNodeRef::new(self.module, expression),
+            None,
+            ExpressionKind::Normal,
+        );
+        self.record_non_terminal_call(callable, call_expr, is_await, true);
+    }
+
+    /// whether `call` calls a method of a fluid specialization candidate, `a.append(1)` after
+    /// `a = []`, which records no non-terminal-call constraint (see the statement-level call in
+    /// `visit_stmt_impl` for why)
+    fn is_method_call_on_fluid_candidate(&self, call: &ast::ExprCall) -> bool {
+        call.func
+            .as_attribute_expr()
+            .and_then(|attribute| self.fluid_candidate_binding(&attribute.value))
+            .is_some()
+    }
+
     fn add_standalone_statement(&mut self, statement_node: &ast::Stmt) -> Statement<'db> {
         // Avoid allocating a salsa ingredient if the statement represents an existing
         // definition or standalone expression.
@@ -5129,6 +5201,18 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             ast::Expr::Statement(statement) => self.visit_statement_expression(expr, statement),
             _ => {
                 walk_expr(self, expr);
+            }
+        }
+
+        if let Some(statement) = self.current_statements.last_mut()
+            && let Some(index) = statement
+                .terminal_call_candidates
+                .iter()
+                .position(|(root, _)| *root == ExpressionNodeKey::from(expr))
+        {
+            let (_, candidates) = statement.terminal_call_candidates.swap_remove(index);
+            for candidate in candidates {
+                self.record_terminal_call_candidate(candidate);
             }
         }
 
@@ -7129,11 +7213,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // `sys.exit()` or `await async_exit()`). In this case, we use a special
                 // kind of constraint to mark the following code as unreachable.
                 //
-                // Ideally, these constraints should be added for every call expression, even those in
-                // sub-expressions. But doing so makes the number of such constraints so high that
-                // it significantly degrades performance. We thus cut scope here and add these
-                // constraints only at statement-level function calls, like `sys.exit()`, and not
-                // within sub-expressions like `3 + sys.exit()` etc.
+                // basedpython: the calls the statement certainly makes inside its value, `exit()`
+                // in `print(exit())`, have already recorded theirs once the value was visited
+                // (see `record_terminal_call_candidate`). A call made on one path only, such as
+                // in `a or exit()`, records none, which keeps the number of these constraints
+                // down.
                 if let Some(StatementCall { call, is_await }) =
                     StatementCall::from_expression(value)
                 {
@@ -7152,10 +7236,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     // basedpython: the fluid short-circuit is about reachability only. An
                     // assertion guard called on such a receiver (`a = A(); a.f()`) still has
                     // to narrow, so its predicate is recorded either way.
-                    let is_terminal_call_candidate = func
-                        .as_attribute_expr()
-                        .and_then(|attribute| self.fluid_candidate_binding(&attribute.value))
-                        .is_none();
+                    let is_terminal_call_candidate = !self.is_method_call_on_fluid_candidate(call);
                     let is_guard_call_candidate = self.source_type.is_basedpython();
 
                     if !self.source_type.is_stub()
@@ -7166,28 +7247,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         let call_expr = self.add_standalone_expression(value);
 
                         if is_terminal_call_candidate {
-                            let predicate = Predicate {
-                                node: PredicateNode::IsNonTerminalCall(CallableAndCallExpr::new(
-                                    self.db, callable, call_expr, is_await,
-                                )),
-                                is_positive: true,
-                            };
-
-                            let predicate_id =
-                                self.add_predicate(PredicateOrLiteral::Predicate(predicate));
-                            let narrowing_constraint = self
-                                .current_use_def_map_mut()
-                                .narrowing_constraints
-                                .add_atom(predicate_id);
-
-                            let reachability_constraint = self
-                                .current_reachability_constraints_mut()
-                                .add_atom(predicate_id);
-                            self.current_use_def_map_mut()
-                                .record_non_terminal_call_constraints(
-                                    reachability_constraint,
-                                    narrowing_constraint,
-                                );
+                            self.record_non_terminal_call(callable, call_expr, is_await, false);
                         }
 
                         // basedpython: the same call may be a call to an assertion guard
@@ -7201,7 +7261,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             self.record_narrowing_constraint(PredicateOrLiteral::Predicate(
                                 Predicate {
                                     node: PredicateNode::AssertsCall(CallableAndCallExpr::new(
-                                        self.db, callable, call_expr, is_await,
+                                        self.db, callable, call_expr, is_await, false,
                                     )),
                                     is_positive: true,
                                 },
@@ -7228,9 +7288,31 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
         if is_loop {
             self.loop_ranges.push(stmt.range());
         }
-        self.push_statement(CurrentStatement::default());
+        let terminal_call_candidates = if self.source_type.is_stub() {
+            Vec::new()
+        } else {
+            let statement_call = match stmt {
+                ast::Stmt::Expr(ast::StmtExpr { value, .. }) => Some(value.range()),
+                _ => None,
+            };
+            evaluation_order::terminal_call_candidates_by_expression(stmt)
+                .into_iter()
+                .map(|(root, mut candidates)| {
+                    candidates.retain(|call| Some(call.range()) != statement_call);
+                    (ExpressionNodeKey::from(root), candidates)
+                })
+                .collect()
+        };
+        self.push_statement(CurrentStatement {
+            terminal_call_candidates,
+            ..CurrentStatement::default()
+        });
         self.visit_stmt_impl(stmt);
         let current_statement = self.pop_statement();
+        debug_assert!(
+            current_statement.terminal_call_candidates.is_empty(),
+            "every expression with terminal call candidates is visited with its statement"
+        );
         if is_loop {
             self.loop_ranges.pop();
         }
@@ -7750,6 +7832,13 @@ impl CurrentAssignment<'_, '_> {
 struct CurrentStatement<'ast, 'db> {
     /// A list of lambda expressions contained in this statement.
     lambda_expressions: Vec<&'ast ast::ExprLambda>,
+    /// basedpython: the calls inside this statement that it certainly makes, by the expression
+    /// of the statement each is part of, other than an expression statement's own call, which is
+    /// recorded once the statement has been visited. each records a non-terminal-call constraint
+    /// once its expression has been visited, so that whatever is evaluated after a call that
+    /// never returns is unreachable. see
+    /// [`evaluation_order::terminal_call_candidates_by_expression`]
+    terminal_call_candidates: Vec<(ExpressionNodeKey, Vec<&'ast ast::Expr>)>,
     /// A list of fluid candidate definitions whose uses are contained in this statement,
     /// together with the use expression, its range, and its enclosing loop ranges.
     fluid_uses: Vec<(

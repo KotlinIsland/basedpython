@@ -1895,6 +1895,42 @@ imports are not some of the edits — two imports from one module go into one
 statement — so a client that lets its user choose asks again with the ones
 chosen. both take `textHash`
 
+## unreachable code
+
+code that can never run is reported as a hint: one diagnostic per range, with
+severity `4` (hint), the tag `1` (`Unnecessary`) and no code, for an editor to
+grey out. its message is `Code is always unreachable` where no environment could
+reach it — after a `return`, a `raise`, a `continue` — and
+`Code is unreachable\nThis may depend on your current environment and settings`
+where the analysis decides it, such as a `sys.version_info` branch or the code
+after a call that never returns
+
+a call that never returns ends the flow where it is made, inside a larger
+expression too. what the statement would have evaluated after it is reported as
+well, in as many ranges as it takes, several on one line:
+
+```python
+def f():
+    print(exit())   # `(` and `)`: the call to `print` is never made
+    return          # unreachable
+```
+
+`print` itself is not reported: python looks it up before it calls `exit`. the
+parts reported are the operation each enclosing expression would have performed
+with the call's value and the operands it would have evaluated next — `+` and
+`+ b` in `x = a + exit() + b`, and `x =`, since the store is never made — the
+keyword of a `return`, a `raise` or a `del`, and the header of a `for`, a `with`
+or a `match` around the call. each range is trimmed of the whitespace around it
+
+a call counts only where the statement certainly makes it: not in the right
+operand of `and`, `or` or `??`, a branch of a conditional expression, a lambda,
+anything of a comprehension but its first iterable, an optional chain past its
+`?.`, an `assert`, or the test of an `if` or a `while`. and a call inside a
+larger expression ends the flow only when its callee says that it never returns — a function declared to return
+`Never` or whose body never completes, or a value declared with a type whose call
+returns `Never`, as the builtin `exit` is — not when a generic call's result is
+merely specialized to `Never`
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the

@@ -156,6 +156,36 @@ python-version = \"3.10\"
     Ok(())
 }
 
+/// what a statement evaluates after a call that never returns is reported in ranges of its own,
+/// one diagnostic for each, beside the statements after it
+#[test]
+fn unreachable_parts_of_a_statement_have_unnecessary_hint_tags() -> Result<()> {
+    let _filter = filter_result_id();
+
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+def f():
+    print(exit())
+    return
+    print(1)
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .enable_pull_diagnostics(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+    let diagnostics = server.document_diagnostic_request(foo, None);
+
+    assert_compact_json_snapshot!(diagnostics);
+
+    Ok(())
+}
+
 #[test]
 fn unreachable_code_suppresses_unused_binding_hint() -> Result<()> {
     let _filter = filter_result_id();
