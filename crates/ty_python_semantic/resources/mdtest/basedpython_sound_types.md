@@ -838,6 +838,37 @@ def branched(x, flag):
 reveal_type(branched)
 ```
 
+nor does a call the flow passed on the way, which has to return for the flow to go on but narrows no
+name, or a test of the local whose branches have met again
+
+```by
+def gated(x, flag):
+    a = x.foo()
+    if flag:
+        print(1)
+    a.bar()
+
+# revealed: def gated(x: some protocol(def foo(self, /) -> protocol(def bar(self, /) -> Unknown)), flag)
+reveal_type(gated)
+
+def entered(x, n: int):
+    a = x.foo()
+    with open(str(n)):
+        a.bar()
+
+# revealed: def entered(x: some protocol(def foo(self, /) -> protocol(def bar(self, /) -> Unknown)), n: int)
+reveal_type(entered)
+
+def tested(x):
+    a = x.foo()
+    if a:
+        print(1)
+    a.bar()
+
+# revealed: def tested(x: some protocol(def foo(self, /) -> protocol(def bar(self, /) -> Unknown)))
+reveal_type(tested)
+```
+
 ### a use this analysis cannot read leaves the parameter gradual
 
 nothing is invented from a use that was not understood, so a body keeps type-checking exactly as it
