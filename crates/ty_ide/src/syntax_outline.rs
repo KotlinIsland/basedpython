@@ -77,6 +77,10 @@ pub struct OutlineStatement {
 }
 
 /// One clause of a compound statement: `if`, `elif`, `else`, `case`, the `def` of a function.
+///
+/// a definition's clause is its header without the decorators written above it: it starts at
+/// `async` in `async def`, and at a basedpython modifier such as `frozen data` in
+/// `frozen data class`, which the statement's [`OutlineStatement::modifiers`] also name
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutlineClause {
     /// The clause keyword. `None` for a clause that has none, which is a basedpython trailing
@@ -447,7 +451,8 @@ impl OutlineBuilder<'_> {
                 .flatten()
                 .max()
                 .unwrap_or(function.name.end());
-                let start = keyword.map_or(function.start(), ruff_text_size::TextRange::start);
+                let start =
+                    self.definition_header_start(&function.decorator_list, function.start());
                 heads.push(self.head(keyword, start, hint, &function.body));
             }
             Stmt::ClassDef(class) => {
@@ -461,7 +466,7 @@ impl OutlineBuilder<'_> {
                 .flatten()
                 .max()
                 .unwrap_or(class.name.end());
-                let start = keyword.map_or(class.start(), ruff_text_size::TextRange::start);
+                let start = self.definition_header_start(&class.decorator_list, class.start());
                 heads.push(self.head(keyword, start, hint, &class.body));
             }
             Stmt::Let(let_stmt) if !let_stmt.orelse.is_empty() => {
@@ -584,6 +589,31 @@ impl OutlineBuilder<'_> {
             .rev()
             .find(|token| !token.kind().is_trivia())
             .map(Ranged::range)
+    }
+
+    /// where the header of a `def` or a `class` starts: at its first token after the decorators
+    /// written with `@`, which is the `async` of an `async def`, a basedpython modifier such as
+    /// the `frozen data` of `frozen data class` or the `class` of `class def`, or else the
+    /// keyword itself. `start` is the statement's start, which is that token when nothing is
+    /// written above it
+    fn definition_header_start(&self, decorators: &[ast::Decorator], start: TextSize) -> TextSize {
+        let Some(last) = decorators
+            .iter()
+            .rfind(|decorator| self.source[decorator.range().to_std_range()].starts_with('@'))
+        else {
+            return start;
+        };
+        let index = self
+            .tokens
+            .partition_point(|token| token.start() < last.end());
+        self.tokens[index..]
+            .iter()
+            .find(|token| {
+                !token.range().is_empty()
+                    && !token.kind().is_trivia()
+                    && token.kind() != TokenKind::Newline
+            })
+            .map_or(start, Ranged::start)
     }
 
     /// The modifiers a definition was declared with: the decorators the parser synthesised from
@@ -1292,7 +1322,7 @@ while z:
   continue
 else:
   pass
-def f():
+async def f():
   async for a in b:
     pass
   async with c as d, e:
@@ -1320,7 +1350,7 @@ case _:
     }
 
     #[test]
-    fn a_definition_keeps_its_decorators_and_modifiers_but_its_clause_starts_at_the_keyword() {
+    fn a_definitions_clause_starts_after_its_decorators_at_its_modifiers() {
         assert_eq!(
             statements(
                 "\
@@ -1332,17 +1362,21 @@ enum class Color:
 class C:
     class def make(cls): ...
     static def s(): ...
+    @dec
+    async def a(self): ...
 "
             ),
             "\
-class P: [frozen_data_class `frozen data`]
+frozen data class P: [frozen_data_class `frozen data`]
   x: int
-class Color: [enum_def `enum class`]
+enum class Color: [enum_def `enum class`]
   RED
 class C:
-  def make(cls): [classmethod `class`]
+  class def make(cls): [classmethod `class`]
     ...
-  def s(): [static `static`]
+  static def s(): [static `static`]
+    ...
+  async def a(self):
     ...
 "
         );
