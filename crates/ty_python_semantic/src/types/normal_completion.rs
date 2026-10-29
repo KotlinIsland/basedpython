@@ -76,14 +76,14 @@ use ty_python_core::{
 };
 
 use crate::place::implicit_builtins_symbol_scope;
-use crate::reachability::{PredicateReading, evaluate_with_reading};
-use crate::types::Type;
+use crate::reachability::{PredicateReading, evaluate_with_reading, is_non_terminal_call};
 use crate::types::definition_resolution::{find_symbol_in_scope, visible_definitions_for_name};
 use crate::types::function::{
     FunctionForm, FunctionHeader, FunctionType, OverloadLiteral, OverriddenReturnType,
     ReturnTypeSource, infers_return_types,
 };
 use crate::types::signatures::function_signature_expression_type;
+use crate::types::{Type, inferred_declaration};
 use crate::{Db, ProgramEnvironment, attribute_assignments, attribute_declarations};
 
 /// whether a statement-level call to `function` can return, when the function's return type is
@@ -302,6 +302,9 @@ impl<'db> PredicateReading<'db> for ControlFlowReading<'_, 'db> {
 
     fn statement_call(&mut self, call: CallableAndCallExpr<'db>) -> Truthiness {
         let db = self.db;
+        if call.is_nested(db) {
+            return nested_call_returns(db, &self.env, call);
+        }
         let module = parsed_module(db, self.scope.python_file(db)).load(db);
         let callee = call.callable(db).node_ref(db).node(&module);
         let mut resolver = CalleeResolver {
@@ -316,9 +319,13 @@ impl<'db> PredicateReading<'db> for ControlFlowReading<'_, 'db> {
             Some(Resolved::Method(definition)) => {
                 call_truthiness(db, &self.env, definition, true, call.is_await(db))
             }
-            Some(Resolved::Module(_) | Resolved::Class(_) | Resolved::Receiver(_)) | None => {
-                Truthiness::Ambiguous
-            }
+            Some(
+                Resolved::Module(_)
+                | Resolved::Class(_)
+                | Resolved::Receiver(_)
+                | Resolved::Declared(_),
+            )
+            | None => Truthiness::Ambiguous,
         }
     }
 
@@ -381,6 +388,57 @@ fn callee_facts<'db>(db: &'db dyn Db, definition: Definition<'db>) -> Option<Cal
         only_method_kind_decorators,
         has_decorators: !node.decorator_list.is_empty(),
     })
+}
+
+/// basedpython: whether a call made inside a larger expression of its statement returns, such as
+/// `exit()` in `print(exit())` (see [`CallableAndCallExpr::is_nested`])
+///
+/// Such a call ends the flow only when its callee says that it never returns, and the callee is
+/// found the way [`CalleeResolver`] finds it, through the semantic index rather than the type of
+/// the callee where it is called. That type depends on the reachability of the call, which
+/// depends on every call before it, and a statement makes far more calls inside its expressions
+/// than it is: reading each callee's type would infer one expression per call, each waiting on
+/// the ones before it. So it is a function or method that is declared to return `Never` or whose
+/// body never completes ([`call_truthiness`]), or a value declared with a type whose call returns
+/// `Never`, such as the builtin `exit: Quitter`. Anything else — a class, a callee bound more than
+/// once, one that only its inferred type could tell — is read as returning.
+pub(crate) fn nested_call_returns<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    call: CallableAndCallExpr<'db>,
+) -> Truthiness {
+    let scope = call.callable(db).scope(db);
+    let module = parsed_module(db, scope.python_file(db)).load(db);
+    let callee = call.callable(db).node_ref(db).node(&module);
+    let is_await = call.is_await(db);
+    let mut resolver = CalleeResolver {
+        db,
+        env,
+        visited: FxHashSet::default(),
+    };
+    let returns = match resolver.resolve(scope, callee) {
+        Some(Resolved::Function(definition)) => {
+            call_truthiness(db, env, definition, false, is_await)
+        }
+        Some(Resolved::Method(definition)) => call_truthiness(db, env, definition, true, is_await),
+        Some(Resolved::Declared(definition)) => {
+            match inferred_declaration(db, definition).declared() {
+                Some(declared) => {
+                    is_non_terminal_call(db, env, declared.inner_type(), is_await, Type::unknown)
+                }
+                None => Truthiness::AlwaysTrue,
+            }
+        }
+        Some(Resolved::Module(_) | Resolved::Class(_) | Resolved::Receiver(_)) | None => {
+            Truthiness::AlwaysTrue
+        }
+    };
+    match returns {
+        Truthiness::AlwaysFalse => Truthiness::AlwaysFalse,
+        Truthiness::AlwaysTrue | Truthiness::Ambiguous | Truthiness::Uninhabited => {
+            Truthiness::AlwaysTrue
+        }
+    }
 }
 
 /// whether a call to the function `definition` returns: `AlwaysFalse` when it cannot, `AlwaysTrue`
@@ -453,6 +511,8 @@ enum Resolved<'db> {
     /// the first parameter of a method of the class `Definition`: its instance or, in a
     /// `classmethod`, the class itself
     Receiver(Definition<'db>),
+    /// a value declared with an annotation, such as `exit: Quitter`
+    Declared(Definition<'db>),
 }
 
 /// resolves callee expressions through the semantic index alone: no expression's type is inferred
@@ -476,7 +536,7 @@ impl<'db> CalleeResolver<'_, 'db> {
                 Resolved::Class(class) | Resolved::Receiver(class) => {
                     self.class_member(class, attribute.attr.as_str())
                 }
-                Resolved::Function(_) | Resolved::Method(_) => None,
+                Resolved::Function(_) | Resolved::Method(_) | Resolved::Declared(_) => None,
             },
             _ => None,
         }
@@ -508,6 +568,7 @@ impl<'db> CalleeResolver<'_, 'db> {
         match definition.kind(db) {
             DefinitionKind::Function(_) => Some(Resolved::Function(definition)),
             DefinitionKind::Class(_) => Some(Resolved::Class(definition)),
+            DefinitionKind::AnnotatedAssignment(_) => Some(Resolved::Declared(definition)),
             DefinitionKind::Parameter(parameter) => self.receiver(definition, parameter),
             DefinitionKind::Import(_)
             | DefinitionKind::ImportFrom(_)

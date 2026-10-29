@@ -1,11 +1,17 @@
 use crate::Db;
-use crate::reachability::is_reachable;
+use crate::reachability::{analyze_non_terminal_call, is_range_reachable, is_reachable};
 use get_size2::GetSize;
 use itertools::Itertools;
-use ruff_text_size::TextRange;
-use ty_python_core::ProgramFile;
+use ruff_db::parsed::parsed_module;
+use ruff_db::source::source_text;
+use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::find_node::covering_node;
+use ruff_text_size::{Ranged, TextRange};
+use ty_python_core::evaluation_order::ranges_evaluated_after;
+use ty_python_core::predicate::PredicateNode;
 use ty_python_core::reachability_constraints::ScopedReachabilityConstraintId;
 use ty_python_core::semantic_index;
+use ty_python_core::{ProgramFile, Truthiness};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, GetSize)]
 pub struct UnreachableRange {
@@ -44,12 +50,51 @@ pub enum UnreachableKind {
 /// Collects all unreachable ranges recorded in each scope's use-def map.
 /// `ALWAYS_FALSE` constraints are classified as unconditional; all others are
 /// unreachable only under the current analysis.
+///
+/// A reachable statement can itself be partly unreachable: in `print(exit())` the call to
+/// `print` is never made, because its argument never returns. The parts of a statement that
+/// Python evaluates after a call that never returns are reported too, under the current
+/// analysis, as the code after such a call is; see [`ranges_evaluated_after`] for what they are.
 #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
 pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[UnreachableRange]> {
     let index = semantic_index(db, file);
     let mut unreachable = Vec::new();
+    let mut module = None;
     for scope_id in index.scope_ids() {
-        let use_def = index.use_def_map(scope_id.file_scope_id(db));
+        let file_scope_id = scope_id.file_scope_id(db);
+        let use_def = index.use_def_map(file_scope_id);
+
+        for predicate in use_def.predicates().iter() {
+            let PredicateNode::IsNonTerminalCall(call) = predicate.node else {
+                continue;
+            };
+            if analyze_non_terminal_call(db, call) != Truthiness::AlwaysFalse {
+                continue;
+            }
+            let module =
+                module.get_or_insert_with(|| parsed_module(db, file.python_file(db)).load(db));
+            let call_range = call.call_expr(db).node_ref(db).node(module).range();
+            // a call that is itself never reached leaves nothing more unreachable
+            if !is_range_reachable(db, index, file_scope_id, call_range) {
+                continue;
+            }
+            let Some(statement) = covering_node(module.syntax().into(), call_range)
+                .ancestors()
+                .find_map(AnyNodeRef::as_stmt_ref)
+            else {
+                continue;
+            };
+            let source = source_text(db, file.file(db));
+            unreachable.extend(
+                ranges_evaluated_after(statement, call_range, source.as_str())
+                    .into_iter()
+                    .map(|range| UnreachableRange {
+                        range,
+                        kind: UnreachableKind::CurrentAnalysis,
+                    }),
+            );
+        }
+
         unreachable.extend(
             use_def
                 .range_reachability()
@@ -827,6 +872,128 @@ mod tests {
 
             if TYPE_CHECKING:
                 import expensive_module
+            "#;
+
+        assert_snapshot!(UnreachableTest::new().render(source)?, @"");
+        Ok(())
+    }
+
+    #[test]
+    fn reports_a_call_whose_argument_never_returns_and_the_code_after_it() -> anyhow::Result<()> {
+        let source = r#"
+            def f():
+                print(exit())
+                return
+                print(1)
+            "#;
+
+        assert_snapshot!(UnreachableTest::new().render(source)?, @"
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:3:10
+          |
+        3 |     print(exit())
+          |          ^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:3:17
+          |
+        3 |     print(exit())
+          |                 ^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:4:5
+          |
+        4 |     return
+          |     ^^^^^^
+
+        info[unreachable-code]: Code is always unreachable
+         --> src/main.py:5:5
+          |
+        5 |     print(1)
+          |     ^^^^^^^^
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn reports_what_a_statement_evaluates_after_a_call_that_never_returns() -> anyhow::Result<()> {
+        let source = r#"
+            def f(a: int, b: int):
+                x = a + exit() + b
+
+            def g(a):
+                g(a, exit(), a)
+
+            def h():
+                return [y for y in exit()]
+            "#;
+
+        assert_snapshot!(UnreachableTest::new().render(source)?, @"
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:3:5
+          |
+        3 |     x = a + exit() + b
+          |     ^^^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:3:11
+          |
+        3 |     x = a + exit() + b
+          |           ^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:3:20
+          |
+        3 |     x = a + exit() + b
+          |                    ^^^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:6:6
+          |
+        6 |     g(a, exit(), a)
+          |      ^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:6:8
+          |
+        6 |     g(a, exit(), a)
+          |        ^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:6:16
+          |
+        6 |     g(a, exit(), a)
+          |                ^^^^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:9:5
+          |
+        9 |     return [y for y in exit()]
+          |     ^^^^^^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:9:12
+          |
+        9 |     return [y for y in exit()]
+          |            ^^^^^^^^^^^
+
+        info[unreachable-code]: Code is unreachable
+         --> src/main.py:9:30
+          |
+        9 |     return [y for y in exit()]
+          |                              ^
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_report_what_may_still_run() -> anyhow::Result<()> {
+        let source = r#"
+            def f(a: int):
+                a or exit()
+                g = lambda: exit()
+                x = a if a else exit()
+                return a
             "#;
 
         assert_snapshot!(UnreachableTest::new().render(source)?, @"");

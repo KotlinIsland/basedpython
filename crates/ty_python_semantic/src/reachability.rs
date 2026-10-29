@@ -200,7 +200,7 @@ use std::ops::ControlFlow;
 use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::narrow::pattern_subject_type;
-use crate::types::normal_completion::body_recovered_call_returns;
+use crate::types::normal_completion::{body_recovered_call_returns, nested_call_returns};
 use crate::{
     Db,
     dunder_all::dunder_all_names,
@@ -1846,9 +1846,15 @@ fn analyze_single_pattern_predicate_kind<'db>(
     },
     heap_size = get_size2::GetSize::get_heap_size
 )]
-fn analyze_non_terminal_call<'db>(db: &'db dyn Db, call: CallableAndCallExpr<'db>) -> Truthiness {
+pub(crate) fn analyze_non_terminal_call<'db>(
+    db: &'db dyn Db,
+    call: CallableAndCallExpr<'db>,
+) -> Truthiness {
     let callable = call.callable(db);
     let env = ProgramEnvironment::from_scope(callable.scope(db));
+    if call.is_nested(db) {
+        return nested_call_returns(db, &env, call);
+    }
     // We first infer just the type of the callable. In the most likely case that the function is
     // not marked with `NoReturn`, or that it always returns `NoReturn`, doing so allows us to avoid
     // the more expensive work of inferring the entire call expression (which could involve

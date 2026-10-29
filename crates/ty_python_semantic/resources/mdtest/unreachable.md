@@ -103,6 +103,50 @@ def f():
     print("unreachable")
 ```
 
+### Calls returning `Never` inside a larger expression
+
+A statement that certainly makes such a call ends the flow there too, wherever in the statement the
+call is: an argument of another call, which is then never made, an operand, or the value of an
+assignment or a `return`.
+
+```py
+from typing_extensions import NoReturn
+
+def always_raises() -> NoReturn:
+    raise Exception()
+
+def argument(x: int | None):
+    if x is None:
+        print(always_raises())
+    reveal_type(x)  # revealed: int
+
+def operand(x: int | None):
+    if x is None:
+        y = 1 + always_raises()
+    reveal_type(x)  # revealed: int
+
+def returned(x: int | None) -> int:
+    if x is None:
+        return always_raises()
+    reveal_type(x)  # revealed: int
+    return x
+```
+
+A call that is made on one path only, such as the right operand of `or` or a lambda's body, leaves
+the flow alone:
+
+```py
+def short_circuit(x: int | None, flag: bool):
+    if x is None:
+        flag or always_raises()
+    reveal_type(x)  # revealed: int | None
+
+def deferred(x: int | None):
+    if x is None:
+        f = lambda: always_raises()
+    reveal_type(x)  # revealed: int | None
+```
+
 ### Calls to unions of functions returning `Never`
 
 In the example below, either function raises an exception, so calling the selected function makes

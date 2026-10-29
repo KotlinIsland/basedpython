@@ -4455,14 +4455,15 @@ Source with applied edits:
         }));
     }
 
-    /// a function that only ever calls itself never settles on a return type, so
-    /// there is nothing to hint
+    /// a function whose every return wraps another call to itself never settles on
+    /// a return type, so there is nothing to hint. (one that calls itself before it
+    /// can return at all, `return f()`, never returns, and is hinted `-> Never`)
     #[test]
     fn inferred_return_type_that_never_settles() {
         let mut test = basedpython_inlay_hint_test(
             "
-            def f():
-                return f()
+            def f(n: int):
+                return [f(n) for _ in range(n)]
             ",
         );
 

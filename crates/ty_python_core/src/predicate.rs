@@ -116,6 +116,18 @@ pub struct CallableAndCallExpr<'db> {
     /// async functions that return `Never`.
     #[returns(copy)]
     pub is_await: bool,
+    /// basedpython: whether the call is made inside a larger expression of its statement, such
+    /// as `exit()` in `print(exit())`, rather than being the statement's own call
+    ///
+    /// such a call ends the flow only when its callee says that it never returns — a function
+    /// declared to return `Never`, or whose body never completes, or a value declared with a type
+    /// whose call returns `Never` — which is read off the callee's definition rather than the
+    /// type the callee has where it is called. a generic call whose result is merely
+    /// *specialized* to `Never`, `first(xs)` on a `list[Never]`, is not read as one: that `Never`
+    /// is as often an artifact of inference as a claim about control flow, and
+    /// `reveal_type(first(xs))` would otherwise end the flow
+    #[returns(copy)]
+    pub is_nested: bool,
 }
 
 // The Salsa heap is tracked separately.
@@ -139,9 +151,10 @@ impl<'ast> StatementCall<'ast> {
     /// The `is_await` flag matters for async functions returning `Never`: calling one creates a
     /// coroutine, while awaiting it prevents execution from continuing.
     ///
-    /// Calls inside larger expressions, such as `1 + sys.exit()`, are deliberately excluded.
-    /// Tracking their termination would require many more reachability constraints and degrade
-    /// analysis performance.
+    /// Calls inside larger expressions, such as `1 + sys.exit()`, are not statement calls.
+    /// basedpython: the builder records the ones a statement certainly makes as well, once the
+    /// expression each is part of has been visited; see
+    /// `evaluation_order::terminal_call_candidates_by_expression`
     pub fn from_expression(expression: &'ast ast::Expr) -> Option<Self> {
         match expression {
             ast::Expr::Call(call) => Some(Self {

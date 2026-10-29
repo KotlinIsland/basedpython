@@ -1183,11 +1183,12 @@ reveal_type(nested(1))  # revealed: dict[int, list[int]]
 ```
 
 a body that really does nest itself one container deeper per round has no return type to reach, and
-keeps the marker that says so:
+keeps the marker that says so. the call is made once per item, so the body can still return: a call
+the body certainly makes to itself would mean that it never returns at all
 
 ```py
 def endless(x: int):
-    return [endless(x)]
+    return [endless(x) for _ in range(x)]
 
 reveal_type(endless(1))  # revealed: list[Divergent]
 ```
@@ -1366,11 +1367,11 @@ to survive being taken apart, or the union the solve builds back up has no reaso
 literals up and grows one element per round with no fixed point.
 
 ```by
-def rec():
-    return min(0.1, rec() * 2)
+def rec(n: int):
+    return 0.1 if n == 0 else min(0.1, rec(n - 1) * 2)
 
 def check():
-    reveal_type(rec())  # revealed: float
+    reveal_type(rec(3))  # revealed: float
 ```
 
 ## a float literal a recursive function recomputes from itself, called from the module body

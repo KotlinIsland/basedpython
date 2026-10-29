@@ -470,8 +470,8 @@ def f(flag: bool):
     reveal_type(exits_before_returning())  # revealed: Never
 ```
 
-A `return` whose value never finishes evaluating returns `Never` too, but a call to it is still read
-as one that reaches its `return`:
+A `return` whose value never finishes evaluating is never reached either, so a call to a function
+that only returns such a value ends the flow too:
 
 ```py
 def returns_an_exit():
@@ -483,8 +483,7 @@ def g(flag: bool):
         returns_an_exit()
     else:
         x = "test"
-    # TODO: `returns_an_exit()` returns `Never`, so this should be `Literal["test"]`
-    reveal_type(x)  # revealed: Literal["call", "test"]
+    reveal_type(x)  # revealed: Literal["test"]
     reveal_type(returns_an_exit())  # revealed: Never
 ```
 
