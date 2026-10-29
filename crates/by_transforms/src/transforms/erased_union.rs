@@ -58,6 +58,8 @@ use ruff_text_size::{Ranged, TextRange};
 
 use ty_python_semantic::RuntimeSpelling;
 
+use crate::columns::Columns;
+use crate::source_map::Replacement;
 use crate::type_info::TypeInfo;
 
 /// the stem of a synthesized type parameter's name. dunder-ish and namespaced
@@ -222,9 +224,9 @@ pub(crate) fn reify<'a>(
     suite: &[Stmt],
     types: &dyn TypeInfo,
     min_version: PythonVersion,
-) -> Cow<'a, str> {
+) -> (Cow<'a, str>, Option<Columns>) {
     if min_version < PythonVersion::PY312 {
-        return Cow::Borrowed(source);
+        return (Cow::Borrowed(source), None);
     }
     let mut visitor = Reify {
         types,
@@ -234,22 +236,27 @@ pub(crate) fn reify<'a>(
         visitor.visit_stmt(stmt);
     }
     if visitor.edits.is_empty() {
-        return Cow::Borrowed(source);
+        return (Cow::Borrowed(source), None);
     }
 
     // a type-parameter insertion is a zero-width point at the def header and an
     // annotation replacement covers one annotation, so the ranges are disjoint;
     // sorting is all that is needed to splice them in a single forward pass
     visitor.edits.sort_by_key(|(range, _)| range.start());
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0usize;
-    for (range, replacement) in visitor.edits {
-        output.push_str(&source[cursor..range.start().into()]);
-        output.push_str(&replacement);
-        cursor = range.end().into();
-    }
-    output.push_str(&source[cursor..]);
-    Cow::Owned(output)
+    let edits: Vec<(usize, usize, Replacement)> = visitor
+        .edits
+        .into_iter()
+        .map(|(range, replacement)| {
+            let start = usize::from(range.start());
+            (
+                start,
+                usize::from(range.end()),
+                Replacement::generated(&replacement, start),
+            )
+        })
+        .collect();
+    let (output, columns) = crate::columns::edited(source, &edits);
+    (Cow::Owned(output), Some(columns))
 }
 
 #[cfg(test)]

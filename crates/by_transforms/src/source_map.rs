@@ -13,13 +13,17 @@
 
 /// Where one run of a replacement's text came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Origin {
+pub(crate) enum Origin {
     /// copied verbatim from the source, starting at this byte offset
     Copied(usize),
     /// written by a lowering; it stands for the construct at this source offset
     /// (the start of the edit that wrote it), which is the one `.by` position a
     /// reader can be pointed at for text no source spells
     Generated(usize),
+    /// written by a lowering in front of the author's name at this source offset to say
+    /// where the name lives — the `_by_lazy.` a lazily imported name is read through — which
+    /// reads the same object the name did
+    Qualifier(usize),
 }
 
 /// The replacement text of one edit, remembered as the runs it was assembled
@@ -60,6 +64,18 @@ impl Replacement {
         self.text.push_str(text);
     }
 
+    /// Append a qualifier written in front of the author's name at `anchor`.
+    pub(crate) fn push_qualifier(&mut self, text: &str, anchor: usize) {
+        if text.is_empty() {
+            return;
+        }
+        let origin = Origin::Qualifier(anchor);
+        if self.runs.last().is_none_or(|&(_, last)| last != origin) {
+            self.runs.push((self.text.len(), origin));
+        }
+        self.text.push_str(text);
+    }
+
     /// Append `source[start..end]` verbatim.
     pub(crate) fn push_source(&mut self, source: &str, start: usize, end: usize) {
         if start >= end {
@@ -84,8 +100,24 @@ impl Replacement {
         for (text, origin) in other.runs() {
             match origin {
                 Origin::Generated(anchor) => self.push_generated(text, anchor),
+                Origin::Qualifier(anchor) => self.push_qualifier(text, anchor),
                 Origin::Copied(start) => self.push_copied(text, start),
             }
+        }
+    }
+
+    /// Drop a final `\n`, if the text ends with one.
+    pub(crate) fn pop_newline(&mut self) {
+        if !self.text.ends_with('\n') {
+            return;
+        }
+        self.text.pop();
+        if self
+            .runs
+            .last()
+            .is_some_and(|&(at, _)| at == self.text.len())
+        {
+            self.runs.pop();
         }
     }
 
@@ -95,7 +127,7 @@ impl Replacement {
     }
 
     /// The runs, as `(text, origin)`, in order.
-    fn runs(&self) -> impl Iterator<Item = (&str, Origin)> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&str, Origin)> {
         self.runs.iter().enumerate().map(|(i, &(at, origin))| {
             let end = self
                 .runs
@@ -226,7 +258,9 @@ pub(crate) fn line_table(source: &str, edits: &[(usize, usize, Replacement)]) ->
         for (text, origin) in replacement.runs() {
             match origin {
                 Origin::Copied(from) => table.push(text, starts.line_of(from), true),
-                Origin::Generated(anchor) => table.push(text, starts.line_of(anchor), false),
+                Origin::Generated(anchor) | Origin::Qualifier(anchor) => {
+                    table.push(text, starts.line_of(anchor), false);
+                }
             }
         }
         src_pos = *end;

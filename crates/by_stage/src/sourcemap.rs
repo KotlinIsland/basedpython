@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use by_transforms::columns::{ColumnOrigin, Columns};
+
 use crate::emit::Transpiled;
 use crate::staging::Staging;
 
@@ -32,6 +34,9 @@ pub struct TracebackEntry {
     pub py_path: PathBuf,
     pub by_path: PathBuf,
     pub line_map: Vec<Option<u32>>,
+    /// for each generated line, the runs of it that are the author's text, with where in the
+    /// `.by` each starts, and the qualifiers the transpiler wrote in front of the author's names
+    pub columns: Columns,
     /// the `.by` text the transpile ran on, kept so nothing downstream has to
     /// read the file a second time and risk reading a different one
     pub by_source: String,
@@ -73,6 +78,7 @@ pub(crate) fn describe_module(emitted: &Transpiled<'_>) -> TracebackEntry {
         by_path: std::fs::canonicalize(emitted.by_path)
             .unwrap_or_else(|_| emitted.by_path.to_path_buf()),
         line_map: emitted.line_map.to_vec(),
+        columns: emitted.columns.to_vec(),
         by_source: emitted.by_source.to_owned(),
         by_digest: content_digest(emitted.by_source.as_bytes()),
         py_digest: content_digest(emitted.python.as_bytes()),
@@ -150,6 +156,19 @@ pub(crate) fn render_sourcemap_module(
     }
     map_src.push_str("}\n");
 
+    // a third table keyed as the two are, read only where a generated location has columns
+    map_src.push_str(
+        "\n# for each generated line, the runs of its byte columns that are text the .by\n\
+         # spells: (start, end, by_line, by_column), zero-based, or (start, end, None, None)\n\
+         # for a qualifier written in front of the author's name. every other column is\n\
+         # the transpiler's\n\
+         COLUMNS = {\n",
+    );
+    for e in entries {
+        map_src.push_str(&columns_line(e));
+    }
+    map_src.push_str("}\n");
+
     // after the tables rather than before them: a re-stage finds an entry by the lines
     // above `DIGESTS`, and rewrites the ones that start with its key, which no line below
     // does. a path is spelled as the tables spell theirs
@@ -205,6 +224,33 @@ fn sourcemap_line(entry: &TracebackEntry) -> String {
         elems.join(", "),
     );
     line
+}
+
+/// One entry's line in the `COLUMNS` table, newline included.
+fn columns_line(entry: &TracebackEntry) -> String {
+    let lines: Vec<String> = entry
+        .columns
+        .iter()
+        .map(|line| {
+            let segments: Vec<String> = line
+                .iter()
+                .map(|segment| match segment.origin {
+                    ColumnOrigin::Copied { line, column } => {
+                        format!("({}, {}, {line}, {column})", segment.start, segment.end)
+                    }
+                    ColumnOrigin::Qualifier => {
+                        format!("({}, {}, None, None)", segment.start, segment.end)
+                    }
+                })
+                .collect();
+            format!("[{}]", segments.join(", "))
+        })
+        .collect();
+    format!(
+        "    {}: [{}],\n",
+        py_str_literal(&entry.py_path.to_string_lossy()),
+        lines.join(", ")
+    )
 }
 
 /// One entry's line in the `DIGESTS` table, newline included.
@@ -285,10 +331,11 @@ pub enum RewriteRefusal {
 /// of the operation rather than a hope about the renderer.
 ///
 /// The entry is matched on its key — the generated path, spelled exactly as the
-/// build spelled it — in both tables. A key present in one and missing from the
-/// other is [`RewriteRefusal::NotInTheMap`] just as a key missing from both is: a
-/// map with a line table and no digests beside it describes a pair of files
-/// nothing can verify.
+/// build spelled it — in each of the three tables. A key missing from any of them
+/// is [`RewriteRefusal::NotInTheMap`] just as a key missing from all is: a map
+/// with a line table and no digests beside it describes a pair of files nothing
+/// can verify, and one without its columns would leave a module's code to be
+/// compiled against columns of the module it replaced.
 pub(crate) fn rewrite_sourcemap_entry(
     existing: &str,
     entry: &TracebackEntry,
@@ -296,31 +343,36 @@ pub(crate) fn rewrite_sourcemap_entry(
     let key = py_str_literal(&entry.py_path.to_string_lossy());
     let prefix = format!("    {key}: ");
 
-    let mut replaced_map = false;
-    let mut replaced_digests = false;
+    let mut replaced = [false; 3];
     let mut out = String::with_capacity(existing.len());
     // the tables are told apart by which header was last seen, because the key
-    // is the same in both and a line matched without knowing its table would
+    // is the same in each and a line matched without knowing its table would
     // write a line table where the digests belong
-    let mut in_digests = false;
+    let mut table = None;
     for line in existing.split_inclusive('\n') {
-        if line.starts_with("DIGESTS = {") {
-            in_digests = true;
+        if let Some(header) = ["SOURCEMAP = {", "DIGESTS = {", "COLUMNS = {"]
+            .iter()
+            .position(|header| line.starts_with(header))
+        {
+            table = Some(header);
+        } else if !line.starts_with("    ") {
+            table = None;
         }
-        if line.starts_with(&prefix) {
-            if in_digests {
-                out.push_str(&digests_line(entry));
-                replaced_digests = true;
-            } else {
-                out.push_str(&sourcemap_line(entry));
-                replaced_map = true;
-            }
+        if let Some(index) = table
+            && line.starts_with(&prefix)
+        {
+            out.push_str(&match index {
+                0 => sourcemap_line(entry),
+                1 => digests_line(entry),
+                _ => columns_line(entry),
+            });
+            replaced[index] = true;
             continue;
         }
         out.push_str(line);
     }
 
-    if replaced_map && replaced_digests {
+    if replaced.iter().all(|replaced| *replaced) {
         Ok(out)
     } else {
         Err(RewriteRefusal::NotInTheMap)
@@ -350,6 +402,7 @@ mod tests {
         BY_SOURCEMAP_FILENAME, OwnCode, RewriteRefusal, TracebackEntry, content_digest,
         render_sourcemap_module, rewrite_sourcemap_entry, write_sourcemap_module,
     };
+    use by_transforms::columns::{ColumnOrigin, Segment};
     use std::path::{Path, PathBuf};
 
     fn entry(py: &str, by: &str, source: &str, python: &str) -> TracebackEntry {
@@ -357,6 +410,7 @@ mod tests {
             py_path: PathBuf::from(py),
             by_path: PathBuf::from(by),
             line_map: vec![None, Some(0)],
+            columns: vec![Vec::new(), Vec::new()],
             by_source: source.to_owned(),
             by_digest: content_digest(source.as_bytes()),
             py_digest: content_digest(python.as_bytes()),
@@ -418,6 +472,22 @@ mod tests {
 
         let mut edited = entry("/build/b.py", "/src/b.by", "b edited", "B EDITED");
         edited.line_map = vec![Some(3), Some(4), None];
+        edited.columns = vec![
+            vec![
+                Segment {
+                    start: 0,
+                    end: 9,
+                    origin: ColumnOrigin::Qualifier,
+                },
+                Segment {
+                    start: 9,
+                    end: 14,
+                    origin: ColumnOrigin::Copied { line: 3, column: 4 },
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+        ];
         let rewritten = rewrite_sourcemap_entry(&existing, &edited).expect("b is in the map");
 
         // what the whole-file renderer would have produced for the same set, so
@@ -443,6 +513,11 @@ mod tests {
         assert!(
             rewritten.contains(r#"    "/build/b.py": ("/src/b.by", [3, 4, None]),"#),
             "{rewritten}"
+        );
+        assert!(
+            rewritten
+                .contains(r#"    "/build/b.py": [[(0, 9, None, None), (9, 14, 3, 4)], [], []],"#),
+            "the columns move with the entry:\n{rewritten}"
         );
         assert!(
             rewritten.contains(&format!(

@@ -10046,3 +10046,159 @@ fn the_server_describes_by_s_own_command_line() {
         .unwrap_or_else(|| panic!("no `--python`:\n{run}"));
     assert_eq!(python["value"]["kind"], "path", "{python}");
 }
+
+/// a call the author wrote is located at the author's text in the `.by`, columns and all, read
+/// through the lazy-import holder or not, and a call the transpiler wrote has its `.by` line and
+/// no columns: what a debugger names a step-into target by, and tells the two apart by
+#[test]
+fn run_locates_a_call_at_the_author_s_columns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0\"\nrequires-python = \">=3.11\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("geometry.by"),
+        "\
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: float
+    y: float
+
+def classify(p: Point) -> str:
+    return \"origin\" if p.x == 0 else \"other\"
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import dis
+import sys
+import types
+from geometry import Point, classify
+
+def build(points: list[Point]) -> list[str]:
+    origin = Point(0.0, 0.0)
+    return [classify(p) for p in points] + [classify(origin)]
+
+def calls(code: types.CodeType) -> list[object]:
+    found: list[object] = []
+    for instruction in dis.get_instructions(code):
+        if instruction.opname == \"CALL\":
+            found.append(tuple(instruction.positions!))
+    for constant in code.co_consts:
+        if isinstance(constant, types.CodeType):
+            found.extend(calls(constant))
+    return found
+
+print(\"columns\" if sys.version_info >= (3, 11) else \"no columns\")
+for position in sorted(calls(build.__code__), key=str):
+    print(position)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if stdout.starts_with("no columns") {
+        return;
+    }
+    let lines: Vec<&str> = stdout.lines().skip(1).collect();
+    assert_eq!(
+        lines,
+        [
+            // `Point(0.0, 0.0)`
+            "(7, 7, 13, 28)",
+            // `classify(p)`, read as `_by_lazy.classify(p)`
+            "(8, 8, 12, 23)",
+            // `classify(origin)`
+            "(8, 8, 44, 60)",
+            // `_soundness_iter(points, Point)`, which the author did not write
+            "(8, 8, None, None)",
+        ],
+        "{stdout}"
+    );
+}
+
+/// a location is moved to its `.by` as often as a test reporter or a profile asks, and the
+/// staged `.py` and its `.by` are read for it once: when the first location checks them
+/// against the map
+#[test]
+fn run_reads_a_module_s_files_once_however_often_it_is_located() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0\"\nrequires-python = \">=3.11\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("shapes.by"),
+        "def area(width: int, height: int) -> int:\n    return width * height\n",
+    )
+    .unwrap();
+    // python rather than basedpython: the runner it reaches into has no types to check it against
+    fs::write(
+        dir.path().join("probe.py"),
+        "\
+import importlib
+import os
+import sys
+
+
+def locate():
+    runner = importlib.import_module(\"_by_runner\")
+    staged = os.path.join(os.path.dirname(runner.__file__), \"shapes.py\")
+    print(runner.project_location(staged, 1)[1])
+    read = []
+
+    def audit(event, args):
+        if event == \"open\" and isinstance(args[0], str):
+            name = os.path.basename(args[0])
+            if name.startswith(\"shapes.\"):
+                read.append(name)
+
+    sys.addaudithook(audit)
+    for line in (1, 2, 1):
+        print(runner.project_location(staged, line)[1])
+    print(read)
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from probe import locate\n\nlocate()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["1", "1", "2", "1", "[]"],
+        "{stdout}"
+    );
+}

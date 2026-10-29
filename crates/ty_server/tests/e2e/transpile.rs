@@ -215,8 +215,8 @@ impl Request for TranspileForBuild {
 }
 
 /// A tree shaped the way a build leaves one for `project/main.by` and `project/other.by`: the
-/// record naming this `by`, and a map holding an entry for each module — with digests that
-/// describe nothing, so every file the server answers for comes back changed and moves its entry.
+/// record naming this `by`, and a map holding an entry for each module in each of its tables —
+/// with digests that describe nothing, so every file the server answers for comes back changed and moves its entry.
 ///
 /// Laid out by hand because the build lives in the `by` binary, which this crate's tests cannot
 /// run; everything the server reads out of the tree is here.
@@ -248,14 +248,16 @@ fn stale_build(server: &TestServer, build: &SystemPath) -> Result<SystemPathBuf>
         (
             format!("    \"{generated}\": (\"{source}\", [None]),\n"),
             format!("    \"{generated}\": {{\"by\": \"sha256:00\", \"py\": \"sha256:00\"}},\n"),
+            format!("    \"{generated}\": [[]],\n"),
         )
     };
-    let (main_map, main_digests) = entry("main");
-    let (other_map, other_digests) = entry("other");
+    let (main_map, main_digests, main_columns) = entry("main");
+    let (other_map, other_digests, other_columns) = entry("other");
     std::fs::write(
         build.join("_by_sourcemap.py").as_std_path(),
         format!(
-            "SOURCEMAP = {{\n{main_map}{other_map}}}\n\nDIGESTS = {{\n{main_digests}{other_digests}}}\n"
+            "SOURCEMAP = {{\n{main_map}{other_map}}}\n\nDIGESTS = {{\n{main_digests}{other_digests}}}\n\n\
+             COLUMNS = {{\n{main_columns}{other_columns}}}\n"
         ),
     )?;
     Ok(build)

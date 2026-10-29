@@ -20,10 +20,13 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_pattern};
 use ruff_python_ast::{Expr, Pattern, PatternMatchAs, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::columns::Columns;
+use crate::source_map::Replacement;
 use crate::type_info::TypeInfo;
 
 struct Qualify<'a> {
     types: &'a dyn TypeInfo,
+    /// each name to qualify, with what goes in front of it
     edits: Vec<(TextRange, String)>,
 }
 
@@ -33,8 +36,7 @@ impl<'ast> Visitor<'ast> for Qualify<'_> {
             && name.ctx.is_load()
             && let Some(qualifier) = self.types.context_sensitive_qualifier(name)
         {
-            self.edits
-                .push((name.range(), format!("{qualifier}.{}", name.id)));
+            self.edits.push((name.range(), format!("{qualifier}.")));
         }
         walk_expr(self, expr);
     }
@@ -49,8 +51,7 @@ impl<'ast> Visitor<'ast> for Qualify<'_> {
         }) = pattern
             && let Some(qualifier) = self.types.case_name_qualifier(name)
         {
-            self.edits
-                .push((name.range(), format!("{qualifier}.{}", name.id)));
+            self.edits.push((name.range(), format!("{qualifier}.")));
         }
         walk_pattern(self, pattern);
     }
@@ -62,7 +63,11 @@ impl<'ast> Visitor<'ast> for Qualify<'_> {
 ///
 /// `suite` must be the parse the `types` model was built from: the resolution is
 /// looked up by AST node identity.
-pub(crate) fn qualify<'a>(source: &'a str, suite: &[Stmt], types: &dyn TypeInfo) -> Cow<'a, str> {
+pub(crate) fn qualify<'a>(
+    source: &'a str,
+    suite: &[Stmt],
+    types: &dyn TypeInfo,
+) -> (Cow<'a, str>, Option<Columns>) {
     let mut visitor = Qualify {
         types,
         edits: Vec::new(),
@@ -71,21 +76,26 @@ pub(crate) fn qualify<'a>(source: &'a str, suite: &[Stmt], types: &dyn TypeInfo)
         visitor.visit_stmt(stmt);
     }
     if visitor.edits.is_empty() {
-        return Cow::Borrowed(source);
+        return (Cow::Borrowed(source), None);
     }
 
     // one edit per name node, so the ranges are disjoint; sorting is all that is
-    // needed to splice them in a single forward pass
+    // needed to splice them in a single forward pass. the qualifier goes in front
+    // of the name as the author wrote it, which stays theirs
     visitor.edits.sort_by_key(|(range, _)| range.start());
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0usize;
-    for (range, replacement) in visitor.edits {
-        output.push_str(&source[cursor..range.start().into()]);
-        output.push_str(&replacement);
-        cursor = range.end().into();
-    }
-    output.push_str(&source[cursor..]);
-    Cow::Owned(output)
+    let edits: Vec<(usize, usize, Replacement)> = visitor
+        .edits
+        .into_iter()
+        .map(|(range, qualifier)| {
+            let (start, end) = (usize::from(range.start()), usize::from(range.end()));
+            let mut replacement = Replacement::default();
+            replacement.push_qualifier(&qualifier, start);
+            replacement.push_source(source, start, end);
+            (start, end, replacement)
+        })
+        .collect();
+    let (output, columns) = crate::columns::edited(source, &edits);
+    (Cow::Owned(output), Some(columns))
 }
 
 #[cfg(test)]

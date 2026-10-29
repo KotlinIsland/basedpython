@@ -408,12 +408,12 @@ impl TypeAwarePass for ExtensionBlockPass<'_> {
 /// defs have to stay below it: the preamble carries the runtime helpers a
 /// lowered body — or a parameter default, which runs at `def` time — reaches
 /// for, and a `def` above them raises `NameError` at import
-pub(crate) fn hoist_backing_functions(
+pub(crate) fn hoist_backing_functions<T: Clone>(
     out: String,
-    table: Vec<Option<u32>>,
+    table: Vec<T>,
     preamble_end: usize,
     backing: &BTreeSet<String>,
-) -> (String, Vec<Option<u32>>) {
+) -> (String, Vec<T>) {
     if backing.is_empty() {
         return (out, table);
     }
@@ -502,7 +502,7 @@ pub(crate) fn hoist_backing_functions(
     order.extend((insert_line..lines.len()).filter(|i| !moved_set.contains(i)));
 
     let new_lines: Vec<&str> = order.iter().map(|&i| lines[i]).collect();
-    let new_table: Vec<Option<u32>> = order.iter().map(|&i| table[i]).collect();
+    let new_table: Vec<T> = order.iter().map(|&i| table[i].clone()).collect();
 
     let mut result = new_lines.join("\n");
     if had_trailing_newline {
