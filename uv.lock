@@ -195,7 +195,7 @@ wheels = [
 
 [[package]]
 name = "basedpython"
-version = "0.0.1b1"
+version = "0.0.1b2"
 source = { editable = "." }
 
 [package.dev-dependencies]
