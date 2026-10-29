@@ -102,7 +102,7 @@ pub use find_references::find_references;
 pub use folding_range::{FoldingRange, FoldingRangeKind, folding_ranges};
 pub use goto::{goto_declaration, goto_definition, goto_type_definition};
 pub use goto_implementation::goto_implementation;
-pub use hints::{Hint, HintKind, hints};
+pub use hints::{Hint, HintKind, hints, unreachable_code_ranges};
 pub use hover::hover;
 pub use inherited_members::{ClassInheritedMembers, InheritedMember, document_inherited_members};
 pub use injection::{Injection, InjectionOrigin, Injections, injections};

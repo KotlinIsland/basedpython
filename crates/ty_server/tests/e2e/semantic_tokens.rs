@@ -160,3 +160,103 @@ fn no_stale_tokens_after_opening_the_same_file_with_new_content() -> Result<()> 
 
     Ok(())
 }
+
+const UNREACHABLE: &str = "\
+def f():
+    print(exit())
+    return
+    print(1)
+";
+
+/// the tokens of `UNREACHABLE` as `(line, character, text)`, from a full request or, given one, a
+/// request for `range`
+fn unreachable_tokens(
+    without_unreachable: bool,
+    range: Option<lsp_types::Range>,
+) -> Result<Vec<(u32, u32, String)>> {
+    let workspace_root = SystemPath::new("src");
+    let path = SystemPath::new("src/foo.py");
+    let mut builder = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(path, UNREACHABLE)?;
+    if without_unreachable {
+        builder = builder.with_unreachable_without_semantic_tokens();
+    }
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+    server.open_text_document(path, UNREACHABLE, 1);
+    let uri = server.file_uri(path);
+
+    let tokens = match range {
+        None => server.semantic_tokens_full_request(&uri),
+        Some(range) => server.send_request_await::<lsp_types::SemanticTokensRangeRequest>(
+            lsp_types::SemanticTokensRangeParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                range,
+                work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+                partial_result_params: lsp_types::PartialResultParams::default(),
+            },
+        ),
+    }
+    .ok_or_else(|| anyhow::anyhow!("expected semantic tokens"))?
+    .data;
+
+    let lines: Vec<&str> = UNREACHABLE.lines().collect();
+    let (mut line, mut character) = (0, 0);
+    Ok(tokens
+        .into_iter()
+        .map(|token| {
+            if token.delta_line == 0 {
+                character += token.delta_start;
+            } else {
+                line += token.delta_line;
+                character = token.delta_start;
+            }
+            let text = &lines[line as usize][character as usize..][..token.length as usize];
+            (line, character, text.to_string())
+        })
+        .collect())
+}
+
+fn token(line: u32, character: u32, text: &str) -> (u32, u32, String) {
+    (line, character, text.to_string())
+}
+
+/// an editor that greys unreachable code with a colour of its own can ask for no token inside
+/// it, so that the token's colour does not win over the grey
+#[test]
+fn unreachable_code_has_no_tokens_when_the_client_asks() -> Result<()> {
+    assert_eq!(
+        unreachable_tokens(true, None)?,
+        [token(0, 4, "f"), token(1, 4, "print"), token(1, 10, "exit")]
+    );
+    Ok(())
+}
+
+#[test]
+fn unreachable_code_has_no_tokens_in_a_range_when_the_client_asks() -> Result<()> {
+    let range = lsp_types::Range::new(
+        lsp_types::Position::new(1, 0),
+        lsp_types::Position::new(3, 12),
+    );
+    assert_eq!(
+        unreachable_tokens(true, Some(range))?,
+        [token(1, 4, "print"), token(1, 10, "exit")]
+    );
+    Ok(())
+}
+
+/// an editor that fades unreachable code keeps its tokens under the fade
+#[test]
+fn unreachable_code_keeps_its_tokens_otherwise() -> Result<()> {
+    assert_eq!(
+        unreachable_tokens(false, None)?,
+        [
+            token(0, 4, "f"),
+            token(1, 4, "print"),
+            token(1, 10, "exit"),
+            token(3, 4, "print"),
+            token(3, 10, "1"),
+        ]
+    );
+    Ok(())
+}

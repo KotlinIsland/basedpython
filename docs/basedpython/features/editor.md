@@ -1023,6 +1023,24 @@ as `cast(list[int], x)` does its first. a default value is not one. `dunder`
 marks a dunder wherever it is defined or read; a name that only starts with
 underscores is not one
 
+two experimental client capabilities, each `true` or left out, change which
+tokens are sent, for an editor that draws something else in their place:
+
+| capability                                      | leaves out                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `experimental.languageInjection`                | the `string` token of a fragment `by/injections` reports, which the editor highlights in the fragment's language |
+| `experimental.unreachableWithoutSemanticTokens` | every token inside a range reported as [unreachable code](#unreachable-code)                                     |
+
+the ranges the second leaves bare are exactly the ranges of the unreachable-code
+hints, the parts of a statement included — in `print(exit())` it is the
+parentheses, and `print` and `exit` keep their tokens. it is for an editor that
+greys unreachable code with a colour of the same weight as a token's, as
+IntelliJ does, where the token's colour would otherwise win: of an unreachable
+`print(1)` only the parentheses would be grey. an editor that fades the code
+instead, as VS Code does, wants the tokens under the fade, and does not ask.
+both `textDocument/semanticTokens/full` and `textDocument/semanticTokens/range`
+honour it; the server offers no delta requests
+
 ## keyword highlighting
 
 `textDocument/documentHighlight` on a keyword answers the keywords that belong
