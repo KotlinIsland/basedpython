@@ -18,6 +18,7 @@ use ty_python_semantic::types::ide_support::unpacking_target_type;
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 use crate::Db;
+use crate::hover::multiline_type;
 
 /// an expression and its type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,13 @@ pub struct ExpressionType {
     pub range: TextRange,
     /// the type as the file would spell it: `1` in a basedpython file, `Literal[1]` in python
     pub ty: String,
+    /// the same type written over as many lines as a reader needs, as hover writes it: each
+    /// parameter of a function on a line of its own, each signature of an overloaded function
+    /// after the one before
+    pub pretty: String,
+    /// what [`Self::pretty`] is highlighted as: `python`, or `xml` for a special type such as
+    /// `<special-form 'typing.Any'>`
+    pub pretty_language: &'static str,
 }
 
 /// the expressions of the statement `range` is in that contain all of it, innermost first, each
@@ -63,9 +71,12 @@ pub fn expression_types(
             else {
                 continue;
             };
+            let (pretty, pretty_language) = multiline_type(db, &env, ty, []);
             found.push(ExpressionType {
                 range: expression.range(),
                 ty: ty.display(db, &env).to_string(),
+                pretty,
+                pretty_language,
             });
         }
         found
@@ -127,6 +138,51 @@ def main(text: str, numbers: list[int]) -> None:
         (kind, _, size) : tuple[str, str, str]
         (kind, _, size), (first, *rest) : tuple[tuple[str, str, str], tuple[int, *tuple[int, ...]]]
         ");
+    }
+
+    #[test]
+    fn each_type_is_also_written_for_reading() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+def main() -> None:
+    pri<CURSOR>nt('hi')
+",
+            )
+            .build();
+
+        let found = expression_types(
+            &test.db,
+            test.program_file(test.cursor.file),
+            TextRange::empty(test.cursor.offset),
+        );
+        let pretty = found
+            .iter()
+            .map(|found| format!("{}:\n{}", found.pretty_language, found.pretty))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        assert_snapshot!(pretty, @r#"
+        python:
+        def print(
+            *values: object,
+            sep: str | None = " ",
+            end: str | None = "\n",
+            file: SupportsWrite[str] | None = None,
+            flush: Literal[False] = False
+        )
+        def print(
+            *values: object,
+            sep: str | None = " ",
+            end: str | None = "\n",
+            file: SupportsWriteAndFlush[str] | None = None,
+            flush: bool
+        )
+
+        python:
+        None
+        "#);
     }
 
     #[test]

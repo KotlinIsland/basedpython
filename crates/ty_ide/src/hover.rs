@@ -692,22 +692,34 @@ pub(crate) struct DisplayHoverContent<'a, 'db> {
 
 impl<'db> DisplayHoverContent<'_, 'db> {
     fn ty_string_and_syntax(&self, ty: &Type<'db>) -> (String, &'static str) {
-        let db = self.db;
-        // Special types like `<special-form of whatever 'blahblah' with 'florps'>`
-        // render poorly with python syntax-highlighting but well as xml
-        let settings = DisplaySettings::from_possibly_ambiguous_types(db, self.env, [*ty])
-            .with_type_params_in_scope(db, self.type_params_in_scope.iter().cloned());
-        let ty_string = ty
-            .display_with(db, self.env, settings)
-            .multiline()
-            .to_string();
-        let syntax = if ty_string.starts_with('<') {
-            "xml"
-        } else {
-            "python"
-        };
-        (ty_string, syntax)
+        multiline_type(
+            self.db,
+            self.env,
+            *ty,
+            self.type_params_in_scope.iter().cloned(),
+        )
     }
+}
+
+/// `ty` written for a reader to read rather than to fit on a line — a function's parameters one
+/// to a line, an overloaded function's signatures one after another — with the language a code
+/// block of it is highlighted as: `python`, or `xml` for a special type such as
+/// `<special-form 'typing.Any'>`, which python highlighting renders poorly.
+pub(crate) fn multiline_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    type_params_in_scope: impl IntoIterator<Item = (BoundTypeVarInstance<'db>, Name)>,
+) -> (String, &'static str) {
+    let settings = DisplaySettings::from_possibly_ambiguous_types(db, env, [ty])
+        .with_type_params_in_scope(db, type_params_in_scope);
+    let ty_string = ty.display_with(db, env, settings).multiline().to_string();
+    let syntax = if ty_string.starts_with('<') {
+        "xml"
+    } else {
+        "python"
+    };
+    (ty_string, syntax)
 }
 
 fn create_qualifier_suffix(qualifiers: TypeQualifiers) -> String {
