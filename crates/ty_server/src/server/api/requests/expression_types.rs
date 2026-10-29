@@ -43,9 +43,22 @@ pub(crate) struct ExpressionTypesParams {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ExpressionType {
     range: Range,
-    /// the type as the document's language spells it
+    /// the type as the document's language spells it, on one line
     #[serde(rename = "type")]
     ty: String,
+    /// the same type written for a reader, as hover writes it: a function's parameters one to a
+    /// line, an overloaded function's signatures one after another
+    pretty: PrettyType,
+}
+
+/// code to show in a code block, with the language to highlight it as: LSP's `MarkedString` in
+/// its `{ language, value }` form
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct PrettyType {
+    /// `python`, or `xml` for a special type such as `<special-form 'typing.Any'>`, which python
+    /// highlighting renders poorly
+    language: String,
+    value: String,
 }
 
 pub(crate) struct ExpressionTypesRequestHandler;
@@ -100,6 +113,10 @@ impl BackgroundDocumentRequestHandler for ExpressionTypesRequestHandler {
                             .to_lsp_range(db, file, snapshot.encoding())?
                             .local_range(),
                         ty: found.ty,
+                        pretty: PrettyType {
+                            language: found.pretty_language.to_owned(),
+                            value: found.pretty,
+                        },
                     })
                 })
                 .collect(),

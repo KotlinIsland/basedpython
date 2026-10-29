@@ -1375,16 +1375,45 @@ range at the caret:
 ```
 
 and the answer is every expression of the statement that contains the whole
-range, innermost first, each with its `range` and its `type` as the document's
-language spells it:
+range, innermost first, each with its `range`, its `type` as the document's
+language spells it, on one line, and the same type `pretty`, written for a
+reader:
 
 ```json
 [
-  { "range": { "start": { "line": 1, "character": 15 }, "end": { "line": 1, "character": 19 } }, "type": "str" },
-  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 20 } }, "type": "int" },
-  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 24 } }, "type": "int" }
+  { "range": { "start": { "line": 1, "character": 15 }, "end": { "line": 1, "character": 19 } }, "type": "str", "pretty": { "language": "python", "value": "str" } },
+  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 20 } }, "type": "int", "pretty": { "language": "python", "value": "int" } },
+  { "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 24 } }, "type": "int", "pretty": { "language": "python", "value": "int" } }
 ]
 ```
+
+`pretty` is written as hover writes a type: a function's parameters one to a
+line once there is more than one, and each signature of an overloaded function
+after the one before, as the `def` it declares — so `print`, whose `type` is
+`Overload[(*values: object, sep: str | None = " ", …) -> None, (…) -> None]`,
+is
+
+```python
+def print(
+    *values: object,
+    sep: str | None = " ",
+    end: str | None = "\n",
+    file: SupportsWrite[str] | None = None,
+    flush: Literal[False] = False
+)
+def print(
+    *values: object,
+    sep: str | None = " ",
+    end: str | None = "\n",
+    file: SupportsWriteAndFlush[str] | None = None,
+    flush: bool
+)
+```
+
+it is LSP's `MarkedString` in its `{ language, value }` form: `language` is
+`python`, which the value can be highlighted as, or `xml` for a special type
+such as `<special-form 'typing.Any'>`, which python highlighting renders poorly.
+a type short enough for one line is the same in both
 
 with a selection the first is the smallest expression containing it, which is
 the selected one when the selection is exactly an expression. the targets a
