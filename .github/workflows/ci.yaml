@@ -1388,7 +1388,12 @@ jobs:
     name: "prek"
     runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
     needs: determine_changes
-    timeout-minutes: 10
+    # the fork's `ubuntu-latest` runner took 6 to 8.5 minutes to run the hooks in october
+    # 2026, and two more runs were cancelled at the old 10-minute limit. the `ruff_dev`
+    # build takes about 1 minute of that with its dependencies restored and 3.5 without, so
+    # the cache saves about 2 minutes, which leaves the cancelled runs no known margin
+    # under 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1406,6 +1411,12 @@ jobs:
         with:
           path: ~/.cache/prek
           key: prek-${{ hashFiles('.pre-commit-config.yaml') }}
+      # the `generate-all` hook builds `ruff_dev`, the same build as `mkdocs`, so
+      # it restores that job's dependencies rather than keeping a cache of its own
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ruff-dev
+          save-if: false
       - name: "Run prek"
         run: |
           echo '```console' > "$GITHUB_STEP_SUMMARY"
@@ -1428,6 +1439,7 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: ruff-dev
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
         run: rustup show
