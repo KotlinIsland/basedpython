@@ -52,6 +52,7 @@ bitflags::bitflags! {
         const FOLDING_RANGE_KIND_ANNOTATION = 1 << 33;
         const COMPLETION_ITEM_ADJUST_INDENTATION = 1 << 34;
         const COMPLETION_INSERTS_AS_IS = 1 << 35;
+        const UNREACHABLE_WITHOUT_SEMANTIC_TOKENS = 1 << 36;
     }
 }
 
@@ -273,6 +274,18 @@ impl ResolvedClientCapabilities {
         self.contains(Self::LANGUAGE_INJECTION)
     }
 
+    /// Returns `true` if the client asks, with `experimental.unreachableWithoutSemanticTokens`,
+    /// for no semantic token inside code reported as unreachable.
+    ///
+    /// It has to ask, because what a token does to unreachable code depends on how the client
+    /// draws the `Unnecessary` tag. A client that greys the code with a colour of the same weight
+    /// as a token's, as `IntelliJ` does, has the token's colour win, so of `print(1)` only the
+    /// parentheses would be grey; without the tokens its own highlighting lies under the grey. A
+    /// client that fades the code instead, as VS Code does, wants the tokens under the fade.
+    pub(crate) const fn leaves_unreachable_code_without_semantic_tokens(self) -> bool {
+        self.contains(Self::UNREACHABLE_WITHOUT_SEMANTIC_TOKENS)
+    }
+
     /// returns `true` if the client folds whole lines only, as
     /// `textDocument.foldingRange.lineFoldingOnly` says
     pub(crate) const fn folds_whole_lines_only(self) -> bool {
@@ -410,6 +423,16 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::LANGUAGE_INJECTION;
+        }
+
+        if client_capabilities
+            .experimental
+            .as_ref()
+            .and_then(|experimental| experimental.get("unreachableWithoutSemanticTokens"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default()
+        {
+            flags |= Self::UNREACHABLE_WITHOUT_SEMANTIC_TOKENS;
         }
 
         if text_document

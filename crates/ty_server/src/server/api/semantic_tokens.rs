@@ -4,10 +4,11 @@ use ruff_source_file::OneIndexed;
 use ruff_text_size::{Ranged, TextRange};
 use ty_ide::{
     Fragments, SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens,
-    semantic_tokens,
+    semantic_tokens, unreachable_code_ranges,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
+use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{PositionEncoding, ToRangeExt};
 
 /// Common logic for generating semantic tokens, either for full document or a specific range.
@@ -20,16 +21,35 @@ pub(crate) fn generate_semantic_tokens(
     file: ruff_db::files::File,
     range: Option<TextRange>,
     encoding: PositionEncoding,
-    multiline_token_support: bool,
+    capabilities: ResolvedClientCapabilities,
     django_template: bool,
-    fragments: Fragments,
 ) -> Vec<SemanticToken> {
+    let multiline_token_support = capabilities.supports_multiline_semantic_tokens();
+    let fragments = if capabilities.supports_language_injection() {
+        Fragments::Injected
+    } else {
+        Fragments::Strings
+    };
+    let without_unreachable_code = capabilities.leaves_unreachable_code_without_semantic_tokens();
     let source = source_text(db, file);
     let line_index = line_index(db, file);
     let semantic_token_data = if django_template {
         django_template_semantic_tokens(db, file, range)
     } else {
         semantic_tokens(db, db.program_file(file), range, fragments)
+    };
+    // the very ranges the unreachable-code hints report, so that a token is left out exactly where
+    // the editor greys the code out
+    let unreachable = if without_unreachable_code && !django_template {
+        unreachable_code_ranges(db, file)
+    } else {
+        Vec::new()
+    };
+    let is_unreachable = |token: TextRange| {
+        let after = unreachable.partition_point(|range| range.start() <= token.start());
+        after
+            .checked_sub(1)
+            .is_some_and(|index| unreachable[index].contains_range(token))
     };
 
     let mut encoder = Encoder {
@@ -39,6 +59,9 @@ pub(crate) fn generate_semantic_tokens(
     };
 
     for token in &*semantic_token_data {
+        if is_unreachable(token.range()) {
+            continue;
+        }
         let Some(lsp_range) = token
             .range()
             .to_lsp_range(db, file, encoding)

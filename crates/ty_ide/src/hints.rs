@@ -78,3 +78,14 @@ pub fn hints(db: &dyn Db, file: File) -> Vec<Hint> {
 
     hints
 }
+
+/// The ranges [`hints`] reports as unreachable code, in source order: the ranges an editor greys
+/// out, which is why an editor that would draw a semantic token over the grey may ask for the
+/// tokens inside them to be left out.
+pub fn unreachable_code_ranges(db: &dyn Db, file: File) -> Vec<TextRange> {
+    hints(db, file)
+        .into_iter()
+        .filter(|hint| matches!(hint.kind, HintKind::UnreachableCode(_)))
+        .map(|hint| hint.range)
+        .collect()
+}

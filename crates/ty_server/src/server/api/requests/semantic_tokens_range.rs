@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 use lsp_types::{SemanticTokens, SemanticTokensRangeParams, Uri};
-use ty_ide::Fragments;
 use ty_project::ProjectDatabase;
 
 use crate::document::RangeExt;
@@ -54,18 +53,8 @@ impl BackgroundDocumentRequestHandler for SemanticTokensRangeRequestHandler {
             file,
             Some(requested_range),
             snapshot.encoding(),
-            snapshot
-                .resolved_client_capabilities()
-                .supports_multiline_semantic_tokens(),
+            snapshot.resolved_client_capabilities(),
             snapshot.is_django_template(),
-            if snapshot
-                .resolved_client_capabilities()
-                .supports_language_injection()
-            {
-                Fragments::Injected
-            } else {
-                Fragments::Strings
-            },
         );
 
         Ok(Some(SemanticTokens {

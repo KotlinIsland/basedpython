@@ -1780,6 +1780,23 @@ impl TestServerBuilder {
         self
     }
 
+    /// Ask, with `experimental.unreachableWithoutSemanticTokens`, for no semantic token inside
+    /// code reported as unreachable.
+    pub(crate) fn with_unreachable_without_semantic_tokens(mut self) -> Self {
+        let experimental = self
+            .client_capabilities
+            .experimental
+            .get_or_insert_with(|| serde_json::json!({}));
+        experimental
+            .as_object_mut()
+            .expect("experimental capabilities must be a JSON object")
+            .insert(
+                "unreachableWithoutSemanticTokens".to_string(),
+                serde_json::json!(true),
+            );
+        self
+    }
+
     /// Advertise support for the `ty.triggerParameterHints` completion command.
     pub(crate) fn with_trigger_parameter_hints_command(mut self) -> Self {
         let experimental = self
