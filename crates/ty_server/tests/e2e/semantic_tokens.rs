@@ -168,19 +168,34 @@ def f():
     print(1)
 ";
 
-/// the tokens of `UNREACHABLE` as `(line, character, text)`, from a full request or, given one, a
-/// request for `range`
+/// what a client asks for code reported as unreachable
+#[derive(Clone, Copy)]
+struct Asks {
+    without: bool,
+    modifier: bool,
+}
+
+const NOTHING: Asks = Asks {
+    without: false,
+    modifier: false,
+};
+
+/// the tokens of `UNREACHABLE` as `(line, character, text, unreachable)`, from a full request or,
+/// given one, a request for `range`
 fn unreachable_tokens(
-    without_unreachable: bool,
+    asks: Asks,
     range: Option<lsp_types::Range>,
-) -> Result<Vec<(u32, u32, String)>> {
+) -> Result<Vec<(u32, u32, String, bool)>> {
     let workspace_root = SystemPath::new("src");
     let path = SystemPath::new("src/foo.py");
     let mut builder = TestServerBuilder::new()?
         .with_workspace(workspace_root, None)?
         .with_file(path, UNREACHABLE)?;
-    if without_unreachable {
+    if asks.without {
         builder = builder.with_unreachable_without_semantic_tokens();
+    }
+    if asks.modifier {
+        builder = builder.with_unreachable_semantic_token_modifier();
     }
     let mut server = builder.build().wait_until_workspaces_are_initialized();
     server.open_text_document(path, UNREACHABLE, 1);
@@ -200,6 +215,10 @@ fn unreachable_tokens(
     .ok_or_else(|| anyhow::anyhow!("expected semantic tokens"))?
     .data;
 
+    let unreachable = 1
+        << ty_ide::SemanticTokenModifier::UNREACHABLE
+            .bits()
+            .trailing_zeros();
     let lines: Vec<&str> = UNREACHABLE.lines().collect();
     let (mut line, mut character) = (0, 0);
     Ok(tokens
@@ -212,21 +231,34 @@ fn unreachable_tokens(
                 character = token.delta_start;
             }
             let text = &lines[line as usize][character as usize..][..token.length as usize];
-            (line, character, text.to_string())
+            (
+                line,
+                character,
+                text.to_string(),
+                token.token_modifiers_bitset & unreachable != 0,
+            )
         })
         .collect())
 }
 
-fn token(line: u32, character: u32, text: &str) -> (u32, u32, String) {
-    (line, character, text.to_string())
+fn token(line: u32, character: u32, text: &str) -> (u32, u32, String, bool) {
+    (line, character, text.to_string(), false)
+}
+
+fn faded(line: u32, character: u32, text: &str) -> (u32, u32, String, bool) {
+    (line, character, text.to_string(), true)
 }
 
 /// an editor that greys unreachable code with a colour of its own can ask for no token inside
 /// it, so that the token's colour does not win over the grey
 #[test]
 fn unreachable_code_has_no_tokens_when_the_client_asks() -> Result<()> {
+    let asks = Asks {
+        without: true,
+        modifier: false,
+    };
     assert_eq!(
-        unreachable_tokens(true, None)?,
+        unreachable_tokens(asks, None)?,
         [token(0, 4, "f"), token(1, 4, "print"), token(1, 10, "exit")]
     );
     Ok(())
@@ -234,22 +266,83 @@ fn unreachable_code_has_no_tokens_when_the_client_asks() -> Result<()> {
 
 #[test]
 fn unreachable_code_has_no_tokens_in_a_range_when_the_client_asks() -> Result<()> {
+    let asks = Asks {
+        without: true,
+        modifier: false,
+    };
     let range = lsp_types::Range::new(
         lsp_types::Position::new(1, 0),
         lsp_types::Position::new(3, 12),
     );
     assert_eq!(
-        unreachable_tokens(true, Some(range))?,
+        unreachable_tokens(asks, Some(range))?,
         [token(1, 4, "print"), token(1, 10, "exit")]
     );
     Ok(())
 }
 
-/// an editor that fades unreachable code keeps its tokens under the fade
+/// an editor that fades unreachable code in its own colours asks for every character of it to
+/// carry a token that says so: the parentheses of the call `exit()` keeps from being made, and
+/// every token of the statements after it, `return` and the punctuation included
+#[test]
+fn every_character_of_unreachable_code_has_a_marked_token_when_the_client_asks() -> Result<()> {
+    let marked = [
+        token(0, 4, "f"),
+        token(1, 4, "print"),
+        faded(1, 9, "("),
+        token(1, 10, "exit"),
+        faded(1, 16, ")"),
+        faded(2, 4, "return"),
+        faded(3, 4, "print"),
+        faded(3, 9, "("),
+        faded(3, 10, "1"),
+        faded(3, 11, ")"),
+    ];
+    let asks = Asks {
+        without: false,
+        modifier: true,
+    };
+    assert_eq!(unreachable_tokens(asks, None)?, marked);
+    // asked for both, the marks win
+    let both = Asks {
+        without: true,
+        modifier: true,
+    };
+    assert_eq!(unreachable_tokens(both, None)?, marked);
+    Ok(())
+}
+
+#[test]
+fn unreachable_code_in_a_range_has_marked_tokens_when_the_client_asks() -> Result<()> {
+    let asks = Asks {
+        without: false,
+        modifier: true,
+    };
+    let range = lsp_types::Range::new(
+        lsp_types::Position::new(3, 0),
+        lsp_types::Position::new(3, 10),
+    );
+    assert_eq!(
+        unreachable_tokens(asks, Some(range))?,
+        [faded(3, 4, "print"), faded(3, 9, "(")]
+    );
+    // a token the range ends inside is answered whole, and is no less unreachable
+    let range = lsp_types::Range::new(
+        lsp_types::Position::new(3, 0),
+        lsp_types::Position::new(3, 6),
+    );
+    assert_eq!(
+        unreachable_tokens(asks, Some(range))?,
+        [faded(3, 4, "print")]
+    );
+    Ok(())
+}
+
+/// an editor that fades unreachable code over the tokens it already has asks for neither
 #[test]
 fn unreachable_code_keeps_its_tokens_otherwise() -> Result<()> {
     assert_eq!(
-        unreachable_tokens(false, None)?,
+        unreachable_tokens(NOTHING, None)?,
         [
             token(0, 4, "f"),
             token(1, 4, "print"),

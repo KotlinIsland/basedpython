@@ -102,7 +102,7 @@ pub use find_references::find_references;
 pub use folding_range::{FoldingRange, FoldingRangeKind, folding_ranges};
 pub use goto::{goto_declaration, goto_definition, goto_type_definition};
 pub use goto_implementation::goto_implementation;
-pub use hints::{Hint, HintKind, hints, unreachable_code_ranges};
+pub use hints::{Hint, HintKind, UnreachableCode, hints, unreachable_code};
 pub use hover::hover;
 pub use inherited_members::{ClassInheritedMembers, InheritedMember, document_inherited_members};
 pub use injection::{Injection, InjectionOrigin, Injections, injections};
@@ -140,7 +140,7 @@ pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, r
 pub use selection_range::selection_range;
 pub use semantic_tokens::{
     Fragments, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
-    semantic_tokens,
+    mark_unreachable_code, semantic_tokens,
 };
 pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, signature_help};
 pub use super_members::{OverridingMember, SuperMember, document_super_members, super_members};

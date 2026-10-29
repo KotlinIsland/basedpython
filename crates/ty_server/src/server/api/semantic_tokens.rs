@@ -3,8 +3,8 @@ use ruff_db::source::{line_index, source_text};
 use ruff_source_file::OneIndexed;
 use ruff_text_size::{Ranged, TextRange};
 use ty_ide::{
-    Fragments, SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens,
-    semantic_tokens, unreachable_code_ranges,
+    Fragments, SemanticTokenModifier, SemanticTokenType, UnreachableCode,
+    django_template_semantic_tokens, mark_unreachable_code, semantic_tokens, unreachable_code,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
@@ -38,18 +38,20 @@ pub(crate) fn generate_semantic_tokens(
     } else {
         semantic_tokens(db, db.program_file(file), range, fragments)
     };
+    let marked;
+    let semantic_token_data: &[ty_ide::SemanticToken] =
+        if capabilities.marks_unreachable_semantic_tokens() && !django_template {
+            marked = mark_unreachable_code(db, file, &semantic_token_data, range);
+            &marked
+        } else {
+            &semantic_token_data
+        };
     // the very ranges the unreachable-code hints report, so that a token is left out exactly where
     // the editor greys the code out
     let unreachable = if without_unreachable_code && !django_template {
-        unreachable_code_ranges(db, file)
+        unreachable_code(db, file)
     } else {
-        Vec::new()
-    };
-    let is_unreachable = |token: TextRange| {
-        let after = unreachable.partition_point(|range| range.start() <= token.start());
-        after
-            .checked_sub(1)
-            .is_some_and(|index| unreachable[index].contains_range(token))
+        UnreachableCode::default()
     };
 
     let mut encoder = Encoder {
@@ -58,8 +60,8 @@ pub(crate) fn generate_semantic_tokens(
         prev_start: 0,
     };
 
-    for token in &*semantic_token_data {
-        if is_unreachable(token.range()) {
+    for token in semantic_token_data {
+        if unreachable.contains(token.range()) {
             continue;
         }
         let Some(lsp_range) = token

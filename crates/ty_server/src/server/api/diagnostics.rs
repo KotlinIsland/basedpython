@@ -473,7 +473,10 @@ fn unnecessary_hint_to_lsp_diagnostic(
         Diagnostic {
             range: range.local_range(),
             severity: Some(DiagnosticSeverity::Hint),
-            code: None,
+            code: hint
+                .kind
+                .code()
+                .map(|code| lsp_types::Code::String(code.to_owned())),
             code_description: None,
             source: Some(DIAGNOSTIC_NAME.into()),
             message: Message::String(hint.message()),

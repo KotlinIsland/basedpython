@@ -53,6 +53,7 @@ bitflags::bitflags! {
         const COMPLETION_ITEM_ADJUST_INDENTATION = 1 << 34;
         const COMPLETION_INSERTS_AS_IS = 1 << 35;
         const UNREACHABLE_WITHOUT_SEMANTIC_TOKENS = 1 << 36;
+        const UNREACHABLE_SEMANTIC_TOKEN_MODIFIER = 1 << 37;
     }
 }
 
@@ -274,16 +275,26 @@ impl ResolvedClientCapabilities {
         self.contains(Self::LANGUAGE_INJECTION)
     }
 
-    /// Returns `true` if the client asks, with `experimental.unreachableWithoutSemanticTokens`,
-    /// for no semantic token inside code reported as unreachable.
+    /// returns `true` if the client asks, with `experimental.unreachableWithoutSemanticTokens`,
+    /// for no semantic token inside code reported as unreachable
     ///
-    /// It has to ask, because what a token does to unreachable code depends on how the client
-    /// draws the `Unnecessary` tag. A client that greys the code with a colour of the same weight
+    /// it has to ask, because what a token does to unreachable code depends on how the client
+    /// draws the `Unnecessary` tag. a client that greys the code with a colour of the same weight
     /// as a token's, as `IntelliJ` does, has the token's colour win, so of `print(1)` only the
-    /// parentheses would be grey; without the tokens its own highlighting lies under the grey. A
-    /// client that fades the code instead, as VS Code does, wants the tokens under the fade.
+    /// parentheses would be grey; without the tokens its own highlighting lies under the grey. a
+    /// client that fades the code instead, as VS Code does, wants the tokens under the fade
     pub(crate) const fn leaves_unreachable_code_without_semantic_tokens(self) -> bool {
         self.contains(Self::UNREACHABLE_WITHOUT_SEMANTIC_TOKENS)
+            && !self.marks_unreachable_semantic_tokens()
+    }
+
+    /// returns `true` if the client asks, with `experimental.unreachableSemanticTokenModifier`,
+    /// for every token inside code reported as unreachable to carry the `unreachable` modifier,
+    /// and for a token on every part of that code that has none — `return`, `(`, `,` — so that
+    /// it can fade all of it in its own colours. a client that asks for both this and
+    /// `unreachableWithoutSemanticTokens` gets this
+    pub(crate) const fn marks_unreachable_semantic_tokens(self) -> bool {
+        self.contains(Self::UNREACHABLE_SEMANTIC_TOKEN_MODIFIER)
     }
 
     /// returns `true` if the client folds whole lines only, as
@@ -433,6 +444,16 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::UNREACHABLE_WITHOUT_SEMANTIC_TOKENS;
+        }
+
+        if client_capabilities
+            .experimental
+            .as_ref()
+            .and_then(|experimental| experimental.get("unreachableSemanticTokenModifier"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default()
+        {
+            flags |= Self::UNREACHABLE_SEMANTIC_TOKEN_MODIFIER;
         }
 
         if text_document

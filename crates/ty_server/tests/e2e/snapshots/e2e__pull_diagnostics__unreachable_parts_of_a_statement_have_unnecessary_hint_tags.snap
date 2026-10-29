@@ -17,6 +17,7 @@ expression: diagnostics
         }
       },
       "severity": 4,
+      "code": "unreachable-code",
       "source": "ty",
       "message": "Code is always unreachable",
       "tags": [
@@ -35,6 +36,7 @@ expression: diagnostics
         }
       },
       "severity": 4,
+      "code": "unreachable-code",
       "source": "ty",
       "message": "Code is always unreachable",
       "tags": [
@@ -53,6 +55,7 @@ expression: diagnostics
         }
       },
       "severity": 4,
+      "code": "unreachable-code",
       "source": "ty",
       "message": "Code is always unreachable",
       "tags": [
@@ -71,6 +74,7 @@ expression: diagnostics
         }
       },
       "severity": 4,
+      "code": "unreachable-code",
       "source": "ty",
       "message": "Code is always unreachable",
       "tags": [

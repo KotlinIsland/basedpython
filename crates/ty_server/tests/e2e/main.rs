@@ -1780,8 +1780,8 @@ impl TestServerBuilder {
         self
     }
 
-    /// Ask, with `experimental.unreachableWithoutSemanticTokens`, for no semantic token inside
-    /// code reported as unreachable.
+    /// ask, with `experimental.unreachableWithoutSemanticTokens`, for no semantic token inside
+    /// code reported as unreachable
     pub(crate) fn with_unreachable_without_semantic_tokens(mut self) -> Self {
         let experimental = self
             .client_capabilities
@@ -1792,6 +1792,23 @@ impl TestServerBuilder {
             .expect("experimental capabilities must be a JSON object")
             .insert(
                 "unreachableWithoutSemanticTokens".to_string(),
+                serde_json::json!(true),
+            );
+        self
+    }
+
+    /// ask, with `experimental.unreachableSemanticTokenModifier`, for every semantic token inside
+    /// code reported as unreachable to carry the `unreachable` modifier
+    pub(crate) fn with_unreachable_semantic_token_modifier(mut self) -> Self {
+        let experimental = self
+            .client_capabilities
+            .experimental
+            .get_or_insert_with(|| serde_json::json!({}));
+        experimental
+            .as_object_mut()
+            .expect("experimental capabilities must be a JSON object")
+            .insert(
+                "unreachableSemanticTokenModifier".to_string(),
                 serde_json::json!(true),
             );
         self
