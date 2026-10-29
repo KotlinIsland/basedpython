@@ -1,3 +1,4 @@
+pub mod columns;
 pub mod config;
 mod reverse_transforms;
 pub mod runtime;
@@ -22,6 +23,8 @@ pub mod entry_point {
     };
 }
 
+use columns::Columns;
+use source_map::Replacement;
 use transforms::quotes::WrittenQuotes;
 use transforms::repeated_underscore::{CodeNames, PrivateNames, SynthesizedClasses};
 
@@ -127,10 +130,10 @@ fn run_context_sensitive_phase<'a>(
     source: &'a str,
     db: &dyn ty_python_semantic::Db,
     file: File,
-) -> std::borrow::Cow<'a, str> {
+) -> (std::borrow::Cow<'a, str>, Option<Columns>) {
     let parsed = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     if !parsed.errors().is_empty() {
-        return std::borrow::Cow::Borrowed(source);
+        return (std::borrow::Cow::Borrowed(source), None);
     }
     let model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     model.infer_in_check_order();
@@ -150,15 +153,15 @@ fn run_erased_union_phase<'a>(
     db: &dyn ty_python_semantic::Db,
     file: File,
     config: &Config,
-) -> std::borrow::Cow<'a, str> {
+) -> (std::borrow::Cow<'a, str>, Option<Columns>) {
     // the reified parameter carries a call's specialization into the body, and a
     // stub has no body to carry it to. its declaration keeps the union written
     if config.is_stub {
-        return std::borrow::Cow::Borrowed(source);
+        return (std::borrow::Cow::Borrowed(source), None);
     }
     let parsed = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     if !parsed.errors().is_empty() {
-        return std::borrow::Cow::Borrowed(source);
+        return (std::borrow::Cow::Borrowed(source), None);
     }
     let model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     model.infer_in_check_order();
@@ -220,7 +223,7 @@ fn transpile_with_report(
 
     // --- Erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, while the source is still the one ty checks ---
-    let reified = run_erased_union_phase(source, &local_db, local_file, config);
+    let (reified, _) = run_erased_union_phase(source, &local_db, local_file, config);
     let reified_changed = matches!(reified, std::borrow::Cow::Owned(_));
     let source = reified.as_ref();
 
@@ -235,7 +238,7 @@ fn transpile_with_report(
     // --- Context-sensitive resolution: qualify names resolved against their
     // expected type (`a: Color = Red` → `Color.Red`) while the source is still
     // the one ty checks ---
-    let qualified = run_context_sensitive_phase(source, qualify_db, qualify_file);
+    let (qualified, _) = run_context_sensitive_phase(source, qualify_db, qualify_file);
     let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
     let source = qualified.as_ref();
 
@@ -263,7 +266,7 @@ fn transpile_with_report(
     let unchanged = !reified_changed
         && !qualified_changed
         && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
-    let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
+    let (source, ast_errors, _phase0_map, _) = transforms::ast_driver::run_against_source(
         source,
         written_names,
         &quotes,
@@ -295,22 +298,23 @@ fn transpile_with_report(
     if let Some(err) = module.errors().iter().find(|e| e.is_basedpython_only()) {
         return Err(err.to_string());
     }
-    let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
+    let LoweringResult { output, errors, .. } = run_lowering_phase(src, module.suite(), config);
     if let Some(first) = errors.first() {
         return Err(first.clone());
     }
 
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
-    let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
-    let final_output = run_lazy_import_phase(
+    let (final_output, _, requirements) = run_import_redirect_phase(output, config);
+    let (final_output, _) =
+        run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
+    let (final_output, _) = run_lazy_import_phase(
         final_output,
         config,
         &model.eagerly_imported_modules(),
         &model.eagerly_imported_names(),
         &quotes.texts(),
     )?;
-    let final_output = run_version_polyfill_phase(final_output, config);
+    let (final_output, _) = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
     verify_syntax(&final_output, &author).map_err(|e| e.message)?;
@@ -353,7 +357,7 @@ pub(crate) fn transpile_typed_with_map(
     rebuild: Option<RebuildProject<'_>>,
 ) -> Result<(String, Vec<Option<u32>>), TranspileError> {
     transpile_typed_with_report(db, file, config, rebuild)
-        .map(|(output, line_map, _)| (output, line_map))
+        .map(|(output, line_map, _, _)| (output, line_map))
 }
 
 /// What the emitted python needs at run time that the standard library does not
@@ -399,14 +403,19 @@ impl RuntimeRequirements {
     }
 }
 
+/// the python a transpile wrote; for each of its lines the `.by` line it came from; for each of
+/// its lines which columns are the `.by`'s text, and where in the `.by` that text is; and what the
+/// python needs installed to run
+pub type TranspileReport = (String, Vec<Option<u32>>, Columns, RuntimeRequirements);
+
 /// Like `transpile_typed_with_map`, and also reports what the emitted python
-/// needs installed to run.
+/// needs installed to run, and which columns of it are the `.by`'s text.
 pub fn transpile_typed_with_report(
     db: &dyn ty_python_semantic::Db,
     file: File,
     config: &Config,
     rebuild: Option<RebuildProject<'_>>,
-) -> Result<(String, Vec<Option<u32>>, RuntimeRequirements), TranspileError> {
+) -> Result<TranspileReport, TranspileError> {
     // whether the output is a stub is a fact about the file rather than about
     // the command that asked for it. `by build` hands every source it stages
     // the one config, so a flag each caller had to set would go unset there
@@ -421,6 +430,7 @@ pub fn transpile_typed_with_report(
         return Ok((
             out,
             source_map::line_table(original_source, &[]),
+            columns::identity(original_source),
             RuntimeRequirements::default(),
         ));
     }
@@ -441,7 +451,7 @@ pub fn transpile_typed_with_report(
     // erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, against the source ty checks. edits stay inside
     // the def header and the annotations, so line correspondence is unaffected
-    let reified = run_erased_union_phase(original_source, db, file, config);
+    let (reified, reified_columns) = run_erased_union_phase(original_source, db, file, config);
     let reified_changed = matches!(reified, std::borrow::Cow::Owned(_));
 
     // that rewrite edits signatures, so qualification needs a db over what it
@@ -460,7 +470,8 @@ pub fn transpile_typed_with_report(
     // type (`a: Color = Red` → `Color.Red`) against the source ty checks, before
     // the enum lowering rewrites it. a within-line rewrite, so line
     // correspondence is unaffected
-    let qualified = run_context_sensitive_phase(reified.as_ref(), qualify_db, qualify_file);
+    let (qualified, qualified_columns) =
+        run_context_sensitive_phase(reified.as_ref(), qualify_db, qualify_file);
     let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
 
     // enum lowering: rewrite `enum` sum types to Python first. when it fires,
@@ -516,18 +527,19 @@ pub fn transpile_typed_with_report(
     let eager_model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
     let eager_names = eager_model.eagerly_imported_names();
-    let (spliced, ast_errors, phase0_map) = transforms::ast_driver::run_against_source(
-        working_source,
-        written_names,
-        &quotes,
-        config,
-        project,
-    );
+    let (spliced, ast_errors, phase0_map, phase0_columns) =
+        transforms::ast_driver::run_against_source(
+            working_source,
+            written_names,
+            &quotes,
+            config,
+            project,
+        );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
     let spliced_lines = line_count(spliced.as_ref());
-    let (output, errors) = if let std::borrow::Cow::Owned(modified) = spliced {
+    let (output, errors, lowering_columns) = if let std::borrow::Cow::Owned(modified) = spliced {
         let (local_db, local_file) = make_in_memory_db(&modified);
         let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
         let src = local_source_ref.as_str();
@@ -536,8 +548,12 @@ pub fn transpile_typed_with_report(
             ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
         )
         .load(&local_db);
-        let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
-        (output, errors)
+        let LoweringResult {
+            output,
+            errors,
+            columns,
+        } = run_lowering_phase(src, module.suite(), config);
+        (output, errors, columns)
     } else if source_changed {
         // ast_driver made no further changes, but the working source differs
         // from the project file — parse it in a single-file db
@@ -549,29 +565,63 @@ pub fn transpile_typed_with_report(
             ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
         )
         .load(&local_db);
-        let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
-        (output, errors)
+        let LoweringResult {
+            output,
+            errors,
+            columns,
+        } = run_lowering_phase(src, module.suite(), config);
+        (output, errors, columns)
     } else {
         let module =
             ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
-        let LoweringResult { output, errors } =
-            run_lowering_phase(original_source, module.suite(), config);
-        (output, errors)
+        let LoweringResult {
+            output,
+            errors,
+            columns,
+        } = run_lowering_phase(original_source, module.suite(), config);
+        (output, errors, columns)
     };
     if let Some(first) = errors.first() {
         return Err(first.clone().into());
     }
 
-    let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
-    let final_output = run_lazy_import_phase(
+    let (final_output, redirect_columns, requirements) = run_import_redirect_phase(output, config);
+    let (final_output, cleanup_columns) =
+        run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
+    let (final_output, lazy_columns) = run_lazy_import_phase(
         final_output,
         config,
         &eager_imports,
         &eager_names,
         &quotes.texts(),
     )?;
-    let final_output = run_version_polyfill_phase(final_output, config);
+    let (final_output, polyfill_columns) = run_version_polyfill_phase(final_output, config);
+
+    // the output's columns against the `.by`: each step's against its input, composed from the
+    // last step back to the first, then checked against the `.by` itself
+    let working_columns = [
+        enum_lowered.columns.as_ref(),
+        qualified_columns.as_ref(),
+        reified_columns.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(phase0_columns, |columns, inner| {
+        columns::compose(&columns, inner)
+    });
+    let output_columns = [
+        &polyfill_columns,
+        &lazy_columns,
+        &cleanup_columns,
+        &redirect_columns,
+        &lowering_columns,
+    ]
+    .into_iter()
+    .rev()
+    .fold(working_columns, |inner, outer| {
+        columns::compose(outer, &inner)
+    });
+    let output_columns = columns::verified(output_columns, &final_output, original_source);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
     // the spliced body keeps its line correspondence: prepend one `None` per
@@ -623,7 +673,7 @@ pub fn transpile_typed_with_report(
         return Err(err);
     }
 
-    Ok((final_output, line_map, requirements))
+    Ok((final_output, line_map, output_columns, requirements))
 }
 
 fn newline_count(s: &str) -> usize {
@@ -648,14 +698,18 @@ fn run_anon_named_tuple_cleanup(
     written: WrittenNames,
     quotes: &WrittenQuotes,
     config: &Config,
-) -> Result<String, String> {
+) -> Result<(String, Columns), String> {
+    let mut described = columns::identity(&source);
     for _ in 0..4 {
         match run_cleanup_round(&source, written, quotes, config)? {
-            CleanupRound::Skipped | CleanupRound::Unchanged => return Ok(source),
-            CleanupRound::Lowered(lowered) => source = lowered,
+            CleanupRound::Skipped | CleanupRound::Unchanged => return Ok((source, described)),
+            CleanupRound::Lowered(lowered, columns) => {
+                described = columns::compose(&columns, &described);
+                source = lowered;
+            }
         }
     }
-    Ok(source)
+    Ok((source, described))
 }
 
 /// what one round of [`run_anon_named_tuple_cleanup`] did
@@ -666,8 +720,9 @@ enum CleanupRound {
     Skipped,
     /// the output was analysed and nothing in it needed lowering
     Unchanged,
-    /// the output with what was left lowered, which the next round reads again
-    Lowered(String),
+    /// the output with what was left lowered, which the next round reads again, and its
+    /// columns against the round's input
+    Lowered(String, Columns),
 }
 
 /// one round of [`run_anon_named_tuple_cleanup`] over `source`
@@ -789,12 +844,14 @@ fn run_cleanup_round(
         );
     }
 
-    let (body, _) = apply_transforms_once(src, edits);
-    Ok(CleanupRound::Lowered(if preamble.is_empty() {
-        body
+    let (body, applied) = apply_transforms_once(src, edits);
+    let columns = applied_columns(src, &body, &applied, &HashSet::new());
+    Ok(if preamble.is_empty() {
+        CleanupRound::Lowered(body, columns)
     } else {
-        splice_preamble(&body, &preamble)
-    }))
+        let (spliced, spliced_columns) = splice_preamble_described(&body, &preamble);
+        CleanupRound::Lowered(spliced, columns::compose(&spliced_columns, &columns))
+    })
 }
 
 /// basedpython-only syntax [`run_anon_named_tuple_cleanup`] lowers when an earlier pass left it
@@ -854,7 +911,10 @@ impl SurfaceSyntax {
 
 /// Rewrite stdlib imports to `typing_extensions` where the imported name is
 /// not yet available at the configured min version
-fn run_import_redirect_phase(source: String, config: &Config) -> (String, RuntimeRequirements) {
+fn run_import_redirect_phase(
+    source: String,
+    config: &Config,
+) -> (String, Columns, RuntimeRequirements) {
     let (db, file) = make_in_memory_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
@@ -870,12 +930,15 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
     }
 
     if typing_redirect.edits.is_empty() {
-        return (source, RuntimeRequirements::default());
+        let columns = columns::identity(&source);
+        return (source, columns, RuntimeRequirements::default());
     }
 
-    let (output, _) = apply_transforms_once(src, typing_redirect.edits);
+    let (output, applied) = apply_transforms_once(src, typing_redirect.edits);
+    let columns = applied_columns(src, &output, &applied, &HashSet::new());
     (
         output,
+        columns,
         RuntimeRequirements {
             // a stub is never imported, and the checker that reads it brings
             // its own `typing_extensions`
@@ -914,9 +977,10 @@ fn run_lazy_import_phase(
     eager: &[String],
     eager_names: &[String],
     quotes: &[String],
-) -> Result<String, String> {
+) -> Result<(String, Columns), String> {
     if !config.lazy_imports {
-        return Ok(source);
+        let columns = columns::identity(&source);
+        return Ok((source, columns));
     }
 
     let (db, file) = make_in_memory_python_db(&source);
@@ -976,12 +1040,21 @@ fn run_lazy_import_phase(
         lazy.visit_stmt(stmt);
     }
     let mut edits = std::mem::take(&mut lazy.edits);
+    // a read of a deferred name is the name read through the holder: `Point` is
+    // `_by_lazy.Point`. where the read spells the name it binds, which it does unless the
+    // module reads it some other way, the holder goes in front of the name the author wrote,
+    // as a qualifier that keeps the read theirs
+    let mut qualifiers: HashSet<Edit> = HashSet::new();
     for (alias, bound) in &lazy.deferred {
         for read in deferrable.get(alias).into_iter().flatten() {
-            edits.push(Fix::safe_edit(Edit::range_replacement(
-                format!("{holder}.{bound}"),
-                *read,
-            )));
+            let edit = if &src[*read] == bound.as_str() {
+                let qualifier = Edit::insertion(format!("{holder}."), read.start());
+                qualifiers.insert(qualifier.clone());
+                qualifier
+            } else {
+                Edit::range_replacement(format!("{holder}.{bound}"), *read)
+            };
+            edits.push(Fix::safe_edit(edit));
         }
     }
     let deferred_names: Vec<String> = lazy
@@ -997,15 +1070,20 @@ fn run_lazy_import_phase(
         lazy.needs_character_class,
     );
     if edits.is_empty() && helpers.is_empty() {
-        return Ok(source);
+        let columns = columns::identity(&source);
+        return Ok((source, columns));
     }
 
-    let (mut body, _) = apply_transforms_once(src, edits);
+    let (mut body, applied) = apply_transforms_once(src, edits);
+    let mut described = applied_columns(src, &body, &applied, &qualifiers);
     // a builtin the module binds for itself is read under a name of the lowering's own, which
     // is imported ahead of everything
     let builtins = written.builtin_imports(&body, config.min_version.minor);
     if !builtins.is_empty() {
-        body = splice_preamble(&body, &format!("{}\n", builtins.join("\n")));
+        let (spliced, columns) =
+            splice_preamble_described(&body, &format!("{}\n", builtins.join("\n")));
+        described = columns::compose(&columns, &described);
+        body = spliced;
     }
     // phase 0 already gave the module the helpers *it* needed. where that was an import of the
     // runtime written beside it, the helpers this phase needs belong on that same line rather
@@ -1014,18 +1092,26 @@ fn run_lazy_import_phase(
         && !helpers.is_empty()
     {
         let line = runtime::import_line(module, helpers.iter().copied());
+        let before = body.clone();
         let left_over = transforms::ast_driver::merge_into_own_imports(&mut body, vec![line]);
+        if before != body {
+            described = columns::compose(&columns::equal_lines(&before, &body), &described);
+        }
         if let Some(line) = left_over.first() {
-            body = splice_preamble(&body, &format!("{line}\n"));
+            let (spliced, columns) = splice_preamble_described(&body, &format!("{line}\n"));
+            described = columns::compose(&columns, &described);
+            body = spliced;
         }
     } else {
         let preamble = runtime_preamble(config, &helpers, &body);
         if !preamble.is_empty() {
-            body = splice_preamble(&body, &preamble);
+            let (spliced, columns) = splice_preamble_described(&body, &preamble);
+            described = columns::compose(&columns, &described);
+            body = spliced;
         }
     }
     if deferred_names.is_empty() {
-        return Ok(body);
+        return Ok((body, described));
     }
     let globals = written.builtin("globals");
     let lines = transforms::lazy_import::holder_lines(&holder, &deferred_names, &globals);
@@ -1035,13 +1121,14 @@ fn run_lazy_import_phase(
         block.push('\n');
     }
     block.push_str(&lines);
-    insert_after_binding(&body, runtime::LAZY_FROM.name(), &block)
+    let (inserted, columns) = insert_after_binding(&body, runtime::LAZY_FROM.name(), &block)?;
+    Ok((inserted, columns::compose(&columns, &described)))
 }
 
 /// `text` inserted on the line after the top-level statement of `module` that binds `name`,
 /// a runtime helper the preamble provides. a module that does not bind it was not given it,
 /// and the lines that need it have nowhere to go
-fn insert_after_binding(module: &str, name: &str, text: &str) -> Result<String, String> {
+fn insert_after_binding(module: &str, name: &str, text: &str) -> Result<(String, Columns), String> {
     let parsed =
         ruff_python_parser::parse_unchecked_source(module, ruff_python_ast::PySourceType::Python);
     let Some(statement) = parsed
@@ -1062,10 +1149,13 @@ fn insert_after_binding(module: &str, name: &str, text: &str) -> Result<String, 
     } else {
         ""
     };
-    Ok(format!(
-        "{}{separator}{text}{}",
-        &module[..at],
-        &module[at..]
+    Ok(columns::edited(
+        module,
+        &[(
+            at,
+            at,
+            Replacement::generated(&format!("{separator}{text}"), at),
+        )],
     ))
 }
 
@@ -1115,9 +1205,14 @@ fn runtime_entries(config: &Config, helpers: &[runtime::Helper], module: &str) -
 /// headers in place and pad them back to their original height, so the only
 /// lines they add are the runtime preamble's, at the top, where the line map
 /// already accounts for generated leading lines.
-fn run_version_polyfill_phase(source: String, config: &Config) -> String {
+fn run_version_polyfill_phase(source: String, config: &Config) -> (String, Columns) {
+    let before = source.clone();
     let source = transforms::match_polyfill::lower(source, config);
-    transforms::except_polyfill::lower(source, config)
+    let output = transforms::except_polyfill::lower(source, config);
+    // the polyfills rewrite headers in place and keep every line where it was, so a line they
+    // did not touch is the line it was
+    let columns = columns::equal_lines(&before, &output);
+    (output, columns)
 }
 
 /// Re-parse the transpiled output *as the target python version* and report any
@@ -1197,10 +1292,47 @@ fn verify_destructuring_target(source: &str, config: &Config) -> Result<(), Tran
 
 /// Splice `preamble` into `body` where generated lines belong: after the module
 /// docstring and any `from __future__ import`, each of which is only valid
-/// where it already is.
-fn splice_preamble(body: &str, preamble: &str) -> String {
+/// where it already is. the columns are the result's against `body`
+fn splice_preamble_described(body: &str, preamble: &str) -> (String, Columns) {
     let at = transforms::source_util::preamble_offset(body);
-    format!("{}{preamble}{}", &body[..at], &body[at..])
+    columns::edited(body, &[(at, at, Replacement::generated(preamble, at))])
+}
+
+/// the columns of `output`, what [`apply_transforms_once`] made of `source` with the `applied`
+/// edits it answered, against `source`. an insertion in `qualifiers` is a qualifier written in
+/// front of the author's name, and every other edit the transpiler's
+///
+/// the edits are the ones the text was made with, in the order they were made, so describing
+/// them writes the same text; were it ever not, the lines that differ would be described as the
+/// transpiler's rather than the description trusted
+fn applied_columns(
+    source: &str,
+    output: &str,
+    applied: &[Edit],
+    qualifiers: &HashSet<Edit>,
+) -> Columns {
+    let edits: Vec<(usize, usize, Replacement)> = applied
+        .iter()
+        .map(|edit| {
+            let (start, end) = (usize::from(edit.start()), usize::from(edit.end()));
+            let content = edit.content().unwrap_or_default();
+            let mut replacement = Replacement::default();
+            if qualifiers.contains(edit) {
+                replacement.push_qualifier(content, start);
+            } else {
+                replacement.push_generated(content, start);
+            }
+            (start, end, replacement)
+        })
+        .collect();
+    let ascending = edits.windows(2).all(|pair| pair[0].1 <= pair[1].0);
+    if ascending {
+        let (described, columns) = columns::edited(source, &edits);
+        if described == output {
+            return columns;
+        }
+    }
+    columns::equal_lines(source, output)
 }
 
 /// Re-parse the transpiled source as **python** (`.py`) and surface any parse
@@ -1663,6 +1795,8 @@ fn output_offset_to_by_range(
 
 /// Result of phase 1 (basedpython lowering)
 struct LoweringResult {
+    /// the output's columns against the source the phase was given
+    columns: Columns,
     /// The full transformed source: preamble + body
     output: String,
     /// Hard transpile errors collected from individual transforms — abort the
@@ -1675,11 +1809,13 @@ struct LoweringResult {
 /// `inject_future_annotations` is set (off by default — forward references
 /// are quoted surgically by `auto_quote` instead)
 fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> LoweringResult {
+    let whole = source;
     let mut output = String::new();
     // a BOM stays at offset 0 — moved off it by the preamble it is no longer a
     // BOM, just a character python refuses to tokenize
     let (bom, source) = source.split_at(usize::from(source.bom_start_offset()));
     output.push_str(bom);
+    let mut columns = None;
     if writes_future_annotations(stmts, config) {
         // a string is the module's `__doc__` only while it is the first statement,
         // so the import goes after it rather than over it — a module whose
@@ -1690,11 +1826,24 @@ fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> Lowering
         output.push_str(&source[..at]);
         output.push_str("from __future__ import annotations\n");
         output.push_str(&source[at..]);
+        let at = bom.len() + at;
+        columns = Some(
+            columns::edited(
+                whole,
+                &[(
+                    at,
+                    at,
+                    Replacement::generated("from __future__ import annotations\n", at),
+                )],
+            )
+            .1,
+        );
     } else {
         output.push_str(source);
     }
 
     LoweringResult {
+        columns: columns.unwrap_or_else(|| columns::identity(whole)),
         output,
         errors: Vec::new(),
     }
@@ -3998,7 +4147,8 @@ mod leftover_surface_syntax {
 
     #[test]
     fn a_round_over_a_leftover_lowers_it() {
-        let CleanupRound::Lowered(lowered) = round("def f(p: (a: int)) -> int:\n    return p.a\n")
+        let CleanupRound::Lowered(lowered, _) =
+            round("def f(p: (a: int)) -> int:\n    return p.a\n")
         else {
             panic!("the leftover anonymous named tuple was not lowered");
         };

@@ -2889,7 +2889,7 @@ import types
 import warnings
 
 from _by_project import CARRIED, ROOT
-from _by_sourcemap import DIGESTS, SOURCEMAP
+from _by_sourcemap import COLUMNS, DIGESTS, SOURCEMAP
 
 # index the sourcemap by realpath so symlinked temp dirs (e.g. /tmp on macOS)
 # still match the filenames python reports in frames. the key the entry was
@@ -2931,6 +2931,9 @@ _CARRIED = {
 # once no matter how many frames it contributes
 _CURRENT = set()
 _STALE = set()
+# what `_by_lines` answered for each current entry, by its key: the widths it read are those
+# of the two files the digests matched, which a location asks about again and again
+_LINES = {}
 
 
 def _digest_matches(path, spec):
@@ -3138,24 +3141,32 @@ def _svarint(out, value):
     _varint(out, (-value << 1) | 1 if value < 0 else value << 1)
 
 
-def _relined(code, filename, by_line, width):
+def _relined(code, filename, by_line, width, by_span=None):
     """`code` and every code object it holds, named `filename`, with each location
-    moved to the line `by_line` gives, spanning the whole of that line."""
-    relined = _relined_one(code, filename, by_line, width)
+    moved to the line `by_line` gives.
+
+    With `by_span`, a location whose text is the author's — copied from the `.by`, with
+    at most a qualifier the transpiler wrote in front of a name — is that text's in the
+    `.by`, columns and all, and any other is at its `.by` line with no columns: the
+    transpiler wrote it. Without, every location spans the whole of its line."""
+    relined = _relined_one(code, filename, by_line, width, by_span)
     if _TRANSPILER_WRITTEN is not None and relined.co_firstlineno == 0:
         # line 0 says only that the transpiler wrote it; a profile needs to know what
         _TRANSPILER_WRITTEN[id(relined)] = (relined, code.co_filename, code.co_firstlineno)
     return relined
 
 
-def _relined_one(code, filename, by_line, width):
+def _relined_one(code, filename, by_line, width, by_span):
     """`_relined`, for `code` itself.
 
     The line table's format is private to each python version: see `Objects/locations.md`
-    (3.11 on) and `Objects/lnotab_notes.txt` (3.10, and 3.9 before it) in cpython.
+    (3.11 on) and `Objects/lnotab_notes.txt` (3.10, and 3.9 before it) in cpython. Only
+    3.11 on has columns.
     """
     consts = tuple(
-        _relined(const, filename, by_line, width) if isinstance(const, types.CodeType) else const
+        _relined(const, filename, by_line, width, by_span)
+        if isinstance(const, types.CodeType)
+        else const
         for const in code.co_consts
     )
     # a module's code starts at its first line whatever is written there, as python's
@@ -3164,24 +3175,38 @@ def _relined_one(code, filename, by_line, width):
     first = 1 if code.co_name == "<module>" else by_line(code.co_firstlineno)
     table = bytearray()
     if sys.version_info >= (3, 11):
-        # an entry for each run of up to 8 code units at one line, in the long form,
-        # which holds any line and column, or the form for no location
-        lines = [None if line is None else by_line(line) for line, *_ in code.co_positions()]
+        # an entry for each run of up to 8 code units at one location, in the long form,
+        # which holds any line and column (a column of 0 is none), or the form for no
+        # location
+        def located(position):
+            line, end_line, column, end_column = position
+            if line is None:
+                return None
+            if by_span is None:
+                at = by_line(line)
+                return at, at, 0, width(at)
+            span = by_span(line, end_line, column, end_column)
+            if span is not None:
+                return span
+            return by_line(line), by_line(line), None, None
+
+        locations = [located(position) for position in code.co_positions()]
         previous = first
         start = 0
-        while start < len(lines):
-            line = lines[start]
+        while start < len(locations):
+            location = locations[start]
             end = start + 1
-            while end < len(lines) and end - start < 8 and lines[end] == line:
+            while end < len(locations) and end - start < 8 and locations[end] == location:
                 end += 1
-            if line is None:
+            if location is None:
                 table.append(0x80 | (15 << 3) | (end - start - 1))
             else:
+                line, end_line, column, end_column = location
                 table.append(0x80 | (14 << 3) | (end - start - 1))
                 _svarint(table, line - previous)
-                _varint(table, 0)
-                _varint(table, 1)
-                _varint(table, width(line) + 1)
+                _varint(table, end_line - line)
+                _varint(table, 0 if column is None else column + 1)
+                _varint(table, 0 if end_column is None else end_column + 1)
                 previous = line
             start = end
         return code.replace(
@@ -3235,7 +3260,8 @@ def _relined_one(code, filename, by_line, width):
 def _by_lines(origin):
     """The `.by` the staged `.py` at `origin` was transpiled from, as `_relined` takes
     it: its path, the `.by` line of each line of the `.py` (0 for one the transpiler
-    wrote on its own), and the width of each `.by` line.
+    wrote on its own), the width of each `.by` line, and the `.by` location of a span of
+    the `.py` whose text is the author's (see `_by_span`).
 
     `None` when there is no `.by` to answer with, or it has changed since it was
     transpiled."""
@@ -3243,6 +3269,8 @@ def _by_lines(origin):
     if entry is None:
         return None
     key, (by_path, lines) = entry
+    if key in _LINES:
+        return _LINES[key]
     if not _is_current(key, by_path):
         return None
     with open(by_path, "rb") as handle:
@@ -3255,7 +3283,63 @@ def _by_lines(origin):
     def width(line):
         return widths[line - 1] if 0 < line <= len(widths) else 0
 
-    return by_path, by_line, width
+    columns = COLUMNS.get(key, ())
+    with open(origin, "rb") as handle:
+        generated_widths = [len(line.rstrip(b"\r\n")) for line in handle]
+
+    def by_span(line, end_line, column, end_column):
+        return _by_span(columns, generated_widths, width, line, end_line, column, end_column)
+
+    _LINES[key] = by_path, by_line, width, by_span
+    return _LINES[key]
+
+
+def _by_span(columns, generated_widths, width, line, end_line, column, end_column):
+    """The `.by` location, 1-based lines and byte columns as python's own, of the span of a
+    staged `.py` from `column` of `line` to `end_column` of `end_line`, when its text is
+    the author's: every byte of it copied from the `.by` or a qualifier the transpiler
+    wrote in front of a name (`COLUMNS` says which), and what is copied one run of the
+    `.by`. `None` for any other span, which the transpiler wrote."""
+    if None in (line, end_line, column, end_column) or end_line < line:
+        return None
+    pieces = []
+    for generated in range(line, end_line + 1):
+        runs = columns[generated - 1] if 0 < generated <= len(columns) else ()
+        at = column if generated == line else 0
+        if generated == end_line:
+            stop = end_column
+        elif 0 < generated <= len(generated_widths):
+            stop = generated_widths[generated - 1]
+        else:
+            return None
+        for start, end, by_line, by_column in runs:
+            if at >= stop:
+                break
+            if end <= at:
+                continue
+            if start > at:
+                return None
+            covered = min(end, stop)
+            if by_line is not None:
+                pieces.append((by_line + 1, by_column + (at - start), covered - at))
+            at = covered
+        if at < stop:
+            return None
+    if not pieces:
+        return None
+    for (line_before, column_before, length), (line_after, column_after, _) in zip(
+        pieces, pieces[1:]
+    ):
+        follows = (line_after == line_before and column_after == column_before + length) or (
+            line_after == line_before + 1
+            and column_after == 0
+            and column_before + length == width(line_before)
+        )
+        if not follows:
+            return None
+    first_line, first_column, _ = pieces[0]
+    last_line, last_column, last_length = pieces[-1]
+    return first_line, last_line, first_column, last_column + last_length
 
 
 def project_location(path, line):
@@ -3267,7 +3351,7 @@ def project_location(path, line):
     the transpiler wrote on its own."""
     lines = _by_lines(path)
     if lines is not None:
-        by_path, by_line, _ = lines
+        by_path, by_line, _, _ = lines
         return by_path, (by_line(line) or None) if line is not None else None
     carried = _CARRIED.get(os.path.realpath(path))
     return (path if carried is None else carried), line
@@ -3368,7 +3452,7 @@ def _by_code(origin, compile_source):
     lines = _by_lines(origin)
     if lines is None:
         return None
-    by_path, by_line, width = lines
+    by_path, by_line, width, by_span = lines
     with open(origin, "rb") as handle:
         source = handle.read()
 
@@ -3394,7 +3478,7 @@ def _by_code(origin, compile_source):
             warnings.warn_explicit(
                 warning.message, warning.category, warning.filename, warning.lineno
             )
-    return _relined(code, by_path, by_line, width)
+    return _relined(code, by_path, by_line, width, by_span)
 
 
 class _ByLoader:

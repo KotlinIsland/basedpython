@@ -504,7 +504,7 @@ impl Repl {
             }),
         );
         let (python, line_map) = match transpiled {
-            Ok(Ok((python, line_map, _))) => (python, line_map),
+            Ok(Ok((python, line_map, _, _))) => (python, line_map),
             Ok(Err(error)) => {
                 let diagnostic = by_stage::emit::transpile_failure_diagnostic(self.module, &error);
                 let diagnostic = self.in_inputs(diagnostic, start, input_file);

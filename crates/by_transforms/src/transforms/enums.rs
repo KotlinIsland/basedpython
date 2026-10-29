@@ -35,12 +35,16 @@ use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use super::repeated_underscore::{CodeNames, WrittenNames};
 use super::source_util::{is_synthetic_decorator, line_indent, line_start};
 use crate::Config;
+use crate::columns::Columns;
+use crate::source_map::Replacement;
 
 /// Result of the enum-lowering phase: the rewritten source and an output-line →
 /// original-`.by`-line table (`None` for generated lines).
 pub(crate) struct EnumLowering<'a> {
     pub(crate) output: Cow<'a, str>,
     pub(crate) line_map: Vec<Option<u32>>,
+    /// the output's columns against the source, when the output is not the source
+    pub(crate) columns: Option<Columns>,
     pub(crate) errors: Vec<String>,
 }
 
@@ -62,6 +66,7 @@ pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
         return EnumLowering {
             output: Cow::Borrowed(source),
             line_map: Vec::new(),
+            columns: None,
             errors,
         };
     }
@@ -116,6 +121,7 @@ pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
         return EnumLowering {
             output: Cow::Borrowed(source),
             line_map: Vec::new(),
+            columns: None,
             errors,
         };
     }
@@ -143,6 +149,7 @@ pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
     out.push_verbatim(source, TextRange::new(cursor, source.text_len()));
     // closes out a last line the source left unterminated, so the map has an
     // entry per line of the body and not per `\n` in it
+    let out_runs = out.runs.clone();
     let (body, body_map) = out.finish();
 
     // prologue: the `__future__` import (always first) then the deduplicated
@@ -161,9 +168,15 @@ pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
     text.push_str(&body);
     line_map.extend(body_map);
 
+    let mut whole = Replacement::generated(&prologue, 0);
+    whole.append(&out_runs);
+    let (described, columns) = crate::columns::edited(source, &[(0, source.len(), whole)]);
+    debug_assert_eq!(described, text, "the columns describe the text written");
+
     EnumLowering {
         output: Cow::Owned(text),
         line_map,
+        columns: Some(columns),
         errors: Vec::new(),
     }
 }
@@ -172,6 +185,7 @@ fn borrowed(source: &str) -> EnumLowering<'_> {
     EnumLowering {
         output: Cow::Borrowed(source),
         line_map: Vec::new(),
+        columns: None,
         errors: Vec::new(),
     }
 }
@@ -615,6 +629,8 @@ fn line_of(source: &str, offset: TextSize) -> u32 {
 #[derive(Default)]
 struct Out {
     text: String,
+    /// `text`, as the runs of the source it copies and of what it generates
+    runs: Replacement,
     /// one entry per *completed* output line (i.e. per `\n` emitted); the last
     /// line of an unterminated output is added by [`Out::finish`]
     line_map: Vec<Option<u32>>,
@@ -625,6 +641,7 @@ struct Out {
 impl Out {
     /// Append generated text whose lines have no `.by` origin.
     fn push_gen(&mut self, s: &str) {
+        self.runs.push_generated(s, 0);
         for ch in s.chars() {
             self.text.push(ch);
             if ch == '\n' {
@@ -639,6 +656,7 @@ impl Out {
     fn pop_trailing_newline(&mut self) {
         if self.text.ends_with('\n') {
             self.text.pop();
+            self.runs.pop_newline();
             // the line is not gone, only unterminated again: its entry goes back
             // to being the open line's, for whatever closes the line to push
             self.open_origin = self.line_map.pop().flatten();
@@ -651,6 +669,8 @@ impl Out {
         if range.is_empty() {
             return;
         }
+        self.runs
+            .push_source(source, usize::from(range.start()), usize::from(range.end()));
         let mut src_line = line_of(source, range.start());
         for ch in slice(source, range).chars() {
             self.text.push(ch);

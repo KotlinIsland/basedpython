@@ -54,6 +54,7 @@ use super::{
     visibility_rename,
 };
 use crate::Config;
+use crate::columns::Columns;
 use crate::source_map::Replacement;
 use crate::type_info::TypeInfo;
 
@@ -1276,7 +1277,7 @@ pub(crate) fn run_against_source<'a>(
     quotes: &WrittenQuotes,
     config: &Config,
     project: SemanticSource<'_>,
-) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
+) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -1309,15 +1310,15 @@ pub(crate) fn run_against_source<'a>(
     // identity line table for the no-change early returns: stripping variance
     // is within-line, so every line still maps to itself
     if !parsed_handle.errors().is_empty() {
-        let cow = blanked.stripped(source);
+        let (cow, columns) = stripped_with_columns(&blanked, source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, Vec::new(), table);
+        return (cow, Vec::new(), table, columns);
     }
     let parsed = parse_unchecked_source(source_ref, PySourceType::BasedPython);
     if !parsed.errors().is_empty() {
-        let cow = blanked.stripped(source);
+        let (cow, columns) = stripped_with_columns(&blanked, source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, Vec::new(), table);
+        return (cow, Vec::new(), table, columns);
     }
     semantic_model.infer_in_check_order();
     // the parentheses grouping an expression are visible in the tokens and
@@ -2098,9 +2099,9 @@ pub(crate) fn run_against_source<'a>(
         && ctx.statement_inserts.is_empty()
         && ctx.epilogue.is_empty()
     {
-        let cow = blanked.stripped(source);
+        let (cow, columns) = stripped_with_columns(&blanked, source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, ctx.errors, table);
+        return (cow, ctx.errors, table, columns);
     }
 
     // splice changed statements back into the source string. process highest
@@ -2289,6 +2290,7 @@ pub(crate) fn run_against_source<'a>(
     let mut body_edits = edits.clone();
     body_edits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let body_table = crate::source_map::line_table(source_ref, &body_edits);
+    let (_, body_columns) = crate::columns::edited(source_ref, &body_edits);
 
     // sort by start descending so prefix offsets stay valid through replace_range.
     // tie-break by end descending so wider edits (deletions) are applied before
@@ -2313,9 +2315,15 @@ pub(crate) fn run_against_source<'a>(
     // one of ours. done here and not against `required_imports` alone, because the statement
     // it joins is the module's own. a session's own imports have run already, so none of them
     // is rewritten
+    let mut body_columns = body_columns;
     if !config.session && !ctx.required_imports.is_empty() {
+        let before = out.clone();
         ctx.required_imports =
             merge_into_own_imports(&mut out, std::mem::take(&mut ctx.required_imports));
+        if before != out {
+            body_columns =
+                crate::columns::compose(&crate::columns::equal_lines(&before, &out), &body_columns);
+        }
     }
     // an entry may be multi-line (runtime helper defs), so the table prefix
     // counts the lines each entry emits, not the entries themselves
@@ -2349,6 +2357,8 @@ pub(crate) fn run_against_source<'a>(
     table.extend(body_table[..kept].iter().copied());
     table.extend(std::iter::repeat_n(None, prefix_lines));
     table.extend(body_table[kept..].iter().copied());
+    let mut columns = body_columns;
+    crate::columns::insert_written_lines(&mut columns, kept, prefix_lines);
     if !ctx.epilogue.is_empty() {
         if !out.ends_with('\n') {
             out.push('\n');
@@ -2357,6 +2367,7 @@ pub(crate) fn run_against_source<'a>(
             out.push_str(&line.text);
             out.push('\n');
         }
+        columns.extend(ctx.epilogue.iter().map(|_| Vec::new()));
         table.extend(ctx.epilogue.iter().map(|line| {
             line.charged_to.map(|at| {
                 u32::try_from(crate::newline_count(&source_ref[..usize::from(at)]))
@@ -2379,13 +2390,49 @@ pub(crate) fn run_against_source<'a>(
     // their source ranges for sibling-pass composition); hoist them to the
     // module top now that lowering is done, so a member called before its
     // block's position still resolves
-    let (out, table) = extension::hoist_backing_functions(
+    // the columns move with their lines. a table and columns that disagree on how many lines
+    // there are describe nothing the columns can be trusted for
+    if columns.len() != table.len() {
+        columns = vec![Vec::new(); table.len()];
+    }
+    let (out, lines) = extension::hoist_backing_functions(
         out,
-        table,
+        table.into_iter().zip(columns).collect::<Vec<_>>(),
         preamble_end,
         &ctx.extension_backing_functions,
     );
-    (Cow::Owned(out), ctx.errors, table)
+    let (table, columns) = lines.into_iter().unzip();
+    (Cow::Owned(out), ctx.errors, table, columns)
+}
+
+/// `original` with its type markers collapsed away, as [`use_site_variance::Blanked::stripped`]
+/// writes it, and its columns against `original`
+fn stripped_with_columns<'s>(
+    blanked: &use_site_variance::Blanked<'_>,
+    original: &'s str,
+) -> (Cow<'s, str>, Columns) {
+    if blanked.ranges.is_empty() {
+        return (Cow::Borrowed(original), crate::columns::identity(original));
+    }
+    let edits: Vec<(usize, usize, Replacement)> = blanked
+        .ranges
+        .iter()
+        .map(|range| {
+            let start = usize::from(range.start());
+            (
+                start,
+                usize::from(range.end()),
+                Replacement::generated(&use_site_variance::collapsed_to(original, *range), start),
+            )
+        })
+        .collect();
+    let (text, columns) = crate::columns::edited(original, &edits);
+    debug_assert_eq!(
+        text,
+        blanked.stripped(original),
+        "the columns describe the text"
+    );
+    (Cow::Owned(text), columns)
 }
 
 #[cfg(test)]
@@ -2583,7 +2630,7 @@ mod driver_tests {
     #[test]
     fn double_coalesce_spliced() {
         let src = "x = None\na = x ?? x ?? \"fallback\"\n";
-        let (out, _, _) = run_against_source(
+        let (out, _, _, _) = run_against_source(
             src,
             repeated_underscore::WrittenNames::new(src),
             &WrittenQuotes::default(),

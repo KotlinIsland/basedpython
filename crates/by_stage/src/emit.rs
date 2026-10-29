@@ -14,6 +14,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use by_transforms::columns::{Columns, LineColumns};
 use by_transforms::config::Config;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
@@ -56,6 +57,9 @@ pub struct Transpiled<'a> {
     pub python: &'a str,
     /// generated line (0-indexed) → the `.by` line it came from
     pub line_map: &'a [Option<u32>],
+    /// for each generated line, which of its columns are the author's text and where in the
+    /// `.by` that text is
+    pub columns: &'a [LineColumns],
 }
 
 /// What a run of [`check_and_transpile`] found.
@@ -106,6 +110,7 @@ enum Outcome {
     Transpiled {
         python: String,
         line_map: Vec<Option<u32>>,
+        columns: Columns,
         requirements: by_transforms::RuntimeRequirements,
     },
     /// the transpiler declined to emit the module, for whatever reason it gave
@@ -240,9 +245,10 @@ pub fn check_and_transpile(
             }),
         );
         match transpiled {
-            Ok(Ok((python, line_map, requirements))) => Outcome::Transpiled {
+            Ok(Ok((python, line_map, columns, requirements))) => Outcome::Transpiled {
                 python,
                 line_map,
+                columns,
                 requirements,
             },
             Ok(Err(error)) => Outcome::Failed(error),
@@ -262,6 +268,7 @@ pub fn check_and_transpile(
             Outcome::Transpiled {
                 python,
                 line_map,
+                columns,
                 requirements: needed,
             } => {
                 requirements.merge(needed);
@@ -271,6 +278,7 @@ pub fn check_and_transpile(
                     by_source: by_source.as_str(),
                     python: &python,
                     line_map: &line_map,
+                    columns: &columns,
                 })?;
                 continue;
             }
@@ -382,6 +390,7 @@ mod tests {
         Outcome::Transpiled {
             python: String::new(),
             line_map: Vec::new(),
+            columns: Vec::new(),
             requirements: by_transforms::RuntimeRequirements::default(),
         }
     }

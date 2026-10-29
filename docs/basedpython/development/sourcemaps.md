@@ -31,16 +31,19 @@ a correct sourcemap is the single primitive all of these share
     1 applies no body edits and later phases only prepend). consumed by `by run`
     to rewrite tracebacks and by `by transpile` to map a transpiler-invalid-output
     span back to its `.by` line for a source-annotated diagnostic
-- `_by_sourcemap.py` carries two tables keyed by the generated `.py` path:
-    `SOURCEMAP`, the `.by` path and its line table, and `DIGESTS`, the sha-256 of
-    both files that entry describes. `by build` writes it into `build/` beside the
+- `_by_sourcemap.py` carries three tables keyed by the generated `.py` path:
+    `SOURCEMAP`, the `.by` path and its line table, `DIGESTS`, the sha-256 of
+    both files that entry describes, and `COLUMNS`, which columns of each
+    generated line are the `.by`'s text (see [columns](#columns)). `by build` writes it into `build/` beside the
     python it describes, and `by run` into the temporary tree it executes — where
     it lives only as long as that run. see [staleness](#staleness) below
 
 ### limitations to remove
 
-- **line granularity** — a column in `int & str` can't map to the column in
-    `Intersection[int, str]`. fine for traceback frames, useless for hover/rename
+- **copied text only** — a column maps only where the generated text is copied
+    from the `.by` ([columns](#columns)): a column in `Intersection[int, str]`
+    has no column of `int & str` behind it. fine for traceback frames and a
+    debugger's calls, not enough for hover/rename
 - **forward only** — no `.by` → `.py` direction (needed by editors that start
     from a `.by` position)
 - **prepend-only assumption** — the composition trick assumes later phases never
@@ -154,6 +157,54 @@ temporary tree under `/tmp` on macOS is reached by a different path than the one
 python reports — so it carries the original key alongside the resolved one. a
 consumer that normalises keys has to do the same, or its digest lookup misses
 and every entry reads as stale
+
+## columns
+
+built, unlike the rest of this document
+
+a debugger names a call on a line by its text, and the text of a call the
+transpiler rewrote is the generated python's: `classify(p)` read through the
+lazy-import holder is `_by_lazy.classify(p)`, and a comprehension's iterable is
+`_soundness_iter(points, Point)`. so the map also says, for each generated line,
+which of its byte columns are text the `.by` spells, as a third table keyed as
+the other two are:
+
+```python
+COLUMNS = {
+    "/tmp/.tmpXXXX/main.py": [
+        [],
+        [(0, 12, 7, 0), (12, 21, None, None), (21, 32, 7, 12)],
+    ],
+}
+```
+
+each line of the generated file, in order, is a list of runs `(start, end, by_line, by_column)`: columns `start` to `end` of the generated line are the
+`.by`'s text from `by_column` of `by_line`, both zero-based. a run `(start, end, None, None)` is a qualifier the transpiler wrote in front of the author's name
+to say where the name lives, `_by_lazy.`, which reads the object the name did.
+every column in no run is the transpiler's. columns are byte offsets, as
+python's own code positions are
+
+every step of the transpile describes its output against its input, and the
+descriptions are composed. a step that rewrites a line without saying where its
+text came from — a polyfill's header, an import the runtime's helpers join —
+leaves that line the transpiler's, which loses its columns and never claims text
+the author did not write, and every claimed run is checked against the `.by`
+before it is written
+
+`by run` reads the table when it compiles a staged module as its `.by`. on python
+3.11 and later each location of the code — what `co_positions` answers, a
+traceback marks and a debugger names a step-into target by — is:
+
+- **the author's text**: the `.by` lines and columns of exactly the text it covers,
+    when every column of the generated span is in a run, and the copied runs are
+    one run of the `.by`. `_by_lazy.classify(p)` is `classify(p)`
+- **the transpiler's**: the `.by` line with no columns, `col_offset` and
+    `end_col_offset` both `None`, for a span with any column in no run.
+    `_soundness_iter(points, Point)` is the line of the comprehension it is
+    written for, and no columns
+- **line 0**, as before, for code no `.by` line is behind
+
+python 3.10 and older have no columns, and every location spans its whole line
 
 ## code by writes for itself
 
