@@ -10887,6 +10887,12 @@ fn importing_a_compiled_module_again_allocates_nothing_that_stays() {
     // python forgets the state pointer of the module a create slot hands back and has the
     // exec slot allocate a fresh one, even for a module asking for no state at all. handing
     // the one module back import after import used to leave an allocation behind each time
+    //
+    // something left behind by every import is at least one block, so a round of imports
+    // with it grows by at least as many blocks as it has imports, however busy the machine.
+    // what the interpreter allocates for itself on the way, a cache filling or a dict
+    // growing, settles, so a single round growing by fewer blocks than it has imports
+    // shows that no import leaves anything behind
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -10914,13 +10920,16 @@ def total(n: int) -> int:
          \x20   import by_diff_reimportleak\n\
          for _ in range(100):\n\
          \x20   again()\n\
-         gc.collect()\n\
-         before = sys.getallocatedblocks()\n\
-         for _ in range(2000):\n\
-         \x20   again()\n\
-         gc.collect()\n\
-         grown = sys.getallocatedblocks() - before\n\
-         print('stable' if grown < 200 else f'grew by {grown}')\n\
+         imports = 1000\n\
+         grown = []\n\
+         for _ in range(5):\n\
+         \x20   gc.collect()\n\
+         \x20   before = sys.getallocatedblocks()\n\
+         \x20   for _ in range(imports):\n\
+         \x20       again()\n\
+         \x20   gc.collect()\n\
+         \x20   grown.append(sys.getallocatedblocks() - before)\n\
+         print('stable' if min(grown) < imports else f'grew by {grown} over {imports} imports each')\n\
          print(sys.modules['by_diff_reimportleak'] is first, first.total(2))\n",
     );
     assert_eq!(out, "stable\nTrue 3");
