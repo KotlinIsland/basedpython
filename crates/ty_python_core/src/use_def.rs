@@ -1677,6 +1677,56 @@ impl<'map, 'db> NarrowingEvaluator<'map, 'db> {
     pub fn narrowing_constraints(&self) -> &'map NarrowingConstraints {
         &self.constraint_tables.narrowing_constraints
     }
+
+    /// basedpython: whether the formula can narrow the binding of `place` it is attached to, read
+    /// off its shape alone, without evaluating a predicate
+    ///
+    /// a binding carries a formula for every reachability gate the flow passed since it was
+    /// made — a call that has to return, the test of a branch — and those narrow no place, so a
+    /// formula that is not `ALWAYS_TRUE` can still leave the binding as it was bound. a predicate
+    /// that cannot narrow `place` lets through whatever any of its branches does, and one that
+    /// can is no narrowing either where the formula holds whichever way it goes: `P or not P`,
+    /// as an `if` that tests the place leaves it once its branches meet
+    pub fn may_narrow(&self, place: ScopedPlaceId) -> bool {
+        let targets = self.predicate_narrowing_targets();
+        if !targets.contains_place(place) {
+            return self.constraint == ScopedNarrowingConstraint::ALWAYS_FALSE;
+        }
+        // whether each formula leaves the binding as it was bound
+        let mut unnarrowed: FxHashMap<ScopedNarrowingConstraint, bool> = FxHashMap::default();
+        let known = |unnarrowed: &FxHashMap<_, bool>, constraint| match constraint {
+            ScopedNarrowingConstraint::ALWAYS_TRUE => Some(true),
+            ScopedNarrowingConstraint::ALWAYS_FALSE => Some(false),
+            _ => unnarrowed.get(&constraint).copied(),
+        };
+        let mut pending = vec![self.constraint];
+        while let Some(&constraint) = pending.last() {
+            if known(&unnarrowed, constraint).is_some() {
+                pending.pop();
+                continue;
+            }
+            let node = self.narrowing_constraints().get_interior_node(constraint);
+            let branches = [node.if_true, node.if_uncertain, node.if_false];
+            let unknown = branches
+                .into_iter()
+                .filter(|branch| known(&unnarrowed, *branch).is_none())
+                .collect::<SmallVec<[_; 3]>>();
+            if !unknown.is_empty() {
+                pending.extend(unknown);
+                continue;
+            }
+            let [if_true, if_uncertain, if_false] =
+                branches.map(|branch| known(&unnarrowed, branch) == Some(true));
+            let leaves = if targets.contains(node.atom, place) {
+                if_uncertain || (if_true && if_false)
+            } else {
+                if_true || if_uncertain || if_false
+            };
+            unnarrowed.insert(constraint, leaves);
+            pending.pop();
+        }
+        known(&unnarrowed, self.constraint) != Some(true)
+    }
 }
 
 #[derive(Clone)]

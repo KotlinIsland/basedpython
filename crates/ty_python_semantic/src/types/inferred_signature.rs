@@ -24,7 +24,6 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_python_core::ast_ids::HasScopedUseId;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
-use ty_python_core::narrowing_constraints::ScopedNarrowingConstraint;
 use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::predicate::{Predicate, PredicateNode};
 use ty_python_core::scope::{NodeWithScopeRef, ScopeId};
@@ -1765,10 +1764,12 @@ where
             .use_def
             .bindings_at_use(name.scoped_use_id(self.db, db.program_file(self.file)));
         let binding = bindings.next()?;
+        let definition = binding.binding.definition()?;
         (bindings.next().is_none()
-            && binding.binding.definition().is_some()
-            && binding.narrowing_constraint.constraint() == ScopedNarrowingConstraint::ALWAYS_TRUE)
-            .then(|| path.clone())
+            && !binding
+                .narrowing_constraint
+                .may_narrow(definition.place(db)))
+        .then(|| path.clone())
     }
 
     /// The parameter `expr` is a *narrowing* of, when a test narrowed the name written there.
