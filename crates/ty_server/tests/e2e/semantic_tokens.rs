@@ -259,7 +259,7 @@ fn unreachable_code_has_no_tokens_when_the_client_asks() -> Result<()> {
     };
     assert_eq!(
         unreachable_tokens(asks, None)?,
-        [token(0, 4, "f"), token(1, 4, "print"), token(1, 10, "exit")]
+        [token(0, 4, "f"), token(1, 10, "exit")]
     );
     Ok(())
 }
@@ -276,19 +276,19 @@ fn unreachable_code_has_no_tokens_in_a_range_when_the_client_asks() -> Result<()
     );
     assert_eq!(
         unreachable_tokens(asks, Some(range))?,
-        [token(1, 4, "print"), token(1, 10, "exit")]
+        [token(1, 10, "exit")]
     );
     Ok(())
 }
 
 /// an editor that fades unreachable code in its own colours asks for every character of it to
-/// carry a token that says so: the parentheses of the call `exit()` keeps from being made, and
+/// carry a token that says so: the call `exit()` keeps from being made, callee and parentheses, and
 /// every token of the statements after it, `return` and the punctuation included
 #[test]
 fn every_character_of_unreachable_code_has_a_marked_token_when_the_client_asks() -> Result<()> {
     let marked = [
         token(0, 4, "f"),
-        token(1, 4, "print"),
+        faded(1, 4, "print"),
         faded(1, 9, "("),
         token(1, 10, "exit"),
         faded(1, 16, ")"),

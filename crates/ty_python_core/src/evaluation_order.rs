@@ -1,6 +1,6 @@
-//! Which parts of a statement Python evaluates whenever the statement runs, and in what order.
+//! which parts of a statement python evaluates whenever the statement runs, and in what order
 //!
-//! A call that cannot return ends the flow at the point where it is made, not only at the end of
+//! a call that cannot return ends the flow at the point where it is made, not only at the end of
 //! its statement:
 //!
 //! ```python
@@ -9,50 +9,50 @@
 //!     return         # unreachable
 //! ```
 //!
-//! The semantic index records a reachability constraint for every call that is evaluated whenever
-//! its statement is ([`terminal_call_candidates`]), and the editor greys out what of the statement
-//! is evaluated after a call that never returns ([`ranges_evaluated_after`]). Both read the same
-//! description of the evaluation order, [`for_each_certain_child`], so that what is greyed out is
-//! exactly what the constraint describes.
+//! the semantic index records a reachability constraint for every call that is evaluated whenever
+//! its statement is (`terminal_call_candidates_by_expression`), and the editor greys out what of the statement
+//! is evaluated after a call that never returns ([`ranges_evaluated_after`]). both read the same
+//! description of the evaluation order, `for_each_certain_child`, so that what is greyed out is
+//! exactly what the constraint describes
 //!
-//! Only what is *certainly* evaluated is described. A part that runs on one path only — the right
+//! only what is *certainly* evaluated is described. a part that runs on one path only — the right
 //! operand of `a or b`, a branch of `x if c else y`, a lambda's body, every part of a
 //! comprehension but its first iterable, the target of a basedpython `a?.b` once `a` is `None` —
-//! is left out, along with everything below it.
+//! is left out, along with everything below it
 
+use ruff_python_ast::token::{Tokens, parenthesized_range};
 use ruff_python_ast::{
-    self as ast, Expr, InterpolatedStringElement, InterpolatedStringElements, Stmt, StmtRef,
+    self as ast, AnyNodeRef, Expr, InterpolatedStringElement, InterpolatedStringElements, Stmt,
+    StmtRef,
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-/// A run of a statement that Python evaluates in one go: the expressions it evaluates, in order,
-/// and the text that stands for what the statement then does with them.
+/// a run of a statement that python evaluates in one go: the expressions it evaluates, in order,
+/// and the text that stands for what the statement then does with them
 ///
-/// A simple statement is one unit, its whole text. A compound statement's unit is its header,
-/// `for x in items:` up to its body.
+/// a simple statement is one unit, its whole text. a compound statement's unit is its header,
+/// `for x in items:` up to its body
 #[derive(Debug)]
-pub struct EvaluationUnit<'a> {
-    pub region: TextRange,
-    pub expressions: Vec<&'a Expr>,
+struct EvaluationUnit<'a> {
+    region: TextRange,
+    expressions: Vec<&'a Expr>,
 }
 
-/// The units of `statement`, each with the expressions it certainly evaluates, in order.
+/// the units of `statement`, each with the expressions it certainly evaluates, in order
 ///
-/// A statement that evaluates nothing, or whose evaluation order is not certain, has none: an
+/// a statement that evaluates nothing, or whose evaluation order is not certain, has none: an
 /// `assert`, which `python -O` leaves out, a `def` or `class`, whose decorators, defaults and
-/// annotations are evaluated in an order that depends on the Python version, and a basedpython
-/// assignment written under a decorator.
-pub fn statement_evaluation_units<'a>(
-    statement: impl Into<StmtRef<'a>>,
-) -> Vec<EvaluationUnit<'a>> {
+/// annotations are evaluated in an order that depends on the python version, and a basedpython
+/// assignment written under a decorator
+fn statement_evaluation_units<'a>(statement: impl Into<StmtRef<'a>>) -> Vec<EvaluationUnit<'a>> {
     fn whole<'a>(statement: StmtRef<'_>, expressions: Vec<&'a Expr>) -> EvaluationUnit<'a> {
         EvaluationUnit {
             region: statement.range(),
             expressions,
         }
     }
-    // A compound statement's header runs from its keyword to its body, whose statements have
-    // reachability of their own.
+    // a compound statement's header runs from its keyword to its body, whose statements have
+    // reachability of their own
     let header = |start: TextSize, body: Option<TextSize>, expression: &Expr| {
         TextRange::new(start, body.unwrap_or_else(|| expression.end()))
     };
@@ -69,7 +69,7 @@ pub fn statement_evaluation_units<'a>(
         }
         // `x[i] += value` loads `x[i]` before it evaluates the value
         StmtRef::AugAssign(node) => vec![whole(statement, vec![&node.target, &node.value])],
-        // An annotation is evaluated, if at all, after the target is stored.
+        // an annotation is evaluated, if at all, after the target is stored
         StmtRef::AnnAssign(ast::StmtAnnAssign {
             value: Some(value),
             target,
@@ -89,7 +89,7 @@ pub fn statement_evaluation_units<'a>(
             }
         }
         StmtRef::Delete(node) => vec![whole(statement, node.targets.iter().collect())],
-        // The target is stored once per item, so only the iterable is certain.
+        // the target is stored once per item, so only the iterable is certain
         StmtRef::For(node) => vec![EvaluationUnit {
             region: header(node.start(), body_start(&node.body), &node.iter),
             expressions: vec![&node.iter],
@@ -118,11 +118,11 @@ pub fn statement_evaluation_units<'a>(
             ),
             expressions: vec![&node.subject],
         }],
-        // The test of an `if` or a `while` is evaluated for its truth, and the semantic index
-        // narrows on what it finds. A constraint recorded inside a test would sit among the
+        // the test of an `if` or a `while` is evaluated for its truth, and the semantic index
+        // narrows on what it finds. a constraint recorded inside a test would sit among the
         // predicates the test itself records, and the narrowing of places the test does not
         // name — a binding whose specialization later uses refine, among them — loses track of
-        // them there, so tests are left out.
+        // them there, so tests are left out
         StmtRef::If(_)
         | StmtRef::While(_)
         | StmtRef::Assign(_)
@@ -145,12 +145,12 @@ pub fn statement_evaluation_units<'a>(
     }
 }
 
-/// Calls `f` with each child of `expression` that Python certainly evaluates when it evaluates
-/// `expression`, in the order it evaluates them.
+/// calls `f` with each child of `expression` that python certainly evaluates when it evaluates
+/// `expression`, in the order it evaluates them
 ///
-/// What `expression` itself then does — the call, the operation, the store — happens after all of
-/// them.
-pub fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a Expr)) {
+/// what `expression` itself then does — the call, the operation, the store — happens after all of
+/// them
+fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a Expr)) {
     match expression {
         // only the first operand: the others are evaluated only when it does not short-circuit
         Expr::BoolOp(node) => {
@@ -187,8 +187,8 @@ pub fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a E
                 node.elts.iter().for_each(f);
             }
         }
-        // The first iterable is evaluated where the comprehension is written; everything else
-        // runs once per item, in the comprehension's own scope.
+        // the first iterable is evaluated where the comprehension is written; everything else
+        // runs once per item, in the comprehension's own scope
         Expr::ListComp(ast::ExprListComp { generators, .. })
         | Expr::SetComp(ast::ExprSetComp { generators, .. })
         | Expr::Generator(ast::ExprGenerator { generators, .. }) => {
@@ -212,19 +212,21 @@ pub fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a E
         Expr::Compare(node) => {
             node.operands.iter().take(2).for_each(f);
         }
-        Expr::Call(node) => {
-            // basedpython: a cast's callee and parentheses are not in the source, and the type it
-            // casts to is not evaluated
-            if node.cast_kind.is_some() {
-                return;
+        // basedpython: `value cast T` evaluates only its value. its callee and parentheses are not
+        // in the source, and the type it casts to is not evaluated
+        Expr::Call(node) if node.cast_kind.is_some() => {
+            if let Some(value) = cast_value(node) {
+                f(value);
             }
+        }
+        Expr::Call(node) => {
             f(&node.func);
             // basedpython: in `a?.b(x)` the call and its arguments are skipped when `a` is `None`
             if is_optional_chain(&node.func) {
                 return;
             }
-            // Positional arguments, starred ones included, are evaluated before keyword
-            // arguments, wherever they are written: `f(k=g(), *h())` calls `h` first.
+            // positional arguments, starred ones included, are evaluated before keyword
+            // arguments, wherever they are written: `f(k=g(), *h())` calls `h` first
             node.arguments.args.iter().for_each(&mut *f);
             for keyword in &node.arguments.keywords {
                 f(&keyword.value);
@@ -257,10 +259,22 @@ pub fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a E
                 f(bound);
             }
         }
-        // A lambda's body runs when it is called. A basedpython statement expression's own
-        // statements are statements of their own. The rest evaluate nothing, or spell types.
-        Expr::Lambda(_)
-        | Expr::Statement(_)
+        // a lambda's defaults are evaluated where it is written, positional ones first, as a
+        // `def`'s are, and its body only when it is called
+        Expr::Lambda(node) => {
+            for parameter in node
+                .parameters
+                .iter()
+                .flat_map(|parameters| parameters.iter_non_variadic_params())
+            {
+                if let Some(default) = parameter.default() {
+                    f(default);
+                }
+            }
+        }
+        // a basedpython statement expression's own statements are statements of their own. the
+        // rest evaluate nothing, or spell types
+        Expr::Statement(_)
         | Expr::StringLiteral(_)
         | Expr::BytesLiteral(_)
         | Expr::NumberLiteral(_)
@@ -275,7 +289,13 @@ pub fn for_each_certain_child<'a>(expression: &'a Expr, f: &mut impl FnMut(&'a E
     }
 }
 
-/// An interpolation's value, then the interpolations of its format spec.
+/// the value a basedpython `value cast T` casts, which the parser writes as the last argument of
+/// a call after the type
+fn cast_value(call: &ast::ExprCall) -> Option<&Expr> {
+    call.arguments.args.last()
+}
+
+/// an interpolation's value, then the interpolations of its format spec
 fn for_each_interpolation<'a>(
     element: &'a InterpolatedStringElement,
     f: &mut impl FnMut(&'a Expr),
@@ -297,8 +317,8 @@ fn for_each_interpolation_in<'a>(
     }
 }
 
-/// Whether `expression` is a link of a basedpython optional chain, `a?.b`, which is skipped along
-/// with the rest of the chain when the receiver is `None`.
+/// whether `expression` is a link of a basedpython optional chain, `a?.b`, which is skipped along
+/// with the rest of the chain when the receiver is `None`
 pub fn is_optional_chain(expression: &Expr) -> bool {
     match expression {
         Expr::Attribute(attribute) => attribute.optional || is_optional_chain(&attribute.value),
@@ -308,28 +328,19 @@ pub fn is_optional_chain(expression: &Expr) -> bool {
     }
 }
 
-/// The calls a statement certainly makes, in the order it makes them: each an [`ast::ExprCall`],
-/// or the [`ast::ExprAwait`] of one, since awaiting is what an `async` function that never
-/// returns does not come back from.
+/// the calls a statement certainly makes, in the order it makes them, grouped by the expression of
+/// the statement each is part of: the value of an assignment, then each of its targets, and so on,
+/// in the order the statement evaluates them. each call is an [`ast::ExprCall`], or the
+/// [`ast::ExprAwait`] of one, since awaiting is what an `async` function that never returns does
+/// not come back from, and a cast or a call in an optional chain is not among them; see
+/// [`for_each_certain_child`]
 ///
-/// A cast and a call in an optional chain are not among them; see [`for_each_certain_child`].
-pub fn terminal_call_candidates<'a>(statement: impl Into<StmtRef<'a>>) -> Vec<&'a Expr> {
-    terminal_call_candidates_by_expression(statement)
-        .into_iter()
-        .flat_map(|(_, candidates)| candidates)
-        .collect()
-}
-
-/// [`terminal_call_candidates`], grouped by the expression of the statement each is part of:
-/// the value of an assignment, then each of its targets, and so on, in the order the statement
-/// evaluates them.
-///
-/// The semantic index records the constraints of a group once the expression has been
-/// evaluated as a whole, as it does for an expression statement's own call. Every call of the
+/// the semantic index records the constraints of a group once the expression has been
+/// evaluated as a whole, as it does for an expression statement's own call. every call of the
 /// group is made whenever the expression is evaluated, so the flow after the expression is the
 /// same, and the flow inside the expression — the branches of `a or b`, of `x if c else y` — is
-/// left as it is.
-pub fn terminal_call_candidates_by_expression<'a>(
+/// left as it is
+pub(crate) fn terminal_call_candidates_by_expression<'a>(
     statement: impl Into<StmtRef<'a>>,
 ) -> Vec<(&'a Expr, Vec<&'a Expr>)> {
     fn collect<'a>(expression: &'a Expr, candidates: &mut Vec<&'a Expr>) {
@@ -365,26 +376,31 @@ fn is_candidate_call(call: &ast::ExprCall) -> bool {
     call.cast_kind.is_none() && !is_optional_chain(&call.func)
 }
 
-/// The ranges of `statement` that Python evaluates after the call at `call`, one of its
-/// [`terminal_call_candidates`], each trimmed of surrounding whitespace, in source order.
+/// the ranges of `statement` that python evaluates after the call at `call`, one of its
+/// `terminal_call_candidates_by_expression`, each trimmed of surrounding whitespace, in source order
 ///
-/// When the call never returns, none of it runs: the operation each enclosing expression would
+/// when the call never returns, none of it runs: the operation each enclosing expression would
 /// have performed with the call's value, the operands it would have evaluated next, and what the
-/// statement would have done last. What was evaluated before the call — the callee of a call whose
-/// argument it is, `a` in `a + exit()` — did run, and is not among the ranges:
+/// statement would have done last. a call whose arguments never finish being evaluated is never
+/// made, and its callee is read as part of it when the callee only looks something up — a name,
+/// an attribute, `handlers["k"]` — though python looks it up first. what was evaluated before the
+/// call otherwise did run, and is not among the ranges: an earlier argument, `a` in `a + exit()`,
+/// a callee that calls or computes something of its own, `f()` in `f()(exit())`:
 ///
 /// ```python
-/// print(exit())       # `(`, `)`
+/// print(exit())       # `print(`, `)`
 /// x = a + exit() + b  # `x =`, `+`, `+ b`
 /// ```
 ///
-/// The body of a compound statement is not among them either: its statements are unreachable in
-/// their own right.
+/// the body of a compound statement is not among them either: its statements are unreachable in
+/// their own right
 pub fn ranges_evaluated_after<'a>(
     statement: impl Into<StmtRef<'a>>,
     call: TextRange,
     source: &str,
+    tokens: &Tokens,
 ) -> Vec<TextRange> {
+    let statement = statement.into();
     let mut ranges = Vec::new();
     for unit in statement_evaluation_units(statement) {
         let Some(index) = unit
@@ -399,29 +415,46 @@ pub fn ranges_evaluated_after<'a>(
         // accounted for below
         let mut evaluated = unit.expressions[..=index]
             .iter()
-            .map(Ranged::range)
+            .map(|expression| written_range(expression, statement.into(), tokens))
             .collect::<Vec<_>>();
         push_gaps(unit.region, &mut evaluated, source, &mut ranges);
-        within(expression, call, source, &mut ranges);
+        within(expression, call, source, tokens, &mut ranges);
         break;
     }
     ranges.sort_by_key(|range| (range.start(), range.end()));
     ranges
 }
 
-/// The ranges of `expression` evaluated after the call at `call`, which it contains.
-fn within(expression: &Expr, call: TextRange, source: &str, ranges: &mut Vec<TextRange>) {
+/// the ranges of `expression` evaluated after the call at `call`, which it contains
+fn within(
+    expression: &Expr,
+    call: TextRange,
+    source: &str,
+    tokens: &Tokens,
+    ranges: &mut Vec<TextRange>,
+) {
     if expression.range() == call {
         // `await f()` is the candidate itself, so the call it awaits is not after it
         return;
     }
+    // the node a child's own parentheses are counted against: a call's arguments, rather than
+    // the call, whose parentheses are not the argument's. a cast's value is written outside the
+    // arguments the parser gives it, so it is counted against the cast
+    let parent = |child: &Expr| match expression {
+        Expr::Call(node)
+            if node.cast_kind.is_none() && !std::ptr::eq(child, node.func.as_ref()) =>
+        {
+            AnyNodeRef::from(&node.arguments)
+        }
+        _ => AnyNodeRef::from(expression),
+    };
     let mut evaluated = Vec::new();
     let mut path = None;
     for_each_certain_child(expression, &mut |child| {
         if path.is_some() {
             return;
         }
-        evaluated.push(child.range());
+        evaluated.push(written_range(child, parent(child), tokens));
         if child.range().contains_range(call) {
             path = Some(child);
         }
@@ -429,11 +462,56 @@ fn within(expression: &Expr, call: TextRange, source: &str, ranges: &mut Vec<Tex
     let Some(child) = path else {
         return;
     };
+    // a call whose arguments never finish being evaluated is never made, and its callee is read
+    // as part of it: `print(` in `print(exit())`. a callee that is only a lookup is; one that
+    // evaluates something of its own, a call or an operation, did that, and stays as it is
+    if let Expr::Call(node) = expression
+        && node.cast_kind.is_none()
+        && !std::ptr::eq(child, node.func.as_ref())
+        && is_lookup(&node.func)
+    {
+        let callee = written_range(&node.func, expression.into(), tokens);
+        evaluated.retain(|range| *range != callee);
+    }
     push_gaps(expression.range(), &mut evaluated, source, ranges);
-    within(child, call, source, ranges);
+    within(child, call, source, tokens, ranges);
 }
 
-/// Pushes the parts of `region` outside every range of `evaluated`, trimmed of whitespace.
+/// `expression`'s range with the parentheses written around it, which belong to it rather than
+/// to `parent`: `(a or b)` in `(a or b)(exit())`
+fn written_range(expression: &Expr, parent: AnyNodeRef, tokens: &Tokens) -> TextRange {
+    parenthesized_range(expression.into(), parent, tokens).unwrap_or(expression.range())
+}
+
+/// whether evaluating `expression` only looks something up: a name, an attribute of a lookup,
+/// or a lookup subscripted with a constant or another lookup, as in `handlers["k"]`
+fn is_lookup(expression: &Expr) -> bool {
+    match expression {
+        Expr::Name(_) => true,
+        Expr::Attribute(attribute) => !attribute.optional && is_lookup(&attribute.value),
+        Expr::Subscript(subscript) => {
+            !subscript.is_typeof
+                && !subscript.is_type_decoration
+                && is_lookup(&subscript.value)
+                && (is_lookup(&subscript.slice) || is_constant(&subscript.slice))
+        }
+        _ => false,
+    }
+}
+
+fn is_constant(expression: &Expr) -> bool {
+    matches!(
+        expression,
+        Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
+}
+
+/// pushes the parts of `region` outside every range of `evaluated`, trimmed of whitespace
 fn push_gaps(
     region: TextRange,
     evaluated: &mut [TextRange],
@@ -471,7 +549,7 @@ fn trim(range: TextRange, source: &str) -> Option<TextRange> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ranges_evaluated_after, terminal_call_candidates};
+    use super::{ranges_evaluated_after, terminal_call_candidates_by_expression};
     use ruff_python_ast::PySourceType;
     use ruff_python_parser::{ParseOptions, parse};
     use ruff_text_size::Ranged;
@@ -484,14 +562,16 @@ mod tests {
             .try_into_module()
             .unwrap();
         let statement = &parsed.suite()[0];
-        terminal_call_candidates(statement)
+        terminal_call_candidates_by_expression(statement)
             .into_iter()
+            .flat_map(|(_, candidates)| candidates)
             .map(|call| {
-                let ranges = ranges_evaluated_after(statement, call.range(), source)
-                    .into_iter()
-                    .map(|range| format!("`{}`", &source[range]))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let ranges =
+                    ranges_evaluated_after(statement, call.range(), source, parsed.tokens())
+                        .into_iter()
+                        .map(|range| format!("`{}`", &source[range]))
+                        .collect::<Vec<_>>()
+                        .join(" ");
                 format!("{}: {ranges}", &source[call.range()])
             })
             .collect()
@@ -501,8 +581,26 @@ mod tests {
     fn a_call_whose_argument_never_returns_is_never_made() {
         assert_eq!(
             after("print(exit())"),
-            ["exit(): `(` `)`", "print(exit()): "]
+            ["exit(): `print(` `)`", "print(exit()): "]
         );
+    }
+
+    #[test]
+    fn the_callee_of_a_call_that_is_never_made_reads_as_unreachable() {
+        assert_eq!(after("obj.method(exit())")[0], "exit(): `obj.method(` `)`");
+        assert_eq!(
+            after("handlers[\"k\"](exit())")[0],
+            "exit(): `handlers[\"k\"](` `)`"
+        );
+        assert_eq!(after("print(a(), exit())")[1], "exit(): `print(` `,` `)`");
+    }
+
+    #[test]
+    fn a_callee_that_evaluates_something_of_its_own_stays_live() {
+        assert_eq!(after("f()(exit())")[1], "exit(): `(` `)`");
+        assert_eq!(after("xs[i()](exit())")[1], "exit(): `(` `)`");
+        assert_eq!(after("(a or b)(exit())")[0], "exit(): `(` `)`");
+        assert_eq!(after("x = (a) + (exit())")[0], "exit(): `x =` `+`");
     }
 
     #[test]
@@ -510,10 +608,10 @@ mod tests {
         assert_eq!(
             after("f(a(), exit(), b(), k=c())"),
             [
-                "a(): `(` `, exit(), b(), k=c())`",
-                "exit(): `(` `,` `, b(), k=c())`",
-                "b(): `(` `,` `,` `, k=c())`",
-                "c(): `(` `,` `,` `, k=` `)`",
+                "a(): `f(` `, exit(), b(), k=c())`",
+                "exit(): `f(` `,` `, b(), k=c())`",
+                "b(): `f(` `,` `,` `, k=c())`",
+                "c(): `f(` `,` `,` `, k=` `)`",
                 "f(a(), exit(), b(), k=c()): ",
             ]
         );
@@ -521,7 +619,7 @@ mod tests {
 
     #[test]
     fn starred_arguments_are_evaluated_before_keywords() {
-        assert_eq!(after("f(k=a(), *b())")[0], "b(): `(k=a(),` `*` `)`");
+        assert_eq!(after("f(k=a(), *b())")[0], "b(): `f(k=a(),` `*` `)`");
     }
 
     #[test]
@@ -541,6 +639,26 @@ mod tests {
         assert_eq!(
             after("[g(y) for y in exit() if h(y)]"),
             ["exit(): `[g(y) for y in` `if h(y)]`"]
+        );
+    }
+
+    #[test]
+    fn a_cast_evaluates_its_value_and_nothing_else() {
+        assert_eq!(after("x = exit() cast int"), ["exit(): `x =` `cast int`"]);
+        assert_eq!(
+            after("x = (exit()) cast! int"),
+            ["exit(): `x =` `cast! int`"]
+        );
+    }
+
+    #[test]
+    fn a_lambda_evaluates_its_defaults_where_it_is_written() {
+        assert_eq!(
+            after("f = lambda a=exit(), *, b=g(): h()"),
+            [
+                "exit(): `f =` `lambda a=` `, *, b=g(): h()`",
+                "g(): `f =` `lambda a=` `, *, b=` `: h()`",
+            ]
         );
     }
 
@@ -575,7 +693,7 @@ mod tests {
     fn an_awaited_call_is_the_candidate() {
         assert_eq!(
             after("x = await stop(a())"),
-            ["a(): `x =` `await` `(` `)`", "await stop(a()): `x =`"]
+            ["a(): `x =` `await` `stop(` `)`", "await stop(a()): `x =`"]
         );
     }
 }

@@ -74,14 +74,21 @@ pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[Unreachabl
         let use_def = index.use_def_map(file_scope_id);
 
         for predicate in use_def.predicates().iter() {
+            // a statement's own call is the last thing it evaluates, so only a call inside a
+            // larger expression leaves part of its statement unreachable
             let PredicateNode::IsNonTerminalCall(call) = predicate.node else {
                 continue;
             };
-            if analyze_non_terminal_call(db, call) != Truthiness::AlwaysFalse {
+            if !call.is_nested(db) || analyze_non_terminal_call(db, call) != Truthiness::AlwaysFalse
+            {
                 continue;
             }
-            let module =
-                module.get_or_insert_with(|| parsed_module(db, file.python_file(db)).load(db));
+            let (module, source) = module.get_or_insert_with(|| {
+                (
+                    parsed_module(db, file.python_file(db)).load(db),
+                    source_text(db, file.file(db)),
+                )
+            });
             let call_range = call.call_expr(db).node_ref(db).node(module).range();
             // a call that is itself never reached leaves nothing more unreachable
             if !is_range_reachable(db, index, file_scope_id, call_range) {
@@ -93,9 +100,8 @@ pub fn unreachable_ranges(db: &dyn Db, file: ProgramFile<'_>) -> Box<[Unreachabl
             else {
                 continue;
             };
-            let source = source_text(db, file.file(db));
             unreachable.extend(
-                ranges_evaluated_after(statement, call_range, source.as_str())
+                ranges_evaluated_after(statement, call_range, source.as_str(), module.tokens())
                     .into_iter()
                     .map(|range| UnreachableRange {
                         range,
@@ -902,10 +908,10 @@ mod tests {
 
         assert_snapshot!(UnreachableTest::new().render(source)?, @"
         info[unreachable-code]: Code is always unreachable
-         --> src/main.py:3:10
+         --> src/main.py:3:5
           |
         3 |     print(exit())
-          |          ^
+          |     ^^^^^^
 
         info[unreachable-code]: Code is always unreachable
          --> src/main.py:3:17
@@ -961,10 +967,10 @@ mod tests {
           |                    ^^^
 
         info[unreachable-code]: Code is always unreachable
-         --> src/main.py:6:6
+         --> src/main.py:6:5
           |
         6 |     g(a, exit(), a)
-          |      ^
+          |     ^^
 
         info[unreachable-code]: Code is always unreachable
          --> src/main.py:6:8
