@@ -120,7 +120,9 @@ pub(crate) struct Clause {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     colon: Option<Range>,
     /// From the start of the header to the end of the body, or of the header when the body is
-    /// empty.
+    /// empty. a definition's header starts after the decorators written above it, at `async` or
+    /// a basedpython modifier such as `frozen data` when it has one, and at `def` or `class`
+    /// otherwise
     range: Range,
     /// The suite's statements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
