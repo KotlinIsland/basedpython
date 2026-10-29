@@ -9,6 +9,7 @@ mod by_repl;
 mod by_source_encoding;
 mod by_stamps;
 mod by_wheels;
+mod command_line;
 mod logging;
 mod printer;
 mod python_version;

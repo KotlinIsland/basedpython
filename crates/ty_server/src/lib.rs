@@ -5,6 +5,9 @@ use lsp_server::Connection;
 use ruff_db::system::{OsSystem, SystemPathBuf};
 
 pub use crate::capabilities::COMMAND_LINE_FLAGS;
+pub use crate::command_line::{
+    Choice, CommandLine, CommandOption, CommandValue, PathHint, Positional, ValueKind,
+};
 use crate::db::Db;
 pub use crate::logging::{LogLevel, init_logging};
 pub use crate::server::Server;
@@ -15,6 +18,7 @@ pub use document::{NotebookDocument, PositionEncoding, TextDocument};
 pub(crate) use session::Session;
 
 mod capabilities;
+mod command_line;
 mod db;
 mod document;
 mod logging;
@@ -30,7 +34,8 @@ pub(crate) const DIAGNOSTIC_NAME: &str = "ty";
 /// result type is needed.
 pub(crate) type Result<T> = anyhow::Result<T>;
 
-pub fn run_server() -> anyhow::Result<()> {
+/// run the language server over stdio, answering `by/commandLine` with `command_line`
+pub fn run_server(command_line: CommandLine) -> anyhow::Result<()> {
     let _ = print_interactive_warning();
     let four = NonZeroUsize::new(4).unwrap();
 
@@ -71,6 +76,7 @@ pub fn run_server() -> anyhow::Result<()> {
         false,
         project_server_directory,
         true,
+        Arc::new(command_line),
     )
     .context("Failed to start server")?
     .run();

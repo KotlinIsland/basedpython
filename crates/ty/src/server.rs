@@ -21,7 +21,7 @@ pub(crate) fn run(args: &ServerCommand) -> Result<ExitStatus> {
     if args.find_executable {
         return find_executable();
     }
-    ty_server::run_server()?;
+    ty_server::run_server(crate::command_line::command_line())?;
     Ok(ExitStatus::Success)
 }
 

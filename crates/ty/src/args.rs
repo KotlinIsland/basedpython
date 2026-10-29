@@ -70,7 +70,7 @@ pub(crate) enum Command {
     Run {
         /// module to run (e.g. `by run main` looks for main.by)
         /// [default: the `run.main` entry point configured for the project]
-        module: Option<String>,
+        module: Option<ModuleName>,
         /// arguments forwarded to the program, as `sys.argv[1:]`
         #[arg(
             trailing_var_arg = true,
@@ -188,7 +188,7 @@ pub(crate) enum Command {
         /// in an input as it does in the module. its `def main` is a function like any other in
         /// a session: nothing calls it
         #[arg(long, value_name = "MODULE")]
-        module: Option<String>,
+        module: Option<ModuleName>,
     },
 
     /// Start a new project.
@@ -762,6 +762,46 @@ pub(crate) struct ServerCommand {
     pub(crate) find_executable: bool,
 }
 
+/// a module of the project, by its dotted name, as `by run` and `by repl --module` take one
+///
+/// a type of its own rather than a `String`, so that the command line `by` describes to an
+/// editor says which values are modules from the parser itself: see `command_line`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleName(String);
+
+impl From<String> for ModuleName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
+impl std::ops::Deref for ModuleName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// a rule, by its name, or `all`, as `--error`, `--warn`, `--ignore` and `by explain rule` take
+/// one: a type of its own for the reason [`ModuleName`] is
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuleName(String);
+
+impl From<String> for RuleName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
+impl std::ops::Deref for RuleName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A list of rules to enable or disable with a given severity.
 ///
 /// This type is used to parse the `--error`, `--warn`, and `--ignore` arguments
@@ -789,7 +829,7 @@ impl clap::FromArgMatches for RulesArg {
             (lint::Level::Error, "error"),
         ] {
             let indices = matches.indices_of(arg_id).into_iter().flatten();
-            let levels = matches.get_many::<String>(arg_id).into_iter().flatten();
+            let levels = matches.get_many::<RuleName>(arg_id).into_iter().flatten();
             rules.extend(
                 indices
                     .zip(levels)
@@ -803,7 +843,7 @@ impl clap::FromArgMatches for RulesArg {
         Ok(Self(
             rules
                 .into_iter()
-                .map(|(_, rule, level)| (rule.to_owned(), level))
+                .map(|(_, rule, level)| (rule.0.clone(), level))
                 .collect(),
         ))
     }
@@ -828,6 +868,7 @@ impl clap::Args for RulesArg {
                     Use 'all' to apply to all rules.",
                 )
                 .value_name("RULE")
+                .value_parser(clap::value_parser!(RuleName))
                 .help_heading(HELP_HEADING),
         )
         .arg(
@@ -840,6 +881,7 @@ impl clap::Args for RulesArg {
                     Use 'all' to apply to all rules.",
                 )
                 .value_name("RULE")
+                .value_parser(clap::value_parser!(RuleName))
                 .help_heading(HELP_HEADING),
         )
         .arg(
@@ -852,6 +894,7 @@ impl clap::Args for RulesArg {
                     Use 'all' to apply to all rules.",
                 )
                 .value_name("RULE")
+                .value_parser(clap::value_parser!(RuleName))
                 .help_heading(HELP_HEADING),
         )
     }
@@ -1014,7 +1057,7 @@ pub(crate) enum ExplainCommand {
         ///
         /// Defaults to all rules if omitted.
         #[arg(hide_possible_values = true)]
-        rule: Option<String>,
+        rule: Option<RuleName>,
 
         /// Output format
         #[arg(long, value_enum, default_value = "text")]

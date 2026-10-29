@@ -9944,3 +9944,105 @@ fn run_declares_by_s_own_python_in_the_tree() {
         );
     }
 }
+
+/// write one language server message, framed as the protocol frames it
+fn send_lsp(stdin: &mut ChildStdin, message: &serde_json::Value) {
+    let body = message.to_string();
+    write!(stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).expect("the server's stdin");
+    stdin.flush().expect("the server's stdin");
+}
+
+/// read one language server message
+fn receive_lsp(stdout: &mut BufReader<std::process::ChildStdout>) -> serde_json::Value {
+    let mut length = None;
+    loop {
+        let mut header = String::new();
+        stdout.read_line(&mut header).expect("a header");
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some(value) = header.strip_prefix("Content-Length: ") {
+            length = Some(value.parse::<usize>().expect("a length"));
+        }
+    }
+    let mut body = vec![0; length.expect("a Content-Length header")];
+    std::io::Read::read_exact(stdout, &mut body).expect("the body");
+    serde_json::from_slice(&body).expect("a json message")
+}
+
+/// `by server` answers `by/commandLine` with the command line of the `by` it is, described from
+/// the parser that parses it: a module where `by run` takes one, and the program's arguments after
+#[test]
+fn the_server_describes_by_s_own_command_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("server")
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn by server");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"processId": null, "rootUri": null, "capabilities": {}}}),
+    );
+    let answer = loop {
+        let message = receive_lsp(&mut stdout);
+        if message["id"] == 1 && message.get("method").is_none() {
+            send_lsp(
+                &mut stdin,
+                &serde_json::json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+            );
+            send_lsp(
+                &mut stdin,
+                &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "by/commandLine"}),
+            );
+        } else if message["id"] == 2 && message.get("method").is_none() {
+            break message;
+        } else if let Some(id) = message
+            .get("id")
+            .filter(|_| message.get("method").is_some())
+        {
+            // a request of the server's own, which it waits on before it answers ours
+            let result = match message["params"]["items"].as_array() {
+                Some(items) => serde_json::Value::Array(vec![serde_json::Value::Null; items.len()]),
+                None => serde_json::Value::Null,
+            };
+            send_lsp(
+                &mut stdin,
+                &serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            );
+        }
+    };
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+    );
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "method": "exit"}),
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    let by = &answer["result"];
+    assert_eq!(by["name"], "by", "{answer}");
+    let run = by["subcommands"]
+        .as_array()
+        .and_then(|commands| commands.iter().find(|command| command["name"] == "run"))
+        .unwrap_or_else(|| panic!("no `run`:\n{answer}"));
+    assert_eq!(run["positionals"][0]["value"]["kind"], "module", "{run}");
+    assert_eq!(run["positionals"][1]["trailing"], true, "{run}");
+    let python = run["options"]
+        .as_array()
+        .and_then(|options| options.iter().find(|option| option["long"] == "python"))
+        .unwrap_or_else(|| panic!("no `--python`:\n{run}"));
+    assert_eq!(python["value"]["kind"], "path", "{python}");
+}
