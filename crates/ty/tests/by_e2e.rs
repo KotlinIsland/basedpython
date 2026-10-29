@@ -1274,6 +1274,31 @@ fn coverage_interpreter() -> (String, bool) {
     (python, importable)
 }
 
+/// The cores coverage.py can measure with on `python`, decided as coverage.py
+/// decides it: `ctrace` needs its C tracer, which its build for free-threaded
+/// python 3.13 lacks, and `sysmon` needs `sys.monitoring`, which python 3.12 added
+fn coverage_cores(python: &str) -> Vec<String> {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import coverage.env\n\
+             try:\n    from coverage.tracer import CTracer\nexcept ImportError:\n    pass\n\
+             else:\n    print('ctrace')\n\
+             if coverage.env.PYBEHAVIOR.pep669:\n    print('sysmon')",
+        ])
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// A project with a transpiled module that runs only partly, a hand-written
 /// `.py` the build carries over, and an entry point calling into both.
 fn project_with_partly_covered_modules(dir: &Path) {
@@ -1498,7 +1523,12 @@ fn run_coverage_reports_a_by_module_that_never_ran() {
     .unwrap();
     let project = dir.path().canonicalize().unwrap();
 
-    for core in ["ctrace", "sysmon"] {
+    let cores = coverage_cores(&python);
+    assert!(
+        !cores.is_empty(),
+        "coverage.py has no core to test on {python}"
+    );
+    for core in &cores {
         let output = Command::new(env!("CARGO_BIN_EXE_by"))
             .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .env("COVERAGE_CORE", core)
