@@ -9,7 +9,7 @@ expression: diagnostics
       "range": {
         "start": {
           "line": 1,
-          "character": 9
+          "character": 4
         },
         "end": {
           "line": 1,

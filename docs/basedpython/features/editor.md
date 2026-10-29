@@ -1035,14 +1035,14 @@ tokens are sent, for an editor that draws something else in their place:
 | `experimental.unreachableSemanticTokenModifier` | marks every token inside a range reported as unreachable code with the modifier `unreachable`, and adds one for each part of that code that had none |
 
 the ranges the last two act on are exactly the ranges of the unreachable-code
-hints, the parts of a statement included — in `print(exit())` they are the
-parentheses, and `print` and `exit` are left as they are. both are honoured by
+hints, the parts of a statement included — in `print(exit())` they are
+`print(` and `)`, and `exit` is left as it is. both are honoured by
 `textDocument/semanticTokens/full` and `textDocument/semanticTokens/range`; the
 server offers no delta requests
 
 `unreachableWithoutSemanticTokens` is for an editor that greys unreachable code
 with a colour of the same weight as a token's, where the token's colour would
-otherwise win: of an unreachable `print(1)` only the parentheses would be grey.
+otherwise win: of an unreachable `print(1)` only the parentheses would be grey
 
 `unreachableSemanticTokenModifier` is for an editor that fades unreachable code
 in its own colours, and finds the colour of a token by its type and the fading
@@ -1979,25 +1979,39 @@ well, in as many ranges as it takes, several on one line:
 
 ```python
 def f():
-    print(exit())   # `(` and `)`: the call to `print` is never made
+    print(exit())   # `print(` and `)`: the call to `print` is never made
     return          # unreachable
 ```
 
-`print` itself is not reported: python looks it up before it calls `exit`. the
-parts reported are the operation each enclosing expression would have performed
-with the call's value and the operands it would have evaluated next — `+` and
-`+ b` in `x = a + exit() + b`, and `x =`, since the store is never made — the
-keyword of a `return`, a `raise` or a `del`, and the header of a `for`, a `with`
-or a `match` around the call. each range is trimmed of the whitespace around it
+a call whose arguments never finish being evaluated is never made, and its
+callee is reported with its parentheses — `print(` in `print(exit())`,
+`obj.method(` in `obj.method(exit())` — when the callee only looks something
+up: a name, an attribute of one, or one subscripted with a constant or a name,
+`handlers["k"](`. python looks it up before the arguments, but the lookup is
+reported as part of the call it names, which is never made. a callee that calls
+or computes something of its own, `f()` in
+`f()(exit())` or `xs[i()]`, did that, and is not reported, nor is an argument
+evaluated before the one that never returns, `a()` in `print(a(), exit())`.
+the other parts reported are the operation each enclosing expression would have
+performed with the call's value and the operands it would have evaluated next —
+`+` and `+ b` in `x = a + exit() + b`, and `x =`, since the store is never made —
+the keyword of a `return`, a `raise` or a `del`, and the header of a `for`, a
+`with` or a `match` around the call. each range is trimmed of the whitespace
+around it, and parentheses written around an operand stay with the operand. an
+operand that is not a callee is never reported, even a lookup: `a` in
+`a + exit()` and `d` in `d[exit()]` are values the program already has, and a
+decorator is not reported, since a `def` or a `class` is not read this way
 
 a call counts only where the statement certainly makes it: not in the right
-operand of `and`, `or` or `??`, a branch of a conditional expression, a lambda,
-anything of a comprehension but its first iterable, an optional chain past its
-`?.`, an `assert`, or the test of an `if` or a `while`. and a call inside a
-larger expression ends the flow only when its callee says that it never returns — a function declared to return
-`Never` or whose body never completes, or a value declared with a type whose call
-returns `Never`, as the builtin `exit` is — not when a generic call's result is
-merely specialized to `Never`
+operand of `and`, `or` or `??`, a branch of a conditional expression, a lambda's
+body, anything of a comprehension but its first iterable, an optional chain past
+its `?.`, an `assert`, or the test of an `if` or a `while`. a lambda's defaults
+and the value of a `cast` count, since they are evaluated where they are
+written. and a call inside a larger expression ends the flow only when its callee
+says that it never returns — a function declared to return `Never` or whose body
+never completes, or a value declared with a type whose call returns `Never`, as
+the builtin `exit` is — not when a generic call's result is merely specialized to
+`Never`
 
 ## the whole project's diagnostics
 

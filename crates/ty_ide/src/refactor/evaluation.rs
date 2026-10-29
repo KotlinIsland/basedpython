@@ -9,6 +9,7 @@
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal, walk_node};
 use ruff_python_ast::{self as ast, AnyNodeRef, CmpOp, Expr, Operator, Stmt, UnaryOp};
 use ruff_text_size::Ranged;
+use ty_python_core::evaluation_order::is_optional_chain;
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::ide_support::{
     BuiltinScalar, builtin_scalar_kinds, is_module_value,
@@ -724,17 +725,5 @@ impl Walk<'_, '_> {
             return Some(found);
         }
         Some(Placement::NotOnce(NotOnce::Comprehension))
-    }
-}
-
-/// Whether `expr` is part of a basedpython optional chain: a `?.` access, or a
-/// trailer applied to one. A chain is evaluated as a whole — an absent receiver
-/// skips every trailer after it — so no link of it is evaluated on its own.
-fn is_optional_chain(expr: &Expr) -> bool {
-    match expr {
-        Expr::Attribute(attribute) => attribute.optional || is_optional_chain(&attribute.value),
-        Expr::Call(call) => is_optional_chain(&call.func),
-        Expr::Subscript(subscript) => is_optional_chain(&subscript.value),
-        _ => false,
     }
 }

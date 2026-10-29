@@ -169,6 +169,24 @@ a = 1
 reveal_type(f(a cast object))  # revealed: object
 ```
 
+## a cast evaluates its value
+
+The value is evaluated wherever the cast is written, so a call in it that never returns ends the
+flow there, as it would without the cast.
+
+```by
+from typing import NoReturn
+
+def stop() -> NoReturn:
+    raise Exception()
+
+def count(x: object) -> int:
+    return 0
+
+def f() -> NoReturn:
+    x = count(stop()) cast object
+```
+
 ## not valid in `.py` files
 
 `cast` as an infix soft keyword is basedpython-only. A `.py` file using it gets a parse error from

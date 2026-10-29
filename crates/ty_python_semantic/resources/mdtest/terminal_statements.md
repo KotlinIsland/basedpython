@@ -1012,6 +1012,59 @@ def _() -> NoReturn:
     x = sys.exit(1)
 ```
 
+The same holds for every expression a statement certainly evaluates: the iterable of a `for`, the
+context manager of a `with`, the subject of a `match`, both sides of an augmented assignment, the
+target of a `del`, and a lambda's default, which is evaluated where the lambda is written.
+
+```py
+def _() -> NoReturn:
+    for x in sys.exit(1):
+        pass
+
+def _() -> NoReturn:
+    with open(sys.exit(1)):
+        pass
+
+def _() -> NoReturn:
+    match sys.exit(1):
+        case _:
+            pass
+
+def _(xs: list[int]) -> NoReturn:
+    xs[0] += sys.exit(1)
+
+def _(xs: list[int]) -> NoReturn:
+    del xs[sys.exit(1)]
+
+def _() -> NoReturn:
+    f = lambda x=sys.exit(1): x
+```
+
+The callee is found through its definition: an awaited `async` function, a method called on `self`,
+or a value declared with a callable type that returns `NoReturn`.
+
+```py
+from typing import Callable
+
+async def stop() -> NoReturn:
+    raise Exception()
+
+async def _() -> NoReturn:
+    print(await stop())
+
+class Stopper:
+    def stop(self) -> NoReturn:
+        raise Exception()
+
+    def run(self) -> NoReturn:
+        print(self.stop())
+
+halt: Callable[[], NoReturn]
+
+def _() -> NoReturn:
+    print(halt())
+```
+
 A call that the statement makes on one path only does not end the flow:
 
 ```py
