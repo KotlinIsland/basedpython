@@ -36,6 +36,7 @@ use ruff_python_ast::helpers::{
     return_guards, word_token_ranges,
 };
 use ruff_python_ast::script::ScriptTag;
+use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
     walk_stmt,
@@ -95,11 +96,15 @@ pub enum SemanticTokenType {
     /// python counterpart worth colouring.
     Operator,
     Regexp,
+    /// basedpython: only produced for code reported as unreachable, when the client asks for
+    /// every character of it to carry a token: a bracket, a comma, a colon or a dot, which is not
+    /// an operator
+    Punctuation,
 }
 
 impl SemanticTokenType {
     /// Returns all supported semantic token types as enum variants.
-    pub const fn all() -> [SemanticTokenType; 18] {
+    pub const fn all() -> [SemanticTokenType; 19] {
         [
             SemanticTokenType::Namespace,
             SemanticTokenType::Class,
@@ -119,6 +124,7 @@ impl SemanticTokenType {
             SemanticTokenType::Comment,
             SemanticTokenType::Operator,
             SemanticTokenType::Regexp,
+            SemanticTokenType::Punctuation,
         ]
     }
 
@@ -149,6 +155,7 @@ impl SemanticTokenType {
             SemanticTokenType::Comment => "comment",
             SemanticTokenType::Operator => "operator",
             SemanticTokenType::Regexp => "regexp",
+            SemanticTokenType::Punctuation => "punctuation",
         }
     }
 }
@@ -183,6 +190,9 @@ bitflags! {
         /// the name of a keyword argument in a call: `scale` in
         /// `cart.total(scale=2.0)`. its token type is `parameter`
         const KEYWORD_ARGUMENT = 1 << 8;
+        /// the token lies in code reported as unreachable, where the client asked for every
+        /// token there to say so; see [`mark_unreachable_code`]
+        const UNREACHABLE = 1 << 9;
     }
 }
 
@@ -207,8 +217,141 @@ impl SemanticTokenModifier {
             "annotation",
             "dunder",
             "keywordArgument",
+            "unreachable",
         ]
     }
+}
+
+/// `tokens`, the semantic tokens of `file` (in `range`, when given), with every one inside a
+/// range of unreachable code marked [`SemanticTokenModifier::UNREACHABLE`], and a token of its own
+/// added, marked the same, for every part of that code in `range` no token covered: a keyword
+/// such as `return`, an operator, a bracket, a comma, a comment
+///
+/// the ranges are [`unreachable_code`](crate::unreachable_code)'s, the very ranges of the
+/// unreachable-code hints, so an editor that fades the code those hints report rather than
+/// greying it can fade every character of it in its own colours: it finds the tokens it colours
+/// by their type, and the fading by the modifier
+pub fn mark_unreachable_code(
+    db: &dyn Db,
+    file: ruff_db::files::File,
+    tokens: &[SemanticToken],
+    range: Option<TextRange>,
+) -> Vec<SemanticToken> {
+    let unreachable = crate::unreachable_code(db, file);
+    if unreachable.ranges().is_empty() {
+        return tokens.to_vec();
+    }
+
+    // a token is marked by the whole of the code it lies in: a range request answers every
+    // token that overlaps the range, and one that sticks out of it is no less unreachable
+    let mut marked: Vec<SemanticToken> = tokens
+        .iter()
+        .map(|token| SemanticToken {
+            modifiers: if unreachable.contains(token.range) {
+                token.modifiers | SemanticTokenModifier::UNREACHABLE
+            } else {
+                token.modifiers
+            },
+            ..token.clone()
+        })
+        .collect();
+
+    let regions = unreachable
+        .ranges()
+        .iter()
+        .filter_map(|unreachable| match range {
+            Some(range) => unreachable
+                .intersect(range)
+                .filter(|range| !range.is_empty()),
+            None => Some(*unreachable),
+        });
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let lexed = parsed.tokens();
+    for region in regions {
+        let first = lexed.partition_point(|token| token.end() <= region.start());
+        for token in &lexed[first..] {
+            if token.start() >= region.end() {
+                break;
+            }
+            let Some(token_type) = unreachable_filler_type(token.kind()) else {
+                continue;
+            };
+            let Some(part) = token.range().intersect(region) else {
+                continue;
+            };
+            // the parts of the token no semantic token covers already
+            let covering = tokens.partition_point(|covered| covered.range.end() <= part.start());
+            let mut start = part.start();
+            for covered in &tokens[covering..] {
+                if covered.range.start() >= part.end() {
+                    break;
+                }
+                if covered.range.start() > start {
+                    marked.push(SemanticToken {
+                        range: TextRange::new(start, covered.range.start()),
+                        token_type,
+                        modifiers: SemanticTokenModifier::UNREACHABLE,
+                    });
+                }
+                start = start.max(covered.range.end());
+            }
+            if start < part.end() {
+                marked.push(SemanticToken {
+                    range: TextRange::new(start, part.end()),
+                    token_type,
+                    modifiers: SemanticTokenModifier::UNREACHABLE,
+                });
+            }
+        }
+    }
+    marked.sort_by_key(|token| (token.range.start(), token.range.end()));
+    marked
+}
+
+/// the type a token of unreachable code that has no semantic token is given: what it is spelled
+/// as. `None` for one with no characters to fade, a newline or an indent
+fn unreachable_filler_type(kind: TokenKind) -> Option<SemanticTokenType> {
+    Some(match kind {
+        TokenKind::Newline
+        | TokenKind::NonLogicalNewline
+        | TokenKind::Indent
+        | TokenKind::Dedent
+        | TokenKind::EndOfFile
+        | TokenKind::Unknown => return None,
+        TokenKind::Comment => SemanticTokenType::Comment,
+        TokenKind::Identifier => SemanticTokenType::Variable,
+        TokenKind::Int | TokenKind::Float | TokenKind::Complex => SemanticTokenType::Number,
+        TokenKind::True | TokenKind::False | TokenKind::None | TokenKind::Ellipsis => {
+            SemanticTokenType::BuiltinConstant
+        }
+        kind if kind.is_keyword() => SemanticTokenType::Keyword,
+        TokenKind::Lpar
+        | TokenKind::Rpar
+        | TokenKind::Lsqb
+        | TokenKind::Rsqb
+        | TokenKind::Lbrace
+        | TokenKind::Rbrace
+        | TokenKind::Comma
+        | TokenKind::Colon
+        | TokenKind::Semi
+        | TokenKind::Dot => SemanticTokenType::Punctuation,
+        // basedpython's own operators, which `is_operator` does not name
+        TokenKind::Question
+        | TokenKind::DoubleQuestion
+        | TokenKind::QuestionDot
+        | TokenKind::Exclamation => SemanticTokenType::Operator,
+        kind if kind.is_operator() => SemanticTokenType::Operator,
+        TokenKind::String
+        | TokenKind::FStringStart
+        | TokenKind::FStringMiddle
+        | TokenKind::FStringEnd
+        | TokenKind::TStringStart
+        | TokenKind::TStringMiddle
+        | TokenKind::TStringEnd => SemanticTokenType::String,
+        // a keyword or an operator, matched above, or an ipython escape command, `%time`, which
+        // is faded with the rest
+        _ => SemanticTokenType::Operator,
+    })
 }
 
 /// A semantic token with its position and classification.

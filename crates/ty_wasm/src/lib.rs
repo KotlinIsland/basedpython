@@ -1633,6 +1633,7 @@ pub enum SemanticTokenKind {
     Comment,
     Operator,
     Regexp,
+    Punctuation,
 }
 
 impl From<ty_ide::SemanticTokenType> for SemanticTokenKind {
@@ -1656,6 +1657,7 @@ impl From<ty_ide::SemanticTokenType> for SemanticTokenKind {
             ty_ide::SemanticTokenType::Comment => Self::Comment,
             ty_ide::SemanticTokenType::Operator => Self::Operator,
             ty_ide::SemanticTokenType::Regexp => Self::Regexp,
+            ty_ide::SemanticTokenType::Punctuation => Self::Punctuation,
         }
     }
 }

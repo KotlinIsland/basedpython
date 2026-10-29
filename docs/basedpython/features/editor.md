@@ -991,6 +991,7 @@ where one fits; the others are basedpython's own
 | `comment`         | a comment in a django template                                                                                  |
 | `operator`        | punctuation in a django template or in a script's `# /// script` metadata                                       |
 | `regexp`          | a date or time in a script's `# /// script` metadata                                                            |
+| `punctuation`     | a bracket, a comma, a colon, a semicolon or a dot in unreachable code, for a client that asks; see below        |
 
 | modifier          | the token is                                                                       |
 | ----------------- | ---------------------------------------------------------------------------------- |
@@ -1003,6 +1004,7 @@ where one fits; the others are basedpython's own
 | `annotation`      | part of a type expression                                                          |
 | `dunder`          | a dunder name, `__init__` or `__name__`                                            |
 | `keywordArgument` | the name a keyword argument is passed by, `scale` in `total(scale=2.0)`            |
+| `unreachable`     | inside code reported as unreachable, for a client that asks; see below             |
 
 `functionScope` marks a parameter or a local, as against a module global or a
 class attribute. it is the binding that decides, not where the name is written:
@@ -1023,23 +1025,36 @@ as `cast(list[int], x)` does its first. a default value is not one. `dunder`
 marks a dunder wherever it is defined or read; a name that only starts with
 underscores is not one
 
-two experimental client capabilities, each `true` or left out, change which
+three experimental client capabilities, each `true` or left out, change which
 tokens are sent, for an editor that draws something else in their place:
 
-| capability                                      | leaves out                                                                                                       |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `experimental.languageInjection`                | the `string` token of a fragment `by/injections` reports, which the editor highlights in the fragment's language |
-| `experimental.unreachableWithoutSemanticTokens` | every token inside a range reported as [unreachable code](#unreachable-code)                                     |
+| capability                                      | changes                                                                                                                                              |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `experimental.languageInjection`                | leaves out the `string` token of a fragment `by/injections` reports, which the editor highlights in the fragment's language                          |
+| `experimental.unreachableWithoutSemanticTokens` | leaves out every token inside a range reported as [unreachable code](#unreachable-code)                                                              |
+| `experimental.unreachableSemanticTokenModifier` | marks every token inside a range reported as unreachable code with the modifier `unreachable`, and adds one for each part of that code that had none |
 
-the ranges the second leaves bare are exactly the ranges of the unreachable-code
-hints, the parts of a statement included — in `print(exit())` it is the
-parentheses, and `print` and `exit` keep their tokens. it is for an editor that
-greys unreachable code with a colour of the same weight as a token's, as
-IntelliJ does, where the token's colour would otherwise win: of an unreachable
-`print(1)` only the parentheses would be grey. an editor that fades the code
-instead, as VS Code does, wants the tokens under the fade, and does not ask.
-both `textDocument/semanticTokens/full` and `textDocument/semanticTokens/range`
-honour it; the server offers no delta requests
+the ranges the last two act on are exactly the ranges of the unreachable-code
+hints, the parts of a statement included — in `print(exit())` they are the
+parentheses, and `print` and `exit` are left as they are. both are honoured by
+`textDocument/semanticTokens/full` and `textDocument/semanticTokens/range`; the
+server offers no delta requests
+
+`unreachableWithoutSemanticTokens` is for an editor that greys unreachable code
+with a colour of the same weight as a token's, where the token's colour would
+otherwise win: of an unreachable `print(1)` only the parentheses would be grey.
+
+`unreachableSemanticTokenModifier` is for an editor that fades unreachable code
+in its own colours, and finds the colour of a token by its type and the fading
+by the modifier. so that every character of the code can be faded, a part that
+has no token otherwise gets one: a keyword such as `return` a `keyword`, an
+operator an `operator`, a comment a `comment`, a name a `variable`, and a
+bracket, a comma, a colon, a semicolon or a dot a `punctuation`, which is
+basedpython's own type, since none of them is an operator. a client that asks
+for both gets the marks
+
+an editor that fades the code over the tokens it already has, as VS Code does,
+asks for neither
 
 ## keyword highlighting
 
@@ -1945,8 +1960,13 @@ chosen. both take `textHash`
 ## unreachable code
 
 code that can never run is reported as a hint: one diagnostic per range, with
-severity `4` (hint), the tag `1` (`Unnecessary`) and no code, for an editor to
-grey out. its message is `Code is always unreachable` where no environment could
+severity `4` (hint), the tag `1` (`Unnecessary`) and the code
+`unreachable-code`, for an editor to grey out or fade. the code tells the hint
+apart from an unused name's, which has none; it names the hint and no rule. the
+type checker does not report unreachable code, so no configuration selects it,
+`by/rules` does not list it, `by/explainRule` answers `null` for it, and a
+`# ty: ignore[unreachable-code]` comment names an unknown rule rather than
+hiding it. its message is `Code is always unreachable` where no environment could
 reach it — after a `return`, a `raise`, a `continue`, or a call that never
 returns — and
 `Code is unreachable\nThis may depend on your current environment and settings`

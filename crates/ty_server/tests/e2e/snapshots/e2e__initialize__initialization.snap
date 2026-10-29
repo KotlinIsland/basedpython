@@ -114,7 +114,8 @@ expression: initialization_result
           "typeParameter",
           "comment",
           "operator",
-          "regexp"
+          "regexp",
+          "punctuation"
         ],
         "tokenModifiers": [
           "definition",
@@ -125,7 +126,8 @@ expression: initialization_result
           "functionScope",
           "annotation",
           "dunder",
-          "keywordArgument"
+          "keywordArgument",
+          "unreachable"
         ]
       },
       "range": true,
