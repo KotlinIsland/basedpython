@@ -3297,6 +3297,60 @@ pub fn is_based_enum(class: &crate::StmtClassDef) -> bool {
     })
 }
 
+/// basedpython: whether evaluating `expr` always leaves before it has a value, by reaching a
+/// `raise`, `return`, `break` or `continue` written inside it: `print(raise E)`
+///
+/// only what is evaluated every time counts. the second operand of `and` or `??` and a branch of a
+/// conditional expression are not, unless each branch leaves.
+pub fn expression_always_leaves(expr: &Expr) -> bool {
+    match expr {
+        Expr::Statement(statement) => matches!(
+            *statement.stmt,
+            Stmt::Raise(_) | Stmt::Return(_) | Stmt::Break(_) | Stmt::Continue(_)
+        ),
+        Expr::Call(call) => {
+            expression_always_leaves(&call.func)
+                || call.arguments.args.iter().any(expression_always_leaves)
+                || call
+                    .arguments
+                    .keywords
+                    .iter()
+                    .any(|keyword| expression_always_leaves(&keyword.value))
+        }
+        Expr::BinOp(binary) => {
+            expression_always_leaves(&binary.left)
+                || (binary.op != Operator::Coalesce && expression_always_leaves(&binary.right))
+        }
+        Expr::UnaryOp(unary) => expression_always_leaves(&unary.operand),
+        Expr::BoolOp(boolean) => boolean.values.first().is_some_and(expression_always_leaves),
+        Expr::Compare(compare) => compare
+            .operands
+            .iter()
+            .take(2)
+            .any(expression_always_leaves),
+        Expr::If(conditional) => {
+            expression_always_leaves(&conditional.test)
+                || (expression_always_leaves(&conditional.body)
+                    && expression_always_leaves(&conditional.orelse))
+        }
+        Expr::Attribute(attribute) => expression_always_leaves(&attribute.value),
+        Expr::Subscript(subscript) => {
+            expression_always_leaves(&subscript.value) || expression_always_leaves(&subscript.slice)
+        }
+        Expr::Starred(starred) => expression_always_leaves(&starred.value),
+        Expr::Named(named) => expression_always_leaves(&named.value),
+        Expr::Await(awaited) => expression_always_leaves(&awaited.value),
+        Expr::Tuple(tuple) => tuple.elts.iter().any(expression_always_leaves),
+        Expr::List(list) => list.elts.iter().any(expression_always_leaves),
+        Expr::Set(set) => set.elts.iter().any(expression_always_leaves),
+        Expr::Dict(dict) => dict.items.iter().any(|item| {
+            item.key.as_ref().is_some_and(expression_always_leaves)
+                || expression_always_leaves(&item.value)
+        }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;

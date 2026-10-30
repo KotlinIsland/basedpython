@@ -18,6 +18,17 @@ with (raise   TypeError):
     pass
 for item in (raise   TypeError):
     pass
+value = 1 if condition else raise
+values = [ raise , 1 ]
+assert condition, raise
+key = lambda item = raise : item
+match subject:
+    case 1 if raise :
+        pass
+match raise :
+    case _:
+        pass
+raise ;
 ```
 
 ## Output
@@ -36,4 +47,15 @@ with raise   TypeError:
     pass
 for item in raise   TypeError:
     pass
+value  = 1 if condition else raise
+values = [raise, 1]
+assert condition, raise
+key = lambda item=raise: item
+match subject:
+    case 1 if raise:
+        pass
+match raise:
+    case _:
+        pass
+raise
 ```

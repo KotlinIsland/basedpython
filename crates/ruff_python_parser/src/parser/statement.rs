@@ -586,6 +586,16 @@ impl ruff_python_ast::visitor::transformer::Transformer for FieldRewriter {
     }
 }
 
+/// the context of what a `raise` written inside an expression raises. it is a value of its own, so
+/// all it takes from around it is what tells a `!r` from a force-unwrap
+fn raise_operand_context(around: ExpressionContext) -> ExpressionContext {
+    if around.is_in_interpolation() {
+        ExpressionContext::default().with_in_interpolation()
+    } else {
+        ExpressionContext::default()
+    }
+}
+
 impl<'src> Parser<'src> {
     /// Returns `true` if the current token is the start of a compound statement.
     pub(super) fn at_compound_stmt(&self) -> bool {
@@ -2951,7 +2961,7 @@ impl<'src> Parser<'src> {
             TokenKind::Pass => Stmt::Pass(self.parse_pass_statement()),
             TokenKind::Continue => Stmt::Continue(self.parse_continue_statement()),
             TokenKind::Break => Stmt::Break(self.parse_break_statement()),
-            TokenKind::Raise => Stmt::Raise(self.parse_raise_statement(false)),
+            TokenKind::Raise => Stmt::Raise(self.parse_raise_statement(None)),
             TokenKind::Del => Stmt::Delete(self.parse_delete_statement()),
             TokenKind::Assert => Stmt::Assert(self.parse_assert_statement()),
             TokenKind::Global => Stmt::Global(self.parse_global_statement()),
@@ -3228,22 +3238,18 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at a `raise` token.
     ///
     /// See: <https://docs.python.org/3/reference/simple_stmts.html#grammar-token-python-grammar-raise_stmt>
-    fn parse_raise_statement(&mut self, in_expression: bool) -> ast::StmtRaise {
+    ///
+    /// `in_expression` is the context of the expression the `raise` is part of, if it is
+    /// written inside one.
+    fn parse_raise_statement(
+        &mut self,
+        in_expression: Option<ExpressionContext>,
+    ) -> ast::StmtRaise {
         let start = self.node_start();
         self.bump(TokenKind::Raise);
 
         let exc = match self.current_token_kind() {
-            TokenKind::Newline => None,
-            // basedpython: a bare `raise` can end where the expression around it goes on
-            TokenKind::Rpar
-            | TokenKind::Rsqb
-            | TokenKind::Rbrace
-            | TokenKind::Comma
-            | TokenKind::Colon
-                if self.options.is_basedpython =>
-            {
-                None
-            }
+            TokenKind::Newline | TokenKind::Semi => None,
             TokenKind::From => {
                 // test_err raise_stmt_from_without_exc
                 // raise from exc
@@ -3256,15 +3262,18 @@ impl<'src> Parser<'src> {
                 );
                 None
             }
+            // basedpython: a bare `raise` ends where the expression around it goes on, which is
+            // wherever no value starts: `f(raise, 1)`, `f"{raise!r}"`, `raise if c else d`
+            _ if in_expression.is_some() && !self.at_value() => None,
             _ => {
                 // test_err raise_stmt_invalid_exc
                 // raise *x
                 // raise yield x
                 // raise x := 1
-                let exc = if in_expression {
+                let exc = if let Some(context) = in_expression {
                     // basedpython: a comma belongs to the expression the `raise` is part of:
                     // `f(raise A, b)` passes two arguments
-                    self.parse_conditional_expression_or_higher()
+                    self.parse_conditional_expression_or_higher_impl(raise_operand_context(context))
                 } else {
                     self.parse_expression_list(ExpressionContext::default())
                 };
@@ -3293,8 +3302,8 @@ impl<'src> Parser<'src> {
             // raise x from *y
             // raise x from yield y
             // raise x from y := 1
-            let cause = if in_expression {
-                self.parse_conditional_expression_or_higher()
+            let cause = if let Some(context) = in_expression {
+                self.parse_conditional_expression_or_higher_impl(raise_operand_context(context))
             } else {
                 self.parse_expression_list(ExpressionContext::default())
             };
@@ -3810,7 +3819,10 @@ impl<'src> Parser<'src> {
     ///
     /// If the parser isn't positioned at a token that can start a statement
     /// expression.
-    pub(super) fn parse_statement_expression(&mut self) -> Option<ast::ExprStatement> {
+    pub(super) fn parse_statement_expression(
+        &mut self,
+        context: ExpressionContext,
+    ) -> Option<ast::ExprStatement> {
         let start = self.node_start();
 
         // the suite-bearing forms end with a `Dedent`, having already eaten the
@@ -3828,7 +3840,10 @@ impl<'src> Parser<'src> {
             TokenKind::For => (Stmt::For(self.parse_for_statement(start)), true),
             TokenKind::While => (Stmt::While(self.parse_while_statement()), true),
             TokenKind::Try => (Stmt::Try(self.parse_try_statement()), true),
-            TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement(true)), false),
+            TokenKind::Raise => (
+                Stmt::Raise(self.parse_raise_statement(Some(context))),
+                false,
+            ),
             TokenKind::Return => (Stmt::Return(self.parse_return_statement()), false),
             // the loop escapes: `let first = next(it) ?? break` leaves the loop
             // when the call has no value to bind
@@ -3872,7 +3887,7 @@ impl<'src> Parser<'src> {
         let test = self.parse_conditional_expression_or_higher();
 
         let msg = if self.eat(TokenKind::Comma) {
-            if self.at_expr() {
+            if self.at_value() {
                 // test_err assert_invalid_msg_expr
                 // assert False, *x
                 // assert False, assert x
@@ -4927,7 +4942,7 @@ impl<'src> Parser<'src> {
             ExceptClauseKind::Normal
         };
 
-        let type_ = if self.at_expr() {
+        let type_ = if self.at_value() {
             // test_err except_stmt_invalid_expression
             // try:
             //     pass
@@ -7339,7 +7354,7 @@ impl<'src> Parser<'src> {
         let pattern = self.parse_match_patterns();
 
         let guard = if self.eat(TokenKind::If) {
-            if self.at_expr() {
+            if self.at_value() {
                 // test_ok match_stmt_valid_guard_expr
                 // match x:
                 //     case y if a := 1: ...
@@ -8164,7 +8179,7 @@ impl<'src> Parser<'src> {
         );
 
         let default = if self.eat(TokenKind::Equal) {
-            if self.at_expr() {
+            if self.at_value() {
                 // test_ok param_with_default
                 // def foo(x=lambda y: y): ...
                 // def foo(x=1 if True else 2): ...
@@ -9273,6 +9288,9 @@ impl<'src> Parser<'src> {
         let (first, second) = self.peek2();
 
         match first {
+            // basedpython: no identifier is followed by a `raise`
+            TokenKind::Raise if self.options.is_basedpython => MatchTokenKind::Keyword,
+
             // test_ok match_classify_as_identifier_1
             // match not in case
             TokenKind::Not if second == TokenKind::In => MatchTokenKind::Identifier,

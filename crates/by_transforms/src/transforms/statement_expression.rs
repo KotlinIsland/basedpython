@@ -222,7 +222,8 @@ impl Lower<'_> {
     }
 
     /// Rewrites a `raise` in the middle of an expression into a call of the runtime's helper,
-    /// as minimal edits so that whatever lowers inside its operands composes with it.
+    /// as one edit over the `raise` that keeps the source of its operands, so that whatever
+    /// lowers inside them composes with it and whatever moves the `raise` moves all of it.
     fn emit_raise_call(&mut self, raise: &StmtRaise) {
         self.raises_in_expression = true;
         let helper = crate::runtime::RAISE.name();
@@ -232,20 +233,18 @@ impl Lower<'_> {
         };
         let exception_range =
             parenthesized_value_range(self.source, exception.range(), raise.range.start());
-        self.text_edits.push((
-            TextRange::new(raise.range.start(), exception_range.start()),
-            format!("{helper}("),
-        ));
+        let mut fragments = vec![
+            Fragment::Lit(format!("{helper}(")),
+            Fragment::Src(exception_range),
+        ];
         if let Some(cause) = &raise.cause {
             let cause_range =
                 parenthesized_value_range(self.source, cause.range(), exception_range.end());
-            self.text_edits.push((
-                TextRange::new(exception_range.end(), cause_range.start()),
-                ", ".to_owned(),
-            ));
+            fragments.push(Fragment::Lit(", ".to_owned()));
+            fragments.push(Fragment::Src(cause_range));
         }
-        self.text_edits
-            .push((TextRange::empty(raise.range.end()), ")".to_owned()));
+        fragments.push(Fragment::Lit(")".to_owned()));
+        self.template_edits.push((raise.range, fragments));
     }
 
     fn next_temp(&mut self) -> String {
@@ -580,6 +579,20 @@ mod tests {
 
     fn check(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
+    }
+
+    #[test]
+    fn a_raise_in_a_parameter_default_moves_with_it() {
+        let out = transpile(
+            indoc! {"
+                class E(Exception): ...
+                def f(a=raise E) -> object:
+                    return a
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("_by_raise(E)"), "{out}");
     }
 
     #[test]

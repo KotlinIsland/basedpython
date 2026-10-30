@@ -1307,14 +1307,14 @@ impl<'src> Parser<'src> {
             | TokenKind::Match
                 if self.options.is_basedpython =>
             {
-                match self.parse_statement_expression() {
+                match self.parse_statement_expression(context) {
                     Some(expr) => Expr::Statement(expr),
                     // the `match` soft keyword was an ordinary identifier
                     None => Expr::Name(self.parse_name(context)),
                 }
             }
             TokenKind::For if self.options.is_basedpython && !context.is_for_excluded() => {
-                match self.parse_statement_expression() {
+                match self.parse_statement_expression(context) {
                     Some(expr) => Expr::Statement(expr),
                     None => Expr::Name(self.parse_name(context)),
                 }
@@ -5981,14 +5981,14 @@ impl ExpressionContext {
 
     /// basedpython: returns a new context that marks parsing as being inside the
     /// value of an interpolated-string replacement field
-    fn with_in_interpolation(self) -> Self {
+    pub(super) fn with_in_interpolation(self) -> Self {
         ExpressionContext(self.0 | ExpressionContextFlags::IN_INTERPOLATION)
     }
 
     /// basedpython: returns `true` if parsing the value of an interpolated-string
     /// replacement field, where a `!` that could introduce a conversion flag is
     /// read as that rather than as the postfix force-unwrap operator
-    const fn is_in_interpolation(self) -> bool {
+    pub(super) const fn is_in_interpolation(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_INTERPOLATION)
     }
 
