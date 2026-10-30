@@ -10609,3 +10609,37 @@ def locate():
         "{stdout}"
     );
 }
+
+/// the `.py` of another file may have been built on its own terms, for a target that can't hold a
+/// forwarded type argument, and is then a plain function that can't be subscripted
+#[test]
+fn a_forwarding_function_of_another_file_is_called_through_the_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lib.by"),
+        "class Box[T]:\n    init(var t: T)\n\ndef wrap[T](t: T) -> object:\n    return Box(t)\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from lib import wrap\n\ndef local[T](t: T) -> object:\n    return wrap(t)\n\nprint(wrap(1), local(1))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["transpile", "main.by"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("return _by_specialized(wrap, T)(t)"),
+        "a hop keeps to the helper:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("print(_by_specialized(wrap, _by_lit(1))(1), local[_by_lit(1)](1))"),
+        "only the function of another file goes through the helper:\n{stdout}"
+    );
+}

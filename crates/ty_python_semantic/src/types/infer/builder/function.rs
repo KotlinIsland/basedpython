@@ -1549,6 +1549,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ));
         }
 
+        if function.type_params.is_some() && self.scope().node(self.db()).as_class().is_some() {
+            self.context.record_runtime_read_check(
+                crate::types::runtime_reads::RuntimeReadSite::GenericMethod {
+                    function: function.node_index.load(),
+                },
+            );
+        }
+
         self.add_declaration_with_binding(
             function.into(),
             definition,

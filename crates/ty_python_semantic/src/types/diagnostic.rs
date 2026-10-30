@@ -8736,7 +8736,7 @@ pub(crate) fn report_shadowed_type_variable<'db>(
 /// basedpython: an override whose reified type-parameter list is incompatible
 /// with the base method's — reported under the same lint as any other Liskov
 /// violation, since the `[...]` step is part of the method's interface
-pub(super) fn report_invalid_reified_override<'db>(
+pub(crate) fn report_invalid_reified_override<'db>(
     context: &InferContext<'db, '_>,
     member: &str,
     subclass_definition: Definition<'db>,
@@ -8821,6 +8821,12 @@ pub(super) fn report_invalid_reified_override<'db>(
                  contravariant",
                 sub_admissible.display(db, env),
                 base_admissible.display(db, env),
+            ));
+        }
+        ReifiedOverrideError::Reordered => {
+            diagnostic.info(format_args!(
+                "a specialization through `{overridden_method}` fills the override's type \
+                 parameters by position, and the override declares them in another order"
             ));
         }
     }

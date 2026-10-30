@@ -656,6 +656,7 @@ class generic:
             raise TypeError("type arguments already specified")
         if len(items) == 1 and isinstance(items[0], tuple):
             items = items[0]
+        items = tuple(_by_literal_type(item) for item in items)
         # reject a bad arity here, not at the call
         _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
         return generic(self.fn, items, self.instance, fields, self.optional)
@@ -681,7 +682,9 @@ class generic:
                     )
                 raise TypeError(f"{fn.__name__}() missing a type argument for {name!r}")
         closure = tuple(
-            CellType(values[name]) if name in values else cell
+            CellType(values[name]) if name in values
+            else CellType(_ByNotRecorded) if name in self.optional
+            else cell
             for name, cell in zip(code.co_freevars, fn.__closure__ or ())
         )
         temp_fn = FunctionType(code, fn.__globals__, fn.__name__, fn.__defaults__, closure)
@@ -690,6 +693,13 @@ class generic:
         if self.instance is not None:
             return temp_fn(self.instance, *args, **kwargs)
         return temp_fn(*args, **kwargs)
+
+
+# what the cell of a forwarded type parameter holds when the call supplied nothing for it. a
+# value built with it, `Box[_ByNotRecorded](t)`, records nothing, and being a module-level class
+# it can still be pickled, which the `TypeVar` left in the cell could not be
+class _ByNotRecorded:
+    pass
 
 
 # `origin[args]` for a class the checker knows as generic but whose runtime may
@@ -912,7 +922,14 @@ def _by_recorded_alias(value):
     # forwards a type parameter and was called with no type argument for it still
     # builds `A[T](…)`, and an alias with a parameter left in it says nothing
     reified = getattr(value, "__orig_class__", None)
-    return None if getattr(reified, "__parameters__", ()) else reified
+    if getattr(reified, "__parameters__", ()) or _by_mentions_not_recorded(reified):
+        return None
+    return reified
+
+def _by_mentions_not_recorded(alias):
+    return alias is _ByNotRecorded or any(
+        _by_mentions_not_recorded(arg) for arg in getattr(alias, "__args__", ())
+    )
 
 def _by_generic_args(value, origin):
     # an explicit `A[int]()` records its specialization on the instance;
@@ -939,18 +956,27 @@ def _parametric_is(value, alias, variances):
 
 def _by_cell_is(value, cell):
     # `value is T`, for a reified `T`. the cell holds whatever the call supplied, and
-    # `isinstance` refuses a literal or a subscripted class outright
+    # `isinstance` refuses `None` and a subscripted class outright. a subscripted class is
+    # compared exactly, unless its own parameters say how they vary: `class B[out T]` lowers
+    # to a parameter whose variance the runtime can't see
     import typing
-    values = _by_literal_args(cell)
-    if values is not None:
-        return any(type(value) is type(member) and value == member for member in values)
+    if cell is None:
+        return value is None
     args = typing.get_args(cell)
     if not args:
         return isinstance(value, cell)
     origin = typing.get_origin(cell)
     if origin is typing.Union or origin is type(int | str):
         return any(_by_cell_is(value, arm) for arm in args)
-    return _parametric_is(value, cell, (0,) * len(args))
+    if origin is typing.Literal:
+        return isinstance(value, _by_literal_type(cell))
+    variances = tuple(
+        1 if getattr(param, "__covariant__", False)
+        else 2 if getattr(param, "__contravariant__", False)
+        else 0
+        for param in getattr(origin, "__parameters__", ())
+    )
+    return _parametric_is(value, cell, variances if len(variances) == len(args) else (0,) * len(args))
 
 def _parametric_is_lenient(value, alias, variances):
     # the checked-cast form: a value that records no reification has no
@@ -985,14 +1011,81 @@ def _by_member_annotation(klass, name):
             return annotations[name]
     return _by_proto_missing
 
-def _by_lit(*values):
-    # rebuild `typing.Literal[…]` for a literal type argument (`A[True]`
-    # specializes `T` to `Literal[True]`). spelled as a call so the member list
-    # needs no import of its own — this helper ships with the check
-    import typing
-    return typing.Literal[values]
+# a literal type as the runtime holds it, equal to its `typing.Literal[…]`. the cell of a reified
+# type parameter may hold one (`f(1)` solves `T` to `1`), and a body reads that cell as a class:
+# `isinstance(x, T)` and `T()` both refuse a `typing.Literal`
+class _ByLiteral(type):
+    types = {}
+
+    def __instancecheck__(cls, value):
+        return any(type(value) is type(member) and value == member for member in cls.__by_values__)
+
+    def __subclasscheck__(cls, other):
+        return cls == other or (
+            isinstance(other, _ByLiteral)
+            and all(isinstance(member, cls) for member in other.__by_values__)
+        )
+
+    def __call__(cls, *args, **kwargs):
+        # the one value the type holds, unless asked to build one, which has to be that value
+        members = cls.__by_values__
+        if not args and not kwargs and len(members) == 1:
+            return members[0]
+        value = type(members[0])(*args, **kwargs)
+        if not isinstance(value, cls):
+            raise TypeError(f"{value!r} is not a {cls!r}")
+        return value
+
+    def __getattr__(cls, name):
+        return getattr(type(cls.__by_values__[0]), name)
+
+    def __eq__(cls, other):
+        values = _by_literal_args(other)
+        return values is not None and _by_literal_members(values) == _by_literal_members(cls.__by_values__)
+
+    def __hash__(cls):
+        return hash(cls.__by_literal__)
+
+    def __repr__(cls):
+        return repr(cls.__by_literal__)
+
+
+__import__("copyreg").pickle(_ByLiteral, lambda literal: (_by_lit, literal.__by_values__))
+
+
+def _by_literal_members(values):
+    return {(type(value), value) for value in values}
+
+def _by_lit(*values, text=None, data=None):
+    # a literal type argument (`A[True]` specializes `T` to `Literal[True]`), spelled as a call
+    # so that it needs no import of its own. a string written below python 3.12 comes as its
+    # code points: it may be going into an f-string's replacement field, which can hold neither
+    # a backslash nor the f-string's own quote
+    if text is not None:
+        values += ("".join(map(chr, text)),)
+    if data is not None:
+        values += (bytes(data),)
+    key = tuple((type(value), value) for value in values)
+    literal = _ByLiteral.types.get(key)
+    if literal is None:
+        import typing
+        written = typing.Literal[values]
+        literal = _ByLiteral(
+            repr(written).removeprefix("typing."),
+            (),
+            {"__by_values__": values, "__by_literal__": written, "__module__": "typing"},
+        )
+        _ByLiteral.types[key] = literal
+    return literal
+
+def _by_literal_type(t):
+    # a `typing.Literal[…]` written out, as `f[1](1)` lowers to, read as a cell can hold it
+    values = _by_literal_args(t)
+    return t if values is None or isinstance(t, _ByLiteral) else _by_lit(*values)
 
 def _by_literal_args(t):
+    if isinstance(t, _ByLiteral):
+        return t.__by_values__
     import typing
     return typing.get_args(t) if typing.get_origin(t) is typing.Literal else None
 

@@ -742,6 +742,72 @@ fn run_program(python: &Interpreter, program: &str) {
     run_program_for(python, program, python.version);
 }
 
+const PICKLED_SPECIALIZATIONS_PROGRAM: &str = r#"
+import pickle
+
+class Box[T]:
+    def __init__(self, t: T):
+        self.t = t
+
+def forwards[T](t: T) -> object:
+    return Box(t)
+
+def untyped(x):
+    return forwards(x)
+
+unrecorded = pickle.loads(pickle.dumps(untyped(1)))
+assert unrecorded.t == 1
+assert not unrecorded is Box[int], "a value with no type argument records nothing"
+
+literal = pickle.loads(pickle.dumps(forwards(1)))
+assert literal is Box[1], "a literal type argument survives pickling"
+assert not literal is Box[2]
+print("ok")
+"#;
+
+/// a pep 695 type parameter can't be pickled, and a literal type argument isn't a module-level
+/// name, so both need saying how they pickle
+#[test]
+fn a_recorded_specialization_can_be_pickled() {
+    let Some(python) = common::python(PythonVersion::PY313) else {
+        return;
+    };
+    run_program(&python, PICKLED_SPECIALIZATIONS_PROGRAM);
+}
+
+const STRING_LITERAL_IN_AN_F_STRING_PROGRAM: &str = r#"
+class B[out T]:
+    def __init__(self, t: T):
+        self.t = t
+
+# `build` checks its result without forwarding `T`, which a target below 3.12 refuses
+def build[T](t: T) -> B[T]:
+    return make(t)
+
+def make(t):
+    return B(t)
+
+assert f"{build('x').t}" == "x"
+assert f'{B("y").t}' == "y"
+assert f"{B('x') is B['x']}" == "True"
+assert f"{B(b'x') is B[b'x']}" == "True"
+print("ok")
+"#;
+
+/// below 3.12 a replacement field can hold neither a backslash nor the f-string's own quote, and
+/// a string literal can reach one from the soundness check of a call as well as a construction
+#[test]
+fn a_string_literal_type_argument_is_written_for_an_f_string_below_3_12() {
+    let Some(python) = common::python(PythonVersion::PY311) else {
+        return;
+    };
+    run_program_for(
+        &python,
+        STRING_LITERAL_IN_AN_F_STRING_PROGRAM,
+        PythonVersion::PY311,
+    );
+}
+
 /// transpile `program` for `min_version` and run its module-level `assert`s on `python`
 fn run_program_for(python: &Interpreter, program: &str, min_version: PythonVersion) {
     let config = Config {
