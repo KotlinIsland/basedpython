@@ -62,7 +62,9 @@ use crate::typeshed::{TypeshedVersions, vendored_typeshed_versions};
 use crate::{ResolverEnvironment, ResolverFile, SearchPathSettings, SearchPathSettingsError};
 
 use self::search::ModuleSearchCursor;
-pub(crate) use self::search::{list_all_modules, list_root_modules, list_submodules};
+pub(crate) use self::search::{
+    list_all_modules, list_modules_where, list_root_modules, list_submodules,
+};
 
 /// Resolves a module name to a module.
 pub fn resolve_module<'db>(

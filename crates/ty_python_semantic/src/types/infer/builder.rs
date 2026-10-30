@@ -94,7 +94,8 @@ use crate::types::diagnostic::{
     UNSOUND_CAST, UNSOUND_YIELD, UNSUPPORTED_OPERATOR, USED_UNDERSCORE_NAME, YieldKind,
     autofix_with_notimplementederror, display_required_elements,
     hint_if_stdlib_attribute_exists_on_other_versions, refutable_unpacking_applies,
-    report_attempted_instantiation_of_abstract_class, report_attempted_protocol_instantiation,
+    report_attempted_instantiation_of_abstract_class,
+    report_attempted_instantiation_of_sealed_class, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
     report_bool_as_int_assignment, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_capturing_case_name,
@@ -13084,6 +13085,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         &self.context,
                         call_expression,
                         protocol,
+                    );
+                } else if class.is_sealed(db) {
+                    report_attempted_instantiation_of_sealed_class(
+                        &self.context,
+                        call_expression,
+                        class,
                     );
                 } else if self.context.is_lint_enabled(&CALL_NON_CALLABLE) {
                     let abstract_methods = AbstractMethods::of_class(db, class);

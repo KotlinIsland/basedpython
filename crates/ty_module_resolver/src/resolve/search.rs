@@ -62,6 +62,38 @@ pub(crate) fn list_all_modules<'db>(
     modules.into_boxed_slice()
 }
 
+/// Lists the file modules `keep` selects, sorted by name, without enumerating what is under a
+/// module it turns down. A namespace package has no file for `keep` to judge, so what is under one
+/// is always enumerated.
+pub(crate) fn list_modules_where<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+    keep: impl Fn(Module<'db>) -> bool,
+) -> Vec<Module<'db>> {
+    let mut modules = Vec::new();
+    let mut stack = vec![list_root_modules(db, resolver_environment)];
+    while let Some(listing) = stack.pop() {
+        modules.extend(
+            listing
+                .modules
+                .iter()
+                .copied()
+                .filter(|module| module.file(db).is_some() && keep(*module)),
+        );
+        for module in &listing.modules_with_possible_children {
+            if module.file(db).is_none() || keep(*module) {
+                let children = list_submodules(db, *module);
+                if !children.is_empty() {
+                    stack.push(children);
+                }
+            }
+        }
+        stack.extend(listing.stub_override_listings(db, resolver_environment));
+    }
+    modules.sort_by_cached_key(|module| module.name(db));
+    modules
+}
+
 /// Lists top-level modules across the configured search paths.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn list_root_modules<'db>(

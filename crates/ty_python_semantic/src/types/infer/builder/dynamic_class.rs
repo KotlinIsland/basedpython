@@ -6,7 +6,7 @@ use crate::types::class::{DynamicClassLiteral, DynamicClassScopeOffset};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     CYCLIC_CLASS_DEFINITION, DUPLICATE_BASE, INCONSISTENT_MRO, INVALID_ARGUMENT_TYPE, INVALID_BASE,
-    IncompatibleBases, SUBCLASS_OF_FINAL_CLASS, UNSUPPORTED_DYNAMIC_BASE,
+    IncompatibleBases, SUBCLASS_OF_FINAL_CLASS, SUBCLASS_OF_SEALED_CLASS, UNSUPPORTED_DYNAMIC_BASE,
     report_inconsistent_generic_bases,
 };
 use crate::types::enums::is_enum_class_by_inheritance;
@@ -212,6 +212,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             disjoint_bases.insert(disjoint_base, idx, class_type.class_literal(db));
                         }
                         continue;
+                    }
+
+                    // basedpython: only a class statement can join a `sealed` hierarchy, since
+                    // the class statements of a workspace are what close it
+                    if class_type.is_sealed(db)
+                        && let Some(builder) = self
+                            .context
+                            .report_lint(&SUBCLASS_OF_SEALED_CLASS, diagnostic_node)
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "Class `{name}` cannot inherit from sealed class `{}` without a \
+                             class statement",
+                            class_type.name(db)
+                        ));
                     }
 
                     if kind == DynamicClassKind::TypeCall

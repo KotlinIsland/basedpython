@@ -10569,7 +10569,7 @@ impl<'db> Type<'db> {
     /// whether nothing can be a subclass of this instance's nominal class
     ///
     /// only `@final`. **not** `sealed`, which closes the world *outside* the
-    /// declaring module and says nothing about a subclass inside it — a consumer
+    /// workspace and says nothing about a subclass inside it — a consumer
     /// that compiles a method call needs to know no override exists anywhere, and
     /// sealing licenses a switch over the known subclasses rather than a direct call
     pub fn nominal_class_is_exact(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {

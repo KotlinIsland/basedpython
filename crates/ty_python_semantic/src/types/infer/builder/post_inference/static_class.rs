@@ -56,7 +56,6 @@ use crate::{
         visitor::find_over_type,
     },
 };
-use ty_module_resolver::{SearchPath, file_to_module};
 use ty_python_core::{
     SemanticIndex, attribute_scopes, definition::DefinitionKind, scope::ScopeId, semantic_index,
 };
@@ -513,24 +512,17 @@ pub(crate) fn check_static_class_definitions<'db>(
             ));
         }
 
-        // basedpython: a `sealed` class may only be subclassed from within its
-        // own workspace. The class under inference is first-party (that's what we
-        // emit diagnostics for), so subclassing a sealed base that lives in a
-        // non-first-party file (a dependency) is forbidden.
+        // basedpython: a `sealed` class may only be subclassed from within its own workspace,
+        // whose class statements are what make a `match` over the class exhaustive. a class that
+        // is not among them would be a value such a `match` does not expect
         if base_class.is_sealed(db)
-            && !file_to_module(
-                db,
-                base_class
-                    .class_literal(db)
-                    .program_file(db)
-                    .resolver_file(db),
-            )
-            .and_then(|module| module.search_path(db))
-            .is_some_and(SearchPath::is_first_party)
+            && let Some((sealed, _)) = base_class.static_class_literal(db)
+            && !sealed.sealed_members(db).contains(&class)
             && let Some(builder) = context.report_lint(&SUBCLASS_OF_SEALED_CLASS, source_node)
         {
             builder.into_diagnostic(format_args!(
-                "Class `{}` cannot inherit from sealed class `{}` defined in another workspace",
+                "Class `{}` cannot inherit from sealed class `{}`, whose workspace does not \
+                 include this file",
                 class.name(db),
                 base_class.name(db),
             ));

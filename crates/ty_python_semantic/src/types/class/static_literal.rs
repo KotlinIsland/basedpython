@@ -62,6 +62,7 @@ use crate::{
         visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion_guard},
     },
 };
+use ty_module_resolver::{SearchPath, file_to_module, modules_where};
 use ty_python_core::{
     ProgramFile, attribute_scopes,
     definition::{Definition, DefinitionKind, DefinitionState},
@@ -1093,36 +1094,22 @@ impl<'db> StaticClassLiteral<'db> {
         })
     }
 
-    /// basedpython: the direct subclasses of this `sealed` class that the scope
-    /// binding it declares — the module for a module-level class, the function
-    /// or class body for one declared there — in source order, one per class
-    /// statement. these are the members of `__sealed_members__`, and the classes
-    /// the transpiler adds to it: it adds each one in that scope, right after its
-    /// class statement, and can name no subclass another scope declares
+    /// basedpython: the class statements anywhere in this `sealed` class's workspace that name it
+    /// as a direct base, by module name and then in source order, one per statement. these are the
+    /// classes a value of the sealed class can be an instance of, which is what makes a `match`
+    /// over them exhaustive, and the members of `__sealed_members__`
     ///
-    /// the class statements are read off the scope's child scopes rather than
-    /// off what its names hold at the end of the scope: a function body that
-    /// ends in `return` has no reachable end, and a name a class statement binds
-    /// may be rebound after it, but the statement is still one that adds a member
-    #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
+    /// the class statements are read off the scopes of each module rather than off what its names
+    /// hold at the end of the module: a function body that ends in `return` has no reachable end,
+    /// and a name a class statement binds may be rebound after it, but the statement still
+    /// declares a subclass
+    #[salsa::tracked(returns(deref), cycle_initial=|_, _, _| Box::default(), heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn sealed_members(self, db: &'db dyn Db) -> Box<[StaticClassLiteral<'db>]> {
-        let index = semantic_index(db, self.program_file(db));
-        let scope = self.definition(db).file_scope(db);
-        index
-            .child_scopes(scope)
-            // a generic class's body is a child of its type-parameter scope, which
-            // is the one the class statement opens in the enclosing scope
-            .filter_map(|(_, child)| child.node().as_class_or_class_type_parameters())
-            .filter_map(|class| original_class_type(db, index.expect_single_definition(class)))
-            .filter_map(ClassLiteral::as_static)
-            .filter(|candidate| {
-                *candidate != self
-                    && candidate.explicit_bases(db).iter().any(|base| {
-                        base.to_class_type(db).is_some_and(|class| {
-                            class.class_literal(db) == ClassLiteral::Static(self)
-                        })
-                    })
-            })
+        sealed_workspace_files(db, self.program_file(db))
+            .into_iter()
+            .flat_map(|file| sealed_subclass_statements(db, file))
+            .filter(|(sealed, _)| *sealed == self)
+            .map(|(_, member)| *member)
             .collect()
     }
 
@@ -4570,6 +4557,76 @@ pub(crate) fn based_enum_unit_member_names<'db>(
         })
         .collect();
     (!names.is_empty()).then_some(names)
+}
+
+/// basedpython: the files a `sealed` class declared in `declaring_file` may be subclassed from. for
+/// first-party code that is every first-party module, and for a dependency every module of its
+/// top-level package. a file that is no module of its search path, which nothing can import a
+/// class from, has only itself
+fn sealed_workspace_files<'db>(
+    db: &'db dyn Db,
+    declaring_file: ProgramFile<'db>,
+) -> Vec<ProgramFile<'db>> {
+    let Some(declaring_module) = file_to_module(db, declaring_file.resolver_file(db)) else {
+        return vec![declaring_file];
+    };
+    let Some(declaring_path) = declaring_module.search_path(db) else {
+        return vec![declaring_file];
+    };
+    let environment = declaring_file.resolver_environment(db);
+    let modules = if declaring_path.is_first_party() {
+        modules_where(db, environment, |module| {
+            module
+                .search_path(db)
+                .is_some_and(SearchPath::is_first_party)
+        })
+    } else {
+        let package = declaring_module.name(db).components().next();
+        modules_where(db, environment, |module| {
+            module.search_path(db) == Some(declaring_path)
+                && module.name(db).components().next() == package
+        })
+    };
+    let program = declaring_file.program(db);
+    modules
+        .into_iter()
+        .filter_map(|module| module.file(db))
+        .map(|file| program.program_file(db, file))
+        .collect()
+}
+
+/// basedpython: every class statement of `file` with a `sealed` class as a direct base, as the
+/// pair of that sealed class and the statement's class. a query of its own so that an edit to a
+/// module re-reads only that module's classes, and so that each sealed class of a workspace shares
+/// one reading of its files
+#[salsa::tracked(returns(deref), cycle_initial=|_, _, _| Box::default(), heap_size=ruff_memory_usage::heap_size)]
+fn sealed_subclass_statements<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+) -> Box<[(StaticClassLiteral<'db>, StaticClassLiteral<'db>)]> {
+    let index = semantic_index(db, file);
+    let mut statements = Vec::new();
+    for scope in index.scope_ids() {
+        let Some(class_stmt) = index.scope(scope.file_scope_id(db)).node().as_class() else {
+            continue;
+        };
+        let Some(ClassLiteral::Static(class)) =
+            original_class_type(db, index.expect_single_definition(class_stmt))
+        else {
+            continue;
+        };
+        for base in class.explicit_bases(db) {
+            if let Some(base) = base.to_class_type(db)
+                && let ClassLiteral::Static(base) = base.class_literal(db)
+                && base != class
+                && base.is_sealed(db)
+                && !statements.contains(&(base, class))
+            {
+                statements.push((base, class));
+            }
+        }
+    }
+    statements.into_boxed_slice()
 }
 
 /// True when a based enum lowers to an idiomatic `enum.Enum` — every variant is

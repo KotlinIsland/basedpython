@@ -52,6 +52,8 @@ use std::ops::ControlFlow;
 
 use super::RecursivelyDefined;
 use super::generic_gradual_intersections::{GenericIntersection, generic_gradual_intersection};
+use crate::types::class::StaticClassLiteral;
+use crate::types::class_base::ClassBase;
 use crate::types::enums::EnumComplement;
 use crate::types::function::FunctionType;
 use crate::types::regex;
@@ -2137,6 +2139,77 @@ impl<'db> InnerIntersectionBuilder<'db> {
         false
     }
 
+    /// Split a positive `sealed` class into its members when a negative excludes some of them.
+    ///
+    /// A value of a sealed class is an instance of one of the classes that subclass it directly, so
+    /// `A & ~B` is the union of `M & A & ~B` over those members. A member the negatives exclude
+    /// simplifies away, and when none is left the whole intersection is empty.
+    ///
+    /// ```by
+    /// sealed class A
+    /// class B(A)
+    /// class C(A)
+    ///
+    /// def f(a: A):
+    ///     if not isinstance(a, B) and not isinstance(a, C):
+    ///         reveal_type(a)  # Never
+    /// ```
+    ///
+    /// Each member is added by its top materialization rather than as a specialization of the
+    /// sealed class's arguments: how a member's type parameters relate to its base's is whatever
+    /// its class statement says, and intersecting with the positive that is still there lets the
+    /// relation between the two classes decide which arguments can occur.
+    ///
+    /// `expanded` holds the sealed classes already split on the way here. A generic sealed class is
+    /// still a positive of each of its branches, and is not to be split again.
+    fn split_sealed_class(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        expanded: &[StaticClassLiteral<'db>],
+    ) -> Option<Type<'db>> {
+        let sealed = self.positive.iter().find_map(|positive| {
+            let Type::NominalInstance(instance) = positive.resolve_type_alias(db) else {
+                return None;
+            };
+            let class = instance.class_literal(db, env);
+            let static_class = class.as_static()?;
+            (static_class.is_sealed(db)
+                && !expanded.contains(&static_class)
+                && self.negative.iter().any(|negative| {
+                    let Type::NominalInstance(negative) = negative.resolve_type_alias(db) else {
+                        return false;
+                    };
+                    negative
+                        .class(db, env)
+                        .iter_mro(db)
+                        .filter_map(ClassBase::into_class)
+                        .any(|base| base.class_literal(db) == class)
+                }))
+            .then_some(static_class)
+        })?;
+        // empty for a class with no members, and while a cycle through this query is resolved:
+        // neither says that no value of the class can exist
+        let members = sealed.sealed_members(db);
+        if members.is_empty() {
+            return None;
+        }
+        let expanded = [expanded, &[sealed]].concat();
+        Some(UnionType::from_elements(
+            db,
+            env,
+            members.iter().map(|member| {
+                let mut branch = self.clone();
+                branch.add_positive(
+                    db,
+                    env,
+                    Type::instance(db, env, member.top_materialization(db)),
+                );
+                branch.build_splitting(db, env, &expanded)
+            }),
+        ))
+    }
+
     /// Adds a positive type to this intersection.
     fn add_positive(
         &mut self,
@@ -2630,9 +2703,22 @@ impl<'db> InnerIntersectionBuilder<'db> {
         }
     }
 
-    fn build(mut self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+    fn build(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        self.build_splitting(db, env, &[])
+    }
+
+    fn build_splitting(
+        mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        expanded: &[StaticClassLiteral<'db>],
+    ) -> Type<'db> {
         if self.has_empty_enum_complement(db, env) {
             return Type::Never;
+        }
+
+        if let Some(split) = self.split_sealed_class(db, env, expanded) {
+            return split;
         }
 
         self.simplify_constrained_typevars(db, env);

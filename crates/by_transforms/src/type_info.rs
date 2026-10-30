@@ -16,6 +16,7 @@ use ty_python_semantic::RuntimeSpelling;
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
 use ty_python_semantic::types::ide_support::BaseTypeArgument;
+use ty_python_semantic::types::ide_support::SealedListing;
 use ty_python_semantic::types::repeated_underscore::{
     RepeatedUnderscoreRead, UnderscoreLowering, UnderscoreRefusal,
 };
@@ -799,9 +800,9 @@ pub(crate) trait TypeInfo {
     /// `docs/basedpython/frameworks/index.md`
     fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole>;
 
-    /// basedpython: the `sealed` classes `class_def` is a member of, each by the range of its
-    /// name, which ty types `__sealed_members__` from
-    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> Vec<TextRange>;
+    /// basedpython: the `sealed` classes `class_def` is a direct subclass of, and so a member of,
+    /// which ty types `__sealed_members__` from
+    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> SealedListing;
 
     /// the inferred annotation to synthesize for a bare class-body assignment
     /// `<name> = <value>` — the promoted display of `value`'s type (`1` →
@@ -1672,7 +1673,7 @@ impl TypeInfo for LoweringModel<'_> {
         ty_python_semantic::types::class_framework_role(self.db(), class)
     }
 
-    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> Vec<TextRange> {
+    fn sealed_classes_listing(&self, class_def: &StmtClassDef) -> SealedListing {
         ty_python_semantic::types::ide_support::sealed_classes_listing(self, class_def)
     }
 

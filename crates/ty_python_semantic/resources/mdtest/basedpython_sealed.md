@@ -1,12 +1,231 @@
 # basedpython: `sealed` classes
 
 A `sealed` class declares a closed hierarchy: it may be subclassed freely from anywhere within its
-own workspace, but not from a dependency. Every sealed class exposes a `__sealed_members__` tuple of
-the direct subclasses declared in the scope that declares it. The transpiler adds each subclass to
-the tuple as its class statement runs, so the tuple holds the subclasses whose statements have run,
-in the order they ran.
+own workspace, but not from a dependency, and a value of it is an instance of one of those
+subclasses. So a `match` covering them is exhaustive. Every sealed class exposes a
+`__sealed_members__` tuple of them. The transpiler adds each subclass to the tuple as its class
+statement runs, so the tuple holds the subclasses whose statements have run, in the order they ran.
 
-## `__sealed_members__` lists the same-module subclasses
+## A `match` covering every subclass is exhaustive
+
+```by
+sealed class A
+class B(A)
+class C(A)
+
+def statement_expression(a: A) -> str:
+    let result = match a:
+        case B(): "b"
+        case C(): "c"
+    return result  # no diagnostic
+
+def falls_through(a: A) -> int:
+    match a:
+        case B():
+            return 1
+        case C():
+            return 2
+```
+
+Leaving a subclass out is reported.
+
+```by
+def missing_case(a: A):
+    # error: [non-exhaustive-statement-expression]
+    let result = match a:
+        case B(): "b"
+```
+
+## Narrowing excludes one subclass at a time
+
+What is left of a sealed class after some of its subclasses are excluded is the others. The excluded
+ones stay as negatives, since a class can derive from two siblings.
+
+```by
+sealed class A
+class B(A)
+class C(A)
+
+def f(a: A):
+    match a:
+        case B():
+            reveal_type(a)  # revealed: B
+        case C():
+            reveal_type(a)  # revealed: C & not B
+        case _:
+            reveal_type(a)  # revealed: Never
+
+def g(a: A):
+    if isinstance(a, B):
+        reveal_type(a)  # revealed: B
+    else:
+        reveal_type(a)  # revealed: C & not B
+```
+
+## A negative unrelated to the hierarchy leaves the class as it is
+
+It says nothing about which subclass a value is.
+
+```by
+sealed class A
+class B(A)
+
+def f(a: A):
+    if not isinstance(a, int):
+        reveal_type(a)  # revealed: A & not int
+```
+
+## A subclass of a subclass is covered by the subclass
+
+```by
+sealed class A
+class B(A)
+class C(A)
+class D(B)
+
+def f(a: A) -> int:
+    match a:
+        case B():
+            return 1
+        case C():
+            return 2
+
+def g(a: A):
+    if not isinstance(a, D):
+        reveal_type(a)  # revealed: (B & not D) | (C & not D)
+```
+
+## A sealed subclass splits in turn
+
+```by
+sealed class Top
+sealed class Mid(Top)
+class Left(Mid)
+class Right(Mid)
+class Other(Top)
+
+def f(top: Top) -> int:
+    match top:
+        case Left() | Right():
+            return 1
+        case Other():
+            return 2
+```
+
+## Naming a sealed subclass covers everything under it
+
+```by
+sealed class Top
+sealed class Mid(Top)
+class Left(Mid)
+class Other(Top)
+
+def f(top: Top) -> int:
+    match top:
+        case Mid():
+            return 1
+        case Other():
+            return 2
+```
+
+## `self` is a value of the class
+
+```by
+sealed class A:
+    def f(self) -> int:
+        match self:
+            case B():
+                return 1
+            case C():
+                return 2
+
+class B(A)
+class C(A)
+```
+
+## A union with a sealed class
+
+```by
+sealed class A
+class B(A)
+class C(A)
+
+def f(value: A | int) -> int:
+    match value:
+        case int():
+            return 0
+        case B():
+            return 1
+        case C():
+            return 2
+```
+
+## A generic sealed class
+
+A subclass's relation to its base's type parameters is whatever its class statement says, so a
+subclass that cannot be a `Box[int]` needs no case.
+
+```by
+sealed class Box[in out T]
+class Wrap[T](Box[T])
+class OfInt(Box[int])
+class OfStr(Box[str])
+class OfList[T](Box[list[T]])
+
+def f(box: Box[int]) -> int:
+    match box:
+        case Wrap():
+            reveal_type(box)  # revealed: Wrap[int]
+            return 1
+        case OfInt():
+            return 2
+```
+
+A subclass that can be one still does.
+
+```by
+def g(box: Box[str]) -> int:  # error: [invalid-return-type]
+    match box:
+        case Wrap():
+            return 1
+```
+
+## A sealed class cannot be instantiated
+
+A `match` over the subclasses covers every value only because no value is an instance of the sealed
+class itself.
+
+```by
+sealed class A
+class B(A)
+
+A()  # error: [call-non-callable]
+B()  # no diagnostic
+```
+
+## A `type[A]` can be called
+
+It stands for a subclass as much as for the class itself.
+
+```by
+sealed class A
+
+def f(cls: type[A]):
+    cls()  # no diagnostic
+```
+
+## A class created through `type()` cannot join the hierarchy
+
+The class statements of the workspace are what close the hierarchy, and a call makes no such
+statement.
+
+```by
+sealed class A
+
+X = type("X", (A,), {})  # error: [subclass-of-sealed-class]
+```
+
+## `__sealed_members__` lists the subclasses
 
 A subclass may be declared under an `if`, in a loop or after a `return`, so how many of them the
 tuple holds is not known before the program runs.
@@ -61,10 +280,10 @@ assert len(make().__sealed_members__) == 2
 assert Outer.X.__sealed_members__ == (Outer.Y,)
 ```
 
-## subclasses declared in another scope are not members
+## subclasses declared in another scope are members
 
-The tuple is added to in the scope that declares the sealed class, which cannot name a class
-declared inside a nested function or class body.
+A subclass adds itself to the tuple as its statement runs, wherever it is written, so one declared
+in a function body is in the tuple once that function has run, and one a `match` has to cover.
 
 ```by
 sealed class A
@@ -77,9 +296,15 @@ def make():
 class Holder:
     class D(A): ...
 
-reveal_type(A.__sealed_members__)  # revealed: (*: type[B])
+reveal_type(A.__sealed_members__)  # revealed: (*: type[B | C | D])
+assert A.__sealed_members__ == (B, Holder.D)
 make()
-assert A.__sealed_members__ == (B,)
+assert len(A.__sealed_members__) == 3
+
+def f(a: A) -> int:  # error: [invalid-return-type]
+    match a:
+        case B():
+            return 1
 ```
 
 ## a subclass declared conditionally
@@ -164,20 +389,95 @@ assert Outer.members == (Outer.Y,)
 
 ## subclassing from within the workspace is allowed
 
+A subclass in another module is as much a member as one next to the sealed class, so the `match` in
+`shapes.by` has to cover `Circle`.
+
+`shapes.by`:
+
+```by
+sealed class Shape
+class Square(Shape)
+
+reveal_type(Shape.__sealed_members__)  # revealed: (*: type[Circle | Square])
+
+def not_covered(shape: Shape) -> int:  # error: [invalid-return-type]
+    match shape:
+        case Square():
+            return 1
+```
+
+`circle.by`:
+
+```by
+from shapes import Shape, Square
+
+class Circle(Shape): ...
+
+reveal_type(Circle())  # revealed: final Circle
+
+def covered(shape: Shape) -> int:
+    match shape:
+        case Square():
+            return 1
+        case Circle():
+            return 2
+```
+
+## a subclass written in python is a member too
+
 `shapes.by`:
 
 ```by
 sealed class Shape
 ```
 
-`circle.by`:
+`circle.py`:
+
+```py
+from shapes import Shape
+
+class Circle(Shape): ...
+```
+
+`main.by`:
+
+```by
+from shapes import Shape
+from circle import Circle
+
+def f(shape: Shape) -> int:
+    match shape:
+        case Circle():
+            return 1
+```
+
+## a subclass in a package is a member
+
+`shapes.by`:
+
+```by
+sealed class Shape
+```
+
+`pkg/__init__.by`:
+
+```by
+```
+
+`pkg/nested/circle.by`:
 
 ```by
 from shapes import Shape
 
 class Circle(Shape): ...
+```
 
-reveal_type(Circle())  # revealed: final Circle
+`main.by`:
+
+```by
+from shapes import Shape
+
+reveal_type(Shape.__sealed_members__)  # revealed: (*: type[Circle])
 ```
 
 ## subclassing a sealed class from a dependency is forbidden
@@ -202,4 +502,39 @@ sealed class Shape
 from dep import Shape
 
 class Circle(Shape): ...  # error: [subclass-of-sealed-class]
+```
+
+## a dependency's sealed class is closed over its own package
+
+The subclasses a dependency declares are the whole hierarchy, whichever of its modules they are in.
+
+```toml
+[environment]
+python = "/.venv"
+```
+
+`/.venv/<path-to-site-packages>/dep/__init__.by`:
+
+```by
+sealed class Shape
+```
+
+`/.venv/<path-to-site-packages>/dep/circle.by`:
+
+```by
+from dep import Shape
+
+class Circle(Shape): ...
+```
+
+`main.by`:
+
+```by
+from dep import Shape
+from dep.circle import Circle
+
+def f(shape: Shape) -> int:
+    match shape:
+        case Circle():
+            return 1
 ```
