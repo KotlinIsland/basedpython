@@ -361,8 +361,13 @@ pub(crate) trait TypeInfo {
     ) -> ty_python_semantic::ForwardedTypeParams;
 
     /// whether `value` is a generic class that nothing in view attests the runtime can
-    /// subscript, so that a subscript of it may raise where the checker accepts it
-    fn class_subscript_is_unattested(&self, value: &Expr) -> bool;
+    /// subscript at `min_version`, so that a subscript of it may raise where the checker
+    /// accepts it
+    fn class_subscript_is_unattested(
+        &self,
+        value: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool;
 
     /// whether the runtime refuses to subscript `value`, as far as can be told. stricter than
     /// [`Self::class_subscript_is_unattested`], whose lowering asks the runtime as it runs
@@ -1063,8 +1068,12 @@ impl TypeInfo for LoweringModel<'_> {
         SemanticModel::forwarded_type_params(self, function)
     }
 
-    fn class_subscript_is_unattested(&self, value: &Expr) -> bool {
-        SemanticModel::class_subscript_is_unattested(self, value)
+    fn class_subscript_is_unattested(
+        &self,
+        value: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool {
+        SemanticModel::class_subscript_is_unattested(self, value, min_version)
     }
 
     fn class_subscript_is_refused(&self, value: &Expr) -> bool {

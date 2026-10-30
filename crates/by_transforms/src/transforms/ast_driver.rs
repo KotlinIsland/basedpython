@@ -1567,7 +1567,9 @@ pub(crate) fn run_against_source<'a>(
         type_reification::TypeReificationPass::new(written, config.min_version);
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass { written };
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, written);
-    let class_subscript_pass = class_subscript::ClassSubscriptPass;
+    let class_subscript_pass = class_subscript::ClassSubscriptPass {
+        min_version: config.min_version,
+    };
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
         inferred_annotation::InferredAnnotationPass::new(written, config.min_version);
@@ -2741,6 +2743,11 @@ mod subsumed_lowerings {
     /// the declared pairs shown written somewhere other than a case here, by the declaring
     /// pass's name: the test of the pass's own that shows it, or why it holds
     const SHOWN_ELSEWHERE: &[(&str, Lowering, &str)] = &[
+        (
+            "CallableSyntaxPass",
+            Lowering::ClassSubscript,
+            "a_class_subscript_inside_a_type_the_callable_lowering_writes_goes_through_the_helper",
+        ),
         (
             "GenericPolyfillPass",
             Lowering::MatchType,

@@ -99,13 +99,18 @@ impl<'db> SemanticModel<'db> {
     }
 
     /// basedpython: whether `value` is a generic class that nothing in view attests the runtime
-    /// can subscript
-    pub fn class_subscript_is_unattested(&self, value: &ast::Expr) -> bool {
+    /// can subscript at `min_version`
+    pub fn class_subscript_is_unattested(
+        &self,
+        value: &ast::Expr,
+        min_version: PythonVersion,
+    ) -> bool {
         value.inferred_type(self).is_some_and(|ty| {
             crate::types::reified_infer::class_subscript_is_unattested(
                 self.db,
                 &self.program_environment(),
                 ty,
+                min_version,
             )
         })
     }

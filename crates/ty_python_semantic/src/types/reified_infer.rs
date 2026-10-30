@@ -1077,10 +1077,75 @@ pub(crate) fn class_subscript_is_unattested<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
+    min_version: PythonVersion,
 ) -> bool {
     ty.as_class_literal().is_some_and(|origin| {
         origin.generic_context(db).is_some()
-            && runtime_subscript(db, env, origin) != RuntimeSubscript::Supported
+            && (runtime_subscript(db, env, origin) != RuntimeSubscript::Supported
+                || class_getitem_needs_newer_than(db, origin, min_version))
+    })
+}
+
+/// whether the `__class_getitem__` that makes `origin` subscriptable is one its stub only
+/// declares for a python newer than `min_version`. the checker reads a stub at the version it
+/// analyses the module at, which need not be the one the module is written for
+fn class_getitem_needs_newer_than<'db>(
+    db: &'db dyn Db,
+    origin: ClassLiteral<'db>,
+    min_version: PythonVersion,
+) -> bool {
+    origin.iter_mro(db).any(|base| {
+        let ClassBase::Class(class) = base else {
+            return false;
+        };
+        let ClassLiteral::Static(literal) = class.class_literal(db) else {
+            return false;
+        };
+        literal.file(db).source_type(db).is_stub()
+            && class_getitem_version_gate(db, literal.body_scope(db))
+                .is_some_and(|gate| gate > min_version)
+    })
+}
+
+/// the version the `__class_getitem__` of the stub class with this body scope is declared from,
+/// if it is written under a gate: `if sys.version_info >= (3, 14):`
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
+fn class_getitem_version_gate<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> Option<PythonVersion> {
+    fn declares_class_getitem(body: &[ast::Stmt]) -> bool {
+        body.iter().any(|statement| {
+            matches!(statement, ast::Stmt::FunctionDef(function)
+                if function.name.as_str() == "__class_getitem__")
+        })
+    }
+    fn gated_from(test: &ast::Expr) -> Option<PythonVersion> {
+        let compare = test.as_compare_expr()?;
+        let ([ast::CmpOp::GtE], [ast::Expr::Attribute(attribute), ast::Expr::Tuple(version)]) =
+            (&*compare.ops, &*compare.operands)
+        else {
+            return None;
+        };
+        if attribute.attr.as_str() != "version_info" {
+            return None;
+        }
+        let [major, minor, ..] = &*version.elts else {
+            return None;
+        };
+        let number =
+            |element: &ast::Expr| element.as_number_literal_expr()?.value.as_int()?.as_u8();
+        Some(PythonVersion {
+            major: number(major)?,
+            minor: number(minor)?,
+        })
+    }
+    let module = parsed_module(db, scope.python_file(db)).load(db);
+    let class = scope.node(db).as_class()?.node(&module);
+    class.body.iter().find_map(|statement| {
+        let ast::Stmt::If(gate) = statement else {
+            return None;
+        };
+        declares_class_getitem(&gate.body)
+            .then(|| gated_from(&gate.test))
+            .flatten()
     })
 }
 
