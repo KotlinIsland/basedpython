@@ -26,7 +26,7 @@ mod hazards;
 mod inline_variable;
 mod intentions;
 mod move_symbol;
-mod names;
+pub(crate) mod names;
 mod return_annotation;
 mod split_join;
 mod text;

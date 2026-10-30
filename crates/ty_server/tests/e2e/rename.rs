@@ -511,3 +511,109 @@ fn a_client_without_change_annotations_gets_the_rename_alone() -> anyhow::Result
     assert_eq!(edited, 2, "{edit:#?}");
     Ok(())
 }
+
+const NAMED: &str = "\
+class HttpRequest: ...
+
+
+class User: ...
+
+
+def get_user() -> User:
+    return User()
+
+
+r = HttpRequest()
+x = get_user()
+found: list[User] = []
+print(found)
+";
+
+fn validate(
+    server: &mut TestServer,
+    line: u32,
+    character: u32,
+    new_name: &str,
+) -> serde_json::Value {
+    let id = server.send_request_named(
+        "by/validateRenameName",
+        serde_json::json!({
+            "textDocument": { "uri": server.file_uri("named.by") },
+            "position": { "line": line, "character": character },
+            "newName": new_name,
+        }),
+    );
+    server.await_response::<RawResponse>(&id)
+}
+
+fn suggestions(server: &mut TestServer, line: u32, character: u32) -> serde_json::Value {
+    let id = server.send_request_named(
+        "by/renameNameSuggestions",
+        serde_json::json!({
+            "textDocument": { "uri": server.file_uri("named.by") },
+            "position": { "line": line, "character": character },
+        }),
+    );
+    server.await_response::<RawResponse>(&id)
+}
+
+/// any request, answered as the json the server sent
+enum RawResponse {}
+
+impl lsp_types::Request for RawResponse {
+    type Params = serde_json::Value;
+    type Result = serde_json::Value;
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("by/raw");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
+}
+
+/// a new name is judged by the rule the rename refuses it by, before the rename is asked for
+#[test]
+fn a_new_name_is_validated_by_the_renames_rule() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_file("named.by", NAMED)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document("named.by", NAMED, 1);
+
+    assert_eq!(
+        validate(&mut server, 10, 0, "request"),
+        serde_json::json!({ "valid": true })
+    );
+    assert_eq!(
+        validate(&mut server, 10, 0, "class"),
+        serde_json::json!({ "valid": false, "message": "`class` is a keyword" })
+    );
+    assert_eq!(
+        validate(&mut server, 10, 0, "two words"),
+        serde_json::json!({ "valid": false, "message": "`two words` is not a valid name" })
+    );
+    // a builtin cannot be renamed at all, whatever its new name
+    assert_eq!(validate(&mut server, 13, 0, "show")["valid"], false);
+    // and there is nothing to rename in whitespace
+    assert_eq!(validate(&mut server, 9, 0, "y"), serde_json::Value::Null);
+    Ok(())
+}
+
+/// names a symbol could take come from the class of what it holds and what computes it
+#[test]
+fn a_rename_suggests_names_from_the_value() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_file("named.by", NAMED)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document("named.by", NAMED, 1);
+
+    let found = [10, 11, 12].map(|line| suggestions(&mut server, line, 0));
+    assert_eq!(
+        found,
+        [
+            serde_json::json!(["http_request", "request"]),
+            serde_json::json!(["user"]),
+            serde_json::json!(["users", "items"]),
+        ]
+    );
+    Ok(())
+}

@@ -247,6 +247,12 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::RenameRequestHandler::METHOD => background_document_request_task::<
             requests::RenameRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::ValidateRenameNameHandler::METHOD => background_document_request_task::<
+            requests::ValidateRenameNameHandler,
+        >(req, BackgroundSchedule::Worker),
+        requests::RenameNameSuggestionsHandler::METHOD => background_document_request_task::<
+            requests::RenameNameSuggestionsHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::CompletionRequestHandler::METHOD => background_document_request_task::<
             requests::CompletionRequestHandler,
         >(

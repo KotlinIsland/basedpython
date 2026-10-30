@@ -4558,6 +4558,52 @@ pub fn inherited_parameter_annotation<'db>(
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
 }
 
+/// basedpython: the class a value bound by `definition` is named after, when there is one worth
+/// naming it after: `HttpRequest` for an `HttpRequest`, and for a `list[User]` the `User` its
+/// elements are, with `true` to say the value holds many of them
+///
+/// a builtin class names what kind of value something is rather than what it is for — a `str` is
+/// any text — so a value of one, or a collection of them, is named after nothing. the same goes for
+/// a class of `types`, which names what the interpreter made: `NoneType`, `ModuleType`
+pub fn naming_class(db: &dyn Db, definition: Definition<'_>) -> Option<(String, bool)> {
+    let env = ProgramEnvironment::from_scope(definition.scope(db));
+    // a `final` binding still holds an instance of the class, however much more is said about it
+    let ty = match binding_type(db, definition) {
+        Type::Restricted(restricted) => restricted.value_type(db),
+        ty => ty,
+    };
+    let class = ty.nominal_class(db, &env)?;
+    let is_builtin = |class: ClassType<'_>| {
+        matches!(
+            ty_module_resolver::file_to_module(
+                db,
+                class.class_literal(db).program_file(db).resolver_file(db),
+            )
+            .and_then(|module| module.known(db)),
+            Some(
+                ty_module_resolver::KnownModule::Builtins | ty_module_resolver::KnownModule::Types
+            )
+        )
+    };
+    if !is_builtin(class) {
+        return Some((class.name(db).to_string(), false));
+    }
+    // a collection of one class's instances is named after them, in the plural
+    if !matches!(
+        class.known(db),
+        Some(KnownClass::List | KnownClass::Set | KnownClass::FrozenSet | KnownClass::Tuple)
+    ) {
+        return None;
+    }
+    let element = class
+        .into_generic_alias()?
+        .specialization(db)
+        .types(db)
+        .first()?
+        .nominal_class(db, &env)?;
+    (!is_builtin(element)).then(|| (element.name(db).to_string(), true))
+}
+
 /// basedpython: one argument of a base's subscript as a class header writes it
 #[derive(Debug, Clone)]
 pub enum BaseTypeArgument<'db> {

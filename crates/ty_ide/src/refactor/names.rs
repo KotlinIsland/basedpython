@@ -16,7 +16,7 @@ use super::RefactorContext;
 
 /// The words basedpython reads as keywords in some position, which a name
 /// introduced by a refactoring stays clear of.
-const BASEDPYTHON_WORDS: &[&str] = &[
+pub(crate) const BASEDPYTHON_WORDS: &[&str] = &[
     "let",
     "var",
     "it",
@@ -123,7 +123,7 @@ fn callee_name(func: &Expr) -> Option<&str> {
     }
 }
 
-fn to_snake_case(name: &str) -> String {
+pub(crate) fn to_snake_case(name: &str) -> String {
     let mut snake = String::with_capacity(name.len() + 4);
     let mut previous_lower = false;
     for character in name.chars() {
