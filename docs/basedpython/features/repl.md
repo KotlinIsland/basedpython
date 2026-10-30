@@ -138,6 +138,12 @@ the end of input (ctrl-d) ends the session, and its exit status is the program's
 `sys.exit` was given, or, when a signal ends the interpreter, 128 and the signal's number. ctrl-c abandons the input being typed, or interrupts the one running with
 a `KeyboardInterrupt`, which is printed, and the session carries on
 
+the signals that ask a process to end are passed on to the interpreter as `by run` passes them
+on to its program (see the [command line reference](../cli-reference.md)): a `SIGTERM` sent to
+`by repl` alone ends the interpreter, and the session exits as it does, 143 for an interpreter
+that does not handle it. a `SIGINT` sent to it from outside a terminal reaches the interpreter as
+ctrl-c does, interrupting the input running rather than ending the session
+
 an input can also be sent whole, framed as a terminal frames a paste: `ESC [200~` before it and
 `ESC [201~` after it. the text between the two is one input whatever it holds, blank lines
 inside a function body included, and runs when the closing marker arrives. this is how an

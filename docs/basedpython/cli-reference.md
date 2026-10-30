@@ -96,7 +96,8 @@ a signal that ends the program ends `by run` with 128 and the signal's number,
 as a shell reports it
 
 on unix, the signals that ask a process to end — `SIGTERM`, `SIGINT`, `SIGHUP`
-and `SIGQUIT` — are passed on to the program when they are sent to `by run`, and
+and `SIGQUIT` — are passed on to the program when they are sent to `by run` (and
+to the interpreter of a `by repl` session the same way), and
 `by run` exits as the program then does: a program that handles one gets to tidy
 up, and its status is `by run`'s. so `docker stop`, a supervisor or an editor's
 Stop that sends `by run` a `SIGTERM` stops the program, `by run` as the first
@@ -106,10 +107,14 @@ which the program is in with `by run`, so while `by run` is in that group they
 are left to reach the program from the terminal rather than sent to it twice:
 ctrl-c interrupts the program once. a signal sent to the whole process group, or
 to every process of the tree, reaches the program twice, so to stop a run,
-signal `by run` alone. a signal that arrives before the program has started ends
-`by run` with 128 and its number. on windows, ctrl-c and ctrl-break reach the
-program through the console it shares with `by run`, which waits for it and
-exits as it does
+signal `by run` alone. the one exception is the `SIGHUP` of a hangup, which goes
+to the first process of the terminal's session: when that is `by run`, nothing
+else has been told, so it is passed on. a signal `by run` was started ignoring,
+as `nohup` starts it ignoring `SIGHUP`, stays ignored, by the program too. a
+signal that arrives before the program has started ends `by run` with 128 and
+its number. on windows, ctrl-c and ctrl-break reach the program through the
+console it shares with `by run`, which waits for it and exits as it does, and
+end `by run` with 130 before the program has started
 
 `--in-build` runs the program in the tree `by run` staged rather than in the
 directory it was typed in. the default is right for an application: a relative
