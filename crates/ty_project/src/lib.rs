@@ -454,6 +454,33 @@ impl Project {
             .is_file_included(path, GlobFilterCheckMode::Adhoc)
     }
 
+    /// whether `file` is source of this project by its configuration, whatever paths the
+    /// current run was restricted to
+    fn is_source_file(self, db: &dyn Db, file: File) -> bool {
+        let Some(path) = file.path(db).as_system_path() else {
+            return true;
+        };
+        if !matches!(
+            self.settings(db)
+                .src()
+                .files
+                .is_file_included(path, GlobFilterCheckMode::Adhoc),
+            IncludeResult::Included { .. }
+        ) {
+            return false;
+        }
+        // read as a file of the database, so that a build writing a manifest later is noticed by
+        // whichever query asked
+        let root = self.root(db);
+        !path
+            .ancestors()
+            .skip(1)
+            .take_while(|directory| *directory != root)
+            .any(|directory| {
+                system_path_to_file(db, directory.join(build_output::BUILD_MANIFEST)).is_ok()
+            })
+    }
+
     fn is_directory_included(self, db: &dyn Db, path: &SystemPath) -> bool {
         matches!(
             ProjectFilesFilter::from_project(db, self)

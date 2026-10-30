@@ -103,6 +103,7 @@ helpers! {
     TYPE_ARGUMENT = "_type_argument",
     DISCARD = "_by_discard",
     RAISE = "_by_raise",
+    NO_CASE_MATCHED = "_by_no_case_matched",
     LOOP_BIND = "_by_loop_bind",
     STATIC_PROPERTY = "_by_static_property",
     OPTIONAL = "Optional",

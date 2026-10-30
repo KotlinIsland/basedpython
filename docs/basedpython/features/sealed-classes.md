@@ -55,6 +55,11 @@ be a value no `match` over its subclasses covers:
 Shape()  # error: [call-non-callable]
 ```
 
+that check reads the class being called, so it can't see `cls()` in a classmethod of the
+sealed class, or `t()` for a `t: type[Shape]`, which may each be a subclass. if one of them
+turns out to build the sealed class itself, a `match` that was found exhaustive raises a
+`TypeError` saying so
+
 a class created by calling `type()` cannot join the hierarchy, since the class
 statements are what close it:
 
