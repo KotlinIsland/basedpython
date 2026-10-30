@@ -81,7 +81,7 @@ impl<'ast> Visitor<'ast> for LiteralReverse<'_> {
     }
 }
 
-fn is_literal_value(expr: &Expr) -> bool {
+pub(super) fn is_literal_value(expr: &Expr) -> bool {
     match expr {
         Expr::NumberLiteral(_)
         | Expr::StringLiteral(_)

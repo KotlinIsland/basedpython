@@ -2064,6 +2064,11 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         reverse_transforms::flexible_keyword::FlexibleKeywordReverse::new(src);
     let mut reified_generic_rev =
         reverse_transforms::reified_generic::ReifiedGenericReverse::new(src);
+    let mut runtime_helpers_rev = reverse_transforms::runtime_helpers::RuntimeHelpersReverse::new(
+        src,
+        module.tokens(),
+        module.suite(),
+    );
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
     let mut unique_loop_bindings_rev =
         reverse_transforms::unique_loop_bindings::UniqueLoopBindingsReverse::new(src);
@@ -2095,6 +2100,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         none_chain_rev.visit_stmt(stmt);
         flexible_keyword_rev.visit_stmt(stmt);
         reified_generic_rev.visit_stmt(stmt);
+        runtime_helpers_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
         export_import_rev.visit_stmt(stmt);
         unique_loop_bindings_rev.visit_stmt(stmt);
@@ -2158,6 +2164,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(none_chain_rev.edits);
     fixes.extend(flexible_keyword_rev.edits);
     fixes.extend(reified_generic_rev.edits);
+    fixes.extend(runtime_helpers_rev.edits);
     fixes.extend(string_tag_rev.edits);
     fixes.extend(unique_loop_bindings_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
@@ -2573,6 +2580,7 @@ mod python_parse_errors {
 
 #[cfg(test)]
 mod transpile_error {
+    use super::columns::{ColumnOrigin, Segment};
     use super::*;
     use ruff_python_ast::PySourceType;
     use ruff_python_parser::UnsupportedSyntaxErrorKind as Kind;
@@ -2813,8 +2821,6 @@ mod transpile_error {
     /// wrote around it onto the line it was written for
     #[test]
     fn maps_output_range_in_copied_text_to_its_by_text() {
-        use columns::{ColumnOrigin, Segment};
-
         let by_source = "if True:\n    print(a)\n";
         let final_output = "import x\nif True:\n    _wrap(print(a))\n";
         let line_map = [None, Some(0), Some(1)];

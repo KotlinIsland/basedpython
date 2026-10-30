@@ -8004,9 +8004,6 @@ impl<'db> Parameter<'db> {
         self.definition
     }
 
-    /// Return `true` if this parameter has an unpacked variadic annotation,
-    /// e.g. `*args: *Ts`, `*args: Unpack[Ts]`, or
-    /// `*args: *tuple[int, *tuple[str, ...], bytes]`.
     /// basedpython: whether this parameter's annotation is the type of each argument it receives,
     /// which is not so of `*args: *Ts`, `*args: P.args` or `**kwargs: Unpack[TD]`, each of which
     /// says something about the whole run instead
@@ -8015,6 +8012,9 @@ impl<'db> Parameter<'db> {
             && !matches!(self.annotated_type, Type::TypeVar(typevar) if typevar.is_paramspec(db))
     }
 
+    /// Return `true` if this parameter has an unpacked variadic annotation,
+    /// e.g. `*args: *Ts`, `*args: Unpack[Ts]`, or
+    /// `*args: *tuple[int, *tuple[str, ...], bytes]`.
     pub(crate) fn has_starred_annotation(&self) -> bool {
         matches!(self.annotation_kind, ParameterAnnotationKind::Starred)
     }

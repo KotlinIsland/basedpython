@@ -8361,11 +8361,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     /// basedpython: read a place the type context does not accept as what the flow established
-    /// about its members, if that is what it takes.
+    /// about its members, if that is what it takes
     ///
-    /// After `if a.b is int:`, `a` is still an `A`, but reading `.b` from it gives `int`, so it
-    /// satisfies a protocol that asks for that. Only a mismatch pays for this, and a place that
-    /// fails either way is reported as the type it was written as.
+    /// after `if a.b is int:`, `a` is still an `A`, but reading `.b` from it gives `int`, so it
+    /// satisfies a protocol that asks for that. only a mismatch pays for this, and a place that
+    /// fails either way is reported as the type it was written as
     fn with_narrowed_members_the_context_needs(
         &self,
         expression: &ast::Expr,

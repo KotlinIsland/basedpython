@@ -2362,7 +2362,7 @@ fn evaluates_to_its_target(node: &ast::Expr, subscript_evaluates: bool) -> bool 
 
 /// a python string literal for `value`, escaped so the emitted source reads it
 /// back character for character.
-pub(super) fn python_str_literal(value: &str) -> String {
+pub fn python_str_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {
@@ -2378,7 +2378,7 @@ pub(super) fn python_str_literal(value: &str) -> String {
 
 /// a python bytes literal for `value`, written one `\xNN` escape per byte so
 /// every byte round-trips whatever it is
-pub(super) fn python_bytes_literal(value: &[u8]) -> String {
+pub fn python_bytes_literal(value: &[u8]) -> String {
     let mut out = String::with_capacity(value.len() * 4 + 3);
     out.push_str("b\"");
     for byte in value {

@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{self as ast, ExceptHandler, Expr, Stmt};
 use ruff_python_parser::parse_module;
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 /// the runtime, as the file a build writes out
 pub const SOURCE: &str = include_str!("runtime/_by_runtime.py");
@@ -1144,6 +1144,50 @@ pub(crate) fn inline(
             source
         })
         .collect()
+}
+
+/// the range of each definition of the runtime in `suite`, the statements of `source`, written
+/// as a transpile with nowhere to import it from pastes it
+pub(crate) fn pasted_definitions(suite: &[Stmt], source: &str) -> Vec<TextRange> {
+    let mut pasted = Vec::new();
+    for (at, stmt) in suite.iter().enumerate() {
+        let names = bindings(stmt);
+        let Some(definition) = names.keys().find_map(|name| index().get(name)) else {
+            continue;
+        };
+        let Some(length) = pasted_length(definition, &source[stmt.start().to_usize()..])
+            .and_then(|length| TextSize::try_from(length).ok())
+        else {
+            continue;
+        };
+        // text that only starts with the definition is another definition
+        let end = stmt.start() + length;
+        if suite[at..].iter().any(|stmt| stmt.end() == end) {
+            pasted.push(TextRange::new(stmt.start(), end));
+        }
+    }
+    pasted
+}
+
+/// the length of `definition` at the start of `text`, where a read of a builtin may be under
+/// whichever name [`inline`] gave it
+fn pasted_length(definition: &Definition, text: &str) -> Option<usize> {
+    let written = definition.source.trim_end_matches('\n');
+    let mut reads: Vec<TextRange> = definition
+        .builtin_reads
+        .iter()
+        .map(|(range, _)| *range)
+        .collect();
+    reads.sort_by_key(Ranged::start);
+    let mut rest = text;
+    let mut at = 0;
+    for read in reads {
+        rest = rest.strip_prefix(&written[at..read.start().to_usize()])?;
+        rest = rest.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_');
+        at = read.end().to_usize();
+    }
+    rest = rest.strip_prefix(&written[at..])?;
+    Some(text.len() - rest.len())
 }
 
 /// the import a module uses to reach helpers written out beside it

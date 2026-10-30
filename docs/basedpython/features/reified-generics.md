@@ -228,6 +228,11 @@ is injected only when the bare name resolves — in the module's globals or
 builtins — to that same class, so the emitted expression evaluates to the
 intended type object
 
+when `T` holds a subscripted class, `x is T` compares its type arguments exactly
+unless the class's own parameters declare a variance the runtime can read, which
+`class B[out T]` doesn't, as it lowers to a parameter whose variance isn't visible
+at runtime
+
 when no injectable solution exists, the bare call is an error
 (`unspecialized-reified-generic`):
 

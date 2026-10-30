@@ -217,9 +217,8 @@ impl<'src> Parser<'src> {
         self.expr_consumed_suite
     }
 
-    /// Returns `true` if the current token is the start of an expression.
-    /// Whether the current token can start an element of a list of values: an expression, or in
-    /// basedpython one of the forms that leave rather than produce a value, `f(raise E)`.
+    /// whether the current token can start an element of a list of values: an expression, or in
+    /// basedpython one of the forms that leave rather than produce a value, `f(raise E)`
     pub(super) fn at_value(&self) -> bool {
         self.at_expr()
             || (self.options.is_basedpython
@@ -229,6 +228,7 @@ impl<'src> Parser<'src> {
                 ))
     }
 
+    /// Returns `true` if the current token is the start of an expression.
     pub(super) fn at_expr(&self) -> bool {
         self.at_ts(EXPR_SET)
             || self.at_soft_keyword()
