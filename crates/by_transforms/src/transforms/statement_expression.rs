@@ -58,6 +58,7 @@
 //! Every rewrite keeps operand source as [`Fragment::Src`] passthrough spans, so
 //! lowerings nested inside a branch — and the comments in it — survive.
 
+use ruff_python_ast::PythonVersion;
 use ruff_python_ast::helpers::{StatementExpressionValue, statement_expression_values};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
@@ -75,11 +76,15 @@ use super::source_util::{
 
 pub(crate) struct StatementExpressionPass<'src> {
     source: &'src str,
+    min_version: PythonVersion,
 }
 
 impl<'src> StatementExpressionPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+        Self {
+            source,
+            min_version,
+        }
     }
 }
 
@@ -98,6 +103,8 @@ impl AstPass for StatementExpressionPass<'_> {
         let mut misplaced = Vec::new();
         let mut lower = Lower {
             source: self.source,
+            min_version: self.min_version,
+            no_case_matched: false,
             counter: 0,
             claimed_breaks: HashSet::new(),
             tail_statements: HashSet::new(),
@@ -111,6 +118,9 @@ impl AstPass for StatementExpressionPass<'_> {
         }
         if lower.raises_in_expression {
             ctx.runtime.insert(crate::runtime::RAISE);
+        }
+        if lower.no_case_matched {
+            ctx.runtime.insert(crate::runtime::NO_CASE_MATCHED);
         }
         // a `break <value>` whose loop is not a statement expression has nothing
         // to write the value into (ty reports it as `DiscardedBreakValue`). the
@@ -138,6 +148,8 @@ impl AstPass for StatementExpressionPass<'_> {
 
 struct Lower<'src> {
     source: &'src str,
+    min_version: PythonVersion,
+    no_case_matched: bool,
     /// monotonic across the file so sibling statement expressions get distinct
     /// temporaries — nesting means several can be live at once
     counter: usize,
@@ -292,7 +304,14 @@ impl Lower<'_> {
         out: &mut Vec<Fragment>,
     ) {
         let values = self.redirect_values(&statement.stmt, temp);
+        let mut closing = String::new();
+        if values > 0 {
+            self.close_matches(&statement.stmt, statement.range.end(), &mut closing);
+        }
         out.push(Fragment::Src(statement.range));
+        if !closing.is_empty() {
+            out.push(Fragment::Lit(closing));
+        }
 
         // with no value position there is nothing to read: `raise` and `return`
         // never complete, and neither does a statement whose every branch
@@ -300,6 +319,70 @@ impl Lower<'_> {
         // `non-exhaustive-statement-expression`, which ty has already reported)
         if values > 0 {
             self.push_prefix(stmt, tail, temp, indent, out);
+        }
+    }
+
+    /// Gives each `match` in a value position of `stmt` that has no case for everything a last
+    /// case that says what went wrong: with none, a value the checker ruled out runs past the
+    /// `match` and fails on reading the temporary it never assigned.
+    ///
+    /// A case added where the statement expression ends goes in `closing`, since an edit there
+    /// lands past the source the statement is written from, and an inner `match`'s goes first.
+    fn close_matches(&mut self, stmt: &Stmt, end: ruff_text_size::TextSize, closing: &mut String) {
+        let tails: Vec<&[Stmt]> = match stmt {
+            Stmt::Match(statement) => statement.cases.iter().map(|case| &*case.body).collect(),
+            Stmt::If(statement) => std::iter::once(&*statement.body)
+                .chain(
+                    statement
+                        .elif_else_clauses
+                        .iter()
+                        .map(|clause| &*clause.body),
+                )
+                .collect(),
+            Stmt::For(statement) => vec![&*statement.orelse],
+            Stmt::While(statement) => vec![&*statement.orelse],
+            Stmt::Try(statement) => {
+                let handlers = statement.handlers.iter().map(|handler| {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    &*handler.body
+                });
+                let body = if statement.orelse.is_empty() {
+                    &*statement.body
+                } else {
+                    &*statement.orelse
+                };
+                std::iter::once(body).chain(handlers).collect()
+            }
+            _ => Vec::new(),
+        };
+        for tail in tails {
+            if let Some(last) = tail.last() {
+                self.close_matches(last, end, closing);
+            }
+        }
+        let Stmt::Match(statement) = stmt else {
+            return;
+        };
+        let covers_everything = statement
+            .cases
+            .iter()
+            .any(|case| case.guard.is_none() && case.pattern.is_irrefutable());
+        // below 3.10 a `match` is polyfilled, with its own account of a miss
+        if covers_everything || self.min_version < PythonVersion::PY310 {
+            return;
+        }
+        let Some(first) = statement.cases.first() else {
+            return;
+        };
+        let indent = line_indent(self.source, first.range.start());
+        let helper = crate::runtime::NO_CASE_MATCHED.name();
+        let case = format!("\n{indent}case _:\n{indent}    {helper}()");
+        self.no_case_matched = true;
+        if statement.range.end() == end {
+            closing.push_str(&case);
+        } else {
+            self.text_edits
+                .push((TextRange::empty(statement.range.end()), case));
         }
     }
 
@@ -497,6 +580,44 @@ mod tests {
 
     fn check(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
+    }
+
+    #[test]
+    fn a_match_the_checker_found_exhaustive_says_so_when_a_value_gets_past_it() {
+        let out = transpile(
+            indoc! {r#"
+                sealed class A
+                class B(A)
+                class C(A)
+                def name(a: A, b: A) -> str:
+                    return match a:
+                        case B(): "b"
+                        case C():
+                            match b:
+                                case B(): "cb"
+                                case C(): "cc"
+            "#},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(indoc! {r#"
+                def name(a: A, b: A) -> str:
+                    match a:
+                        case B(): __by_stmt_expr_0__ = "b"
+                        case C():
+                            match b:
+                                case B(): __by_stmt_expr_0__ = "cb"
+                                case C(): __by_stmt_expr_0__ = "cc"
+                                case _:
+                                    _by_no_case_matched()
+                        case _:
+                            _by_no_case_matched()
+                    return __by_stmt_expr_0__
+            "#}),
+            "{out}"
+        );
+        assert!(out.contains("def _by_no_case_matched():"), "{out}");
     }
 
     #[test]

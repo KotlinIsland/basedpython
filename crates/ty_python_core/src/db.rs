@@ -10,6 +10,14 @@ pub trait Db: ModuleResolverDb {
     /// Returns `true` if the file should be checked.
     fn should_check_file(&self, file: File) -> bool;
 
+    /// basedpython: whether `file` is source of the project, whichever files of it a run was
+    /// asked about: `[tool.ty.src] exclude` and the output of a build are not. what a project's
+    /// source is decides what closes a `sealed` class, which can't depend on the paths given
+    /// to `by check`, and that is why this is not [`Db::should_check_file`]
+    fn is_project_source(&self, file: File) -> bool {
+        self.should_check_file(file)
+    }
+
     /// basedpython: whether a `let` / `var` declaration written inside a block is
     /// visible only within that block.
     ///

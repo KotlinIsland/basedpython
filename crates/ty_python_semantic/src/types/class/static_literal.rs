@@ -4560,7 +4560,8 @@ pub(crate) fn based_enum_unit_member_names<'db>(
 }
 
 /// basedpython: the files a `sealed` class declared in `declaring_file` may be subclassed from. for
-/// first-party code that is every first-party module, and for a dependency every module of its
+/// first-party code that is every first-party module that is source of the project, which leaves
+/// out what the project excludes and what a build wrote, and for a dependency every module of its
 /// top-level package. a file that is no module of its search path, which nothing can import a
 /// class from, has only itself
 fn sealed_workspace_files<'db>(
@@ -4588,11 +4589,16 @@ fn sealed_workspace_files<'db>(
         })
     };
     let program = declaring_file.program(db);
-    modules
+    let mut files: Vec<_> = modules
         .into_iter()
         .filter_map(|module| module.file(db))
+        .filter(|file| !declaring_path.is_first_party() || db.is_project_source(*file))
         .map(|file| program.program_file(db, file))
-        .collect()
+        .collect();
+    if !files.contains(&declaring_file) {
+        files.push(declaring_file);
+    }
+    files
 }
 
 /// basedpython: every class statement of `file` with a `sealed` class as a direct base, as the

@@ -1604,7 +1604,8 @@ pub(crate) fn run_against_source<'a>(
     let if_let_pass = if_let::IfLetPass::new(source_ref);
     let class_pattern_star_pass = class_pattern_star::ClassPatternStarPass::new(source_ref);
     let destructure_pass = destructure::DestructurePass::new(source_ref);
-    let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
+    let statement_expression_pass =
+        statement_expression::StatementExpressionPass::new(source_ref, config.min_version);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref, written);
     let extension_block_pass =
         extension::ExtensionBlockPass::new(source_ref, written, config.is_stub);

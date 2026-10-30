@@ -520,12 +520,17 @@ pub(crate) fn check_static_class_definitions<'db>(
             && !sealed.sealed_members(db).contains(&class)
             && let Some(builder) = context.report_lint(&SUBCLASS_OF_SEALED_CLASS, source_node)
         {
-            builder.into_diagnostic(format_args!(
+            let mut diagnostic = builder.into_diagnostic(format_args!(
                 "Class `{}` cannot inherit from sealed class `{}`, whose workspace does not \
                  include this file",
                 class.name(db),
                 base_class.name(db),
             ));
+            diagnostic.info(
+                "A sealed class is closed over the modules of its project, and a `match` over \
+                 it knows only of the subclasses in them. A file that is excluded, or that can't \
+                 be imported by its name, is not one of them",
+            );
         }
 
         if let Some((base_class_literal, _)) = base_class.static_class_literal(db)

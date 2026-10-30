@@ -14,9 +14,16 @@ imported by hand
 
 
 def _by_sealed_member(_cls):
+    # a class statement in a function runs per call, and each run is the same member, so the
+    # tuple doesn't grow and the classes of earlier runs can be collected
+    _name = (_cls.__module__, _cls.__qualname__)
     for _base in _cls.__bases__:
         if "__sealed_members__" in vars(_base):
-            _base.__sealed_members__ += (_cls,)
+            _base.__sealed_members__ = tuple(
+                _member
+                for _member in _base.__sealed_members__
+                if (_member.__module__, _member.__qualname__) != _name
+            ) + (_cls,)
 
 
 # --- runtime type-soundness checks ---------------------------------------
@@ -1671,6 +1678,12 @@ def _by_raise(*raised):
     if len(raised) == 1:
         raise raised[0]
     raise raised[0] from raised[1]
+
+
+def _by_no_case_matched():
+    # a statement expression's `match` the checker found exhaustive, reached with a value it
+    # ruled out. nothing else would say so: the name the value was to be read from is just unbound
+    raise TypeError("no case of this `match` matched, though the checker found it exhaustive")
 
 
 # --- match statement -------------------------------------------------------

@@ -538,3 +538,19 @@ def f(shape: Shape) -> int:
         case Circle():
             return 1
 ```
+
+## A class statement in a function is one member
+
+The statement runs per call, and each run is the same member, so the tuple does not grow:
+
+```by
+sealed class A
+
+def make() -> type[A]:
+    class C(A): ...
+    return C
+
+first = make()
+second = make()
+assert A.__sealed_members__ == (second,)
+```

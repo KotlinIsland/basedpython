@@ -10643,3 +10643,59 @@ fn a_forwarding_function_of_another_file_is_called_through_the_helper() {
         "only the function of another file goes through the helper:\n{stdout}"
     );
 }
+
+/// a build writes a copy of each source beside its output, and a class in that copy derives from
+/// the same sealed class. neither that nor an excluded file is part of the hierarchy, and which
+/// files a run is asked about doesn't change what it is
+#[test]
+fn a_sealed_class_closes_over_the_source_of_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"pkg\"\nversion = \"0\"\nrequires-python = \">=3.13\"\n\n\
+         [tool.ty.src]\nexclude = [\"generated\"]\n",
+    )
+    .unwrap();
+    let package = dir.path().join("pkg");
+    let generated = dir.path().join("generated");
+    fs::create_dir_all(&package).unwrap();
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("base.by"), "sealed class A\nclass B(A)\n").unwrap();
+    fs::write(
+        package.join("other.by"),
+        "from pkg.base import A\nclass C(A)\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("use.by"),
+        "from pkg.base import A, B\nfrom pkg.other import C\n\n\
+         def name(a: A) -> int:\n    return match a:\n        case B(): 1\n        case C(): 2\n",
+    )
+    .unwrap();
+    fs::write(
+        generated.join("excluded.by"),
+        "from pkg.base import A\nclass Generated(A)\n",
+    )
+    .unwrap();
+
+    let by = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            output.status.success(),
+            "by {args:?} failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    };
+    by(&["check", "pkg"]);
+    by(&["build"]);
+    by(&["check", "pkg"]);
+    by(&["check", "pkg/use.by"]);
+    by(&["build"]);
+}

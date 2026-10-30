@@ -715,6 +715,11 @@ impl ty_python_core::Db for ProjectDatabase {
             .is_some_and(|_| crate::should_check_file(self, file))
     }
 
+    fn is_project_source(&self, file: File) -> bool {
+        self.project
+            .is_none_or(|project| project.is_source_file(self, file))
+    }
+
     fn block_scoped_declarations(&self, file: File) -> bool {
         file_settings(self, file)
             .analysis(self)
