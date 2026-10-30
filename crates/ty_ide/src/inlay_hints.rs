@@ -1861,10 +1861,14 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     }
 
     /// basedpython: hint `reified` on each type parameter of `function` that a
-    /// value-position use in the body reifies without saying so.
+    /// value-position use in the body, or what the body forwards it into, reifies
+    /// without saying so.
     fn add_inferred_reification(&mut self, function: &ast::StmtFunctionDef) {
-        let inferred =
-            |hints: &mut Self| inferred_reified_type_param_names(hints.source_type, function);
+        let inferred = |hints: &mut Self| {
+            let mut names = inferred_reified_type_param_names(hints.source_type, function);
+            names.extend_from_slice(&hints.model.forwarded_type_params(function).names);
+            names
+        };
         self.add_inferred_reification_of(function.type_params.as_deref(), inferred);
     }
 
@@ -12433,6 +12437,31 @@ Source with applied edits:
             class C:
                 def method[T](self):
                     print(T)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_reification: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_reification_of_a_forwarded_type_parameter() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Box[T]:
+                def __init__(self, t: T):
+                    self.t: T = t
+
+            def forwarded[T](t: T) -> object:
+                return Box(t)
+
+            def hop[U](u: U) -> object:
+                return forwarded(u)
+
+            def erased[V](v: V) -> list[V]:
+                return [v]
             ",
         );
 

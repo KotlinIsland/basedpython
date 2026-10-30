@@ -70,6 +70,8 @@ enum SpellingPart {
     Global(Name),
     /// a module-level `private` symbol, by the name the source declares it under
     ModulePrivate(Name),
+    /// the runtime helper that builds a literal type, which a module has only if asked for
+    LiteralHelper,
 }
 
 impl RuntimeSpelling {
@@ -78,6 +80,22 @@ impl RuntimeSpelling {
         let mut spelling = Self::default();
         spelling.push_str(&text.into());
         spelling
+    }
+
+    /// the literal type holding `value`, which is a python expression: `_by_lit(1)`
+    pub(crate) fn literal(value: &Self) -> Self {
+        let mut spelling = Self {
+            parts: vec![SpellingPart::LiteralHelper],
+        };
+        spelling.push_str("(");
+        spelling.push(value);
+        spelling.push_str(")");
+        spelling
+    }
+
+    /// whether the spelling needs the runtime helper that builds a literal type
+    pub fn reads_literal_helper(&self) -> bool {
+        self.parts.contains(&SpellingPart::LiteralHelper)
     }
 
     /// `name` as read through `file`'s global scope, kept apart when it is one of the
@@ -101,7 +119,7 @@ impl RuntimeSpelling {
     pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
-            SpellingPart::Text(_) => None,
+            SpellingPart::Text(_) | SpellingPart::LiteralHelper => None,
         })
     }
 
@@ -115,7 +133,7 @@ impl RuntimeSpelling {
                     parts: vec![part.clone()],
                 },
             )),
-            SpellingPart::Text(_) => None,
+            SpellingPart::Text(_) | SpellingPart::LiteralHelper => None,
         })
     }
 
@@ -145,7 +163,9 @@ impl RuntimeSpelling {
         for part in &other.parts {
             match part {
                 SpellingPart::Text(text) => self.push_str(text),
-                SpellingPart::Global(_) | SpellingPart::ModulePrivate(_) => {
+                SpellingPart::Global(_)
+                | SpellingPart::ModulePrivate(_)
+                | SpellingPart::LiteralHelper => {
                     self.parts.push(part.clone());
                 }
             }
@@ -177,6 +197,7 @@ impl RuntimeSpelling {
                 SpellingPart::Text(text) => spelled.push_str(text),
                 SpellingPart::Global(name) => spelled.push_str(name),
                 SpellingPart::ModulePrivate(name) => spelled.push_str(&module_private(name)),
+                SpellingPart::LiteralHelper => spelled.push_str("_by_lit"),
             }
         }
         spelled
@@ -191,7 +212,7 @@ impl RuntimeSpelling {
 
 /// the first of the module-level names `reads` that does not hold, where `site` runs, the
 /// binding the checker resolved — with what it holds instead
-pub(crate) fn first_unbound_read<'a, 'db>(
+fn first_unbound_read<'a, 'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     reads: impl IntoIterator<Item = &'a Name>,

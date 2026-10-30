@@ -270,6 +270,148 @@ def f(x: object) -> bool:
     return x is list[int]
 ```
 
+## a value built inside a generic function records its specialization
+
+`A(t)` builds an `A[T]`, and a test of the value needs to know what `T` was, so `f` is given `T` as
+a [reified](basedpython_reified_generics.md) type parameter without saying so. `f(1)` solves `T` to
+`1`, so the value is an `A[1]` and not an `A[int]`:
+
+```by
+class A[T]:
+    init(var t: T)
+
+def f[T](t: T) -> object:
+    a = A(t)
+    return a
+
+assert f(1) is A[1]
+assert not f(1) is A[2]
+assert not f(1) is A[int]
+assert not f(1) is A[str]
+assert f(int(1)) is A[int]
+```
+
+The value records what the checker solved, which is not always the literal. Nothing can read a
+different type back out of a covariant parameter, so it keeps the literal, and still passes for the
+wider type. An invariant parameter widens as soon as it is a parameter of the type being returned:
+
+```by
+class Fixed[T]:
+    init(var t: T)
+
+class Out[out T]:
+    init(let t: T)
+
+def fixed[T](t: T) -> Fixed[T]:
+    return Fixed(t)
+
+def opaque(value: object) -> object:
+    return value
+
+assert opaque(Fixed(1)) is Fixed[int]
+assert not opaque(Fixed(1)) is Fixed[1]
+assert opaque(fixed(1)) is Fixed[int]
+assert not opaque(fixed(1)) is Fixed[1]
+
+assert opaque(Out(1)) is Out[1]
+assert opaque(Out(1)) is Out[int]
+assert not opaque(Out(1)) is Out[2]
+assert not opaque(Out(1)) is Out[str]
+```
+
+It carries on through a function that only passes the value along, and through a method:
+
+```by
+class B[T]:
+    init(var t: T)
+
+def build[T](t: T) -> object:
+    return B(t)
+
+def hop[U](u: U) -> object:
+    return build(u)
+
+class Maker:
+    def make[T](self, t: T) -> object:
+        return B(t)
+
+assert hop("x") is B["x"]
+assert Maker().make(1) is B[1]
+```
+
+An override that forwards nothing is still called correctly through the method that does:
+
+```by
+from typing import override
+
+class C[T]:
+    init(var t: T)
+
+class Maker:
+    def make[T](self, t: T) -> object:
+        return C(t)
+
+class Plain(Maker):
+    @override
+    def make[T](self, t: T) -> object:
+        return t
+
+def run(maker: Maker) -> object:
+    return maker.make(1)
+
+assert run(Maker()) is C[1]
+assert run(Plain()) == 1
+```
+
+What a call is solved to depends on what is expected of it as much as on its arguments, and that is
+the specialization it is given, so the value is what the program goes on to take it for:
+
+```by
+class E[T]:
+    init(var t: T)
+
+def build[T](t: T) -> E[T]:
+    return E(t)
+
+def takes(e: E[object]) -> bool:
+    return e is E[object]
+
+wide: E[object] = build(1)
+print(wide.t)
+assert takes(build(1))
+```
+
+A call the solver has no spelling for still runs. Nothing is known about the argument, so nothing is
+recorded and the test answers `False`:
+
+```by
+class D[T]:
+    init(var t: T)
+
+def build[T](t: T) -> object:
+    return D(t)
+
+def dynamic(x) -> object:
+    return build(x)
+
+assert not dynamic(1) is D[int]
+```
+
+A value that records nothing is not held to any specialization either, so the same goes for an
+annotated function that the checker believes it knows the answer for:
+
+```by
+class F[T]:
+    init(var t: T)
+
+def annotated[T](t: T) -> F[T]:
+    return F(t)
+
+unpacked = annotated(*(1,))
+assert unpacked.t == 1
+assert list(map(annotated, [1]))[0].t == 1
+```
+
 ## a target the runtime cannot subscript is rejected
 
 The probe has to name the target specialization when the program runs, and some classes are generic

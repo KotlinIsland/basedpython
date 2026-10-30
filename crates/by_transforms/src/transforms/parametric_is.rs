@@ -166,6 +166,8 @@ pub(crate) struct PredicateNeeds {
     pub(crate) conformance_runtime: bool,
     /// the predicate calls `_by_pattern_is`
     pub(crate) pattern_runtime: bool,
+    /// the predicate calls `_by_cell_is`
+    pub(crate) cell_runtime: bool,
     /// no arm carried a parametric claim — a plain `isinstance` covers the whole
     /// target, so a caller may use its compact shallow form instead
     pub(crate) all_plain: bool,
@@ -337,6 +339,15 @@ fn fragments_for_plan(
                 Fragment::Lit(", ".to_owned()),
                 Fragment::Src(arm.range()),
                 Fragment::Lit(")".to_owned()),
+            ]
+        }
+        ParametricIsPlan::Cell(cell) => {
+            needs.references_value = true;
+            needs.cell_runtime = true;
+            vec![
+                Fragment::Lit("_by_cell_is(".to_owned()),
+                value_ref(),
+                Fragment::Lit(format!(", {})", written.spelled(&cell))),
             ]
         }
         ParametricIsPlan::Isinstance(target) => {
@@ -639,6 +650,7 @@ pub(crate) enum PredicateRuntime {
     Protocol,
     Conformance,
     Pattern,
+    Cell,
 }
 
 impl PredicateRuntime {
@@ -659,6 +671,7 @@ impl PredicateRuntime {
             Self::Protocol => &[crate::runtime::PROTOCOL_IS, crate::runtime::LITERAL],
             Self::Conformance => super::conformance::WITNESS_HELPERS,
             Self::Pattern => &[crate::runtime::PATTERN_IS],
+            Self::Cell => &[crate::runtime::CELL_IS],
         }
     }
 
@@ -669,6 +682,7 @@ impl PredicateRuntime {
             needs.protocol_runtime.then_some(Self::Protocol),
             needs.conformance_runtime.then_some(Self::Conformance),
             needs.pattern_runtime.then_some(Self::Pattern),
+            needs.cell_runtime.then_some(Self::Cell),
         ]
         .into_iter()
         .flatten()
@@ -758,6 +772,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         &[
             super::ast_driver::Lowering::AnonNamedTuple,
             super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::ClassSubscript,
             super::ast_driver::Lowering::DynamicKeyword,
             super::ast_driver::Lowering::JustFloat,
             super::ast_driver::Lowering::LiteralType,

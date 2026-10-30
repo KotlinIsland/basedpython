@@ -160,7 +160,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             && let Expr::Name(name) = sub.value.as_ref()
             && types.is_function(name)
         {
-            if types.is_reified_function(name)
+            if types.is_reified_function(name, self.min_version)
                 && Self::subscript_elements(sub)
                     .iter()
                     .any(|element| Self::is_keyword_field(element))

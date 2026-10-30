@@ -82,6 +82,17 @@ the second line is the honest cost of one uniform rule: on a builtin that does
 accept the subscript the wrap is inert rather than wrong, and the transpiler
 does not try to guess which classes can hold the stamp
 
+a subscript the source writes itself is another matter: `map[int]` is valid
+basedpython, whether or not `map` would allow it, so it evaluates to what it
+would have been, a `types.GenericAlias` with the same `__origin__` and
+`__args__`. an annotation is quoted instead wherever python would evaluate it,
+so it stays the type expression its readers expect:
+
+```by
+a = map[int]                  # a = _by_subscript(map, int)
+def f(x: map[int]): ...       # def f(x: "map[int]"): ...
+```
+
 this is also why a parametric test cannot read a specialization back off a
 builtin: `x is list[int]` resolves statically or through a
 [reified](reified-generics.md) type parameter instead
@@ -89,11 +100,10 @@ builtin: `x is list[int]` resolves statically or through a
 ## where the types come from
 
 the injected spelling is read from the specialization ty already inferred for
-the expression — the same solution the checker reports — promoting each
-argument as it is spelled (`Literal[1]` → `int`, since only a class object can
-be written at runtime; a covariant parameter keeps its literal in the checker's
-own view, see [fluid specializations](fluid-specializations.md)). there is no
-separate solver, so the injected arguments never disagree with the checker, and
+the expression — the same solution the checker reports. that includes whether a
+literal widened: `A(1)` is an `A[int]` when `T` is invariant, and a covariant
+`B(1)` is a `B[1]` that also passes for a `B[int]`, see
+[fluid specializations](fluid-specializations.md). there is no separate solver, so the injected arguments never disagree with the checker, and
 usage-based widening of an inferred specialization flows straight into the
 injection
 
@@ -109,6 +119,10 @@ doesn't fire when no runtime spelling exists:
 
 - an unsolved or dynamic argument — `A()` inferred as `A[Unknown]`, or `A(x)`
     for an unannotated `x`
+
+- a type parameter of a classmethod, or of the enclosing class, which has no
+    runtime value here. a type parameter of a plain function does have one, see
+    [a type parameter the body forwards](reified-generics.md#a-type-parameter-the-body-forwards)
 
 - a type argument with no spelling at the call site, such as a class defined
     inside a function: `A(Local())` stays bare

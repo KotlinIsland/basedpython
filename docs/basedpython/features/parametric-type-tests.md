@@ -42,7 +42,8 @@ the value's static type decides the strategy:
     `A[int](…)` [stamps](type-reification.md) on user generics — and matches
     each type argument by the target's variance. it discriminates a union
     soundly (`x: A[int] | A[str]` against `A[int]`); answers `False` for values
-    that carry no `__orig_class__`
+    that carry no `__orig_class__`. a value built inside a generic function
+    carries one too, since [the function is given the type argument](reified-generics.md#a-type-parameter-the-body-forwards)
 
 - **undecidable, protocol target → structural check**. a protocol's instances
     record no specialization, but basedpython reifies class attribute

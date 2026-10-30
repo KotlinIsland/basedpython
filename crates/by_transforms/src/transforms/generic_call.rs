@@ -1,9 +1,9 @@
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
 /// Strips explicit type arguments from generic function call sites.
@@ -15,14 +15,16 @@ use crate::type_info::TypeInfo;
 pub(crate) struct GenericCallStrip<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
+    min_version: PythonVersion,
     edits: Vec<Fix>,
 }
 
 impl<'src> GenericCallStrip<'src> {
-    fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    fn new(source: &'src str, types: &'src dyn TypeInfo, min_version: PythonVersion) -> Self {
         Self {
             source,
             types,
+            min_version,
             edits: Vec::new(),
         }
     }
@@ -34,17 +36,26 @@ impl<'src> GenericCallStrip<'src> {
 
 pub(crate) struct GenericCallStripPass<'src> {
     source: &'src str,
+    min_version: PythonVersion,
 }
 
 impl<'src> GenericCallStripPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+        Self {
+            source,
+            min_version,
+        }
     }
 }
 
 impl TypeAwarePass for GenericCallStripPass<'_> {
+    /// the type arguments it strips evaluate nothing, so there is nothing left to lower
+    fn subsumes(&self) -> &'static [Lowering] {
+        &[Lowering::ClassSubscript]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = GenericCallStrip::new(self.source, types);
+        let mut inner = GenericCallStrip::new(self.source, types, self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -70,7 +81,9 @@ impl<'ast> Visitor<'ast> for GenericCallStrip<'_> {
                     // a reified generic keeps its `[…]`: the `@generic` wrapper
                     // routes the specialization through `generic.__getitem__`,
                     // so stripping it would erase a runtime-significant step
-                    if self.types.is_function(name) && !self.types.is_reified_function(name) {
+                    if self.types.is_function(name)
+                        && !self.types.is_reified_function(name, self.min_version)
+                    {
                         let fn_src = self.src(sub.value.range()).to_owned();
                         self.edits
                             .push(Fix::safe_edit(Edit::range_replacement(fn_src, sub.range())));

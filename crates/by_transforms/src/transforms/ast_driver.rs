@@ -24,7 +24,7 @@
 //! is intentionally not invoked for any construct an AST pass handles.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::transformer::Transformer;
@@ -38,20 +38,20 @@ use super::quotes::WrittenQuotes;
 use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, build_stamps, callable, character_type, checked_cast,
-    class_pattern_star, coalesce, compat, conformance, context_params, conversion, debug_field,
-    decl_site_variance, decorated_binding, decorator_keyword, dedent_string, destructure,
-    django_lookup, dynamic_keyword, empty_declarations, export_import, extension, flexible_keyword,
-    float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
-    if_let, implicit_receiver, implicit_typing, inferred_annotation, inferred_base_arguments,
-    init_method, just_float, kw_subscript, literal_string, literal_types, local_once,
-    main_function, match_type, modifiers, module_api, mutable_defaults, none_chain, optional_type,
-    overload, parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
-    reified_class, reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel,
-    some_ctor, soundness, statement_expression, static_resource, string_tag, super_keyword,
-    symbolic_type_op, synthesized_types, template_expression, template_type, top_star,
-    trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
-    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
-    visibility_rename,
+    class_pattern_star, class_subscript, coalesce, compat, conformance, context_params, conversion,
+    debug_field, decl_site_variance, decorated_binding, decorator_keyword, dedent_string,
+    destructure, django_lookup, dynamic_keyword, empty_declarations, export_import, extension,
+    flexible_keyword, float_const, force_unwrap, frameworks, generic_call, generics,
+    grapheme_string, identity_swap, if_let, implicit_receiver, implicit_typing,
+    inferred_annotation, inferred_base_arguments, init_method, just_float, kw_subscript,
+    literal_string, literal_types, local_once, main_function, match_type, modifiers, module_api,
+    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
+    properties, protocol_type, raises_clause, reified_class, reified_generic, repeated_underscore,
+    return_value_use, runtime_union, sentinel, some_ctor, soundness, statement_expression,
+    static_resource, string_tag, super_keyword, symbolic_type_op, synthesized_types,
+    template_expression, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
+    unpack, use_site_variance, visibility_rename,
 };
 use crate::Config;
 use crate::columns::Columns;
@@ -263,6 +263,7 @@ pub(crate) struct PassContext {
 pub(crate) enum Lowering {
     AnonNamedTuple,
     Callable,
+    ClassSubscript,
     ContextParams,
     Conversion,
     DynamicKeyword,
@@ -1278,6 +1279,8 @@ pub(crate) fn run_against_source<'a>(
     config: &Config,
     project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
+    let literal_helper = Cell::new(false);
+    let written = written.with_literal_helper(&literal_helper);
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -1556,7 +1559,7 @@ pub(crate) fn run_against_source<'a>(
     let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass =
         kw_subscript::KwSubscriptPass::new(source_ref, written, config.min_version);
-    let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
+    let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref, config.min_version);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, written, config.min_version);
     let reified_class_pass = reified_class::ReifiedClassPass::new(source_ref, config.min_version);
@@ -1564,6 +1567,7 @@ pub(crate) fn run_against_source<'a>(
         type_reification::TypeReificationPass::new(written, config.min_version);
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass { written };
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, written);
+    let class_subscript_pass = class_subscript::ClassSubscriptPass;
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
         inferred_annotation::InferredAnnotationPass::new(written, config.min_version);
@@ -1828,6 +1832,7 @@ pub(crate) fn run_against_source<'a>(
         // resolves them rust-style from static types (fold / reified-cell
         // token equality / witness probe / unchecked runtime probe)
         &parametric_is_pass,
+        &class_subscript_pass,
         &implicit_typing_pass,
         // synthesize declared types for bare class-body assignments
         // (`class A: a = 1` → `a: int = 1`); a zero-width insertion at the
@@ -2071,6 +2076,9 @@ pub(crate) fn run_against_source<'a>(
         .any(template_expression::Wrap::rebuilds)
     {
         ctx.runtime.insert(crate::runtime::TEMPLATE_TEXT);
+    }
+    if literal_helper.get() {
+        ctx.runtime.insert(crate::runtime::LITERAL);
     }
     if !ctx.runtime.is_empty() {
         let helpers = ctx.runtime.iter().copied();
@@ -3098,6 +3106,20 @@ mod subsumed_lowerings {
 
     fn whole_construct_cases() -> Vec<Case> {
         vec![
+            case(
+                "ParametricIsPass",
+                &[Lowering::ClassSubscript],
+                "def f(x: int):\n    return x is zip[int]\n",
+                &["return False"],
+                &["_by_subscript(zip"],
+            ),
+            case(
+                "GenericCallStripPass",
+                &[Lowering::ClassSubscript],
+                "def f[T](t: T) -> T:\n    return t\nf[map[int]](map(int, []))\n",
+                &["f(map(int, []))"],
+                &["_by_subscript(map"],
+            ),
             case(
                 "GenericPolyfillPass",
                 &[Lowering::TupleLiteralType],

@@ -16,7 +16,7 @@
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
 
 use crate::semantic_model::LoweringModel;
 use crate::types::runtime_spelling::RuntimeSpelling;
@@ -81,10 +81,13 @@ impl<'ast> Visitor<'ast> for Spellings<'_, '_> {
 
 impl Spellings<'_, '_> {
     fn call(&mut self, call: &ast::ExprCall) {
-        if let Some(specialization) = self.model.reified_call_specialization(call) {
-            self.read(&specialization);
+        // the answer has to hold for any build of the file, and the latest target is the one
+        // that gives a forwarded type parameter a value, so the most calls a specialization
+        let target = PythonVersion::latest();
+        if let Some(specialization) = self.model.reified_call_specialization(call, target) {
+            self.read(&specialization.suffix);
         }
-        if let Some(arguments) = self.model.reified_constructor_type_arguments(call) {
+        if let Some(arguments) = self.model.reified_constructor_type_arguments(call, target) {
             self.read(&arguments);
         }
     }

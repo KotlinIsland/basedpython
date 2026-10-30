@@ -34,6 +34,6 @@ error[unspecialized-reified-generic]: Cannot call reified generic function `pair
    |
 11 |     return pair(value, lambda: 1)
    |            ^^^^^^^^^^^^^^^^^^^^^^
-info: inferred type `() -> int` for type parameter `B` has no runtime spelling — specialize with `pair[...]`
+info: inferred type `() -> 1` for type parameter `B` has no runtime spelling — specialize with `pair[...]`
 
 ```

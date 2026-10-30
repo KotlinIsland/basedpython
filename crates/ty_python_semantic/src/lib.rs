@@ -70,8 +70,8 @@ pub use types::ide_support::{
 };
 pub use types::implicit_names::implicit_names;
 pub use types::reified_infer::{
-    ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
-    TargetSpelling,
+    ArgVariance, CallSpecialization, ErasedTargetReason, ErasedUnion, ForwardedTypeParams,
+    ParametricIsPlan, ProtocolMemberCheck, TargetSpelling,
 };
 pub use types::runtime_spelling::RuntimeSpelling;
 pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};

@@ -616,6 +616,10 @@ class _by_static_property:
 # `__get__` captures the receiver so a reified *method* (`obj.m[int]()`) binds
 # `self` like an ordinary method. attribute access falls through to the
 # wrapped function, keeping introspection (`f.__name__`, `f.__doc__`) working
+#
+# `forwarding` is for a parameter the body only writes into a specialization it
+# records (`A[T](t)`). a call the transpiler has no spelling for is still legal
+# there, so the slot is left alone and the cell keeps the `TypeVar` itself
 class generic:
     # what tells another lowering's wrapper that this is a reified generic and
     # not the plain function it forwards to — the `raises` guard has to keep the
@@ -623,11 +627,16 @@ class generic:
     __by_generic__ = True
     __doc__ = property(lambda self: self.fn.__doc__)
 
-    def __init__(self, fn, args=None, instance=None, fields=None):
+    def __init__(self, fn, args=None, instance=None, fields=None, optional=()):
         self.fn = fn
         self.args = args
         self.instance = instance
         self.fields = fields
+        self.optional = optional
+
+    @classmethod
+    def forwarding(cls, *optional):
+        return lambda fn: cls(fn, optional=optional)
 
     def __repr__(self):
         return f"<generic {self.fn!r}>"
@@ -640,7 +649,7 @@ class generic:
     def __get__(self, obj, objtype=None):
         if obj is None:
             return self
-        return generic(self.fn, self.args, obj, self.fields)
+        return generic(self.fn, self.args, obj, self.fields, self.optional)
 
     def __getitem__(self, *items, **fields):
         if self.args is not None or self.fields is not None:
@@ -649,7 +658,7 @@ class generic:
             items = items[0]
         # reject a bad arity here, not at the call
         _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
-        return generic(self.fn, items, self.instance, fields)
+        return generic(self.fn, items, self.instance, fields, self.optional)
 
     def __call__(self, *args, **kwargs):
         from types import CellType, FunctionType
@@ -661,7 +670,7 @@ class generic:
         )
         for param in fn.__type_params__:
             name = param.__name__
-            if name not in values and name in code.co_freevars:
+            if name not in values and name in code.co_freevars and name not in self.optional:
                 # a synthesized parameter stands for an erased union the user
                 # never spelled, so naming it would leak the lowering
                 if name.startswith("__by_erased"):
@@ -681,6 +690,25 @@ class generic:
         if self.instance is not None:
             return temp_fn(self.instance, *args, **kwargs)
         return temp_fn(*args, **kwargs)
+
+
+# `origin[args]` for a class the checker knows as generic but whose runtime may
+# have no subscript: a c type only has one if cpython wrote it by hand. a
+# `types.GenericAlias` is what the subscript would have been
+def _by_subscript(origin, *args):
+    args = args[0] if len(args) == 1 else args
+    if hasattr(origin, "__class_getitem__") or hasattr(type(origin), "__getitem__"):
+        return origin[args]
+    from types import GenericAlias
+    return GenericAlias(origin, args)
+
+
+# a bare call of a method that only forwards its type parameters. an override may
+# forward none, which makes it a plain method with no specialization to take
+def _by_specialized(callee, *items, **fields):
+    if getattr(callee, "__by_generic__", False):
+        return callee.__getitem__(*items, **fields)
+    return callee
 
 
 # --- conformance registry --------------------------------------------------
@@ -879,11 +907,18 @@ def _by_specialize(alias, origin, depth=0):
             pass
     return None
 
+def _by_recorded_alias(value):
+    # the specialization `value` records, if it records one. a function that
+    # forwards a type parameter and was called with no type argument for it still
+    # builds `A[T](…)`, and an alias with a parameter left in it says nothing
+    reified = getattr(value, "__orig_class__", None)
+    return None if getattr(reified, "__parameters__", ()) else reified
+
 def _by_generic_args(value, origin):
     # an explicit `A[int]()` records its specialization on the instance;
     # otherwise the class itself is the starting point and any pep 696 defaults
     # stand in for the arguments it was constructed with
-    reified = getattr(value, "__orig_class__", None)
+    reified = _by_recorded_alias(value)
     found = _by_specialize(reified if reified is not None else type(value), origin)
     return [found] if found is not None else []
 
@@ -898,29 +933,24 @@ def _parametric_is(value, alias, variances):
     for reified_args in _by_generic_args(value, origin):
         if len(reified_args) != len(target_args):
             continue
-        for r, t, v in zip(reified_args, target_args, variances):
-            if v == 3 or r == t:
-                continue
-            if v == 1 and _parametric_is_sub(r, t):
-                continue
-            if v == 2 and _parametric_is_sub(t, r):
-                continue
-            break
-        else:
+        if all(_by_variance_ok(r, t, v) for r, t, v in zip(reified_args, target_args, variances)):
             return True
     return False
 
-def _parametric_is_sub(a, b):
-    if a is b or b is object:
-        return True
-    a_origin = getattr(a, "__origin__", a)
-    b_origin = getattr(b, "__origin__", b)
-    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, "__args__", ()):
-        try:
-            return issubclass(a_origin, b_origin)
-        except TypeError:
-            return False
-    return a == b
+def _by_cell_is(value, cell):
+    # `value is T`, for a reified `T`. the cell holds whatever the call supplied, and
+    # `isinstance` refuses a literal or a subscripted class outright
+    import typing
+    values = _by_literal_args(cell)
+    if values is not None:
+        return any(type(value) is type(member) and value == member for member in values)
+    args = typing.get_args(cell)
+    if not args:
+        return isinstance(value, cell)
+    origin = typing.get_origin(cell)
+    if origin is typing.Union or origin is type(int | str):
+        return any(_by_cell_is(value, arm) for arm in args)
+    return _parametric_is(value, cell, (0,) * len(args))
 
 def _parametric_is_lenient(value, alias, variances):
     # the checked-cast form: a value that records no reification has no
@@ -1155,7 +1185,7 @@ def _soundness_parametric(_v, _alias, _variances):
             f"type soundness violation: expected {getattr(_origin, '__name__', _origin)}, "
             f"got {type(_v).__name__}"
         )
-    if getattr(_v, "__orig_class__", None) is not None and not _parametric_is(_v, _alias, _variances):
+    if _by_recorded_alias(_v) is not None and not _parametric_is(_v, _alias, _variances):
         raise TypeError(
             f"type soundness violation: expected {_alias}, got {_v.__orig_class__}"
         )

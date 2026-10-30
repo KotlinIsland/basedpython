@@ -170,10 +170,40 @@ impl Walk<'_> {
             edits: &mut self.edits,
             skip_root: false,
         };
-        if quoter.contains_forward_reference(annotation) {
+        // a subscript the runtime refuses would raise as the annotation is evaluated. a quote
+        // changes what `__annotations__` holds, and frameworks read that, so this asks for
+        // more than the value-position lowering, which only ever asks the runtime
+        if quoter.contains_forward_reference(annotation)
+            || holds_refused_class_subscript(types, annotation)
+        {
             quoter.quote(annotation.range());
         }
     }
+}
+
+fn holds_refused_class_subscript(types: &dyn TypeInfo, annotation: &Expr) -> bool {
+    struct Finder<'a> {
+        types: &'a dyn TypeInfo,
+        found: bool,
+    }
+    impl<'ast> Visitor<'ast> for Finder<'_> {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            self.found |= matches!(
+                expr,
+                Expr::Subscript(subscript)
+                    if self.types.class_subscript_is_refused(&subscript.value)
+            );
+            if !self.found {
+                walk_expr(self, expr);
+            }
+        }
+    }
+    let mut finder = Finder {
+        types,
+        found: false,
+    };
+    finder.visit_expr(annotation);
+    finder.found
 }
 
 /// quotes the forward references in what the checker reads as deferred though python

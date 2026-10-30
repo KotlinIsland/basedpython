@@ -87,6 +87,7 @@ use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::narrow::ClassInfoConstraintFunction;
 use crate::types::overrides::{OverrideStep, is_constructor_like_method, overridden_declarations};
+use crate::types::reified_infer::{ForwardedTypeParams, forwarded_type_params, target_can_forward};
 use crate::types::relation::TypeRelationChecker;
 use crate::types::repeated_underscore::{
     BaseParameter, LoweredParameters, ParameterSlot, UnderscoreLowering, UnderscoreRefusal,
@@ -3026,6 +3027,29 @@ impl<'db> FunctionType<'db> {
         self.literal(db)
             .last_definition
             .reified_type_params_requiring_argument(db)
+    }
+
+    /// basedpython: the type parameters this function's body forwards into a specialization
+    /// without its source reifying them. this reads the inference of the body, so nothing
+    /// inference asks may depend on it
+    pub(crate) fn forwarded_type_params(self, db: &'db dyn Db) -> &'db ForwardedTypeParams {
+        forwarded_type_params(db, self.literal(db).last_definition.body_scope(db))
+    }
+
+    /// basedpython: a function that takes a specialization only because its body forwards
+    /// one, and has not been given it yet
+    pub(crate) fn is_unspecialized_forwarding(self, db: &'db dyn Db) -> bool {
+        self.updated_signature(db).is_none() && !self.forwarded_type_params(db).names.is_empty()
+    }
+
+    /// basedpython: whether the python generated for `min_version` keeps the native type
+    /// parameter list of this function, which is what holds a forwarded type argument
+    pub(crate) fn can_forward_at(self, db: &'db dyn Db, min_version: PythonVersion) -> bool {
+        target_can_forward(
+            db,
+            self.literal(db).last_definition.body_scope(db),
+            min_version,
+        )
     }
 
     /// basedpython: a *pristine* reified generic — reified and not yet put
