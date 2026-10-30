@@ -44,7 +44,7 @@
 //! v = __by_stmt_expr_0__
 //! ```
 //!
-//! A `raise` anywhere else — a call's argument, a condition, a lambda's body — has
+//! a `raise` anywhere else — a call's argument, a condition, a lambda's body — has
 //! to raise partway through an expression, which only a call can do from inside one:
 //!
 //! ```text
@@ -192,8 +192,8 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 }
 
 impl Lower<'_> {
-    /// Records the statement expressions in the positions [`Self::emit_value`] writes as
-    /// statements: the value itself, and what the operators that choose between operands choose.
+    /// records the statement expressions in the positions [`Self::emit_value`] writes as
+    /// statements: the value itself, and what the operators that choose between operands choose
     fn collect_tail_statements(&mut self, expr: &Expr) {
         match expr {
             // a trailing lambda block needs no temporary: its value is the call it
@@ -221,9 +221,9 @@ impl Lower<'_> {
         }
     }
 
-    /// Rewrites a `raise` in the middle of an expression into a call of the runtime's helper,
+    /// rewrites a `raise` in the middle of an expression into a call of the runtime's helper,
     /// as one edit over the `raise` that keeps the source of its operands, so that whatever
-    /// lowers inside them composes with it and whatever moves the `raise` moves all of it.
+    /// lowers inside them composes with it and whatever moves the `raise` moves all of it
     fn emit_raise_call(&mut self, raise: &StmtRaise) {
         self.raises_in_expression = true;
         let helper = crate::runtime::RAISE.name();
@@ -321,12 +321,12 @@ impl Lower<'_> {
         }
     }
 
-    /// Gives each `match` in a value position of `stmt` that has no case for everything a last
+    /// gives each `match` in a value position of `stmt` that has no case for everything a last
     /// case that says what went wrong: with none, a value the checker ruled out runs past the
-    /// `match` and fails on reading the temporary it never assigned.
+    /// `match` and fails on reading the temporary it never assigned
     ///
-    /// A case added where the statement expression ends goes in `closing`, since an edit there
-    /// lands past the source the statement is written from, and an inner `match`'s goes first.
+    /// a case added where the statement expression ends goes in `closing`, since an edit there
+    /// lands past the source the statement is written from, and an inner `match`'s goes first
     fn close_matches(&mut self, stmt: &Stmt, end: ruff_text_size::TextSize, closing: &mut String) {
         let tails: Vec<&[Stmt]> = match stmt {
             Stmt::Match(statement) => statement.cases.iter().map(|case| &*case.body).collect(),

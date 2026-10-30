@@ -103,9 +103,9 @@ the injected spelling is read from the specialization ty already inferred for
 the expression — the same solution the checker reports. that includes whether a
 literal widened: `A(1)` is an `A[int]` when `T` is invariant, and a covariant
 `B(1)` is a `B[1]` that also passes for a `B[int]`, see
-[fluid specializations](fluid-specializations.md). there is no separate solver, so the injected arguments never disagree with the checker, and
-usage-based widening of an inferred specialization flows straight into the
-injection
+[fluid specializations](fluid-specializations.md). there is no separate solver,
+so the injected arguments never disagree with the checker, and usage-based
+widening of an inferred specialization flows straight into the injection
 
 an explicit specialization is always kept as written: `A[int](1)` transpiles
 unchanged, and is never wrapped twice

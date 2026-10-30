@@ -2139,11 +2139,11 @@ impl<'db> InnerIntersectionBuilder<'db> {
         false
     }
 
-    /// Split a positive `sealed` class into its members when a negative excludes some of them.
+    /// split a positive `sealed` class into its members when a negative excludes some of them
     ///
-    /// A value of a sealed class is an instance of one of the classes that subclass it directly, so
-    /// `A & ~B` is the union of `M & A & ~B` over those members. A member the negatives exclude
-    /// simplifies away, and when none is left the whole intersection is empty.
+    /// a value of a sealed class is an instance of one of the classes that subclass it directly, so
+    /// `A & ~B` is the union of `M & A & ~B` over those members. a member the negatives exclude
+    /// simplifies away, and when none is left the whole intersection is empty
     ///
     /// ```by
     /// sealed class A
@@ -2155,13 +2155,13 @@ impl<'db> InnerIntersectionBuilder<'db> {
     ///         reveal_type(a)  # Never
     /// ```
     ///
-    /// Each member is added by its top materialization rather than as a specialization of the
+    /// each member is added by its top materialization rather than as a specialization of the
     /// sealed class's arguments: how a member's type parameters relate to its base's is whatever
     /// its class statement says, and intersecting with the positive that is still there lets the
-    /// relation between the two classes decide which arguments can occur.
+    /// relation between the two classes decide which arguments can occur
     ///
-    /// `expanded` holds the sealed classes already split on the way here. A generic sealed class is
-    /// still a positive of each of its branches, and is not to be split again.
+    /// `expanded` holds the sealed classes already split on the way here. a generic sealed class is
+    /// still a positive of each of its branches, and is not to be split again
     fn split_sealed_class(
         &self,
         db: &'db dyn Db,

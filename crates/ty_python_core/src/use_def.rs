@@ -3147,13 +3147,13 @@ impl<'db> UseDefMapBuilder<'db> {
         });
     }
 
-    /// basedpython: record the state of `places` where the body returns, with every way out of it
-    /// already merged into the current state.
-    /// basedpython: whether a predicate recorded so far narrows `place`.
+    /// basedpython: whether a predicate recorded so far narrows `place`
     pub(super) fn is_narrowing_target(&self, place: ScopedPlaceId) -> bool {
         self.narrowed_places.contains(&place)
     }
 
+    /// basedpython: record the state of `places` where the body returns, with every way out of it
+    /// already merged into the current state.
     pub(super) fn record_normal_exit(&mut self, places: impl Iterator<Item = ScopedPlaceId>) {
         self.normal_exit = self.current_place_bindings(places).into_vec();
     }

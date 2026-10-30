@@ -162,10 +162,10 @@ pub struct DisplaySettings<'db> {
     /// Used to suppress redundant `@{scope}` suffixes for type variables.
     active_scopes: Rc<FxHashSet<Definition<'db>>>,
     /// basedpython: whether a type variable leaves out its `@{scope}` suffix wherever its name
-    /// alone says which one it is. A `.by` file always does; this asks for it in a `.py` file.
+    /// alone says which one it is. a `.by` file always does; this asks for it in a `.py` file
     hide_type_variable_scopes: bool,
     /// basedpython: the names shared by different type variables in what is being displayed,
-    /// which keep their `@{scope}` suffixes because `T` alone would not say which is meant.
+    /// which keep their `@{scope}` suffixes because `T` alone would not say which is meant
     ambiguous_type_variables: Rc<FxHashSet<&'db str>>,
     /// Function types that are currently being displayed.
     /// Used to prevent infinite recursion when displaying self-referential function types.
@@ -331,7 +331,7 @@ impl<'db> DisplaySettings<'db> {
     }
 
     /// basedpython: leave out a type variable's `@{scope}` suffix wherever its name alone says
-    /// which one it is, in a `.py` file too.
+    /// which one it is, in a `.py` file too
     #[must_use]
     pub fn with_hidden_type_variable_scopes(self) -> Self {
         Self {
@@ -713,8 +713,8 @@ struct AmbiguousNameCollector<'a, 'db> {
 }
 
 impl<'db> AmbiguousNameCollector<'_, 'db> {
-    /// Two type variables only need their `@{scope}` suffixes to tell them apart when those
-    /// suffixes differ: the `T` of each overload of `f` would read `T@f` either way.
+    /// two type variables only need their `@{scope}` suffixes to tell them apart when those
+    /// suffixes differ: the `T` of each overload of `f` would read `T@f` either way
     fn record_type_variable(&self, db: &'db dyn Db, type_variable: BoundTypeVarInstance<'db>) {
         let identity = type_variable.identity(db);
         let name = identity.identity.name(db).as_str();
