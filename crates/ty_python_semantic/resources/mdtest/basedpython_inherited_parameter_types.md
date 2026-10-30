@@ -82,7 +82,7 @@ class A:
 
 class B(A):
     override def f(self, b):  # error: [invalid-method-override]
-        reveal_type(b)  # revealed: b@f
+        reveal_type(b)  # revealed: b
 ```
 
 ## `*args` and `**kwargs`
@@ -132,7 +132,7 @@ class C:
 
 class D(C):
     override def f(self, a, *args):  # error: [invalid-method-override]
-        reveal_type(a)  # revealed: a@f
+        reveal_type(a)  # revealed: a
         reveal_type(args)  # revealed: (*: int)
 ```
 
@@ -253,7 +253,7 @@ class B:
 
 class C(A, B):
     def f(self, x):  # error: [invalid-method-override]
-        reveal_type(x)  # revealed: x@f
+        reveal_type(x)  # revealed: x
 ```
 
 a class whose MRO cannot be built has no MRO to search, so its parameters take nothing:
@@ -266,7 +266,7 @@ class B(A): ...
 
 class C(A, B):  # error: [inconsistent-mro]
     def f(self, a):
-        reveal_type(a)  # revealed: a@f
+        reveal_type(a)  # revealed: a
 ```
 
 ## a chain of overrides
@@ -296,7 +296,7 @@ class A:
 
 class B(A):
     override def f(self, a):
-        reveal_type(a)  # revealed: a@f
+        reveal_type(a)  # revealed: a
 ```
 
 ## a generic base
@@ -315,7 +315,7 @@ class B(A[int]):
 
 class C[U](A[U]):
     override def f(self, a, b):
-        reveal_type(a)  # revealed: U@C
+        reveal_type(a)  # revealed: U
 ```
 
 ## a type the overridden method binds itself
@@ -333,10 +333,10 @@ class A:
 
 class B(A):
     override def f(self, a, b):
-        reveal_type(a)  # revealed: a@f
+        reveal_type(a)  # revealed: a
         reveal_type(b)  # revealed: int
     override def g(self, other):
-        reveal_type(other)  # revealed: other@g
+        reveal_type(other)  # revealed: other
 ```
 
 ## an overloaded base
@@ -368,5 +368,5 @@ class A:
 
 class B(A):
     def __init__(self, a):
-        reveal_type(a)  # revealed: a@__init__
+        reveal_type(a)  # revealed: a
 ```
