@@ -1315,6 +1315,12 @@ fn a_management_command_that_wants_a_terminal_is_refused_rather_than_spawned() -
         "got {failure}"
     );
 
+    // and the refusal is shown, since an error answer to a click is one an editor need not
+    // show anyone
+    let shown = server.await_notification::<lsp_types::ShowMessageNotification>();
+    assert_eq!(shown.kind, lsp_types::MessageType::Error);
+    assert!(shown.message.contains("needs a terminal"), "got {shown:?}");
+
     Ok(())
 }
 
