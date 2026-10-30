@@ -1097,6 +1097,102 @@ fn run_exits_with_the_signal_that_ended_the_program() {
     );
 }
 
+/// a program that tidies up when it is asked to end, and ends with its own status
+#[cfg(unix)]
+const ENDS_WHEN_ASKED: &str = "\
+import signal
+import sys
+import time
+
+
+def ask(signum: int, frame: object) -> None:
+    print(f\"got {signal.Signals(signum).name}\", flush=True)
+    sys.exit(7)
+
+
+_ = signal.signal(signal.SIGTERM, ask)
+_ = signal.signal(signal.SIGINT, ask)
+print(\"ready\", flush=True)
+while True:
+    time.sleep(0.05)
+";
+
+/// start `by run main` in `dir`, wait for the program to say it is ready, send `by` — and only
+/// `by` — `signal`, and hand back how `by` ended and what the program printed
+#[cfg(unix)]
+fn run_and_signal(dir: &Path, signal: &str, command: &mut Command) -> (Option<i32>, String) {
+    let mut by = command
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn by");
+    let mut stdout = BufReader::new(by.stdout.take().expect("piped"));
+    let mut printed = String::new();
+    while !printed.contains("ready") {
+        let read = stdout
+            .read_line(&mut printed)
+            .expect("the program's output");
+        assert!(read > 0, "the program ended before it was ready: {printed}");
+    }
+    let sent = Command::new("kill")
+        .args([format!("-{signal}"), by.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(sent.success());
+    // the program that was not told keeps running, and so does `by`, waiting on it
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = by.try_wait().expect("by can be waited on") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            by.kill().expect("by can be killed");
+            panic!("`by run` did not end after {signal}: {printed}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut rest = String::new();
+    let _ = std::io::Read::read_to_string(&mut stdout, &mut rest);
+    printed.push_str(&rest);
+    (status.code(), printed)
+}
+
+/// `SIGTERM` is how a run is stopped — `docker stop`, a supervisor, an editor's Stop — and it
+/// reaches `by` alone: the program is told, gets to tidy up, and `by` exits as it does
+#[cfg(unix)]
+#[test]
+fn run_passes_a_sigterm_on_to_the_program() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), ENDS_WHEN_ASKED).unwrap();
+    let (code, printed) = run_and_signal(
+        dir.path(),
+        "TERM",
+        &mut Command::new(env!("CARGO_BIN_EXE_by")),
+    );
+    assert_eq!(code, Some(7), "{printed}");
+    assert!(printed.contains("got SIGTERM"), "{printed}");
+}
+
+/// a `SIGINT` sent to `by` alone is passed on too when no terminal has sent it to the program,
+/// which `by` outside any terminal's foreground process group is sure of
+#[cfg(unix)]
+#[test]
+fn run_passes_a_sigint_on_to_the_program_outside_a_terminal() {
+    use std::os::unix::process::CommandExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), ENDS_WHEN_ASKED).unwrap();
+    let mut by = Command::new(env!("CARGO_BIN_EXE_by"));
+    // a process group of its own is the foreground of no terminal, whatever runs the tests
+    by.process_group(0);
+    let (code, printed) = run_and_signal(dir.path(), "INT", &mut by);
+    assert_eq!(code, Some(7), "{printed}");
+    assert!(printed.contains("got SIGINT"), "{printed}");
+}
+
 /// the program runs out of a directory of transpiled copies that is deleted when
 /// the run ends, so every path python derives from a module's origin named a
 /// temporary file — leaving a tool started anywhere but the project root with

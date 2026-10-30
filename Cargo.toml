@@ -224,6 +224,7 @@ serde_json = { version = "1.0.113", default-features = false, features = ["std"]
 serde_test = { version = "1.0.152", default-features = false }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 shellexpand = { version = "3.0.0", default-features = false, features = ["base-0", "tilde"] }
+signal-hook = { version = "0.3.18", default-features = false, features = ["iterator"] }
 similar = { version = "3.0.0", default-features = false, features = ["inline", "std", "text"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["union", "const_generics", "const_new"] }
 snapbox = { version = "1.0.0", default-features = false, features = [

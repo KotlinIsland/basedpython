@@ -6,6 +6,7 @@ mod by_lowering;
 mod by_merge_driver;
 mod by_project_server;
 mod by_repl;
+mod by_signals;
 mod by_source_encoding;
 mod by_stamps;
 mod by_wheels;
