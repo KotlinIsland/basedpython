@@ -165,13 +165,12 @@ fn create_parent(path: &Path) -> Result<()> {
               put a name between the flag and the field it sets"
 )]
 pub struct Options {
-    /// reject a function declined because a type was gradual, instead of
-    /// quietly leaving it interpreted.
+    /// reject a compiled function that has a gradual type.
     ///
     /// this buys no speed on its own — it is a *predictability* contract. a
-    /// gradual type is the reason most functions decline, and a decline is
-    /// invisible unless you look, so a module that means to be fully compiled
-    /// should be able to say so and be held to it
+    /// gradual type still compiles, through python's object protocol, so it
+    /// costs speed with nothing to say so, and a module that means to be fully
+    /// typed should be able to say so and be held to it
     pub no_any: bool,
     /// reject *any* decline, whatever the reason.
     ///

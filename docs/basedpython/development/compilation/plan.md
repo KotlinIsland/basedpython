@@ -70,12 +70,14 @@ unobservable there. the row stays, but it stops being unavoidable
 
 ### what refuses to compile
 
-- a module whose check has **errors**. this is already `by run`'s rule: the
-    checker's verdict and the runtime must not diverge
 - tier 3 with a stale `api.lock`
 - `--soundness none` together with `--tier=3` without an explicit
     `--i-know-what-this-means`, because that combination removes both the
     runtime guard and the closed-world escape hatch at once
+
+a module whose check has **errors** still compiles. as with `by build`, everything
+that could be written is written and the exit status is 1, so `by compile && ...`
+only carries on from a clean check. `by run` is what refuses to start the program
 
 ## coverage escape hatches
 

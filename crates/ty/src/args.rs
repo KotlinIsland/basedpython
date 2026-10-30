@@ -324,12 +324,11 @@ pub(crate) enum Command {
         /// Emit the generated C without invoking the C compiler.
         #[arg(long)]
         emit_c_only: bool,
-        /// Fail the build when a function cannot be compiled because a type is
-        /// gradual, instead of leaving it to its interpreted definition.
+        /// Fail the build when a compiled function has a gradual type.
         ///
         /// A contract about predictability rather than a speed switch: a
-        /// gradual type is the commonest reason a function silently stays
-        /// interpreted.
+        /// gradual type still compiles, through python's object protocol, so it
+        /// costs speed with nothing to say so.
         #[arg(long)]
         no_any: bool,
         /// Fail the build if *any* function is left to its interpreted

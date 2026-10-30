@@ -41,9 +41,9 @@ def main():
 ## installation
 
 ```sh
-uv add --dev basedpython
+uv add --dev "basedpython>=0.0.1b2"
 echo 'print("hello")' > main.by
-by run main
+uv run by run main
 ```
 
 ## documentation

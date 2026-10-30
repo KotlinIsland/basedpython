@@ -174,7 +174,7 @@ a write nobody observes says `nothing`, and that is said only of a slot no compo
 
 `reads` and `invalidates` disagree on a forwarding parent, on purpose. `def Forwarding(count)⟨ reads count⟩` lifts every composable callee's reads into its caller — a superset that says what the subtree depends on — while a write to that slot says `invalidates Child` and not `Forwarding`, because the runtime subscribes the child's own scope and skips the parent, whose arguments did not change. only a child called with a content block subscribes its parent, and then both hints name the parent
 
-the runtime's exact answer is its trace: why every scope ran, which `bpd` reads and pycharm shows — see [why did this rerender](https://kotlinisland.github.io/basedpython-ui/guide/why-did-this-rerender/)
+the runtime's exact answer is its trace: why every scope ran, which `bpd` reads and pycharm shows — see [why did this rerender](https://github.com/KotlinIsland/basedpython-ui/blob/master/docs/guide/why-did-this-rerender.md)
 
 ## limitations
 
