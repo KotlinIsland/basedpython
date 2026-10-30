@@ -26,12 +26,14 @@ use serde::{Deserialize, Serialize};
 use ty_project::{Db as _, ProjectDatabase};
 
 use crate::capabilities::ResolvedClientCapabilities;
-use crate::document::{FileRangeExt, ToRangeExt};
+use crate::document::{DocumentVersion, FileRangeExt, ToRangeExt};
 use crate::server::api::requests::api_lock::api_lock_document_diagnostics;
 use crate::server::api::requests::detached_transpile::transpile_detached;
 use crate::server::api::requests::transpile::project_config;
+use crate::server::main_loop::Action;
+use crate::server::schedule::{BackgroundSchedule, Task};
 use crate::session::client::Client;
-use crate::session::{GlobalSettings, OpenDocumentHandle};
+use crate::session::{DocumentRequestTarget, GlobalSettings, OpenDocumentHandle};
 use crate::system::{AnySystemPath, file_to_uri};
 use crate::{DIAGNOSTIC_NAME, Db, DiagnosticMode};
 use crate::{PositionEncoding, Session};
@@ -263,13 +265,23 @@ pub(super) fn publish_diagnostics(
         );
         return;
     };
+    let transpile_verdicts = session.transpile_verdicts(document.notebook_or_file_path());
+    // a transpile takes about as long as the check before it, and this is the thread the next
+    // edit is waiting on, so what needs one is published from a worker
+    if !document.is_django_template() && transpile_verdicts.awaits_transpile(db, file) {
+        client.queue_action(Action::PublishAwaitingTranspile {
+            uri: document.uri().clone(),
+            version: document.version(),
+        });
+        return;
+    }
     let Some(diagnostics) = compute_diagnostics(
         db,
         file,
         session.position_encoding(),
         session.global_settings(),
         document.is_django_template(),
-        session.transpile_verdicts(document.notebook_or_file_path()),
+        transpile_verdicts,
     ) else {
         return;
     };
@@ -306,6 +318,70 @@ pub(super) fn publish_diagnostics(
             }
         }
     }
+}
+
+/// publishes what [`publish_diagnostics`] handed over for the document `uri` at `version`
+///
+/// nothing is published for a document that has moved on, since the edit that moved it asked for
+/// its own, nor once a change to the database cancels this, since each change to the database is
+/// followed by a publish. the database is held until the notification is sent, so that one for an
+/// older version can't overtake the next edit's
+pub(in crate::server) fn publish_awaiting_transpile(uri: Uri, version: DocumentVersion) -> Task {
+    Task::background(BackgroundSchedule::Worker, move |session: &Session| {
+        let snapshot = match session.snapshot_document(&uri) {
+            Ok(snapshot)
+                if matches!(
+                    snapshot.document(),
+                    DocumentRequestTarget::Open(document) if document.version() == version
+                ) =>
+            {
+                snapshot
+            }
+            _ => return Box::new(|_| {}),
+        };
+        let db = session
+            .project_db(snapshot.document().notebook_or_file_path())
+            .clone();
+
+        Box::new(move |client| {
+            let published = ruff_db::panic::catch_unwind(|| {
+                salsa::attach(&db, || {
+                    let diagnostics =
+                        snapshot
+                            .document()
+                            .to_notebook_or_file(&db)
+                            .and_then(|file| {
+                                compute_diagnostics(
+                                    &db,
+                                    file,
+                                    snapshot.encoding(),
+                                    snapshot.global_settings(),
+                                    snapshot.is_django_template(),
+                                    snapshot.transpile_verdicts(),
+                                )
+                            });
+                    let Some(diagnostics) = diagnostics else {
+                        return;
+                    };
+                    let diagnostics = diagnostics
+                        .to_lsp_diagnostics(&db, snapshot.resolved_client_capabilities())
+                        .into_document_diagnostics(&uri);
+                    client.send_notification::<PublishDiagnosticsNotification>(
+                        PublishDiagnosticsParams {
+                            uri: uri.clone(),
+                            diagnostics,
+                            version: Some(version),
+                        },
+                    );
+                });
+            });
+            if let Err(error) = published
+                && error.payload.downcast_ref::<salsa::Cancelled>().is_none()
+            {
+                tracing::error!("Failed to publish the diagnostics of {uri}: {error}");
+            }
+        })
+    })
 }
 
 /// Publishes settings diagnostics for all the project at the given path
@@ -491,11 +567,7 @@ impl TranspileVerdicts {
         file: File,
         checked: &[ruff_db::diagnostic::Diagnostic],
     ) -> Option<ruff_db::diagnostic::Diagnostic> {
-        if !file.source_type(db).is_basedpython()
-            || checked
-                .iter()
-                .any(|diagnostic| diagnostic.severity() >= Severity::Error)
-        {
+        if !file.source_type(db).is_basedpython() || checked_has_error(checked) {
             return None;
         }
 
@@ -511,6 +583,17 @@ impl TranspileVerdicts {
         failure
     }
 
+    /// whether [`Self::failure`] would have to transpile `file` to answer now
+    fn awaits_transpile(&self, db: &ProjectDatabase, file: File) -> bool {
+        file.source_type(db).is_basedpython()
+            && !db.uv_environments().is_initialization_pending(db, file)
+            && !checked_has_error(&db.check_file(file))
+            && self
+                .lock()
+                .get(&file)
+                .is_none_or(|(known_at, _)| *known_at != salsa::plumbing::current_revision(db))
+    }
+
     fn lock(
         &self,
     ) -> MutexGuard<'_, FxHashMap<File, (salsa::Revision, Option<ruff_db::diagnostic::Diagnostic>)>>
@@ -518,6 +601,12 @@ impl TranspileVerdicts {
         // a panic while the lock was held left nothing half-written: each entry is replaced whole
         self.verdicts.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn checked_has_error(checked: &[ruff_db::diagnostic::Diagnostic]) -> bool {
+    checked
+        .iter()
+        .any(|diagnostic| diagnostic.severity() >= Severity::Error)
 }
 
 /// transpile `file` as `by build` does, and say what stopped it
@@ -528,7 +617,11 @@ fn transpile_failure(
     db: &ProjectDatabase,
     file: File,
 ) -> Result<Option<ruff_db::diagnostic::Diagnostic>, ()> {
-    let config = project_config(db);
+    // a build settles the stamps, and a stamp nobody has settled yet isn't what stops the module
+    let config = by_transforms::Config {
+        stamps_undetermined: true,
+        ..project_config(db)
+    };
     let owned = db.dyn_clone();
     // the transpiler builds databases of its own, which a thread with the session's attached
     // cannot; see `transpile_detached`. a panic in it is reported the way a build reports one

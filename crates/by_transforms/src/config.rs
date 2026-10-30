@@ -72,6 +72,10 @@ pub struct Config {
     /// block; one with neither is a transpile error, which is the whole point of
     /// declaring it
     pub stamps: BTreeMap<String, String>,
+    /// nothing has settled the stamps, so that one with no value and no default says nothing
+    /// about whether the module transpiles. this is a question only asked to judge a module: what
+    /// comes out is not a program to run
+    pub stamps_undetermined: bool,
     /// when true (the default), a closure created inside a loop captures the
     /// loop's bindings *by value*, so each iteration's closure sees that
     /// iteration's element instead of every closure sharing the one cell
@@ -135,6 +139,7 @@ impl Default for Config {
             float_literals: FloatLiteralLowering::Nominal,
             runtime_module: None,
             stamps: BTreeMap::new(),
+            stamps_undetermined: false,
             session: false,
         }
     }

@@ -504,6 +504,11 @@ fn module_named_after(
     } else {
         new_name.to_owned()
     };
+    // what can't be written in an import isn't a module, and the imports of this one would be left
+    // pointing at nothing
+    if !is_identifier(&new_stem) || is_keyword(&new_stem) {
+        return None;
+    }
     let new_path = path.parent()?.join(match path.extension() {
         Some(extension) => format!("{new_stem}.{extension}"),
         None => new_stem,

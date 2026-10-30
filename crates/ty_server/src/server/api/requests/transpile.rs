@@ -186,6 +186,21 @@ pub(crate) fn project_config(db: &ProjectDatabase) -> Config {
             .to_string()
             .parse()
             .unwrap_or_else(|_| Config::default().min_version),
+        float_literals: match db
+            .project()
+            .metadata(db)
+            .options()
+            .lowering
+            .as_ref()
+            .and_then(|lowering| lowering.float_literals.as_deref())
+        {
+            Some(ty_project::metadata::options::FloatLiteralLowering::Literal) => {
+                by_transforms::FloatLiteralLowering::Literal
+            }
+            Some(ty_project::metadata::options::FloatLiteralLowering::Nominal) | None => {
+                by_transforms::FloatLiteralLowering::Nominal
+            }
+        },
         ..Config::default()
     }
 }

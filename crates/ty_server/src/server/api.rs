@@ -24,6 +24,7 @@ mod type_hierarchy;
 use self::traits::{NotificationHandler, RequestHandler};
 use super::{Result, schedule::BackgroundSchedule};
 use crate::session::client::Client;
+pub(in crate::server) use diagnostics::publish_awaiting_transpile;
 pub(crate) use diagnostics::{
     TranspileVerdicts, publish_all_document_diagnostics, publish_diagnostics_if_needed,
     publish_settings_diagnostics,

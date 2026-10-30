@@ -57,7 +57,7 @@
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, PySourceType, PythonVersion, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::reified::reified_type_param_names;
+use ty_python_semantic::reified::{has_classmethod_binding, reified_type_param_names};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
@@ -144,11 +144,7 @@ impl<'src> ReifiedGeneric<'src> {
             self.defaulted_below_313.push(function.name.id.to_string());
             return;
         }
-        if function
-            .decorator_list
-            .iter()
-            .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "classmethod"))
-        {
+        if has_classmethod_binding(function) {
             self.classmethods.push(function.name.id.to_string());
             return;
         }
@@ -595,6 +591,19 @@ mod tests {
     }
 
     #[test]
+    fn a_classmethod_spelled_through_builtins_has_no_function_to_rebuild() {
+        let out = out_at(
+            &format!(
+                "import builtins\n{BOX}class C:\n    @builtins.classmethod\n    \
+                 def m[T](cls, t: T) -> object:\n        return Box(t)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(!out.contains("generic"), "{out}");
+        assert!(out.contains("return Box(t)"), "{out}");
+    }
+
+    #[test]
     fn a_parameter_that_hides_the_type_parameter_is_not_forwarded() {
         let out = out_at(
             &format!("{BOX}def f[T](T: T) -> object:\n    return Box(T)\n"),
@@ -950,6 +959,28 @@ mod tests {
             indoc! {"
                 class C:
                     @classmethod
+                    def f[T](cls) -> None:
+                        print(T)
+            "},
+            &Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("classmethod `f` cannot have reified type parameters"),
+            "expected a classmethod reification error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_classmethod_spelled_through_builtins_reified_is_an_error() {
+        let err = transpile(
+            indoc! {"
+                import builtins
+                class C:
+                    @builtins.classmethod
                     def f[T](cls) -> None:
                         print(T)
             "},

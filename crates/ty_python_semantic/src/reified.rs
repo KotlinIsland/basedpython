@@ -130,14 +130,21 @@ pub(crate) fn forwardable_type_param_names(function: &ast::StmtFunctionDef) -> V
 
 /// whether `function` is a classmethod, whose binding hides the function a reified parameter
 /// is rebuilt into
-fn has_classmethod_binding(function: &ast::StmtFunctionDef) -> bool {
+pub fn has_classmethod_binding(function: &ast::StmtFunctionDef) -> bool {
     matches!(
         function.name.as_str(),
         "__init_subclass__" | "__class_getitem__"
     ) || function
         .decorator_list
         .iter()
-        .any(|decorator| matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "classmethod"))
+        .any(|decorator| match &decorator.expression {
+            Expr::Name(name) => name.id.as_str() == "classmethod",
+            Expr::Attribute(attribute) => {
+                attribute.attr.as_str() == "classmethod"
+                    && matches!(&*attribute.value, Expr::Name(module) if module.id.as_str() == "builtins")
+            }
+            _ => false,
+        })
 }
 
 /// where a class's reified type parameters are read, and which of them are

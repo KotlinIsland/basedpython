@@ -107,6 +107,32 @@ fn by_file_reports_a_refused_transpile() -> Result<()> {
     Ok(())
 }
 
+/// a stamp with no value is for the build to settle, so it says nothing about whether the module
+/// transpiles, and the module is one `by run` takes with `--stamp`
+#[test]
+fn by_file_with_a_stamp_nothing_has_settled_reports_nothing() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let stamped = SystemPath::new("src/stamped.by");
+    let stamped_content = "build:\n    GIT_SHA: str\n\nprint(build.GIT_SHA)\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(
+            "src/basedpython.toml",
+            "[experimental]\nbuild-stamps = true\n",
+        )?
+        .with_file(stamped, stamped_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(stamped, stamped_content, 1);
+    let items = full_items(server.document_diagnostic_request(stamped, None))?;
+
+    assert_eq!(items, vec![]);
+
+    Ok(())
+}
+
 /// a module the check reports an error in is not transpiled: `by run` refuses it before it
 /// transpiles anything, and its transpile fails as often as not on what the check reported
 #[test]

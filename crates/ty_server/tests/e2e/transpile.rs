@@ -158,6 +158,44 @@ fn transpiling_a_document_answers_rather_than_panicking() -> Result<()> {
     Ok(())
 }
 
+/// a project's lowering options reach the editor, so a preview and the verdict on a module are of
+/// the python its build would write
+#[test]
+fn transpiling_a_document_reads_the_projects_float_literal_lowering() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/main.by");
+    let content = "x: 1.5 = 1.5\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(
+            "src/basedpython.toml",
+            "[lowering]\nfloat-literals = \"literal\"\n",
+        )?
+        .with_file(main, content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, content, 1);
+    let uri = server.file_uri(main);
+
+    let response = server
+        .send_request_await::<Transpile>(params(&uri, None))
+        .expect("the server answered nothing at all");
+
+    assert!(
+        response.error.is_none(),
+        "transpile failed: {:?}",
+        response.error
+    );
+    let generated = response.source.expect("no generated source");
+    assert!(
+        generated.contains("Literal[1.5]"),
+        "unexpected output:\n{generated}"
+    );
+    Ok(())
+}
+
 /// The reverse direction, python in and basedpython out, which builds an in-memory
 /// database of its own to read a semantic model of the source — so it needs the
 /// detached thread as much as the forward one does.
