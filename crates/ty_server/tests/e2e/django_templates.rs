@@ -662,6 +662,40 @@ fn a_block_rename_reaches_the_base_and_every_child() -> Result<()> {
     Ok(())
 }
 
+/// a new name for a django name is judged by the django rename's own rule, and a symbol it
+/// refuses to rename is refused whatever the name
+#[test]
+fn a_django_name_is_validated_by_the_django_renames_rule() -> Result<()> {
+    let mut server = whole_project(&[
+        (
+            "src/blog/templates/blog/base.html",
+            "{% block content %}{% endblock content %}\n",
+        ),
+        (
+            "src/blog/templates/blog/post.html",
+            "{% extends 'blog/base.html' %}{% block content %}a{% endblock %}\n",
+        ),
+    ])?;
+    let uri = server.file_uri(SystemPath::new("src/blog/templates/blog/post.html"));
+    let mut validate = |new_name: &str| {
+        let id = server.send_request_named(
+            "by/validateRenameName",
+            serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 40 },
+                "newName": new_name,
+            }),
+        );
+        server.await_response::<crate::rename::RawResponse>(&id)
+    };
+
+    assert_eq!(validate("body"), serde_json::json!({ "valid": true }));
+    assert_eq!(validate("two words")["valid"], false);
+    assert_eq!(validate("")["valid"], false);
+    assert_eq!(validate("{body}")["valid"], false);
+    Ok(())
+}
+
 #[test]
 fn a_route_rename_reaches_the_declaration_the_python_and_the_template() -> Result<()> {
     let mut server = whole_project(&[(

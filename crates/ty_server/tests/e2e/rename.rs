@@ -5,6 +5,8 @@ use lsp_types::ShowMessageNotification;
 use crate::notebook::NotebookBuilder;
 use crate::{AwaitResponseError, TestServer, TestServerBuilder};
 use insta::assert_json_snapshot;
+use ruff_db::system::SystemPath;
+use ty_server::ClientOptions;
 
 #[test]
 fn text_document() -> anyhow::Result<()> {
@@ -321,8 +323,8 @@ fn apply(source: &str, mut edits: Vec<lsp_types::TextEdit>) -> String {
 
 /// `textDocument/rename`, answered as the json the server sent
 ///
-/// An annotated text edit reads as a plain one through `lsp_types::Edit`, which tries the plain
-/// shape first, so the annotations are read off the json instead.
+/// an annotated text edit reads as a plain one through `lsp_types::Edit`, which tries the plain
+/// shape first, so the annotations are read off the json instead
 enum RawRename {}
 
 impl lsp_types::Request for RawRename {
@@ -527,6 +529,8 @@ r = HttpRequest()
 x = get_user()
 found: list[User] = []
 print(found)
+nothing = None
+print(nothing)
 ";
 
 fn validate(
@@ -558,7 +562,7 @@ fn suggestions(server: &mut TestServer, line: u32, character: u32) -> serde_json
 }
 
 /// any request, answered as the json the server sent
-enum RawResponse {}
+pub(crate) enum RawResponse {}
 
 impl lsp_types::Request for RawResponse {
     type Params = serde_json::Value;
@@ -606,14 +610,190 @@ fn a_rename_suggests_names_from_the_value() -> anyhow::Result<()> {
         .wait_until_workspaces_are_initialized();
     server.open_text_document("named.by", NAMED, 1);
 
-    let found = [10, 11, 12].map(|line| suggestions(&mut server, line, 0));
+    let found = [10, 11, 12, 14].map(|line| suggestions(&mut server, line, 0));
     assert_eq!(
         found,
         [
             serde_json::json!(["http_request", "request"]),
             serde_json::json!(["user"]),
             serde_json::json!(["users", "items"]),
+            // `None` is a `types.NoneType`, which says nothing of what the value is for
+            serde_json::json!(["value"]),
         ]
+    );
+    Ok(())
+}
+
+/// the requests about a rename answer nothing where the rename itself does
+#[test]
+fn rename_requests_answer_nothing_with_language_services_disabled() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(
+            SystemPath::new("src"),
+            Some(ClientOptions::default().with_disable_language_services(true)),
+        )?
+        .with_file("src/animal.by", ANIMAL)?
+        .with_file("src/dog.by", DOG)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document("src/animal.by", ANIMAL, 1);
+    let uri = server.file_uri("src/animal.by");
+    let position = serde_json::json!({ "line": 1, "character": 9 });
+    let at = serde_json::json!({ "textDocument": { "uri": uri }, "position": position });
+    let named = serde_json::json!({
+        "textDocument": { "uri": uri },
+        "position": position,
+        "newName": "talk",
+    });
+
+    let id = server.send_request_named("by/validateRenameName", named.clone());
+    assert_eq!(
+        server.await_response::<RawResponse>(&id),
+        serde_json::Value::Null
+    );
+    let id = server.send_request_named("by/renameNameSuggestions", at);
+    assert_eq!(
+        server.await_response::<RawResponse>(&id),
+        serde_json::json!([])
+    );
+    let id = server.send_request_named("by/renameOffers", named);
+    assert_eq!(
+        server.await_response::<RawResponse>(&id),
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+/// `by/renameOffers` for renaming what is at `line` and `character` of `animal.by`, one line per
+/// offer and then one per edit it makes
+fn offers_summary(server: &mut TestServer, line: u32, character: u32, new_name: &str) -> String {
+    use std::fmt::Write as _;
+
+    let id = server.send_request_named(
+        "by/renameOffers",
+        serde_json::json!({
+            "textDocument": { "uri": server.file_uri("animal.by") },
+            "position": { "line": line, "character": character },
+            "newName": new_name,
+        }),
+    );
+    let offers = server.await_response::<RawResponse>(&id);
+    let name = |uri: &serde_json::Value| {
+        uri.as_str()
+            .and_then(|uri| uri.rsplit('/').next())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let edit_line = |file: &str, edit: &serde_json::Value| {
+        let start = &edit["range"]["start"];
+        format!(
+            "  {file} {}:{} {}",
+            start["line"].as_u64().unwrap_or_default() + 1,
+            start["character"].as_u64().unwrap_or_default() + 1,
+            edit["newText"]
+        )
+    };
+    let mut summary = String::new();
+    for offer in offers.as_array().into_iter().flatten() {
+        let _ = writeln!(
+            summary,
+            "{}: {} / {}",
+            offer["id"].as_str().unwrap_or_default(),
+            offer["label"],
+            offer["description"]
+        );
+        let edit = &offer["edit"];
+        let mut lines = Vec::new();
+        for (uri, edits) in edit["changes"].as_object().into_iter().flatten() {
+            let file = name(&serde_json::Value::String(uri.clone()));
+            lines.extend(
+                edits
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|edit| edit_line(&file, edit)),
+            );
+        }
+        for change in edit["documentChanges"].as_array().into_iter().flatten() {
+            if change["kind"] == "rename" {
+                lines.push(format!(
+                    "  rename {} -> {}",
+                    name(&change["oldUri"]),
+                    name(&change["newUri"])
+                ));
+                continue;
+            }
+            let file = name(&change["textDocument"]["uri"]);
+            for edit in change["edits"].as_array().into_iter().flatten() {
+                assert!(edit.get("annotationId").is_none(), "{edit}");
+                lines.push(edit_line(&file, edit));
+            }
+        }
+        lines.sort();
+        for line in lines {
+            let _ = writeln!(summary, "{line}");
+        }
+    }
+    summary
+}
+
+/// the offers a rename comes with, each as a workspace edit of its own, for a client whose
+/// workspace edits carry no change annotations: the same offers, with the same identifiers, as
+/// the annotated rename
+#[test]
+fn rename_offers_are_answered_one_edit_each() -> anyhow::Result<()> {
+    let mut server = animals(false)?;
+    insta::assert_snapshot!(offers_summary(&mut server, 1, 9, "talk"), @r#"
+    override:0: "Rename overriding methods" / "`dog.Dog.speak`"
+      dog.by 10:13 "talk"
+      dog.by 5:18 "talk"
+    "#);
+    insta::assert_snapshot!(offers_summary(&mut server, 1, 21, "shout"), @r#"
+    parameter:0: "Rename parameters of overriding methods" / "`loud` of `dog.Dog.speak`"
+      dog.by 10:19 "shout"
+      dog.by 5:30 "shout"
+      dog.by 6:26 "shout"
+    "#);
+    insta::assert_snapshot!(offers_summary(&mut server, 0, 7, "Beast"), @r#"
+    module:0: "Rename module" / "`animal.by` to `beast.by`"
+      dog.by 1:6 "beast"
+      rename animal.by -> beast.by
+    "#);
+    Ok(())
+}
+
+/// a new name the rename would refuse is refused with its reason, and nothing to rename has
+/// nothing to offer
+#[test]
+fn rename_offers_refuse_what_the_rename_refuses() -> anyhow::Result<()> {
+    let mut server = animals(false)?;
+    let id = server.send_request_named(
+        "by/renameOffers",
+        serde_json::json!({
+            "textDocument": { "uri": server.file_uri("animal.by") },
+            "position": { "line": 1, "character": 9 },
+            "newName": "class",
+        }),
+    );
+    let refused = server
+        .try_await_response::<RawResponse>(&id, None)
+        .expect_err("a keyword is no new name");
+    assert!(
+        format!("{refused}").contains("`class` is a keyword"),
+        "{refused}"
+    );
+
+    let id = server.send_request_named(
+        "by/renameOffers",
+        serde_json::json!({
+            "textDocument": { "uri": server.file_uri("animal.by") },
+            "position": { "line": 0, "character": 0 },
+            "newName": "anything",
+        }),
+    );
+    assert_eq!(
+        server.await_response::<RawResponse>(&id),
+        serde_json::json!([])
     );
     Ok(())
 }

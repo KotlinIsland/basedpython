@@ -2429,6 +2429,33 @@ and leaves out the others; none of them touches an occurrence the rename itself
 makes. a client without the capability gets the rename alone, as plain `changes`,
 as before
 
+### the offers as edits of their own
+
+a client that cannot read change annotations — one whose protocol library takes
+an annotated text edit for a plain one, as lsp4j does — asks for the offers on
+their own, with the rename's own params:
+
+| request           | params                                | answers                                      |
+| ----------------- | ------------------------------------- | -------------------------------------------- |
+| `by/renameOffers` | `textDocument`, `position`, `newName` | `[{ "id", "label", "description", "edit" }]` |
+
+each offer is the one the annotated rename gives, with the same `id`, `label`
+and `description`, and `edit` is a workspace edit of its own that makes it and
+nothing else: plain `changes`, or for a module, `documentChanges` holding a
+`TextDocumentEdit` per file and then the `RenameFile`, without annotations. the
+rename itself is still `textDocument/rename`'s, asked of a client that leaves
+out `changeAnnotationSupport` so that it is answered alone. a new name the
+rename would refuse is refused with the same reason, and there is nothing to
+offer, `[]`, where there is no python symbol to rename. both answers are made by
+the same code, so they offer the same
+
+every position in an offer's edit is one in the text before the rename, as the
+rename's own edits are. so the edits of the rename and of the offers the user
+keeps are one edit, to be merged and applied together. applied one after another
+they would land in the wrong place wherever an earlier one changed the length of
+a line, as the two `speak`s of `print(a.speak(), d.speak())` do when only `a`'s
+is the rename's
+
 ## a rename's new name
 
 an editor that asks for a new name can check it, and offer some, before the
@@ -2442,9 +2469,10 @@ rename is asked for:
 `by/validateRenameName` judges the name by the rule `textDocument/rename` refuses
 it by, and gives the reason the rename would: a python symbol's new name is an
 identifier that is not a keyword (`` `class` is a keyword ``), while a django
-name may be any text. a symbol that cannot be renamed at all, such as a
-builtin, is `valid: false` with the reason, whatever the name; where there is
-nothing to rename the answer is `null`, as `textDocument/prepareRename`'s is
+name is held to what django's own rename takes, which depends on the kind of
+name it is. a symbol that cannot be renamed at all, such as a builtin, is
+`valid: false` with the reason, whatever the name; where there is nothing to
+rename the answer is `null`, as `textDocument/prepareRename`'s is
 
 `by/renameNameSuggestions` names a symbol after what it holds: the class of its
 value, as `http_request` and `request` for an `HttpRequest`, in the plural for a
