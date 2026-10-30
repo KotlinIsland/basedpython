@@ -1536,7 +1536,11 @@ pub(crate) fn run_against_source<'a>(
         config,
     );
     let main_function_pass = main_function::MainFunction::new(source_ref, written, config.session);
-    let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
+    let build_stamps_pass = build_stamps::BuildStampsPass::new(
+        source_ref,
+        config.stamps.clone(),
+        config.stamps_undetermined,
+    );
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, written, config.is_stub);
     let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(

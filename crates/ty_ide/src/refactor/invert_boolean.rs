@@ -18,11 +18,15 @@
 //! change with it, a parameter a call may pass by position, which no reference to the parameter
 //! shows, a function used other than by calling it, an `async` function, whose call is a coroutine
 //! rather than the `bool` it returns, a function defined more than once, each with returns and
-//! parameters of its own, and an import under another name, whose reads no reference shows
+//! parameters of its own, an import under another name, whose reads no reference shows, a
+//! declaration annotated as other than `bool`, a value written as a statement, which `not` can't
+//! go in front of, a name `__all__` lists as a string, and a replacement field with `=`, which
+//! prints the name
 
 use ruff_db::files::{File, FileRange};
 use ruff_diagnostics::Edit;
 use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::helpers::any_over_expr;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal, walk_stmt};
 use ruff_python_ast::{
     self as ast, AnyNodeRef, Expr, ExprContext, ExprRef, OperatorPrecedence, Stmt, UnaryOp,
@@ -32,7 +36,7 @@ use rustc_hash::FxHashSet;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::{ProgramFile, semantic_index};
 use ty_python_semantic::ResolvedDefinition;
-use ty_python_semantic::types::ide_support::is_bool_value;
+use ty_python_semantic::types::ide_support::{annotates_bool, dunder_all_lists, is_bool_value};
 
 use super::intentions::{Written, lost_comment, negated};
 use super::names::{fresh_name, names_in_file};
@@ -82,6 +86,10 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         DefinitionKind::AnnotatedAssignment(assignment)
             if assignment.value(module).is_some_and(is_boolean_literal) =>
         {
+            let annotation = assignment.annotation(module);
+            if !annotates_bool(&context.model, annotation) {
+                return Err(not_annotated_bool(context, &title, annotation));
+            }
             Inverted::Variable
         }
         DefinitionKind::Parameter(_) => {
@@ -102,6 +110,11 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
             };
             if !parameter.default.as_deref().is_some_and(is_boolean_literal) {
                 return Err(Refusal::NotApplicable);
+            }
+            if let Some(annotation) = parameter.annotation()
+                && !annotates_bool(&context.model, annotation)
+            {
+                return Err(not_annotated_bool(context, &title, annotation));
             }
             let functions = definitions_at(context, function.name.start());
             if functions
@@ -133,7 +146,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
             if !function
                 .returns
                 .as_deref()
-                .is_some_and(|returns| matches!(returns, Expr::Name(name) if name.id == "bool"))
+                .is_some_and(|returns| annotates_bool(&context.model, returns))
             {
                 return Err(Refusal::NotApplicable);
             }
@@ -167,6 +180,12 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
             "it is an attribute of a class, which a subclass overrides by assigning its own and a \
              dataclass's constructor takes by name, neither of which is a use of it",
         ));
+    }
+
+    if definition.scope(db).file_scope_id(db).is_global()
+        && dunder_all_lists(db, context.file, &name)
+    {
+        return Err(Refusal::refused(title, listed_in_dunder_all(&name)));
     }
 
     // every occurrence the symbol's rename makes, which is every place the rewrite reaches
@@ -303,6 +322,15 @@ fn occurrence_edits(
         return Err("a use of it is not one this can rewrite".to_owned());
     };
     let parent = ancestors.get(index + 1).copied();
+    // `f"{flag=}"` prints what it is written as
+    if ancestors.iter().any(|ancestor| {
+        matches!(ancestor, AnyNodeRef::InterpolatedElement(element) if element.debug_text.is_some())
+    }) {
+        return Err(
+            "a replacement field with `=` prints it by name, which a rename would change"
+                .to_owned(),
+        );
+    }
 
     match node {
         // the declaration of a parameter, whose default is negated
@@ -330,6 +358,12 @@ fn occurrence_edits(
         }) => Err(format!(
             "it is imported as `{asname}`, and what is read through that name cannot be seen"
         )),
+        // an import that passes it on through `__all__` keeps the old name there
+        AnyNodeRef::Alias(alias)
+            if dunder_all_lists(context.db, context.file, alias.name.as_str()) =>
+        {
+            Err(listed_in_dunder_all(alias.name.as_str()))
+        }
         // an import, a `global` or a `nonlocal` only names it
         AnyNodeRef::Alias(_) | AnyNodeRef::StmtGlobal(_) | AnyNodeRef::StmtNonlocal(_) => {
             Ok(vec![rename])
@@ -482,6 +516,12 @@ fn inverted_value(
         let flipped = if literal.value { "False" } else { "True" };
         return Ok(Edit::range_replacement(flipped.to_owned(), value.range()));
     }
+    if any_over_expr(value, &Expr::is_statement_expr) {
+        return Err(
+            "a value is a statement written as an expression, which `not` can't be put in front of"
+                .to_owned(),
+        );
+    }
     if !is_bool_value(&context.model, value) {
         return Err(format!(
             "`{}` is not a `bool`, and its negation would not keep its value",
@@ -508,6 +548,22 @@ fn keeps_comments(
         Some(line) => Err(format!("the comment on line {line} would be lost")),
         None => Ok(()),
     }
+}
+
+/// the refusal for a declaration annotated as more or less than `bool`
+fn not_annotated_bool(context: &RefactorContext<'_>, title: &str, annotation: &Expr) -> Refusal {
+    Refusal::refused(
+        title,
+        format!(
+            "it is annotated `{}`, whose values a negation would not keep",
+            &context.source()[annotation.range()]
+        ),
+    )
+}
+
+/// the refusal for a name `__all__` holds as a string, which no rename reaches
+fn listed_in_dunder_all(name: &str) -> String {
+    format!("`__all__` lists `{name}` by name, which a rename would leave behind")
 }
 
 fn is_boolean_literal(expr: &Expr) -> bool {
@@ -869,6 +925,190 @@ mod tests {
         assert_snapshot!(test.apply(RefactorKind::InvertBoolean), @"refused: Invert boolean `f` (one use of it is inside another, which cannot both be rewritten)");
     }
 
+    /// `not` can't be put in front of a value written as a statement, whether it is returned or
+    /// given to the variable
+    #[test]
+    fn a_value_written_as_a_statement_is_refused() {
+        let invert_by =
+            |source: &str| RefactorTest::basedpython(source).apply(RefactorKind::InvertBoolean);
+        assert_snapshot!(invert_by(
+            r#"
+            def i<CURSOR>s_one(a: int) -> bool:
+                return match a:
+                    case 1: True
+                    case _: False
+            "#,
+        ), @"refused: Invert boolean `is_one` (a value is a statement written as an expression, which `not` can't be put in front of)");
+        assert_snapshot!(invert_by(
+            r#"
+            def f(a: int):
+                fl<CURSOR>ag = True
+                flag = match a:
+                    case 1: True
+                    case _: False
+                return flag
+            "#,
+        ), @"refused: Invert boolean `flag` (a value is a statement written as an expression, which `not` can't be put in front of)");
+    }
+
+    /// a declaration wider or narrower than `bool` holds values a negation would not keep, or that
+    /// the opposite literal would not be one of
+    #[test]
+    fn a_declaration_annotated_as_other_than_bool_is_refused() {
+        assert_snapshot!(invert(
+            r#"
+            def f(fl<CURSOR>ag: bool | None = True):
+                return flag is None
+            "#,
+        ), @"refused: Invert boolean `flag` (it is annotated `bool | None`, whose values a negation would not keep)");
+        assert_snapshot!(invert(
+            r#"
+            from typing import Literal
+
+            x<CURSOR>: Literal[True] = True
+            "#,
+        ), @"refused: Invert boolean `x` (it is annotated `Literal[True]`, whose values a negation would not keep)");
+    }
+
+    /// a qualifier says nothing about the values, and neither does a string
+    #[test]
+    fn a_declaration_says_bool_however_it_is_written() {
+        assert_snapshot!(invert(
+            r#"
+            from typing import Final
+
+            x<CURSOR>: Final[bool] = True
+            print(x)
+            "#,
+        ), @"
+        Invert boolean `x` as `not_x`
+        ---
+
+        from typing import Final
+
+        not_x: Final[bool] = False
+        print(not not_x)
+        ");
+        assert_snapshot!(invert(
+            r#"
+            def f(fl<CURSOR>ag: "bool" = True):
+                return flag
+            "#,
+        ), @r#"
+        Invert boolean `flag` as `not_flag`
+        ---
+
+        def f(not_flag: "bool" = False):
+            return not not_flag
+        "#);
+    }
+
+    /// `__all__` holds the name as a string, however it comes to hold it
+    #[test]
+    fn a_name_listed_in_dunder_all_is_refused() {
+        assert_snapshot!(invert(
+            r#"
+            __all__ = ["flag"]
+            fl<CURSOR>ag = True
+            "#,
+        ), @"refused: Invert boolean `flag` (`__all__` lists `flag` by name, which a rename would leave behind)");
+        assert_snapshot!(invert(
+            r#"
+            __all__ = []
+            __all__ += ["flag"]
+            fl<CURSOR>ag = True
+            "#,
+        ), @"refused: Invert boolean `flag` (`__all__` lists `flag` by name, which a rename would leave behind)");
+    }
+
+    /// a local of the same name is not what `__all__` lists
+    #[test]
+    fn a_local_is_not_what_dunder_all_lists() {
+        assert_snapshot!(invert(
+            r#"
+            __all__ = ["flag"]
+            flag = 1
+
+            def f():
+                fl<CURSOR>ag = True
+                return flag
+            "#,
+        ), @r#"
+        Invert boolean `flag` as `not_flag`
+        ---
+
+        __all__ = ["flag"]
+        flag = 1
+
+        def f():
+            not_flag = False
+            return not not_flag
+        "#);
+    }
+
+    /// a module that passes the name on through its own `__all__` would keep the old one there
+    #[test]
+    fn a_name_another_module_lists_in_dunder_all_is_refused() {
+        let test = RefactorTest::with_files(
+            "/flags.py",
+            "DEBU<CURSOR>G = True\n",
+            &[(
+                "/main.py",
+                "from flags import DEBUG\n\n__all__ = [\"DEBUG\"]\n",
+            )],
+        );
+        assert_snapshot!(test.apply(RefactorKind::InvertBoolean), @"refused: Invert boolean `DEBUG` (`__all__` lists `DEBUG` by name, which a rename would leave behind)");
+    }
+
+    /// `f"{flag=}"` prints what it is written as, so any rename would change what it prints
+    #[test]
+    fn a_replacement_field_that_prints_the_name_is_refused() {
+        assert_snapshot!(invert(
+            r#"
+            fl<CURSOR>ag = True
+            print(f"{flag=}")
+            "#,
+        ), @"refused: Invert boolean `flag` (a replacement field with `=` prints it by name, which a rename would change)");
+        assert_snapshot!(invert(
+            r#"
+            def g(fl<CURSOR>ag=True):
+                return flag
+
+            print(f"{g(flag=True)=}")
+            "#,
+        ), @"refused: Invert boolean `flag` (a replacement field with `=` prints it by name, which a rename would change)");
+    }
+
+    /// the annotation is what it means, not how it is spelled: an alias of `bool` is `bool`, and a
+    /// class of the same name isn't
+    #[test]
+    fn a_return_annotation_is_read_rather_than_matched_by_name() {
+        assert_snapshot!(invert(
+            r#"
+            Flag = bool
+
+            def i<CURSOR>s_on() -> Flag:
+                return True
+            "#,
+        ), @"
+        Invert boolean `is_on` as `not_is_on`
+        ---
+
+        Flag = bool
+
+        def not_is_on() -> Flag:
+            return False
+        ");
+        assert_snapshot!(invert(
+            r#"
+            class bool: ...
+
+            def i<CURSOR>s_on() -> bool:
+                return bool()
+            "#,
+        ), @"not offered");
+    }
+
     /// a subclass overrides an attribute by assigning its own, and a dataclass's constructor takes
     /// it by name, neither of which is a use of the name
     #[test]
@@ -1009,7 +1249,7 @@ mod tests {
             .map(|edit| {
                 format!(
                     "{} {:?} {:?}",
-                    edit.file.path(&test.db),
+                    edit.file.path(&test.db).as_str().replace('\\', "/"),
                     edit.edit.range(),
                     edit.edit.content().unwrap_or_default()
                 )

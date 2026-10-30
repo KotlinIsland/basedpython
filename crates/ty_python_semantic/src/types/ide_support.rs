@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::FxIndexSet;
+use crate::dunder_all::dunder_all_names;
 use std::ops::ControlFlow;
 
 use crate::lint::LintId;
@@ -4565,6 +4566,21 @@ pub fn is_bool_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
     let env = model.program_environment();
     expr.inferred_type(model)
         .is_some_and(|ty| ty.is_assignable_to(db, &env, KnownClass::Bool.to_instance(db, &env)))
+}
+
+/// basedpython: whether the annotation `annotation` says exactly `bool`, however it spells it. a
+/// `bool | None` or a `Literal[True]` holds values a negation wouldn't keep
+pub fn annotates_bool(model: &SemanticModel<'_>, annotation: &ast::Expr) -> bool {
+    let db = model.db();
+    let env = model.program_environment();
+    annotation
+        .inferred_type(model)
+        .is_some_and(|ty| ty == KnownClass::Bool.to_instance(db, &env))
+}
+
+/// basedpython: whether the `__all__` of `file` lists `name`, however it builds the list
+pub fn dunder_all_lists(db: &dyn Db, file: ProgramFile<'_>, name: &str) -> bool {
+    dunder_all_names(db, file).is_some_and(|names| names.contains(name))
 }
 
 /// basedpython: the class a value bound by `definition` is named after, when there is one worth

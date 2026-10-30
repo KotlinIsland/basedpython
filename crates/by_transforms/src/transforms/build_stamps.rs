@@ -65,6 +65,15 @@ impl StampType {
         }
     }
 
+    /// a value of this type, for a stamp no one has settled
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Str => "\"\"",
+            Self::Int => "0",
+            Self::Bool => "False",
+        }
+    }
+
     fn spelled(self) -> &'static str {
         match self {
             Self::Str => "str",
@@ -94,11 +103,20 @@ impl StampType {
 pub(crate) struct BuildStampsPass<'a> {
     source: &'a str,
     stamps: BTreeMap<String, String>,
+    undetermined: bool,
 }
 
 impl<'a> BuildStampsPass<'a> {
-    pub(crate) fn new(source: &'a str, stamps: BTreeMap<String, String>) -> Self {
-        Self { source, stamps }
+    pub(crate) fn new(
+        source: &'a str,
+        stamps: BTreeMap<String, String>,
+        undetermined: bool,
+    ) -> Self {
+        Self {
+            source,
+            stamps,
+            undetermined,
+        }
     }
 
     /// the lowered class, or the reasons it could not be lowered
@@ -143,6 +161,7 @@ impl<'a> BuildStampsPass<'a> {
                         // carried across as written
                         None => match &declaration.value {
                             Some(default) => self.text(default.range()).to_owned(),
+                            None if self.undetermined => stamp_type.placeholder().to_owned(),
                             None => {
                                 errors.push(format!(
                                     "the build supplied no value for the stamp `{name}`, and it \
@@ -290,6 +309,20 @@ mod tests {
             error.contains("supplied no value for the stamp `GIT_SHA`"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_stamp_nothing_has_settled_says_nothing_about_a_module() {
+        let mut config = Config::test_default();
+        config.stamps_undetermined = true;
+        let output = transpile(
+            "build:\n    GIT_SHA: str\n    NUMBER: int\n    DIRTY: bool\n",
+            &config,
+        )
+        .unwrap();
+        assert!(output.contains("GIT_SHA: str = \"\""), "{output}");
+        assert!(output.contains("NUMBER: int = 0"), "{output}");
+        assert!(output.contains("DIRTY: bool = False"), "{output}");
     }
 
     #[test]

@@ -1303,3 +1303,72 @@ package = "invalid"
         Ok(())
     }
 }
+
+/// what is published last is the last edit's, however many came while a transpile was running
+#[test]
+fn the_last_of_a_burst_of_edits_is_what_is_published() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let clash = SystemPath::new("src/clash.by");
+    let clean = "from typing import Optional as Opt\n\nx = Some(3)\nprint(x!)\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(clash, clean)?
+        .enable_pull_diagnostics(false)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(clash, clean, 1);
+    let published = server.await_notification::<PublishDiagnosticsNotification>();
+    assert_eq!(published.version, Some(1));
+
+    let refused = "from typing import Optional\n\nx = Some(3)\nprint(x!)\n";
+    let last = 10;
+    for version in 2..=last {
+        server.change_text_document(
+            clash,
+            vec![
+                lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                    TextDocumentContentChangeWholeDocument {
+                        text: if version % 2 == 0 { refused } else { clean }.to_string(),
+                    },
+                ),
+            ],
+            version,
+        );
+    }
+    // the last is refused
+    server.change_text_document(
+        clash,
+        vec![
+            lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: refused.to_string(),
+                },
+            ),
+        ],
+        last + 1,
+    );
+
+    let mut seen = 1;
+    loop {
+        let published = server.await_notification::<PublishDiagnosticsNotification>();
+        let version = published.version.expect("a document has a version");
+        assert!(version >= seen, "version {version} came after {seen}");
+        seen = version;
+        if version == last + 1 {
+            assert!(
+                published
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code
+                        == Some(lsp_types::Code::String("transpile-refused".to_string()))),
+                "{:#?}",
+                published.diagnostics
+            );
+            break;
+        }
+    }
+
+    Ok(())
+}

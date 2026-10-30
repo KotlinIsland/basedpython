@@ -1,4 +1,5 @@
 use crate::Session;
+use crate::document::DocumentVersion;
 use crate::project_server;
 use crate::server::schedule::{BackgroundSchedule, Scheduler, Task};
 use crate::server::{Server, api};
@@ -173,6 +174,11 @@ impl Server {
                     }
 
                     Action::SendRequest(request) => client.send_request_raw(&self.session, request),
+
+                    Action::PublishAwaitingTranspile { uri, version } => {
+                        let task = api::publish_awaiting_transpile(uri, version);
+                        scheduler.dispatch(task, &mut self.session, client);
+                    }
 
                     Action::RescanProjects => {
                         api::changes::apply(
@@ -385,6 +391,12 @@ pub(crate) enum Action {
         request: lsp_server::Request,
         /// The session's revision when the request found its text missing.
         revision: u64,
+    },
+
+    /// publish the diagnostics of an open document from a worker, because they wait on a transpile
+    PublishAwaitingTranspile {
+        uri: Uri,
+        version: DocumentVersion,
     },
 
     /// Re-read the file system, after the server itself changed something in it.

@@ -10541,6 +10541,37 @@ Source with applied edits:
         ");
     }
 
+    /// a type parameter's name means another one here, or something else altogether, so no
+    /// annotation can say it, on its own or inside another type
+    #[test]
+    fn a_hidden_typevar_offers_no_annotation() {
+        for source in [
+            "def f[T](t: T):\n    def g[T](u: T):\n        a = t\n",
+            "def f[T](t: T):\n    def g[T](u: T):\n        a = [t]\n",
+            "class C[T]:\n    def m(self, t: T):\n        def g[T](u: T):\n            a = t\n",
+            "def f[T](t: T):\n    T = 1\n    a = t\n",
+        ] {
+            let test = inlay_hint_test(source);
+            let hints = inlay_hints(
+                &test.db,
+                ProgramFile::new(
+                    &test.db,
+                    test.file,
+                    test.db.program_environment().program(&test.db),
+                ),
+                test.range,
+                &InlayHintSettings::default(),
+            );
+            let annotations: Vec<_> = hints
+                .iter()
+                .flat_map(|hint| &hint.text_edits)
+                .map(|edit| edit.new_text.as_str())
+                .filter(|edit| edit.starts_with(": "))
+                .collect();
+            assert_eq!(annotations, Vec::<&str>::new(), "{source}");
+        }
+    }
+
     #[test]
     fn test_meta_typevar_inlay_hint() {
         let mut test = inlay_hint_test(

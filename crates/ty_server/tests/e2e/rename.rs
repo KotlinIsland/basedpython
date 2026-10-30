@@ -391,6 +391,30 @@ fn rename_summary(server: &mut TestServer, line: u32, character: u32, new_name: 
             );
         }
     }
+    // an edit with nothing to confirm comes as plain `changes`
+    let mut changes: Vec<(&String, &serde_json::Value)> =
+        edit["changes"].as_object().into_iter().flatten().collect();
+    changes.sort_by_key(|(uri, _)| uri.as_str());
+    for (uri, edits) in changes {
+        let mut edits: Vec<&serde_json::Value> = edits.as_array().into_iter().flatten().collect();
+        edits.sort_by_key(|edit| {
+            (
+                edit["range"]["start"]["line"].as_u64(),
+                edit["range"]["start"]["character"].as_u64(),
+            )
+        });
+        for edit in edits {
+            let start = &edit["range"]["start"];
+            let _ = writeln!(
+                summary,
+                "{} {}:{} {} -",
+                uri.rsplit('/').next().unwrap_or_default(),
+                start["line"].as_u64().unwrap_or_default() + 1,
+                start["character"].as_u64().unwrap_or_default() + 1,
+                edit["newText"],
+            );
+        }
+    }
     let mut annotations: Vec<(&String, &serde_json::Value)> = edit["changeAnnotations"]
         .as_object()
         .into_iter()
@@ -485,6 +509,20 @@ fn a_class_rename_offers_the_module_named_after_it() -> anyhow::Result<()> {
     dog.by 9:18 "Beast" -
     rename animal.by -> beast.by module:0
     module:0: "Rename module" / "`animal.by` to `beast.by`" / confirm true
+    "#);
+    Ok(())
+}
+
+/// `class` is no name for a module, so nothing could import one moved there: the class is renamed
+/// and the module stays where it is
+#[test]
+fn a_class_rename_to_a_keyword_in_lower_case_offers_no_module() -> anyhow::Result<()> {
+    let mut server = animals(true)?;
+    insta::assert_snapshot!(rename_summary(&mut server, 0, 7, "Class"), @r#"
+    animal.by 1:7 "Class" -
+    dog.by 1:20 "Class" -
+    dog.by 4:11 "Class" -
+    dog.by 9:18 "Class" -
     "#);
     Ok(())
 }
