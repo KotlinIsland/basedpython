@@ -540,9 +540,10 @@ Sub().m("nope")  # error: invalid-argument-type
 
 `Protocol` members and `abstractmethod` declarations are ordinary base methods for this purpose
 
-a method that overrides nothing falls back to the analysis above. the base signature is also ignored
-when it mentions a type variable (including an implicit `Self`), because those are bound to the base
-method's own scope and copying them across would silently rebind them
+a method that overrides nothing falls back to the analysis above. which base parameter each
+parameter corresponds to, and when a base parameter's type is not inherited — one that mentions a
+type variable of the base method, such as `Self`, is bound to that method and copying it across
+would silently rebind it — is set out in [inherited parameter types](inherited-parameter-types.md)
 
 ## bare `ClassVar`
 
