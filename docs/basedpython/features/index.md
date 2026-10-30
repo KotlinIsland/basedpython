@@ -167,6 +167,7 @@ the forms a class, function or binding can take
 - [decorator keyword](decorator-keyword.md)
 - [decorated function parameters](decorated-parameters.md)
 - [decorating anything](decorate-anything.md)
+- [inherited parameter types](inherited-parameter-types.md)
 - [inherited default values](inherited-defaults.md)
 - [inferred base type arguments](inferred-base-arguments.md)
 

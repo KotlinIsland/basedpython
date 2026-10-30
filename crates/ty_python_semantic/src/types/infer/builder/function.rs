@@ -2209,7 +2209,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// basedpython: for an unannotated parameter, look up the type that
     /// [`OverloadLiteral::parameter_signature`] filled in for it — from the sibling overloads when
     /// this is an overload implementation, or (under `sound-types`) from the overridden base
-    /// method. matching is by name
+    /// method. for `*args` and `**kwargs` it is the type of one argument. matching is by name
     fn inherited_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let ty = self.signature_parameter_type(parameter)?;
         // an anonymous hole is not inherited from anywhere; it is offered separately, after
@@ -2332,8 +2332,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             self.add_parameter(parameter.into(), definition, ty);
         } else {
-            let inferred_ty =
-                Type::homogeneous_tuple(db, self.program_environment(), Type::unknown());
+            // basedpython: an unannotated `*args` takes the element type the signature gave it
+            // from the overloads it implements or the method it overrides
+            let element = self
+                .inherited_parameter_type(parameter)
+                .unwrap_or_else(Type::unknown);
+            let inferred_ty = Type::homogeneous_tuple(db, self.program_environment(), element);
             self.add_binding(parameter.into(), definition)
                 .insert(self, inferred_ty);
         }
@@ -2680,10 +2684,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             };
             self.add_parameter(parameter.into(), definition, ty);
         } else {
+            // basedpython: an unannotated `**kwargs` takes the value type the signature gave it
+            // from the overloads it implements or the method it overrides
+            let value = self
+                .inherited_parameter_type(parameter)
+                .unwrap_or_else(Type::unknown);
             let inferred_ty = KnownClass::Dict.to_specialized_instance(
                 db,
                 env,
-                &[KnownClass::Str.to_instance(db, env), Type::unknown()],
+                &[KnownClass::Str.to_instance(db, env), value],
             );
 
             self.add_binding(parameter.into(), definition)

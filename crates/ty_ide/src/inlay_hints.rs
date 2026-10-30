@@ -13905,7 +13905,8 @@ def each(fn: (int) -> None) -> None:
     /// An unannotated method takes its parameter types from the method it
     /// overrides, so the hint says what the override left out. A method that
     /// overrides nothing has only an anonymous hole to offer, which says no more
-    /// than the missing annotation did.
+    /// than the missing annotation did. A base that leaves its return type out
+    /// has a receiver of its own `Self`, which is no reason to pass nothing on.
     #[test]
     fn basedpython_inherited_parameter_types() {
         let mut test = basedpython_inlay_hint_test(
@@ -13918,6 +13919,12 @@ def each(fn: (int) -> None) -> None:
 
             class C:
                 def f(self, a) -> None: ...
+
+            class D:
+                def f(self, a: int, *args: str): ...
+
+            class E(D):
+                def f(self, a, *args): ...
             ",
         );
 

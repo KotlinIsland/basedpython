@@ -11,3 +11,9 @@ class B(A):
 
 class C:
     def f(self, a) -> None: ...
+
+class D:
+    def f(self, a: int, *args: str): ...
+
+class E(D):
+    def f(self, a[: int], *args[: str]): ...

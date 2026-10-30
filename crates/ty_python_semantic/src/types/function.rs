@@ -74,7 +74,9 @@ use crate::types::constraints::ConstraintSet;
 use crate::types::context::InferContext;
 use crate::types::cyclic::ActiveRecursionDetector;
 
-use crate::types::generics::{ApplySpecialization, GenericContext, Specialization, typing_self};
+use crate::types::generics::{
+    ApplySpecialization, GenericContext, Specialization, enclosing_binding_contexts, typing_self,
+};
 use crate::types::infer::{
     function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
 };
@@ -84,6 +86,7 @@ use crate::types::inferred_narrowing::{
 use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::narrow::ClassInfoConstraintFunction;
+use crate::types::overrides::{OverrideStep, is_constructor_like_method, overridden_declarations};
 use crate::types::relation::TypeRelationChecker;
 use crate::types::repeated_underscore::{
     BaseParameter, LoweredParameters, ParameterSlot, UnderscoreLowering, UnderscoreRefusal,
@@ -96,9 +99,9 @@ use crate::types::signatures::{
 use crate::types::variance::{VarianceInferable, VarianceOrigin, VarianceTerm};
 use crate::types::visitor::any_over_type;
 use crate::types::{
-    ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
-    CallableType, ClassLiteral, ClassType, FindLegacyTypeVarsVisitor, KnownClass,
-    MemberLookupPolicy, SubclassOfInner, SubclassOfType, Type, TypeContext, TypeIsType,
+    ApplyTypeMappingVisitor, BindingContext, BoundMethodType, BoundTypeVarIdentity,
+    BoundTypeVarInstance, CallableType, ClassLiteral, ClassType, FindLegacyTypeVarsVisitor,
+    KnownClass, MemberLookupPolicy, SubclassOfInner, SubclassOfType, Type, TypeContext, TypeIsType,
     TypeMapping, UnionType, binding_type, definition_expression_type, walk_signature,
 };
 use crate::{Db, FxOrderSet, ProgramEnvironment};
@@ -1415,29 +1418,49 @@ impl<'db> OverloadLiteral<'db> {
         {
             let (overload_list, _) = previous.overloads_and_implementation(db);
             if !overload_list.is_empty() {
-                let overload_sigs: Vec<Signature<'db>> = overload_list
+                let binds_receiver = self.binds_first_parameter(db);
+                let overload_sigs: Vec<(Signature<'db>, bool)> = overload_list
                     .iter()
                     .map(|ol| {
-                        ol.parameter_signature(db, ReturnCallableTypeVarScope::Public)
-                            .clone()
+                        let signature = ol
+                            .parameter_signature(db, ReturnCallableTypeVarScope::Public)
+                            .clone();
+                        (signature, binds_receiver)
                     })
                     .collect();
-                raw_signature.inherit_unannotated_from_overloads(db, env, &overload_sigs, false);
+                // an implementation is read against its overloads' own type variables, which a
+                // call through any one of them solves: `def f[T](x: T)` gives the `x` of the
+                // implementation the type `T@f`
+                raw_signature.inherit_unannotated_parameters(
+                    db,
+                    env,
+                    &overload_sigs,
+                    binds_receiver,
+                    |_| true,
+                );
             }
         }
 
-        // basedpython: an unannotated method inherits its parameter types from the method it
-        // overrides, so `def m(self, a)` over `def m(self, a: int)` sees `a: int`. the recovery of
-        // a return type draws on the same method first; see `return_type_source`
+        // basedpython: an unannotated method inherits its parameter types from the methods it
+        // overrides, so `def m(self, a)` over `def m(self, a: int)` sees `a: int`. a constructor
+        // is not held to the signature of the one it overrides, since a subclass's constructor
+        // takes what that subclass needs, so it inherits nothing. the recovery of a return type
+        // draws on the nearest overridden method; see `return_type_source`
         if infers_unannotated_signatures(db, self.file(db))
-            && raw_signature.has_inherited_annotations_to_fill(false)
-            && let Some(base_signature) = self.overridden_signature(db, env)
+            && !is_constructor_like_method(self.name(db))
+            && raw_signature.has_inherited_annotations_to_fill()
+            && let Some(sources) = self.overridden_parameter_sources(db, env)
         {
-            raw_signature.inherit_unannotated_from_overloads(
+            // a type variable this method can see is one bound by its class or a scope around
+            // that. anything else an inherited type mentions belongs to a base method
+            let visible: Vec<BindingContext<'db>> =
+                enclosing_binding_contexts(index, definition.scope(db).file_scope_id(db)).collect();
+            raw_signature.inherit_unannotated_parameters(
                 db,
                 env,
-                std::slice::from_ref(&base_signature),
-                false,
+                &sources,
+                self.binds_first_parameter(db),
+                |context| visible.contains(&context),
             );
         }
 
@@ -1462,7 +1485,7 @@ impl<'db> OverloadLiteral<'db> {
         // something about this parameter in particular (a sibling overload, an overridden base)
         // and before the anonymous hole, which stands in only where nothing else answered
         if !function_stmt_node.is_trailing_lambda
-            && raw_signature.has_inherited_annotations_to_fill(false)
+            && raw_signature.has_inherited_annotations_to_fill()
             && let Some(expected) = self.decorated_as_signature(db, env, function_stmt_node)
         {
             raw_signature.inherit_unannotated_from_callable(db, env, &expected);
@@ -1908,38 +1931,50 @@ impl<'db> OverloadLiteral<'db> {
         self.node(db, self.file(db), &module).is_asserts_return
     }
 
-    /// basedpython: the signature of the method that this method overrides, resolved by looking
-    /// `self`'s name up in the enclosing class's MRO starting *after* the class itself — the same
-    /// lookup `super()` performs.
+    /// basedpython: the signatures of the methods this one overrides, whose calls it accepts in
+    /// their place: every superclass declaration of its name that [`overridden_declarations`]
+    /// finds, which is what the override checks hold it to. each is read as this class sees it,
+    /// so `class B(A[int])` reads `A`'s `T` as `int`, and as its callers do, one signature per
+    /// overload, paired with whether its first parameter is bound by the receiver
     ///
-    /// Returns `None` when this function is not a method, when nothing in the MRO defines the
-    /// name, when the base is overloaded, or when the base signature mentions a type variable.
-    /// Type variables (including the implicit `Self`) are bound to the *base* method's scope, so
-    /// copying them into this signature would silently rebind them.
-    fn overridden_signature(
+    /// a base whose members cannot be known declares nothing to hold the method to, and is
+    /// passed over. `None` when this function is not a method, and when a declaration is
+    /// something other than a method, such as an attribute or a property: what it accepts
+    /// cannot be lined up with this method's parameters, so nothing is inherited from the rest
+    fn overridden_parameter_sources(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
-    ) -> Option<Signature<'db>> {
-        let base = self.overridden_method(db, env)?;
+    ) -> Option<Vec<(Signature<'db>, bool)>> {
+        let definition = self.definition(db);
+        let index = semantic_index(db, db.program_file(definition.file(db)));
+        let class_node = index
+            .scope(definition.scope(db).file_scope_id(db))
+            .node()
+            .as_class()?;
+        let class = original_class_type(db, index.expect_single_definition(class_node))?;
 
-        if base.signature(db).overloads.len() != 1 {
-            return None;
-        }
-        let signature = base_raw_signature(db, base);
-
-        let mentions_typevar =
-            |ty: Type<'db>| any_over_type(db, env, ty, false, |ty| matches!(ty, Type::TypeVar(_)));
-        if mentions_typevar(signature.return_ty)
-            || signature
-                .parameters()
-                .iter()
-                .any(|param| mentions_typevar(param.annotated_type()))
+        let mut sources = Vec::new();
+        for step in
+            overridden_declarations(db, env, class.identity_specialization(db), self.name(db))
         {
-            return None;
+            let OverrideStep::Overrides(declaration) = step else {
+                continue;
+            };
+            let base = match declaration.ty {
+                Type::FunctionLiteral(base) => base,
+                Type::BoundMethod(method) => method.function(db)?,
+                _ => return None,
+            };
+            let binds_receiver = base.literal(db).last_definition.binds_first_parameter(db);
+            sources.extend(
+                base.signature(db)
+                    .overloads
+                    .iter()
+                    .map(|signature| (signature.clone(), binds_receiver)),
+            );
         }
-
-        Some(signature.clone())
+        Some(sources)
     }
 
     /// basedpython: the method this method overrides, found by looking `self`'s name up in the

@@ -1281,12 +1281,22 @@ impl<'db> PartialApplication<'db> {
     }
 }
 
-/// bucket parameter kinds for overload-impl inheritance matching. positional
-/// only and positional-or-keyword share a bucket so that an overload declared
-/// with PEP-570 `/` matches an impl that uses the default kind. the four other
-/// kinds (keyword-only, variadic, keyword-variadic) are kept separate so we
-/// don't inherit, e.g. a regular keyword type onto a `*args` parameter that
-/// happens to share its name
+/// basedpython: what a parameter receives from the parameters of a signature it is accepted in
+/// place of; see [`Parameters::counterpart_in`]
+enum Counterpart<'a, 'db> {
+    /// no argument of that signature reaches it
+    Nothing,
+    /// the arguments of this one parameter, and of no other
+    One(&'a Parameter<'db>),
+    /// arguments no one parameter's type describes: of several, or only some of one's
+    Mixed,
+}
+
+/// bucket parameter kinds for matching an override's parameters to its base's by name, for
+/// inherited defaults. positional only and positional-or-keyword share a bucket so that a base
+/// declared with PEP-570 `/` matches an override that uses the default kind. the other kinds
+/// (keyword-only, variadic, keyword-variadic) are kept separate so we don't inherit, e.g. a
+/// regular keyword default onto a `*args` parameter that happens to share its name
 fn parameter_kind_tag(kind: &ParameterKind<'_>) -> u8 {
     match kind {
         ParameterKind::PositionalOnly { .. } | ParameterKind::PositionalOrKeyword { .. } => 0,
@@ -1844,28 +1854,14 @@ impl<'db> Signature<'db> {
         }
     }
 
-    /// basedpython: for the implementation of an overloaded function, fill in
-    /// any parameter whose type was not explicitly annotated with the union of
-    /// the corresponding parameter types from the sibling overload signatures
-    /// (matched by name and kind bucket). if `inherit_return` is true, also replace the return
-    /// type with the union of the overload return types. used to make
-    /// ```by
-    /// def foo(i: str) -> int
-    /// def foo(i: int) -> str
-    /// def foo(i): ...
-    /// ```
-    /// type-check `i` as `str | int` and validate `return` statements against
-    /// `int | str`
-    /// Whether [`Signature::inherit_unannotated_from_overloads`] could still fill anything in —
-    /// that is, whether some parameter is awaiting an inferred annotation, or the return type is.
+    /// basedpython: whether [`Signature::inherit_unannotated_parameters`] could still fill
+    /// anything in — that is, whether some parameter is awaiting an inferred annotation
     ///
-    /// Used to avoid an MRO walk for the common case of a fully annotated method.
-    pub(crate) fn has_inherited_annotations_to_fill(&self, inherit_return: bool) -> bool {
-        inherit_return
-            || self
-                .parameters
-                .iter()
-                .any(|param| param.inferred_annotation && param.annotated_type.is_unknown())
+    /// used to avoid an MRO walk for the common case of a fully annotated method
+    pub(crate) fn has_inherited_annotations_to_fill(&self) -> bool {
+        self.parameters
+            .iter()
+            .any(|param| param.inferred_annotation && param.annotated_type.is_unknown())
     }
 
     /// basedpython: give the parameter `name` the type `ty` as though it had been written, when
@@ -1882,44 +1878,92 @@ impl<'db> Signature<'db> {
         }
     }
 
-    pub(crate) fn inherit_unannotated_from_overloads(
+    /// basedpython: fill in every parameter the source left unannotated from `sources`, the
+    /// signatures whose calls this function accepts in their place: the overloads of the methods
+    /// it overrides, or the overloads it implements. so
+    /// ```by
+    /// class A:
+    ///     def f(self, a: int): ...
+    ///
+    /// class B(A):
+    ///     override def f(self, a): ...
+    ///
+    /// def g(x: int) -> int
+    /// def g(x: str) -> str
+    /// def g(x): ...
+    /// ```
+    /// type `a` as `int`, and `x` as `int | str`
+    ///
+    /// a parameter receives the arguments of its counterpart in each source — see
+    /// [`Parameters::counterpart_in`] — so it takes the union of their types. a source that hands
+    /// it nothing has no say
+    ///
+    /// but when what a source hands it cannot be stated here, the parameter is left as it was,
+    /// since a type made of the others would reject arguments that source accepts. that is
+    /// arguments of more than one of the source's parameters, a counterpart left gradual itself,
+    /// a `*args` or `**kwargs` whose annotation is not the type of each argument, and a counterpart
+    /// whose type mentions a type variable `is_visible` does not admit: the overridden method's
+    /// own type parameters and its implicit `Self` are bound to that method, and copying one across
+    /// would silently rebind it to this function
+    ///
+    /// `binds_receiver`, and the flag paired with each source, say whether the first parameter of
+    /// this signature and of that source is bound by the receiver, and so receives no argument
+    pub(crate) fn inherit_unannotated_parameters(
         &mut self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
-        overload_signatures: &[Signature<'db>],
-        inherit_return: bool,
+        sources: &[(Signature<'db>, bool)],
+        binds_receiver: bool,
+        is_visible: impl Fn(BindingContext<'db>) -> bool,
     ) {
-        for impl_param in &mut Arc::make_mut(&mut self.parameters.data).value {
-            // skip explicit annotations, and any parameter that already has a
-            // resolved type (e.g. `self`/`cls` after
-            // `add_implicit_self_annotation`, or a `*args` whose annotated
-            // type was previously filled in elsewhere)
-            if !impl_param.inferred_annotation || !impl_param.annotated_type.is_unknown() {
-                continue;
-            }
-            let Some(name) = impl_param.name().cloned() else {
-                continue;
-            };
-            let impl_kind = parameter_kind_tag(&impl_param.kind);
-            let mut tys: Vec<Type<'db>> = Vec::new();
-            for sig in overload_signatures {
-                if let Some(matched) = sig
-                    .parameters
-                    .iter()
-                    .find(|p| p.name() == Some(&name) && parameter_kind_tag(&p.kind) == impl_kind)
-                    && !matched.inferred_annotation
-                {
-                    tys.push(matched.annotated_type);
+        let statable = |ty: Type<'db>| {
+            !any_over_type(
+                db,
+                env,
+                ty,
+                false,
+                |ty| matches!(ty, Type::TypeVar(typevar) if !is_visible(typevar.binding_context(db))),
+            )
+        };
+        let inherited: Vec<(usize, Type<'db>)> = self
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, parameter)| {
+                // an explicit annotation, or a type some earlier source already filled in
+                parameter.inferred_annotation && parameter.annotated_type.is_unknown()
+            })
+            .filter_map(|(index, _)| {
+                let mut types = Vec::new();
+                for (source, source_binds_receiver) in sources {
+                    let counterpart = match self.parameters.counterpart_in(
+                        index,
+                        binds_receiver,
+                        &source.parameters,
+                        *source_binds_receiver,
+                    ) {
+                        Counterpart::Nothing => continue,
+                        Counterpart::One(counterpart) => counterpart,
+                        Counterpart::Mixed => return None,
+                    };
+                    if counterpart.inferred_annotation
+                        || !counterpart.annotates_each_argument(db)
+                        || !statable(counterpart.annotated_type)
+                    {
+                        return None;
+                    }
+                    types.push(counterpart.annotated_type);
                 }
+                (!types.is_empty()).then(|| (index, UnionType::from_elements(db, env, types)))
+            })
+            .collect();
+
+        let parameters = &mut Arc::make_mut(&mut self.parameters.data).value;
+        for (index, ty) in inherited {
+            if let Some(parameter) = parameters.get_mut(index) {
+                parameter.annotated_type = ty;
+                parameter.inferred_annotation = false;
             }
-            if !tys.is_empty() {
-                impl_param.annotated_type = UnionType::from_elements(db, env, tys);
-                impl_param.inferred_annotation = false;
-            }
-        }
-        if inherit_return && !overload_signatures.is_empty() {
-            self.return_ty =
-                UnionType::from_elements(db, env, overload_signatures.iter().map(|s| s.return_ty));
         }
     }
 
@@ -6908,6 +6952,123 @@ impl<'db> Parameters<'db> {
         self.data.value.get(index)
     }
 
+    /// basedpython: what a call hands this list's parameter at `index` from the parameters of
+    /// `other`, which it is accepted in place of: an overridden method, whose arguments an
+    /// override's parameter receives, or an overload, whose arguments its implementation's
+    /// parameter receives
+    ///
+    /// parameters correspond the way a call binds arguments to them: a positional-only parameter
+    /// by its position, a keyword-only one by its name, and a positional-or-keyword one by both,
+    /// so it is a counterpart only when its position and its name land on the same parameter here:
+    ///
+    /// ```python
+    /// class A:
+    ///     def f(self, a: int, b: str, /, *, k: bytes): ...
+    ///
+    /// class B(A):
+    ///     def f(self, x, y, k): ...  # x ← a, y ← b, k ← k
+    /// ```
+    ///
+    /// `*args` and `**kwargs` each stand for a run of arguments rather than one, so they
+    /// correspond only to each other, and a parameter here that one of them also feeds is mixed.
+    /// what lands in a `*args` or `**kwargs` here for want of a parameter of its own mixes with
+    /// `other`'s run: `def f(self, *args)` over `def f(self, a: int, *args: str)` receives an `int`
+    /// and then `str`s. a receiver the call binds rather than passes (`binds_receiver`,
+    /// `other_binds_receiver`) receives no argument and has no counterpart, which is what lines
+    /// a `staticmethod` up with an instance method
+    fn counterpart_in<'a>(
+        &self,
+        index: usize,
+        binds_receiver: bool,
+        other: &'a Parameters<'db>,
+        other_binds_receiver: bool,
+    ) -> Counterpart<'a, 'db> {
+        let own_offset = usize::from(binds_receiver);
+        let Some(target) = index.checked_sub(own_offset) else {
+            return Counterpart::Nothing;
+        };
+        let own: Vec<&Parameter<'db>> = self.iter().skip(own_offset).collect();
+        let Some(parameter) = own.get(target) else {
+            return Counterpart::Nothing;
+        };
+        let others: Vec<&'a Parameter<'db>> = other
+            .iter()
+            .skip(usize::from(other_binds_receiver))
+            .collect();
+
+        // the parameter here that a positional argument at `position`, or a keyword argument
+        // `name`, lands on
+        let by_position = |position: usize| {
+            if own
+                .get(position)
+                .is_some_and(|parameter| parameter.is_positional())
+            {
+                Some(position)
+            } else {
+                own.iter().position(|parameter| parameter.is_variadic())
+            }
+        };
+        let by_name = |name: &Name| {
+            own.iter()
+                .position(|parameter| parameter.callable_by_name(name))
+                .or_else(|| {
+                    own.iter()
+                        .position(|parameter| parameter.is_keyword_variadic())
+                })
+        };
+
+        let mut counterpart = None;
+        for (position, candidate) in others.iter().enumerate() {
+            // whether any, and whether all, of the ways to pass this parameter land here
+            let (any, all) = match &candidate.kind {
+                ParameterKind::PositionalOnly { .. } => {
+                    let positionally = by_position(position) == Some(target);
+                    (positionally, positionally)
+                }
+                ParameterKind::PositionalOrKeyword { name, .. } => {
+                    let positionally = by_position(position) == Some(target);
+                    let by_keyword = by_name(name) == Some(target);
+                    (positionally || by_keyword, positionally && by_keyword)
+                }
+                ParameterKind::KeywordOnly { name, .. } => {
+                    let by_keyword = by_name(name) == Some(target);
+                    (by_keyword, by_keyword)
+                }
+                ParameterKind::Variadic { .. } => {
+                    if parameter.is_variadic() {
+                        counterpart = Some(*candidate);
+                    } else if parameter.is_positional() && target >= position {
+                        return Counterpart::Mixed;
+                    }
+                    continue;
+                }
+                ParameterKind::KeywordVariadic { .. } => {
+                    if parameter.is_keyword_variadic() {
+                        counterpart = Some(*candidate);
+                    } else if parameter.keyword_name().is_some_and(|name| {
+                        !others.iter().any(|named| named.callable_by_name(name))
+                    }) {
+                        return Counterpart::Mixed;
+                    }
+                    continue;
+                }
+            };
+            if !any {
+                continue;
+            }
+            // a `*args` or `**kwargs` here corresponds only to `other`'s own, so what else lands
+            // in it is extra
+            if !all
+                || parameter.is_variadic()
+                || parameter.is_keyword_variadic()
+                || counterpart.replace(*candidate).is_some()
+            {
+                return Counterpart::Mixed;
+            }
+        }
+        counterpart.map_or(Counterpart::Nothing, Counterpart::One)
+    }
+
     /// Return positional parameter at given index, or `None` if `index` is out of range.
     ///
     /// Does not return variadic parameter.
@@ -7833,6 +7994,14 @@ impl<'db> Parameter<'db> {
     /// Return `true` if this parameter has an unpacked variadic annotation,
     /// e.g. `*args: *Ts`, `*args: Unpack[Ts]`, or
     /// `*args: *tuple[int, *tuple[str, ...], bytes]`.
+    /// basedpython: whether this parameter's annotation is the type of each argument it receives,
+    /// which is not so of `*args: *Ts`, `*args: P.args` or `**kwargs: Unpack[TD]`, each of which
+    /// says something about the whole run instead
+    fn annotates_each_argument(&self, db: &'db dyn Db) -> bool {
+        matches!(self.annotation_kind, ParameterAnnotationKind::Normal)
+            && !matches!(self.annotated_type, Type::TypeVar(typevar) if typevar.is_paramspec(db))
+    }
+
     pub(crate) fn has_starred_annotation(&self) -> bool {
         matches!(self.annotation_kind, ParameterAnnotationKind::Starred)
     }
