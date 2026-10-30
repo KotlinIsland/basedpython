@@ -53,6 +53,7 @@ allow-build-scripts = [
     "serde",
     "serde_core",
     "serde_json",
+    "signal-hook",
     "stacker",
     "terminfo",
     "thiserror",

@@ -95,6 +95,22 @@ a `by build` tree, which no program is started from, says `LAUNCHER = None`
 a signal that ends the program ends `by run` with 128 and the signal's number,
 as a shell reports it
 
+on unix, the signals that ask a process to end — `SIGTERM`, `SIGINT`, `SIGHUP`
+and `SIGQUIT` — are passed on to the program when they are sent to `by run`, and
+`by run` exits as the program then does: a program that handles one gets to tidy
+up, and its status is `by run`'s. so `docker stop`, a supervisor or an editor's
+Stop that sends `by run` a `SIGTERM` stops the program, `by run` as the first
+process of a container included. `SIGTERM` is always passed on. the other three
+are what a terminal sends to every process of its foreground process group,
+which the program is in with `by run`, so while `by run` is in that group they
+are left to reach the program from the terminal rather than sent to it twice:
+ctrl-c interrupts the program once. a signal sent to the whole process group, or
+to every process of the tree, reaches the program twice, so to stop a run,
+signal `by run` alone. a signal that arrives before the program has started ends
+`by run` with 128 and its number. on windows, ctrl-c and ctrl-break reach the
+program through the console it shares with `by run`, which waits for it and
+exits as it does
+
 `--in-build` runs the program in the tree `by run` staged rather than in the
 directory it was typed in. the default is right for an application: a relative
 path on the command line, and anything the program reads or writes beside the

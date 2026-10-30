@@ -23,6 +23,7 @@ use walkdir::WalkDir;
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_lowering::SettledLowering;
+use crate::by_signals::Forwarding;
 use by_stage::emit::{
     CheckGate, Emit, Transpiled, is_unusable_source, transpile_failure_diagnostic,
 };
@@ -360,6 +361,9 @@ pub(crate) fn cmd_run(
         coverage,
         profile,
     } = flags;
+    // from before the program is staged, so that `by` can be stopped while it stages, and the
+    // program once it runs; see `by_signals`
+    let signals = Forwarding::install().context("could not handle the signals that end a run")?;
     let staged = match stage_run(
         min_version,
         lowering,
@@ -505,11 +509,8 @@ pub(crate) fn cmd_run(
         }
         None => None,
     };
-    let status = command
-        .arg(&module)
-        .args(args)
-        .current_dir(workdir)
-        .status()
+    let status = signals
+        .run(command.arg(&module).args(args).current_dir(workdir))
         .with_context(|| match launcher {
             Some(launcher) => format!(
                 "could not run the launcher `{}` for `{python}`, the interpreter from {}",
@@ -557,6 +558,7 @@ pub(crate) fn cmd_run(
     // drop the temp dir explicitly: `process::exit` skips destructors, so
     // exiting while it's still in scope would leak the directory
     drop(tmp);
+    drop(signals);
     std::process::exit(code);
 }
 
