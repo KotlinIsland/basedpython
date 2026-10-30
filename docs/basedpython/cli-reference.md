@@ -70,7 +70,8 @@ the project root rather than the working directory, so `by run` in a
 subdirectory is still this project
 
 `--launcher PATH` starts the program through another program — a debugger that
-has to be the process the program runs in, say — without choosing the
+has to be the process the program runs in, say, see [debugging](features/debugger.md) —
+without choosing the
 interpreter for it. discovery runs exactly as above, and the program starts as
 `PATH <interpreter> <runner> MODULE [ARGS...]`, so the launcher is handed the
 interpreter `by run` chose and runs once, for the program: the version probe is
@@ -298,6 +299,8 @@ reading it can tell whether it still describes what is on disk — see
 > **status: early.** integer, float and bool arithmetic, control flow, and calls
 > within a module compile natively. everything else falls back to the interpreted
 > definition — see [native compilation](development/compilation/index.md)
+
+for how to use it, see [native compilation](features/compilation.md)
 
 ```sh
 by compile                      # every .by file under the project root → build/

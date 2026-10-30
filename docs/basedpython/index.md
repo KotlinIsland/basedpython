@@ -11,7 +11,7 @@ files any python tool can read
     they do at runtime checks like ordinary code
 - **polyfill and transpilation** — write code against the latest version of python, and ship wheels that are compatible with old ones, no more waiting for 5 years to use new features
 - **basedpython-language** — based on Python, powerful and modern. fully backwards compatible
-- **compiles into high performance python extension modules** — or ordinary Python
+- **compiles into high performance python [extension modules](features/compilation.md)** — or ordinary Python
 - **a language server, formatter and linter** — high performance and feature rich tooling
 
 <div class="by-actions" markdown>

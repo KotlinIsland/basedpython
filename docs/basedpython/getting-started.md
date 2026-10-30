@@ -92,6 +92,18 @@ to ship the project rather than run it, build a wheel — see
 uv build
 ```
 
+## compiling
+
+`by compile` writes the same tree with native extension modules beside the python, and python
+imports those instead. it takes no change to the source, and a function it cannot compile still
+runs interpreted:
+
+```sh
+by compile
+```
+
+see [native compilation](features/compilation.md)
+
 ## CI integration
 
 ```yaml

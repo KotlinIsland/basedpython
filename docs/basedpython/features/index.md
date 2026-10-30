@@ -41,6 +41,9 @@ features that apply to a project rather than to a file
     `pyproject.toml`, and a quick fix that declares them
 - [editor support](editor.md) — postfix templates, completions, inlay hints
     and the outline
+- [the intellij plugin](intellij-plugin.md) — `.by` as a first-class language
+    in PyCharm and IntelliJ IDEA
+- [debugging](debugger.md) — breakpoints and stepping at `.by` lines, and `bpd`
 - [language injection](language-injection.md) — a string that says what
     language is written inside it
 - [linting](linter.md) — the `BY` rules, and how ruff's own rules read `.by`
@@ -51,6 +54,8 @@ features that apply to a project rather than to a file
     language server's warm state
 - [the repl](repl.md) — an interactive session in basedpython, checked as one
     module
+- [native compilation](compilation.md) — `by compile` builds native extension
+    modules
 
 </div>
 

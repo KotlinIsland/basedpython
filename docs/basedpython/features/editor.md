@@ -3,7 +3,8 @@
 the `by` language server backs the editor experience: completions, inlay
 hints, an outline, and the rest of the language-server protocol. this page
 covers the parts that are basedpython's own — the ones you would not find by
-guessing from python
+guessing from python. for the PyCharm and IntelliJ plugin, see
+[the intellij plugin](intellij-plugin.md)
 
 ## which dialect a document is
 
