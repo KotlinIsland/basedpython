@@ -2075,6 +2075,71 @@ transpile is answered once per change to the project, however often its
 diagnostics are asked for. it is part of a document's diagnostics, pulled or
 pushed, and not of the [whole project's](#the-whole-projects-diagnostics)
 
+## what a module transpiles to
+
+two requests answer about the python a `.by` module becomes, without a build:
+
+| request                   | params                            | answers                                                        |
+| ------------------------- | --------------------------------- | -------------------------------------------------------------- |
+| `by/explainTranspilation` | `textDocument`                    | each basedpython construct the document uses, and its lowering |
+| `by/transpileForBuild`    | `textDocuments`, `buildDirectory` | the files' new slots in a running build's tree, or why not     |
+
+### explaining a transpilation
+
+`by/explainTranspilation` answers a list, in source order, of what the document
+writes that python does not have, read off the tree the transpiler parses — so a
+`?.` inside a string or a comment is not one, and a `?` in a type is the optional
+type rather than the operator:
+
+```json
+[
+  { "construct": "null-safe access", "snippet": "user?.email", "line": 4,
+    "explanation": "Lowered to a conditional that yields `None` when the receiver is `None`, and the attribute otherwise. A chain evaluates the receiver once." }
+]
+```
+
+`construct` is a short name that stays the same from one release to the next:
+`pattern match`, `data-class modifier`, `null-coalescing operator`,
+`force unwrap`, `propagate operator`, `optional type` and `null-safe access`.
+`snippet` is the source as written, `line` is one-based, and `explanation` is a
+sentence for a reader. the answer is `null` for a document the server does not
+hold
+
+### re-staging files into a running build
+
+`by run` transpiles the project into a build tree and runs the program out of
+it, so reloading an edit into the running program means putting new bytes in
+that tree first. `by/transpileForBuild` computes them — for the files of an
+edit, against the warm project the server already holds rather than a whole new
+build — and writes nothing: the client writes them, so that it can roll the
+write back together with whatever it does next if that is refused
+
+its params are `textDocuments`, every document of the edit (their open buffers
+are what is transpiled), and `buildDirectory`, the tree the program runs out of,
+which only whatever started the program knows. the answer is one of two shapes:
+
+```json
+{ "files": [ { "source": "/p/app/main.by", "generated": "/tmp/.tmpX/app/main.py",
+               "content": "…", "byDigest": "…", "pyDigest": "…", "changed": true } ],
+  "sourcemap": "…" }
+```
+
+each of `files` is one document's slot: where its bytes go, the whole text to
+write there, the sha-256 of the source and of that text, and whether writing it
+changes the tree. a file the build copied rather than transpiled is answered the
+same way, with its bytes. `sourcemap` is the whole new `_by_sourcemap.py`, every
+transpiled file's entry moved in it, or `null` when the map is unchanged. or:
+
+```json
+{ "refusals": [ { "file": "/p/app/main.by", "refused": "…", "diagnostics": ["…"] } ] }
+```
+
+every reason, one sentence each, about a file or, with `file` `null`, about the
+tree: a tree built by another `by` or with `--compiled`, one with no sourcemap, a
+file that is not one the build was made from, documents of different projects,
+and a file that does not check, whose diagnostics come with it. a refusal is an
+answer rather than an error, so that a client shows why the reload did nothing
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the
