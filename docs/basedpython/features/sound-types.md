@@ -428,6 +428,26 @@ reveal_type(make() is make())  # bool
 reveal_type(make()())          # Point
 ```
 
+### what a test established about a value's members
+
+a value that isn't what is expected of it counts what the flow settled about its members, so under a
+test it can stand where those members are all that is asked:
+
+```by
+protocol HasCount:
+    let count: int
+
+class Row:
+    init(let count: object)
+
+def f(row: Row):
+    if row.count is int:
+        counted: HasCount = row
+```
+
+the claim is what reading the member gives, so a protocol that can also write the member is still
+refused
+
 ### what the body established about what it returns
 
 a return type is a summary of the function, so it carries what the body settled about the value it

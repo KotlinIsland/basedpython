@@ -67,6 +67,7 @@ use ruff_python_ast::{self as ast, ParameterBorrow, name::Name};
 use ruff_text_size::Ranged;
 use std::borrow::Cow;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
+use ty_python_core::scope::ScopeId;
 
 /// Selects which binding context to use for type variables that only appear in a return-position
 /// `Callable`.
@@ -800,7 +801,13 @@ pub(crate) enum NarrowingGuardKind<'db> {
     ///
     /// It narrows with the same reach as [`Self::AssertsType`], but nothing was written, so a
     /// call using its value is not a misuse of an annotation.
-    InferredAssertion { ty: Type<'db> },
+    ///
+    /// A root the body reads but does not take as a parameter is a variable of an enclosing scope,
+    /// recorded as `variable_scope`, and it only tells a caller about that same variable.
+    InferredAssertion {
+        ty: Type<'db>,
+        variable_scope: Option<ScopeId<'db>>,
+    },
 }
 
 impl<'db> NarrowingGuardKind<'db> {
@@ -830,7 +837,7 @@ impl<'db> NarrowingGuardKind<'db> {
             NarrowingGuardKind::AssertsType { is_positive, ty } => {
                 Some(ty.negate_if(db, env, !is_positive))
             }
-            NarrowingGuardKind::InferredAssertion { ty } => Some(ty),
+            NarrowingGuardKind::InferredAssertion { ty, .. } => Some(ty),
             NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => None,
         }
     }
@@ -854,7 +861,9 @@ impl<'db> NarrowingGuardKind<'db> {
                 ty,
             } => format!("not `{}`", ty.display(db, env)),
             // an assertion recovered from a body says what that body established, which is a type
-            NarrowingGuardKind::InferredAssertion { ty } => format!("`{}`", ty.display(db, env)),
+            NarrowingGuardKind::InferredAssertion { ty, .. } => {
+                format!("`{}`", ty.display(db, env))
+            }
             NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => {
                 return None;
             }

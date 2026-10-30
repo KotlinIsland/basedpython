@@ -278,6 +278,27 @@ callers narrow by it too — and has to establish it in its own body. the guard
 follows the parameter by position, so an override may rename a positional-only
 parameter
 
+a `def` that leaves its return type out and returns nothing asserts what its body
+establishes, about a variable it reads as much as about a parameter. the call
+narrows that variable where it was made, unless the name means a different
+variable there:
+
+```by
+a: int | None = None
+
+def check():
+    assert a is not None
+
+def f():
+    check()
+    a  # int
+
+def g():
+    a = source()
+    check()
+    a  # int | None, this is g's own `a`
+```
+
 some ways out of a body are left alone rather than checked: a `return` a
 `finally` suite can follow hands control back only once that suite has run, and
 what the suite leaves behind is not modelled. such a body is neither read as
