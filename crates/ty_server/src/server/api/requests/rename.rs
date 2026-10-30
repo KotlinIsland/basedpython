@@ -100,15 +100,15 @@ impl BackgroundDocumentRequestHandler for RenameRequestHandler {
             let capabilities = snapshot.resolved_client_capabilities();
             if capabilities.supports_workspace_edit_change_annotations() {
                 let extras = rename_extras(db, db.program_file(file), offset, &params.new_name);
-                if !extras.is_empty() {
-                    return Ok(Some(annotated_workspace_edit(
-                        db,
-                        snapshot,
-                        &params.new_name,
-                        changes,
-                        extras,
-                        capabilities.supports_workspace_edit_rename_file(),
-                    )));
+                let offers = rename_offers(
+                    db,
+                    snapshot,
+                    &params.new_name,
+                    extras,
+                    capabilities.supports_workspace_edit_rename_file(),
+                );
+                if !offers.is_empty() {
+                    return Ok(Some(annotated_workspace_edit(changes, offers)));
                 }
             }
 
@@ -139,86 +139,83 @@ impl BackgroundDocumentRequestHandler for RenameRequestHandler {
     }
 }
 
-/// basedpython: the rename `changes` makes, with the renames that go with it — see
-/// [`RenameExtra`] — as edits the client asks the user to confirm
+/// basedpython: one rename offered beside a rename, for the user to keep or leave — see
+/// [`RenameExtra`] — as both `textDocument/rename` and `by/renameOffers` hand it over
 ///
-/// Each extra is its own change annotation, with `needsConfirmation` set, so that a client can
-/// offer it as a checkbox and apply the rename without it. Its label says what kind of extra it is
-/// and is shared by every extra of that kind, which is what a client that groups on labels groups
-/// by; its description names what it renames. The identifiers are `override:<n>`,
-/// `parameter:<n>` and `module:<n>`, numbered from 0 within each kind. The rename itself is made
-/// of plain text edits, as without extras. A module is moved by a `RenameFile` after every text
-/// edit, the edits to the module itself among them, and only for a client that says it can.
-fn annotated_workspace_edit(
+/// the identifiers are `override:<n>`, `parameter:<n>` and `module:<n>`, numbered from 0 within
+/// each kind. the label says what kind of offer it is, and is shared by every offer of that kind;
+/// the description names what it renames
+struct RenameOffer {
+    id: String,
+    label: &'static str,
+    description: String,
+    /// the text edits it makes, each in the document it is in
+    edits: Vec<(Uri, TextEdit)>,
+    /// the file it moves, from and to, made after every text edit
+    file_move: Option<(Uri, Uri)>,
+}
+
+/// the offers that go with a rename to `new_name`, made of `extras`. a module is offered only to
+/// a client that `renames_files`
+fn rename_offers(
     db: &ProjectDatabase,
     snapshot: &DocumentSnapshot,
     new_name: &str,
-    changes: HashMap<Uri, Vec<TextEdit>>,
     extras: Vec<RenameExtra>,
     renames_files: bool,
-) -> WorkspaceEdit {
-    let mut edits: BTreeMap<String, (Uri, Vec<Edit>)> = BTreeMap::new();
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each file's edits go into an ordered map, which sets the order they are sent in"
-    )]
-    for (uri, file_edits) in changes {
-        edits
-            .entry(uri.as_str().to_owned())
-            .or_insert_with(|| (uri, Vec::new()))
-            .1
-            .extend(file_edits.into_iter().map(Edit::from));
-    }
-
-    let mut annotations: HashMap<String, ChangeAnnotation> = HashMap::new();
-    let mut file_moves = Vec::new();
-    let mut counts = [0usize; 3];
+) -> Vec<RenameOffer> {
+    let mut offers = Vec::new();
+    let mut counts = OfferCounts::default();
+    let plain = |occurrences: Vec<FileRange>| -> Vec<(FileRange, String)> {
+        occurrences
+            .into_iter()
+            .map(|range| (range, new_name.to_owned()))
+            .collect()
+    };
     for extra in extras {
-        let (kind, label, description, occurrences): (
-            usize,
-            &str,
-            String,
-            Vec<(FileRange, String)>,
-        ) = match extra {
+        let (prefix, count, label, description, occurrences, file_move) = match extra {
             RenameExtra::Override {
                 member,
                 occurrences,
             } => (
-                0,
+                "override",
+                &mut counts.overrides,
                 "Rename overriding methods",
                 format!("`{member}`"),
-                occurrences
-                    .into_iter()
-                    .map(|range| (range, new_name.to_owned()))
-                    .collect(),
+                plain(occurrences),
+                None,
             ),
             RenameExtra::Parameter {
                 member,
                 parameter,
                 occurrences,
             } => (
-                1,
+                "parameter",
+                &mut counts.parameters,
                 "Rename parameters of overriding methods",
                 format!("`{parameter}` of `{member}`"),
-                occurrences
-                    .into_iter()
-                    .map(|range| (range, new_name.to_owned()))
-                    .collect(),
+                plain(occurrences),
+                None,
             ),
             RenameExtra::Module { file_move, edits } => {
                 if !renames_files {
                     continue;
                 }
-                let description = format!(
-                    "`{}` to `{}`",
-                    file_move.old_path.file_name().unwrap_or_default(),
-                    file_move.new_path.file_name().unwrap_or_default()
-                );
-                file_moves.push((counts[2], file_move));
+                let (Ok(old_uri), Ok(new_uri)) = (
+                    Uri::from_file_path(file_move.old_path.as_std_path()),
+                    Uri::from_file_path(file_move.new_path.as_std_path()),
+                ) else {
+                    continue;
+                };
                 (
-                    2,
+                    "module",
+                    &mut counts.modules,
                     "Rename module",
-                    description,
+                    format!(
+                        "`{}` to `{}`",
+                        file_move.old_path.file_name().unwrap_or_default(),
+                        file_move.new_path.file_name().unwrap_or_default()
+                    ),
                     edits
                         .into_iter()
                         .map(|edit| {
@@ -228,45 +225,57 @@ fn annotated_workspace_edit(
                             )
                         })
                         .collect(),
+                    Some((old_uri, new_uri)),
                 )
             }
         };
-        let id = format!(
-            "{}:{}",
-            ["override", "parameter", "module"][kind],
-            counts[kind]
-        );
-        counts[kind] += 1;
-        for (range, new_text) in occurrences {
-            let Some(location) = range
-                .to_lsp_range(db, snapshot.encoding())
-                .and_then(LspRange::into_location)
-            else {
-                continue;
-            };
-            edits
-                .entry(location.uri.as_str().to_owned())
-                .or_insert_with(|| (location.uri.clone(), Vec::new()))
-                .1
-                .push(Edit::AnnotatedTextEdit(AnnotatedTextEdit {
-                    annotation_id: id.clone(),
-                    text_edit: TextEdit {
+        let id = format!("{prefix}:{count}");
+        *count += 1;
+        let edits = occurrences
+            .into_iter()
+            .filter_map(|(range, new_text)| {
+                let location = range
+                    .to_lsp_range(db, snapshot.encoding())
+                    .and_then(LspRange::into_location)?;
+                Some((
+                    location.uri,
+                    TextEdit {
                         range: location.range,
                         new_text,
                     },
-                }));
-        }
-        annotations.insert(
+                ))
+            })
+            .collect();
+        offers.push(RenameOffer {
             id,
-            ChangeAnnotation {
-                label: label.to_owned(),
-                needs_confirmation: Some(true),
-                description: Some(description),
-            },
-        );
+            label,
+            description,
+            edits,
+            file_move,
+        });
     }
+    offers
+}
 
-    let mut document_changes: Vec<DocumentChange> = edits
+/// how many offers of each kind have been made, which numbers the next one
+#[derive(Default)]
+struct OfferCounts {
+    overrides: usize,
+    parameters: usize,
+    modules: usize,
+}
+
+/// one text edit per file, as `documentChanges` holds them, in the order of the files' uris
+fn text_document_edits(edits: impl IntoIterator<Item = (Uri, Edit)>) -> Vec<DocumentChange> {
+    let mut by_file: BTreeMap<String, (Uri, Vec<Edit>)> = BTreeMap::new();
+    for (uri, edit) in edits {
+        by_file
+            .entry(uri.as_str().to_owned())
+            .or_insert_with(|| (uri, Vec::new()))
+            .1
+            .push(edit);
+    }
+    by_file
         .into_values()
         .map(|(uri, edits)| {
             TextDocumentEdit {
@@ -278,28 +287,201 @@ fn annotated_workspace_edit(
             }
             .into()
         })
-        .collect();
-    for (index, file_move) in file_moves {
-        let (Ok(old_uri), Ok(new_uri)) = (
-            Uri::from_file_path(file_move.old_path.as_std_path()),
-            Uri::from_file_path(file_move.new_path.as_std_path()),
-        ) else {
-            continue;
-        };
-        document_changes.push(DocumentChange::RenameFile(RenameFile {
-            old_uri,
-            new_uri,
-            options: None,
-            annotation_id: Some(format!("module:{index}")),
-        }));
+        .collect()
+}
+
+/// basedpython: the rename `changes` makes, with the `offers` that go with it, as edits the
+/// client asks the user to confirm
+///
+/// each offer is its own change annotation, with `needsConfirmation` set, so that a client can
+/// offer it as a checkbox and apply the rename without it. its label is the offer's kind, which is
+/// what a client that groups on labels groups by. the rename itself is made of plain text edits,
+/// as without offers. a module is moved by a `RenameFile` after every text edit, the edits to the
+/// module itself among them
+fn annotated_workspace_edit(
+    changes: HashMap<Uri, Vec<TextEdit>>,
+    offers: Vec<RenameOffer>,
+) -> WorkspaceEdit {
+    let mut edits: Vec<(Uri, Edit)> = Vec::new();
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "`text_document_edits` orders the files, and a file's edits stay in its own order"
+    )]
+    for (uri, file_edits) in changes {
+        edits.extend(
+            file_edits
+                .into_iter()
+                .map(|edit| (uri.clone(), Edit::from(edit))),
+        );
     }
 
+    let mut annotations: HashMap<String, ChangeAnnotation> = HashMap::new();
+    let mut file_moves = Vec::new();
+    for offer in offers {
+        edits.extend(offer.edits.into_iter().map(|(uri, text_edit)| {
+            (
+                uri,
+                Edit::AnnotatedTextEdit(AnnotatedTextEdit {
+                    annotation_id: offer.id.clone(),
+                    text_edit,
+                }),
+            )
+        }));
+        if let Some((old_uri, new_uri)) = offer.file_move {
+            file_moves.push(DocumentChange::RenameFile(RenameFile {
+                old_uri,
+                new_uri,
+                options: None,
+                annotation_id: Some(offer.id.clone()),
+            }));
+        }
+        annotations.insert(
+            offer.id,
+            ChangeAnnotation {
+                label: offer.label.to_owned(),
+                needs_confirmation: Some(true),
+                description: Some(offer.description),
+            },
+        );
+    }
+
+    let mut document_changes = text_document_edits(edits);
+    document_changes.extend(file_moves);
     WorkspaceEdit {
         changes: None,
         document_changes: Some(document_changes),
         change_annotations: Some(annotations),
     }
 }
+
+/// `by/renameOffers`: the renames that go with renaming the symbol at a position to a new name,
+/// each as an edit of its own, for a client whose workspace edits carry no change annotations
+pub(crate) enum RenameOffersRequest {}
+
+impl lsp_types::Request for RenameOffersRequest {
+    type Params = RenameOffersParams;
+    type Result = Vec<RenameOfferAnswer>;
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("by/renameOffers");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
+}
+
+/// the rename, as `textDocument/rename` is asked for it
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RenameOffersParams {
+    text_document: TextDocumentIdentifier,
+    position: lsp_types::Position,
+    new_name: String,
+}
+
+/// one offer: what [`RenameOffer`] says, with its edits as a workspace edit of their own
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RenameOfferAnswer {
+    id: String,
+    label: String,
+    description: String,
+    edit: WorkspaceEdit,
+}
+
+impl From<RenameOffer> for RenameOfferAnswer {
+    /// text edits alone go across as `changes`. an offer that also moves a file goes across as
+    /// `documentChanges`, a plain text edit per file followed by the `RenameFile`
+    fn from(offer: RenameOffer) -> Self {
+        let edit = match offer.file_move {
+            None => {
+                let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+                for (uri, text_edit) in offer.edits {
+                    changes.entry(uri).or_default().push(text_edit);
+                }
+                WorkspaceEdit {
+                    changes: Some(changes),
+                    document_changes: None,
+                    change_annotations: None,
+                }
+            }
+            Some((old_uri, new_uri)) => {
+                let mut document_changes = text_document_edits(
+                    offer
+                        .edits
+                        .into_iter()
+                        .map(|(uri, text_edit)| (uri, Edit::TextEdit(text_edit))),
+                );
+                document_changes.push(DocumentChange::RenameFile(RenameFile {
+                    old_uri,
+                    new_uri,
+                    options: None,
+                    annotation_id: None,
+                }));
+                WorkspaceEdit {
+                    changes: None,
+                    document_changes: Some(document_changes),
+                    change_annotations: None,
+                }
+            }
+        };
+        Self {
+            id: offer.id,
+            label: offer.label.to_owned(),
+            description: offer.description,
+            edit,
+        }
+    }
+}
+
+pub(crate) struct RenameOffersRequestHandler;
+
+impl RequestHandler for RenameOffersRequestHandler {
+    type RequestType = RenameOffersRequest;
+}
+
+impl BackgroundDocumentRequestHandler for RenameOffersRequestHandler {
+    fn document_uri(params: &RenameOffersParams) -> Cow<'_, Uri> {
+        Cow::Borrowed(&params.text_document.uri)
+    }
+
+    /// empty where there is no python symbol to rename, and refused with the reason
+    /// `textDocument/rename` gives for a new name it would refuse
+    fn run_with_snapshot(
+        db: &ProjectDatabase,
+        snapshot: &DocumentSnapshot,
+        _client: &Client,
+        params: RenameOffersParams,
+    ) -> crate::server::Result<Vec<RenameOfferAnswer>> {
+        if snapshot.is_django_template()
+            || snapshot
+                .workspace_settings()
+                .is_language_services_disabled()
+        {
+            return Ok(Vec::new());
+        }
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
+            return Ok(Vec::new());
+        };
+        let Some(offset) =
+            params
+                .position
+                .to_text_size(db, file, snapshot.document().uri(), snapshot.encoding())
+        else {
+            return Ok(Vec::new());
+        };
+        let PreparedRename::Ready { .. } = prepare_rename(db, db.program_file(file), offset) else {
+            return Ok(Vec::new());
+        };
+        if let Some(why) = invalid_new_name(&params.new_name) {
+            return Err(Error::new(anyhow!(why), ErrorCode::RequestFailed));
+        }
+        let extras = rename_extras(db, db.program_file(file), offset, &params.new_name);
+        Ok(rename_offers(db, snapshot, &params.new_name, extras, true)
+            .into_iter()
+            .map(RenameOfferAnswer::from)
+            .collect())
+    }
+}
+
+impl RetriableRequestHandler for RenameOffersRequestHandler {}
 
 /// the edits a django rename makes, as the client applies them
 ///

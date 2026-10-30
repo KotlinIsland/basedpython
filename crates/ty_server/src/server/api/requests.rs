@@ -153,7 +153,7 @@ pub(super) use prepare_call_hierarchy::PrepareCallHierarchyRequestHandler;
 pub(super) use prepare_rename::PrepareRenameRequestHandler;
 pub(super) use prepare_type_hierarchy::PrepareTypeHierarchyRequestHandler;
 pub(super) use references::ReferencesRequestHandler;
-pub(super) use rename::RenameRequestHandler;
+pub(super) use rename::{RenameOffersRequestHandler, RenameRequestHandler};
 pub(super) use rename_names::{RenameNameSuggestionsHandler, ValidateRenameNameHandler};
 pub(super) use rules::RulesHandler;
 pub(super) use run_modules::RunModulesHandler;
