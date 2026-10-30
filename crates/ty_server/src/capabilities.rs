@@ -2,9 +2,9 @@ use lsp_types::{
     self as types, ClientCapabilities, CodeActionKind, CodeActionOptions, CompletionOptions,
     DiagnosticOptions, DiagnosticProvider, DocumentOnTypeFormattingOptions, InlayHintOptions,
     MarkupKind, NotebookCellLanguage, NotebookDocumentFilterWithCells, NotebookSelector,
-    RenameOptions, Save, SaveOptions, SemanticTokensLegend, SemanticTokensOptions,
-    ServerCapabilities, SignatureHelpOptions, TextDocumentSyncKind, TextDocumentSyncOptions,
-    WorkDoneProgressOptions,
+    RenameOptions, ResourceOperationKind, Save, SaveOptions, SemanticTokensLegend,
+    SemanticTokensOptions, ServerCapabilities, SignatureHelpOptions, TextDocumentSyncKind,
+    TextDocumentSyncOptions, WorkDoneProgressOptions,
 };
 use std::str::FromStr;
 
@@ -54,6 +54,8 @@ bitflags::bitflags! {
         const COMPLETION_INSERTS_AS_IS = 1 << 35;
         const UNREACHABLE_WITHOUT_SEMANTIC_TOKENS = 1 << 36;
         const UNREACHABLE_SEMANTIC_TOKEN_MODIFIER = 1 << 37;
+        const WORKSPACE_EDIT_CHANGE_ANNOTATIONS = 1 << 38;
+        const WORKSPACE_EDIT_RENAME_FILE = 1 << 39;
     }
 }
 
@@ -225,6 +227,18 @@ impl ResolvedClientCapabilities {
         self.contains(Self::COMPLETION_ITEM_LABEL_DETAILS_SUPPORT)
     }
 
+    /// basedpython: whether the client takes a workspace edit as ordered `documentChanges` whose
+    /// text edits may carry change annotations, so that some of an edit can be left for the
+    /// user to confirm
+    pub(crate) const fn supports_workspace_edit_change_annotations(self) -> bool {
+        self.contains(Self::WORKSPACE_EDIT_CHANGE_ANNOTATIONS)
+    }
+
+    /// basedpython: whether the client renames a file a workspace edit's `documentChanges` asks it to
+    pub(crate) const fn supports_workspace_edit_rename_file(self) -> bool {
+        self.contains(Self::WORKSPACE_EDIT_RENAME_FILE)
+    }
+
     /// Returns `true` if the client can ask for a code action's edit later, with
     /// `codeAction/resolve`, rather than needing it in the `textDocument/codeAction` reply.
     pub(crate) const fn supports_code_action_edit_resolve(self) -> bool {
@@ -367,6 +381,22 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::SEMANTIC_TOKENS_REFRESH;
+        }
+
+        if let Some(workspace_edit) =
+            workspace.and_then(|workspace| workspace.workspace_edit.as_ref())
+            && workspace_edit.document_changes == Some(true)
+        {
+            if workspace_edit.change_annotation_support.is_some() {
+                flags |= Self::WORKSPACE_EDIT_CHANGE_ANNOTATIONS;
+            }
+            if workspace_edit
+                .resource_operations
+                .as_ref()
+                .is_some_and(|operations| operations.contains(&ResourceOperationKind::Rename))
+            {
+                flags |= Self::WORKSPACE_EDIT_RENAME_FILE;
+            }
         }
 
         if let Some(capabilities) =

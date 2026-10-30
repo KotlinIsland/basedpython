@@ -1,12 +1,18 @@
+use crate::code_action::FileEdit;
 use crate::goto::{ClassCallName, GotoTarget, find_goto_target};
+use crate::goto_implementation::implementations_at_each;
+use crate::module_rename::{FileMove, module_rename_edits};
 use crate::references::{ReferencesMode, references};
 use crate::{Db, ReferenceTarget};
-use ruff_db::files::File;
+use ruff_db::files::{File, FileRange};
+use ruff_db::source::source_text;
 use ruff_python_ast as ast;
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_python_stdlib::keyword::is_keyword;
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use rustc_hash::FxHashSet;
 use ty_python_core::ProgramFile;
+use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::{ResolvedDefinition, SemanticModel};
 
 /// Returns the range of the symbol if it can be renamed, None if not.
@@ -182,6 +188,263 @@ pub fn rename(
 
     // Find all references that need to be renamed
     references(db, file, &goto_target, rename_mode)
+}
+
+/// basedpython: a rename that goes with renaming a symbol, which the user decides on
+///
+/// the symbol's own rename — its declaration and every use of it — is [`rename`]'s, and is made
+/// whatever the user decides. these are the renames PyCharm offers beside a `.py` rename as
+/// checkboxes, each its own decision: the methods that override a renamed method, which keep
+/// overriding it only if they are renamed too; a parameter of the same name in each of those,
+/// which a caller passing it by keyword through the base reaches; and the module a renamed class
+/// gives its name to
+#[derive(Debug, Clone)]
+pub enum RenameExtra {
+    /// a method that overrides the renamed one, renamed with every use of it
+    Override {
+        /// the overriding method, as `Dog.speak`
+        member: String,
+        /// its declaration and uses, each renamed to the new name
+        occurrences: Vec<FileRange>,
+    },
+    /// the parameter of the same name in a method that overrides the method whose parameter is
+    /// renamed, with every use of it, keyword arguments included
+    Parameter {
+        /// the overriding method, as `Dog.speak`
+        member: String,
+        /// the parameter's name in it, which is the name being renamed
+        parameter: String,
+        /// the parameter's declaration and uses, each renamed to the new name
+        occurrences: Vec<FileRange>,
+    },
+    /// the module named after the renamed class, `animal.by` for `Animal`, moved to the name the
+    /// class is given, with the import edits that keep the project working
+    Module {
+        /// where the module is and where it is moved to
+        file_move: FileMove,
+        /// the edits [`module_rename_edits`] makes for the move
+        edits: Vec<FileEdit>,
+    },
+}
+
+/// basedpython: the renames that go with renaming the symbol at `offset` to `new_name`, besides
+/// its own; see [`RenameExtra`]. none of them touches an occurrence [`rename`] already renames
+pub fn rename_extras(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+    new_name: &str,
+) -> Vec<RenameExtra> {
+    let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db));
+    let module = parsed.load(db);
+    let model = SemanticModel::new(db, file);
+    let Some(goto_target) = find_goto_target(&model, &module, offset) else {
+        return Vec::new();
+    };
+    let Some(name) = goto_target.to_string() else {
+        return Vec::new();
+    };
+    let Some(declarations) = goto_target
+        .definitions(&model, ReferencesMode::Rename.to_import_alias_resolution())
+        .and_then(|definitions| {
+            definitions.goto_declaration(&model, &goto_target, ClassCallName::Class)
+        })
+    else {
+        return Vec::new();
+    };
+
+    // what the rename itself renames, which no extra renames again
+    let mut taken: FxHashSet<FileRange> = rename(db, file, offset, new_name)
+        .unwrap_or_default()
+        .iter()
+        .map(ReferenceTarget::file_range)
+        .collect();
+    let mut extras = Vec::new();
+    for declaration in &declarations {
+        let ResolvedDefinition::Definition(definition) = declaration else {
+            continue;
+        };
+        let declared_in = ProgramFile::new(db, definition.file(db), file.program(db));
+        let declared_module =
+            ruff_db::parsed::parsed_module(db, declared_in.python_file(db)).load(db);
+        match definition.kind(db) {
+            DefinitionKind::Function(_) => {
+                let at = definition.focus_range(db, &declared_module);
+                for (member, overriding) in overriding_methods(db, declared_in, at) {
+                    let occurrences = fresh_occurrences(
+                        db,
+                        overriding.program_file,
+                        overriding.name_start,
+                        new_name,
+                        &mut taken,
+                    );
+                    if !occurrences.is_empty() {
+                        extras.push(RenameExtra::Override {
+                            member,
+                            occurrences,
+                        });
+                    }
+                }
+            }
+            DefinitionKind::Parameter(_) => {
+                let Some(function) = definition
+                    .scope(db)
+                    .node(db)
+                    .as_function()
+                    .map(|function| function.node(&declared_module))
+                else {
+                    continue;
+                };
+                let at = FileRange::new(definition.file(db), function.name.range());
+                for (member, overriding) in overriding_methods(db, declared_in, at) {
+                    let overriding_module =
+                        ruff_db::parsed::parsed_module(db, overriding.program_file.python_file(db))
+                            .load(db);
+                    let overriding_model = SemanticModel::new(db, overriding.program_file);
+                    let Some(GotoTarget::FunctionDef(method)) = find_goto_target(
+                        &overriding_model,
+                        &overriding_module,
+                        overriding.name_start,
+                    ) else {
+                        continue;
+                    };
+                    // a parameter a caller can pass by keyword is the same parameter in the
+                    // override only under the same name, which is the name being renamed
+                    let Some(parameter) = method
+                        .parameters
+                        .iter_non_variadic_params()
+                        .find(|parameter| parameter.name().as_str() == name)
+                    else {
+                        continue;
+                    };
+                    let occurrences = fresh_occurrences(
+                        db,
+                        overriding.program_file,
+                        parameter.name().start(),
+                        new_name,
+                        &mut taken,
+                    );
+                    if !occurrences.is_empty() {
+                        extras.push(RenameExtra::Parameter {
+                            member,
+                            parameter: name.to_string(),
+                            occurrences,
+                        });
+                    }
+                }
+            }
+            DefinitionKind::Class(_) => {
+                if let Some(extra) = module_named_after(db, *definition, &name, new_name) {
+                    extras.push(extra);
+                }
+            }
+            _ => {}
+        }
+    }
+    extras
+}
+
+/// a method that overrides another, found by [`implementations_at_each`]
+struct OverridingMethod<'db> {
+    program_file: ProgramFile<'db>,
+    name_start: TextSize,
+}
+
+/// every method that overrides the method whose name is at `at`, in `file`, named as
+/// `Dog.speak`
+fn overriding_methods<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    at: FileRange,
+) -> Vec<(String, OverridingMethod<'db>)> {
+    let Some(Some(implementations)) = implementations_at_each(db, file, &[at.range().start()])
+        .into_iter()
+        .next()
+    else {
+        return Vec::new();
+    };
+    implementations
+        .into_iter()
+        // the family a method's own name starts from holds the method itself
+        .filter(|implementation| {
+            implementation.target.file() != at.file()
+                || implementation.target.focus_range() != at.range()
+        })
+        .filter_map(|implementation| {
+            let class = implementation.class?;
+            let target = implementation.target;
+            let method = &source_text(db, target.file())[target.focus_range()];
+            let member = format!("{}.{method}", class.qualified_name.unwrap_or(class.name));
+            Some((
+                member,
+                OverridingMethod {
+                    program_file: ProgramFile::new(db, target.file(), file.program(db)),
+                    name_start: target.focus_range().start(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// what renaming the symbol at `offset` in `file` renames, less what is `taken` already, which
+/// takes it in turn
+fn fresh_occurrences(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    offset: TextSize,
+    new_name: &str,
+    taken: &mut FxHashSet<FileRange>,
+) -> Vec<FileRange> {
+    let mut occurrences: Vec<FileRange> = rename(db, file, offset, new_name)
+        .unwrap_or_default()
+        .iter()
+        .map(ReferenceTarget::file_range)
+        .filter(|occurrence| taken.insert(*occurrence))
+        .collect();
+    occurrences.sort_by_key(|occurrence| (occurrence.file(), occurrence.range().start()));
+    occurrences
+}
+
+/// the module named after the class `definition` declares as `name`, moved to `new_name`
+///
+/// a module is named after a class, as PyCharm judges it, when its file's name is the class's
+/// but for case: `animal.by` for `Animal`. the new file is named the way the old one was, in
+/// lower case where it was, and beside it. nothing is offered for a class inside a function or
+/// another class, for a package's `__init__`, or when a file of the new name is there already
+fn module_named_after(
+    db: &dyn Db,
+    definition: Definition<'_>,
+    name: &str,
+    new_name: &str,
+) -> Option<RenameExtra> {
+    if !definition.scope(db).file_scope_id(db).is_global() {
+        return None;
+    }
+    let path = definition.file(db).path(db).as_system_path()?;
+    let stem = path.file_stem()?;
+    if !stem.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let new_stem = if stem == name {
+        new_name.to_owned()
+    } else if stem == name.to_lowercase() {
+        new_name.to_lowercase()
+    } else {
+        new_name.to_owned()
+    };
+    let new_path = path.parent()?.join(match path.extension() {
+        Some(extension) => format!("{new_stem}.{extension}"),
+        None => new_stem,
+    });
+    if new_path.as_path() == path || db.system().path_exists(&new_path) {
+        return None;
+    }
+    let file_move = FileMove {
+        old_path: path.to_path_buf(),
+        new_path,
+    };
+    let edits = module_rename_edits(db, std::slice::from_ref(&file_move)).edits;
+    Some(RenameExtra::Module { file_move, edits })
 }
 
 /// Helper function to check if a file is included in the project.
