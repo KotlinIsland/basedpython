@@ -186,14 +186,17 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
 
         // asked for before anything is worked out, because answering for one refactoring costs
         // computing its rewrite: a client narrowing to `quickfix` must not pay for seven
+        let automatic =
+            params.context.trigger_kind == Some(types::CodeActionTriggerKind::Automatic);
         let wanted: Vec<ty_ide::RefactorKind> = RefactorKind::ALL
             .iter()
             .copied()
             .filter(|kind| {
-                is_requested(
-                    only.as_deref(),
-                    &CodeActionKind::new(kind.code_action_kind()),
-                )
+                !(automatic && kind.reads_the_whole_project())
+                    && is_requested(
+                        only.as_deref(),
+                        &CodeActionKind::new(kind.code_action_kind()),
+                    )
             })
             .collect();
         if !wanted.is_empty()

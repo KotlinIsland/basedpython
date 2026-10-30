@@ -359,6 +359,7 @@ fn plan_selection(
     // the name where the expression was, after the receiver for a field
     let name_at = PlannedName::at(1, replacement.len() - name.len(), name.len());
     Ok(Plan {
+        foreign: Vec::new(),
         title,
         edits: vec![
             insertion,

@@ -67,6 +67,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
             .map(|import| Edit::range_replacement(import.new_text, import.range)),
     );
     Ok(Plan {
+        foreign: Vec::new(),
         title: format!("Add return annotation `-> {annotation}`"),
         edits,
         name: None,

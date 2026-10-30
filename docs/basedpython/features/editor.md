@@ -576,6 +576,7 @@ one that asks while the caret moves is only offered what applies
 | apply De Morgan's law   | `refactor.rewrite.deMorgan`            | an `and` or an `or`                  |
 | convert quotes          | `refactor.rewrite.flipQuotes`          | a string or bytes literal            |
 | loop to comprehension   | `refactor.rewrite.loopToComprehension` | a loop filling an empty collection   |
+| invert boolean          | `refactor.rewrite.invertBoolean`       | a boolean variable, parameter, `def` |
 
 an extraction makes up a name, which its user will want to choose. once its
 action is resolved, its `data` says where the name is: `rename`, a `uri` and a
@@ -587,6 +588,39 @@ rename location:
 ```json
 { "data": { "rename": { "uri": "file:///src/shapes.by", "range": { "start": { "line": 13, "character": 21 }, "end": { "line": 13, "character": 30 } } } } }
 ```
+
+inverting a boolean gives a variable, a parameter or a function the opposite
+meaning under a name that says so, and keeps every use meaning what it meant, as
+PyCharm's *Invert Boolean* does for a `.py`. it is offered on a variable assigned
+`True` or `False`, a parameter defaulting to one, and a `def` declared `-> bool`,
+asked about on the declaration or, for a variable, on any use in its file. it
+reads every module of the project to answer, so a client asking as the caret
+moves, with the trigger kind `Automatic`, is not offered it. the new name is
+`not_` before the old one, or the old one without its `not_`, and is the made-up
+name its `data` hands back for renaming:
+
+```by
+ready = True            # not_ready = False
+if ready and x:         # if not not_ready and x:
+    ready = check()     #     not_ready = not check()
+print(not ready)        # print(not_ready)
+```
+
+every read is negated, or loses its `not`; every value it is given is negated,
+a `True` or a `False` by flipping it; a parameter's default and the values calls
+pass it by keyword are negated; a function returns the negation of each value
+and each call of it is negated. its uses in other modules are rewritten too, and
+an import of it is only renamed. it is refused where a use could not be kept
+meaning the same: a binding that is not an assignment of a value of its own (an
+unpacking, an augmented assignment, a loop's target), a value that is not a
+`bool`, whose negation keeps its truth and loses the value, a write to an
+attribute, an attribute of a class, a method or a method's parameter, whose
+overrides would have to change with it, a parameter some call may pass by
+position or by unpacking, a function used other than by calling it, an `async`
+function, whose call is a coroutine, a function defined more than once, each
+with returns and parameters of its own, a function with a `return` of no value
+or a `yield`, an import under another name, whose reads are no use of the name,
+one use inside another, and a rewrite that would lose a comment
 
 inlining is offered on the variable's assignment and on any of its reads alike, and
 replaces every read either way. the value is parenthesised only where python

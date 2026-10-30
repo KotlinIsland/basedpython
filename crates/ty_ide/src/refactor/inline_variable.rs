@@ -181,6 +181,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
     edits.push(context.delete_statement(in_suite));
 
     Ok(Plan {
+        foreign: Vec::new(),
         title,
         edits,
         name: None,

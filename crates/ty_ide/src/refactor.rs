@@ -25,6 +25,7 @@ mod flow;
 mod hazards;
 mod inline_variable;
 mod intentions;
+mod invert_boolean;
 mod move_symbol;
 pub(crate) mod names;
 mod return_annotation;
@@ -71,6 +72,7 @@ pub enum RefactorKind {
     DeMorgan,
     FlipQuotes,
     LoopToComprehension,
+    InvertBoolean,
 }
 
 impl RefactorKind {
@@ -90,7 +92,14 @@ impl RefactorKind {
         RefactorKind::DeMorgan,
         RefactorKind::FlipQuotes,
         RefactorKind::LoopToComprehension,
+        RefactorKind::InvertBoolean,
     ];
+
+    /// whether answering for this refactoring reads every module of the project, which is more
+    /// than a client asking as the caret moves should be made to wait for
+    pub fn reads_the_whole_project(self) -> bool {
+        matches!(self, RefactorKind::InvertBoolean)
+    }
 
     /// The LSP code action kind the refactoring is offered as.
     pub const fn code_action_kind(self) -> &'static str {
@@ -110,6 +119,7 @@ impl RefactorKind {
             RefactorKind::DeMorgan => "refactor.rewrite.deMorgan",
             RefactorKind::FlipQuotes => "refactor.rewrite.flipQuotes",
             RefactorKind::LoopToComprehension => "refactor.rewrite.loopToComprehension",
+            RefactorKind::InvertBoolean => "refactor.rewrite.invertBoolean",
         }
     }
 
@@ -132,6 +142,7 @@ impl RefactorKind {
             RefactorKind::DeMorgan => "de-morgan",
             RefactorKind::FlipQuotes => "flip-quotes",
             RefactorKind::LoopToComprehension => "loop-to-comprehension",
+            RefactorKind::InvertBoolean => "invert-boolean",
         }
     }
 
@@ -192,6 +203,8 @@ pub(crate) struct Plan {
     /// the name the rewrite makes up, which its user will want to choose: the new
     /// function's or the new variable's, where it is declared
     name: Option<PlannedName>,
+    /// what the rewrite edits in other files: the uses of a symbol it renames there
+    foreign: Vec<FileEdit>,
 }
 
 /// where a made-up name is in a plan's edits: the edit whose content writes it, and its range
@@ -269,12 +282,13 @@ impl<'db> RefactorContext<'db> {
         self.file().source_type(self.db).is_basedpython()
     }
 
-    /// A plan's edits, each carrying the file it applies to.
-    fn file_edits(&self, edits: Vec<Edit>) -> Vec<FileEdit> {
+    /// a plan's edits, each carrying the file it applies to, and then those it makes elsewhere
+    fn plan_edits(&self, edits: Vec<Edit>, foreign: Vec<FileEdit>) -> Vec<FileEdit> {
         let file = self.file();
         edits
             .into_iter()
             .map(|edit| FileEdit { file, edit })
+            .chain(foreign)
             .collect()
     }
 
@@ -307,6 +321,7 @@ impl<'db> RefactorContext<'db> {
             RefactorKind::DeMorgan => intentions::de_morgan(self, range),
             RefactorKind::FlipQuotes => intentions::flip_quotes(self, range),
             RefactorKind::LoopToComprehension => intentions::loop_to_comprehension(self, range),
+            RefactorKind::InvertBoolean => invert_boolean::plan(self, range),
         }
     }
 }
@@ -358,7 +373,7 @@ pub fn refactors(
                 kind,
                 title: plan.title,
                 range,
-                availability: Ok(context.file_edits(plan.edits)),
+                availability: Ok(context.plan_edits(plan.edits, plan.foreign)),
             }),
             Err(Refusal::NotApplicable) => None,
             Err(Refusal::Refused { title, reason }) => Some(RefactorOffer {
@@ -392,7 +407,7 @@ pub fn refactor(
             kind,
             title: plan.title,
             name: plan.name.and_then(|name| name.in_edited_text(&plan.edits)),
-            edits: context.file_edits(plan.edits),
+            edits: context.plan_edits(plan.edits, plan.foreign),
         }),
         Err(Refusal::NotApplicable) => Err(NOT_HERE.to_string()),
         Err(Refusal::Refused { reason, .. }) => Err(reason),
@@ -418,9 +433,9 @@ pub(crate) mod test_support {
 
     /// A file with a `<CURSOR>`, or a `<START>`…`<END>` selection, to refactor.
     pub(crate) struct RefactorTest {
-        db: ty_project::TestDb,
-        file: File,
-        range: TextRange,
+        pub(crate) db: ty_project::TestDb,
+        pub(crate) file: File,
+        pub(crate) range: TextRange,
     }
 
     impl RefactorTest {

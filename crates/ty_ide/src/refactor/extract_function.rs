@@ -377,6 +377,7 @@ pub(super) fn plan(context: &RefactorContext<'_>, range: TextRange) -> Result<Pl
         )
     };
     Ok(Plan {
+        foreign: Vec::new(),
         title,
         edits,
         name: Some(name),

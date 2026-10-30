@@ -100,6 +100,7 @@ pub(super) fn invert_if(context: &RefactorContext<'_>, range: TextRange) -> Resu
         Some(AnyNodeRef::StmtIf(statement)),
     );
     Ok(Plan {
+        foreign: Vec::new(),
         title: title.to_string(),
         edits: vec![
             Edit::range_replacement(condition, statement.test.range()),
@@ -120,7 +121,7 @@ fn with_line_end(text: &str) -> String {
 
 /// the one-based line of a comment inside one of `replaced` that none of `kept` holds, which a
 /// rewrite writing only `kept`'s source in place of `replaced` would lose
-fn lost_comment(
+pub(super) fn lost_comment(
     context: &RefactorContext<'_>,
     replaced: &[TextRange],
     kept: &[TextRange],
@@ -177,6 +178,7 @@ pub(super) fn de_morgan(context: &RefactorContext<'_>, range: TextRange) -> Resu
             ancestors.get(position + 2).copied(),
         );
         return Ok(Plan {
+            foreign: Vec::new(),
             title,
             edits: vec![Edit::range_replacement(text, not.range())],
             name: None,
@@ -211,6 +213,7 @@ pub(super) fn de_morgan(context: &RefactorContext<'_>, range: TextRange) -> Resu
         ancestors.get(position + 1).copied(),
     );
     Ok(Plan {
+        foreign: Vec::new(),
         title,
         edits: vec![Edit::range_replacement(text, bool_op.range())],
         name: None,
@@ -271,10 +274,10 @@ fn only_truth_is_read(ancestors: &[AnyNodeRef]) -> bool {
 
 /// the text of an expression the rewrite writes, how tightly its operator binds, and the ranges
 /// of the source it copies, outside which a comment it replaces is lost
-struct Written {
-    text: String,
-    precedence: OperatorPrecedence,
-    kept: Vec<TextRange>,
+pub(super) struct Written {
+    pub(super) text: String,
+    pub(super) precedence: OperatorPrecedence,
+    pub(super) kept: Vec<TextRange>,
 }
 
 impl Written {
@@ -291,7 +294,7 @@ impl Written {
     /// the text written in place of `node`, a child of `parent`: in parentheses where python
     /// would otherwise read it differently there, or where it spans lines, which only brackets
     /// allow. `node`'s own parentheses stay, since the edit replaces what is inside them
-    fn in_place_of(
+    pub(super) fn in_place_of(
         self,
         context: &RefactorContext<'_>,
         node: ExprRef<'_>,
@@ -363,7 +366,7 @@ fn fits_in(precedence: OperatorPrecedence, parent: AnyNodeRef<'_>, child: TextRa
 /// `expr` negated for its truth: `not` taken off, a comparison's operator flipped where that
 /// means the same, an `and` and an `or` swapped by De Morgan's law, and `not` written before it
 /// otherwise
-fn negated(context: &RefactorContext<'_>, expr: &Expr) -> Written {
+pub(super) fn negated(context: &RefactorContext<'_>, expr: &Expr) -> Written {
     let source = context.source();
     match expr {
         Expr::UnaryOp(unary) if unary.op == UnaryOp::Not => Written {
@@ -518,6 +521,7 @@ pub(super) fn flip_quotes(
         }
     }
     Ok(Plan {
+        foreign: Vec::new(),
         title: title.to_string(),
         edits: vec![Edit::range_replacement(
             format!("{}{new}{converted}{new}", &text[..prefix_len]),
@@ -805,6 +809,7 @@ pub(super) fn loop_to_comprehension(
     }
     comprehension.push_str(close);
     Ok(Plan {
+        foreign: Vec::new(),
         title,
         edits: vec![
             Edit::range_replacement(comprehension, initial.value.range()),
