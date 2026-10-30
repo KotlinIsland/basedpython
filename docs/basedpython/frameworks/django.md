@@ -286,6 +286,29 @@ def get_author_email(book_id: int) -> str | None:
 
 django template files get their own language support in the editor — completions, go-to-definition and semantic highlighting, all joined up with the models, views and urls described here. see [django templates](django-templates.md).
 
+## running management commands
+
+a test case and its test methods, a migration and an app's models module carry
+code lenses that run `manage.py` — `test`, `makemigrations`, `migrate`,
+`sqlmigrate` — with the
+interpreter of the environment the project is checked against, from the
+directory `manage.py` is in. a lens's command is `ty.runManageCommand`, its one
+argument `{ "arguments": ["test", "blog.tests.BookTest"] }`, and it answers at
+once, `null`, with the command running in the background
+
+everything the command writes goes to the editor's log, as
+`window/logMessage`. when it has finished, what came of it is shown, as
+`window/showMessage`: `manage.py test blog.tests.BookTest succeeded: OK`, with
+`Info`, or `manage.py test blog failed (exit status: 1): FAILED (failures=1)`,
+with `Error` — the outcome, and the last line the command wrote, which is where
+django sums up what it did
+
+a command the server will not run — one that needs a terminal, such as
+`runserver` or `shell`, one no lens offers, or any of them in a project with no
+`manage.py` or no interpreter to run it — is refused with the reason as the
+command's error, and the reason is shown too, since an editor need not show an
+error answer to a click
+
 ## see also
 
 - [django templates](django-templates.md) — editor support for template files

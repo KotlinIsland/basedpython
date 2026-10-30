@@ -11,7 +11,9 @@ use lsp_types::{self as types, MessageType};
 use ruff_db::Db as _;
 use ruff_db::system::{Command, SystemPathBuf};
 use std::fmt::{self, Write};
+use std::io::{BufRead as _, BufReader, Read};
 use std::str::FromStr;
+use std::sync::{Mutex, PoisonError};
 use ty_ide::{AddDependency, DependencyTarget};
 use ty_module_resolver::ModuleResolveMode;
 use ty_project::{Db as _, ProjectDatabase};
@@ -45,8 +47,12 @@ impl SyncRequestHandler for ExecuteCommand {
                     .and_then(|argument| Ok(serde_json::from_value(argument)?))
                     .with_failure_code(ErrorCode::InvalidParams)?;
 
-                run_manage(session, client, &arguments.arguments)
-                    .with_failure_code(ErrorCode::InvalidParams)?;
+                // a lens is clicked, and what it does is shown, not only logged: an error
+                // answer to the click is one an editor need not show anyone
+                if let Err(refusal) = run_manage(session, client, &arguments.arguments) {
+                    client.show_error_message(&refusal);
+                    return Err(refusal).with_failure_code(ErrorCode::InvalidParams);
+                }
 
                 Ok(None)
             }
@@ -254,7 +260,14 @@ const TERMINAL_COMMANDS: &[&str] = &["runserver", "shell", "dbshell", "createsup
 /// the few we know are wrong" is a much larger promise than this needs to make.
 const OFFERED_COMMANDS: &[&str] = &["test", "makemigrations", "migrate", "sqlmigrate"];
 
-/// Runs the project's `manage.py`, reporting through `window/logMessage`.
+/// runs the project's `manage.py`
+///
+/// its output goes to `window/logMessage`, all of it, and its outcome to
+/// `window/showMessage` once it has finished — succeeded or failed, with the last line
+/// it wrote, which is where django's test runner and its other commands sum up what
+/// they did (`OK`, `FAILED (failures=1)`, `No changes detected`) — so that whoever
+/// clicked the lens sees what came of it. a refusal is shown the same way by the
+/// caller
 ///
 /// The process is spawned on a thread of its own so that a command that takes a
 /// while — a test suite is the whole point of this — doesn't stop the server
@@ -325,8 +338,8 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         .spawn(move || {
             log(&client, MessageType::Info, format!("running {line}"));
 
-            match process.output() {
-                Ok(output) => {
+            match run_to_end(&mut process) {
+                Ok((output, summary)) => {
                     // django's test runner and most of its commands report on
                     // stderr, so both streams are the answer rather than one
                     for stream in [&output.stdout, &output.stderr] {
@@ -342,16 +355,72 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
                         (MessageType::Error, format!("failed ({})", output.status))
                     };
                     log(&client, kind, format!("{line} {outcome}"));
+                    client.show_message(
+                        match summary {
+                            Some(summary) => format!("{line} {outcome}: {summary}"),
+                            None => format!("{line} {outcome}"),
+                        },
+                        kind,
+                    );
                 }
-                Err(error) => log(
-                    &client,
-                    MessageType::Error,
-                    format!("{line} could not be started: {error}"),
-                ),
+                Err(error) => {
+                    let message = format!("{line} could not be started: {error}");
+                    log(&client, MessageType::Error, message.clone());
+                    client.show_error_message(message);
+                }
             }
         })?;
 
     Ok(())
+}
+
+/// what `process` wrote, once it has finished, and the last line it wrote that says something
+///
+/// the two streams are read as they are written, since which of them ends on the summary is the
+/// command's to decide: the test runner reports on stderr, `makemigrations` on stdout, and a
+/// warning at startup lands on stderr ahead of either
+fn run_to_end(
+    process: &mut std::process::Command,
+) -> std::io::Result<(std::process::Output, Option<String>)> {
+    let mut child = process.spawn()?;
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let last_line = Mutex::new(None);
+    let (stdout, stderr) = std::thread::scope(|scope| {
+        let stdout = scope.spawn(|| stdout.map(|stream| read_lines(stream, &last_line)));
+        let stderr = scope.spawn(|| stderr.map(|stream| read_lines(stream, &last_line)));
+        (stdout.join(), stderr.join())
+    });
+    let output = std::process::Output {
+        status: child.wait()?,
+        stdout: stdout.ok().flatten().unwrap_or_default(),
+        stderr: stderr.ok().flatten().unwrap_or_default(),
+    };
+    Ok((
+        output,
+        last_line
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner),
+    ))
+}
+
+/// everything `stream` holds, keeping `last_line` up to date with each line that says something
+fn read_lines(stream: impl Read, last_line: &Mutex<Option<String>>) -> Vec<u8> {
+    let mut reader = BufReader::new(stream);
+    let mut written = Vec::new();
+    loop {
+        let start = written.len();
+        match reader.read_until(b'\n', &mut written) {
+            Ok(0) | Err(_) => return written,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&written[start..]);
+                let line = line.trim();
+                if !line.is_empty() {
+                    *last_line.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(line.to_owned());
+                }
+            }
+        }
+    }
 }
 
 fn log(client: &Client, kind: MessageType, message: String) {
@@ -478,6 +547,40 @@ impl Write for IndentingWriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// what a management command's outcome is shown with: the last line it wrote
+    #[test]
+    fn a_commands_summary_is_its_last_line() {
+        let last_line = Mutex::new(None);
+        let written = b"Ran 3 tests in 0.010s\n\nFAILED (failures=1)\n\n";
+        assert_eq!(read_lines(&written[..], &last_line), written);
+        assert_eq!(
+            last_line.lock().unwrap().as_deref(),
+            Some("FAILED (failures=1)")
+        );
+
+        let last_line = Mutex::new(None);
+        read_lines(&b"\n  \n"[..], &last_line);
+        assert_eq!(last_line.lock().unwrap().as_deref(), None);
+    }
+
+    /// a warning at startup does not stand in for the line the command ends on, on either stream
+    #[cfg(unix)]
+    #[test]
+    fn a_commands_summary_is_the_last_line_of_either_stream() {
+        let mut process = std::process::Command::new("sh");
+        process
+            .args([
+                "-c",
+                "echo warning >&2; sleep 0.2; echo 'No changes detected'",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let (output, summary) = run_to_end(&mut process).expect("sh runs");
+        assert!(output.status.success());
+        assert_eq!(output.stderr, b"warning\n");
+        assert_eq!(summary.as_deref(), Some("No changes detected"));
+    }
 
     fn round_tripped(add: &AddDependency) -> crate::Result<AddDependency> {
         let command = add_dependency_command("some title", add);
