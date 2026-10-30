@@ -25,7 +25,8 @@ use self::traits::{NotificationHandler, RequestHandler};
 use super::{Result, schedule::BackgroundSchedule};
 use crate::session::client::Client;
 pub(crate) use diagnostics::{
-    publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
+    TranspileVerdicts, publish_all_document_diagnostics, publish_diagnostics_if_needed,
+    publish_settings_diagnostics,
 };
 pub(crate) use requests::SuspendedWorkspaceRequestKind;
 use ruff_db::panic::PanicError;

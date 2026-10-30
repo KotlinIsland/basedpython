@@ -53,7 +53,7 @@ use ruff_db::panic::catch_unwind;
 /// dispatcher does with them: a query this one waited on having unwound is as often
 /// that query's own cancellation as a panic, and a real panic there is met again, as
 /// a panic, by whichever asks next — the retry, or the client asking again.
-pub(super) fn transpile_detached<R: Send>(op: impl FnOnce() -> R + Send) -> Result<R, ()> {
+pub(crate) fn transpile_detached<R: Send>(op: impl FnOnce() -> R + Send) -> Result<R, ()> {
     let caught =
         std::thread::scope(|scope| scope.spawn(|| catch_unwind(AssertUnwindSafe(op))).join());
     match caught {

@@ -667,7 +667,13 @@ pub fn transpile_typed_with_report(
         // helper-name clash points at where the author bound the name
         err.by_range = err.by_range.or_else(|| {
             err.output_range.and_then(|r| {
-                output_offset_to_by_range(&line_map, &final_output, original_source, r.start())
+                output_range_to_by_range(
+                    &line_map,
+                    &output_columns,
+                    &final_output,
+                    original_source,
+                    r,
+                )
             })
         });
         return Err(err);
@@ -1762,28 +1768,75 @@ fn verify_runtime_helpers(suite: &[Stmt], written: &HashSet<String>) -> Result<(
     }
 }
 
+/// map a range of the generated python to the `.by` text it is about
+///
+/// where the range starts in text the author wrote — a run the columns say was copied from the
+/// `.by` — it maps onto that text, as far as the run goes: an error about the `a` of a `case a:`
+/// the lowering left as it was is put on the author's `a`. text the transpiler wrote itself has
+/// no column in the `.by`, and the most the line table says is which `.by` line it was written
+/// for, so such a range maps to the whole of that line
+fn output_range_to_by_range(
+    line_map: &[Option<u32>],
+    columns: &Columns,
+    final_output: &str,
+    by_source: &str,
+    output_range: TextRange,
+) -> Option<TextRange> {
+    copied_by_range(columns, final_output, by_source, output_range).or_else(|| {
+        output_offset_to_by_range(line_map, final_output, by_source, output_range.start())
+    })
+}
+
+/// the `.by` text a range of the generated python covers, when it starts in a run the author
+/// wrote. it is cut short where that run ends, past which the bytes are the transpiler's
+fn copied_by_range(
+    columns: &Columns,
+    final_output: &str,
+    by_source: &str,
+    output_range: TextRange,
+) -> Option<TextRange> {
+    let start = usize::from(output_range.start()).min(final_output.len());
+    let output_line = newline_count(&final_output[..start]);
+    let line_start = final_output[..start].rfind('\n').map_or(0, |i| i + 1);
+    let column = u32::try_from(start - line_start).ok()?;
+    let segment = columns.get(output_line)?.iter().find(|segment| {
+        // an empty range just past the run is still about the text that ends there
+        segment.start <= column
+            && (column < segment.end || (output_range.is_empty() && column == segment.end))
+    })?;
+    let columns::ColumnOrigin::Copied {
+        line,
+        column: copied_from,
+    } = segment.origin
+    else {
+        return None;
+    };
+    // a copied column counts a BOM on the first line, which is part of the text it was copied from
+    let by_start = line_start_after_newlines(by_source, line as usize)?
+        + (copied_from + column - segment.start) as usize;
+    let length = u32::from(output_range.len()).min(segment.end - column) as usize;
+    let by_end = by_start + length;
+    // the renderer strips a BOM from the snippet it prints; see `by_line_start`
+    let by_start = by_start.max(usize::from(by_source.bom_start_offset()));
+    Some(TextRange::new(
+        TextSize::try_from(by_start).ok()?,
+        TextSize::try_from(by_end.max(by_start)).ok()?,
+    ))
+}
+
 /// Map a byte offset in the generated python to a byte range in the original
-/// `.by` source, via the line table. Returns the full `.by` line's range (line
-/// granularity is all the table provides today; see the sourcemap plan).
+/// `.by` source, via the line table: the full `.by` line it was written for
 fn output_offset_to_by_range(
     line_map: &[Option<u32>],
     final_output: &str,
     by_source: &str,
-    output_offset: ruff_text_size::TextSize,
-) -> Option<ruff_text_size::TextRange> {
-    use ruff_text_size::{TextRange, TextSize};
-
+    output_offset: TextSize,
+) -> Option<TextRange> {
     let output_line =
         newline_count(&final_output[..usize::from(output_offset).min(final_output.len())]);
     let by_line = (*line_map.get(output_line)?)? as usize;
 
-    // the first line starts after any BOM: the diagnostic renderer strips one
-    // from the snippet it prints, so an annotation that covered it would run
-    // past the end of that buffer
-    let mut start = usize::from(by_source.bom_start_offset());
-    for _ in 0..by_line {
-        start = by_source[start..].find('\n').map(|i| start + i + 1)?;
-    }
+    let start = by_line_start(by_source, by_line)?;
     let end = by_source[start..]
         .find('\n')
         .map_or(by_source.len(), |i| start + i);
@@ -1791,6 +1844,26 @@ fn output_offset_to_by_range(
         TextSize::try_from(start).ok()?,
         TextSize::try_from(end).ok()?,
     ))
+}
+
+/// the offset of the 0-based `line` of `by_source`
+///
+/// the first line starts after any BOM: the diagnostic renderer strips one from the snippet it
+/// prints, so an annotation that covered it would run past the end of that buffer
+fn by_line_start(by_source: &str, line: usize) -> Option<usize> {
+    if line == 0 {
+        return Some(usize::from(by_source.bom_start_offset()));
+    }
+    line_start_after_newlines(by_source, line)
+}
+
+/// the offset just past the `line`th newline of `by_source`, which is 0 for the first line
+fn line_start_after_newlines(by_source: &str, line: usize) -> Option<usize> {
+    let mut start = 0;
+    for _ in 0..line {
+        start = by_source[start..].find('\n').map(|i| start + i + 1)?;
+    }
+    Some(start)
 }
 
 /// Result of phase 1 (basedpython lowering)
@@ -2734,6 +2807,81 @@ mod transpile_error {
         let range = output_offset_to_by_range(&line_map, final_output, by_source, offset)
             .expect("offset should map to a .by line");
         assert_eq!(&by_source[range], "c = 3");
+    }
+
+    /// a range in text the author wrote maps onto that text, and one in text the transpiler
+    /// wrote around it onto the line it was written for
+    #[test]
+    fn maps_output_range_in_copied_text_to_its_by_text() {
+        use columns::{ColumnOrigin, Segment};
+
+        let by_source = "if True:\n    print(a)\n";
+        let final_output = "import x\nif True:\n    _wrap(print(a))\n";
+        let line_map = [None, Some(0), Some(1)];
+        let copied = |start, end, line, column| Segment {
+            start,
+            end,
+            origin: ColumnOrigin::Copied { line, column },
+        };
+        let columns = vec![
+            vec![],
+            vec![copied(0, 8, 0, 0)],
+            vec![copied(0, 4, 1, 0), copied(10, 18, 1, 4)],
+        ];
+        let range_of = |text: &str, at: &str| {
+            let start = TextSize::try_from(final_output.find(at).unwrap()).unwrap();
+            TextRange::at(start, TextSize::try_from(text.len()).unwrap())
+        };
+
+        let range = output_range_to_by_range(
+            &line_map,
+            &columns,
+            final_output,
+            by_source,
+            range_of("a", "a))"),
+        )
+        .expect("a copied range maps");
+        assert_eq!(range, TextRange::at(TextSize::new(19), TextSize::new(1)));
+        assert_eq!(&by_source[range], "a");
+
+        // `print(a))` runs past the copied text into the `)` the transpiler wrote
+        let range = output_range_to_by_range(
+            &line_map,
+            &columns,
+            final_output,
+            by_source,
+            range_of("print(a))", "print(a))"),
+        )
+        .expect("a copied range maps");
+        assert_eq!(&by_source[range], "print(a)");
+
+        let range = output_range_to_by_range(
+            &line_map,
+            &columns,
+            final_output,
+            by_source,
+            range_of("_wrap", "_wrap"),
+        )
+        .expect("a generated range maps to its line");
+        assert_eq!(&by_source[range], "    print(a)");
+    }
+
+    /// a copied column on the first line counts the BOM it was copied after, and is not moved
+    /// past it a second time
+    #[test]
+    fn copied_range_on_the_first_line_of_a_bom_file_is_its_by_text() {
+        let by_source = "\u{feff}print(a)\n";
+        let columns = columns::identity(by_source);
+        let start = TextSize::try_from(by_source.find('a').expect("an `a`")).unwrap();
+        let range = output_range_to_by_range(
+            &[Some(0)],
+            &columns,
+            by_source,
+            by_source,
+            TextRange::at(start, TextSize::new(1)),
+        )
+        .expect("a copied range maps");
+        assert_eq!(&by_source[range], "a");
     }
 
     #[test]

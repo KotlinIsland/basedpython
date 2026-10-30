@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+use std::panic::AssertUnwindSafe;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use by_stage::emit::transpile_failure_diagnostic;
 use lsp_types::{Code, PublishDiagnosticsNotification};
 use lsp_types::{
     CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DiagnosticTag,
@@ -16,6 +19,7 @@ use ruff_db::diagnostic::{
     Annotation, DisplayDiagnosticConfig, HyperlinkMode, Severity, SubDiagnostic,
 };
 use ruff_db::files::{File, FileRange};
+use ruff_db::panic::PanicActivity;
 use ruff_db::source::source_text;
 use ruff_db::system::SystemPathBuf;
 use serde::{Deserialize, Serialize};
@@ -24,6 +28,8 @@ use ty_project::{Db as _, ProjectDatabase};
 use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{FileRangeExt, ToRangeExt};
 use crate::server::api::requests::api_lock::api_lock_document_diagnostics;
+use crate::server::api::requests::detached_transpile::transpile_detached;
+use crate::server::api::requests::transpile::project_config;
 use crate::session::client::Client;
 use crate::session::{GlobalSettings, OpenDocumentHandle};
 use crate::system::{AnySystemPath, file_to_uri};
@@ -263,6 +269,7 @@ pub(super) fn publish_diagnostics(
         session.position_encoding(),
         session.global_settings(),
         document.is_django_template(),
+        session.transpile_verdicts(document.notebook_or_file_path()),
     ) else {
         return;
     };
@@ -407,6 +414,7 @@ pub(super) fn compute_diagnostics(
     encoding: PositionEncoding,
     global_settings: &GlobalSettings,
     template: bool,
+    transpile_verdicts: &TranspileVerdicts,
 ) -> Option<Diagnostics> {
     // The first uv result supplies the module paths needed for correct diagnostics. Do not analyze
     // the script until that result is available. Waiting would not help: publishing the environment
@@ -434,6 +442,9 @@ pub(super) fn compute_diagnostics(
     // pass. it arrives here through the checker the session registers, which is the
     // one `by check` registers too
     let mut diagnostics = db.check_file(file);
+    if let Some(failure) = transpile_verdicts.failure(db, file, &diagnostics) {
+        diagnostics.push(failure);
+    }
     diagnostics.retain(|diagnostic| global_settings.should_show_diagnostic(diagnostic));
 
     let unnecessary_hints = hints(db, file);
@@ -443,6 +454,96 @@ pub(super) fn compute_diagnostics(
         unnecessary_hints,
         encoding,
         file_or_notebook: file,
+    })
+}
+
+/// basedpython: what stops a `.by` module that checks clean from being transpiled — the
+/// transpiler refusing it, the python it wrote not being python the target version runs, or the
+/// transpiler breaking — as the diagnostic `by build` and `by run` stop on, one answer per file
+/// and revision of the project's database
+///
+/// without it the first anyone hears of such a module is from a run or a build, since a refusal
+/// is about how the module lowers rather than what it means, and the check has nothing to say
+/// about it: `from typing import Optional` beside `x = Some(3)` checks clean, and takes over the
+/// name the runtime's `Some` helper is provided under
+///
+/// a transpile is not a query of the database — it builds databases of its own — so salsa does
+/// not remember its answer the way it remembers the check's. this does, for as long as nothing in
+/// the database changes: a client asks for a document's diagnostics again whenever the server
+/// says they may have changed, which is far more often than the document does
+#[derive(Debug, Default)]
+pub(crate) struct TranspileVerdicts {
+    verdicts: Mutex<FxHashMap<File, (salsa::Revision, Option<ruff_db::diagnostic::Diagnostic>)>>,
+}
+
+impl TranspileVerdicts {
+    /// why `file` does not transpile, when it is a `.by` module whose check reported no error,
+    /// `checked`
+    ///
+    /// a module the check found an error in is not asked. its transpile fails as often as not on
+    /// the very thing the check reported — a capture pattern that makes the rest unreachable is
+    /// `invalid-match-pattern` to the checker and `invalid-syntax` in the python it lowers to —
+    /// and `by run` refuses such a module before it transpiles anything. a module that does not
+    /// parse has nothing to transpile at all
+    fn failure(
+        &self,
+        db: &ProjectDatabase,
+        file: File,
+        checked: &[ruff_db::diagnostic::Diagnostic],
+    ) -> Option<ruff_db::diagnostic::Diagnostic> {
+        if !file.source_type(db).is_basedpython()
+            || checked
+                .iter()
+                .any(|diagnostic| diagnostic.severity() >= Severity::Error)
+        {
+            return None;
+        }
+
+        let revision = salsa::plumbing::current_revision(db);
+        if let Some((known_at, failure)) = self.lock().get(&file)
+            && *known_at == revision
+        {
+            return failure.clone();
+        }
+
+        let failure = transpile_failure(db, file).ok()?;
+        self.lock().insert(file, (revision, failure.clone()));
+        failure
+    }
+
+    fn lock(
+        &self,
+    ) -> MutexGuard<'_, FxHashMap<File, (salsa::Revision, Option<ruff_db::diagnostic::Diagnostic>)>>
+    {
+        // a panic while the lock was held left nothing half-written: each entry is replaced whole
+        self.verdicts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// transpile `file` as `by build` does, and say what stopped it
+///
+/// `Ok(None)` when it transpiles, and `Err` when there is no verdict to give, because the thread
+/// the transpile ran on failed outright, which `transpile_detached` has logged
+fn transpile_failure(
+    db: &ProjectDatabase,
+    file: File,
+) -> Result<Option<ruff_db::diagnostic::Diagnostic>, ()> {
+    let config = project_config(db);
+    let owned = db.dyn_clone();
+    // the transpiler builds databases of its own, which a thread with the session's attached
+    // cannot; see `transpile_detached`. a panic in it is reported the way a build reports one
+    let transpiled = transpile_detached(move || {
+        ty_project::catch_panic(
+            &*owned,
+            file,
+            PanicActivity::Transpiling,
+            AssertUnwindSafe(|| by_transforms::transpile_typed(&*owned, file, &config, None)),
+        )
+    })?;
+    Ok(match transpiled {
+        Ok(Ok(_)) => None,
+        Ok(Err(error)) => Some(transpile_failure_diagnostic(file, &error)),
+        Err(panic) => Some(panic),
     })
 }
 

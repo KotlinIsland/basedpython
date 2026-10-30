@@ -2013,6 +2013,34 @@ never completes, or a value declared with a type whose call returns `Never`, as
 the builtin `exit` is — not when a generic call's result is merely specialized to
 `Never`
 
+## a module that does not transpile
+
+a document's diagnostics include what stops it being transpiled, as the
+diagnostic `by build` and `by run` stop on. a refusal is about how a module
+lowers rather than what it means, so the check has nothing to say about it:
+
+```by
+from typing import Optional  # error: [transpile-refused]
+
+x = Some(3)
+print(x!)
+```
+
+checks clean, and binds `Optional`, the name the runtime helper behind `Some`
+is provided under. the code is `transpile-refused` for a module the transpiler
+declines to lower, `invalid-syntax` for python it wrote that the target version
+does not run, and `internal-error` for a transpiler that broke a contract of its
+own. a failure about the python is put on the `.by` text it was copied from
+where it was — the `a` of a `case a:` — and on the whole `.by` line it was
+written for where the transpiler wrote it
+
+it is asked only of a module the check reports no error in: the transpile of
+one that does not check fails as often as not on what the check already
+reported, and `by run` refuses such a module before it transpiles anything. a
+transpile is answered once per change to the project, however often its
+diagnostics are asked for. it is part of a document's diagnostics, pulled or
+pushed, and not of the [whole project's](#the-whole-projects-diagnostics)
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the
