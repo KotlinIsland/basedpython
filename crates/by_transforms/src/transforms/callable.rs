@@ -94,6 +94,9 @@ pub(crate) struct CallableSyntax<'src> {
     needs_intersection_import: bool,
     needs_typeof_import: bool,
     needs_not_import: bool,
+    needs_class_subscript_runtime: bool,
+    /// what an evaluated subscript has to run on
+    min_version: ruff_python_ast::PythonVersion,
     needs_annotated_import: bool,
     needs_type_is_import: bool,
     needs_optional_runtime: bool,
@@ -151,6 +154,8 @@ impl<'src> CallableSyntax<'src> {
             needs_intersection_import: false,
             needs_typeof_import: false,
             needs_not_import: false,
+            needs_class_subscript_runtime: false,
+            min_version: config.min_version,
             needs_annotated_import: false,
             needs_type_is_import: false,
             needs_optional_runtime: false,
@@ -255,6 +260,9 @@ impl<'src> CallableSyntax<'src> {
         if self.needs_optional_runtime {
             helpers.push(crate::runtime::OPTIONAL);
         }
+        if self.needs_class_subscript_runtime {
+            helpers.push(crate::runtime::SUBSCRIPT);
+        }
         // reset so a second call is a no-op rather than re-emitting every line
         self.needs_import = false;
         self.needs_concatenate_import = false;
@@ -262,6 +270,7 @@ impl<'src> CallableSyntax<'src> {
         self.needs_intersection_import = false;
         self.needs_typeof_import = false;
         self.needs_not_import = false;
+        self.needs_class_subscript_runtime = false;
         self.needs_annotated_import = false;
         self.needs_union_import = false;
         self.needs_optional_runtime = false;
@@ -887,6 +896,21 @@ impl<'src> CallableSyntax<'src> {
                     }
                     slice => self.rewrite(slice),
                 };
+                // an evaluated subscript has to survive being run. an annotation stays a type
+                // expression for whoever reads it, and is quoted instead
+                if self.evaluated
+                    && !s.slice.is_slice_expr()
+                    && self.types.is_some_and(|types| {
+                        types.class_subscript_is_unattested(&s.value, self.min_version)
+                    })
+                {
+                    self.needs_class_subscript_runtime = true;
+                    let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
+                    return Some(format!(
+                        "_by_subscript({}, {slice})",
+                        self.src(s.value.range())
+                    ));
+                }
                 slice_rewrite.map(|s_text| format!("{}[{s_text}]", self.src(s.value.range())))
             }
 
@@ -1224,6 +1248,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::RuntimeUnion,
             Lowering::SymbolicTypeOp,
             Lowering::LiteralString,
+            Lowering::ClassSubscript,
         ]
     }
 

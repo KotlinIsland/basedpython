@@ -26,17 +26,20 @@
 //! annotation stays a type expression for whoever reads it, and is quoted instead
 //! ([`AutoQuote`](super::auto_quote::AutoQuote))
 
-use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::{Visitor, walk_expr};
+use ruff_python_ast::{Expr, PythonVersion};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-pub(crate) struct ClassSubscriptPass;
+pub(crate) struct ClassSubscriptPass {
+    pub(crate) min_version: PythonVersion,
+}
 
 struct ClassSubscripts<'a> {
     types: &'a dyn TypeInfo,
+    min_version: PythonVersion,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -46,11 +49,14 @@ impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Subscript(subscript) = expr
             && !subscript.slice.is_slice_expr()
-            && self.types.class_subscript_is_unattested(&subscript.value)
+            && self
+                .types
+                .class_subscript_is_unattested(&subscript.value, self.min_version)
         {
             let (value, slice) = (subscript.value.range(), subscript.slice.range());
+            // these take any parentheses around the value with them, on both of its sides
             self.edits.push((
-                TextRange::empty(subscript.start()),
+                TextRange::new(subscript.start(), value.start()),
                 "_by_subscript(".to_owned(),
             ));
             self.edits
@@ -75,6 +81,7 @@ impl TypeAwarePass for ClassSubscriptPass {
     fn run(&self, stmts: &[ruff_python_ast::Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut subscripts = ClassSubscripts {
             types,
+            min_version: self.min_version,
             edits: Vec::new(),
         };
         subscripts.visit_body(stmts);
@@ -104,6 +111,84 @@ mod tests {
         let out = out("a = map[int]\n");
         assert!(out.contains("a = _by_subscript(map, int)\n"), "{out}");
         assert!(out.contains("def _by_subscript(origin, *args):"), "{out}");
+    }
+
+    #[test]
+    fn a_parenthesized_value_keeps_its_parentheses_balanced() {
+        let out = out("a = (map)[int]\nb = ((map))[int]\n");
+        assert!(out.contains("a = _by_subscript(map, int)\n"), "{out}");
+        assert!(out.contains("b = _by_subscript(map, int)\n"), "{out}");
+    }
+
+    #[test]
+    fn a_class_the_stub_gates_above_the_target_goes_through_the_helper() {
+        let source = "a = memoryview[int]\n";
+        let at = |min_version| {
+            transpile(
+                source,
+                &Config {
+                    min_version,
+                    ..Config::test_default()
+                },
+            )
+            .unwrap()
+        };
+        let below = at(PythonVersion::PY313);
+        assert!(
+            below.contains("a = _by_subscript(memoryview, int)\n"),
+            "{below}"
+        );
+        let from = at(PythonVersion::PY314);
+        assert!(from.contains("a = memoryview[int]\n"), "{from}");
+    }
+
+    #[test]
+    fn a_class_subscript_inside_a_type_the_callable_lowering_writes_goes_through_the_helper() {
+        let out = out(indoc! {"
+            type X = () -> map[int]
+            type Y = (int, map[int])
+            y = list[() -> map[int]]()
+            class K(list[() -> map[int]]): ...
+            z = map[() -> map[int]]
+        "});
+        assert!(
+            out.contains("type X = Callable[[], _by_subscript(map, int)]\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("y = list[Callable[[], _by_subscript(map, int)]]()\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("class K(list[Callable[[], _by_subscript(map, int)]]): ...\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("z = _by_subscript(map, Callable[[], _by_subscript(map, int)])\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_class_subscript_inside_a_polyfilled_alias_goes_through_the_helper() {
+        let out = transpile(
+            "type X = () -> map[int]\n",
+            &Config {
+                min_version: PythonVersion::PY311,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("Callable[[], _by_subscript(map, int)]"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_class_subscript_inside_an_annotation_is_quoted_with_it() {
+        let out = out("def f(x: () -> map[int]) -> None: ...\n");
+        assert!(!out.contains("_by_subscript"), "{out}");
     }
 
     #[test]
