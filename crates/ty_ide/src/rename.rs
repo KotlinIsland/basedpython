@@ -2,6 +2,7 @@ use crate::code_action::FileEdit;
 use crate::goto::{ClassCallName, GotoTarget, find_goto_target};
 use crate::goto_implementation::implementations_at_each;
 use crate::module_rename::{FileMove, module_rename_edits};
+use crate::refactor::names::{BASEDPYTHON_WORDS, suggest_for_expression, to_snake_case};
 use crate::references::{ReferencesMode, references};
 use crate::{Db, ReferenceTarget};
 use ruff_db::files::{File, FileRange};
@@ -13,6 +14,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
+use ty_python_semantic::types::ide_support::naming_class;
 use ty_python_semantic::{ResolvedDefinition, SemanticModel};
 
 /// Returns the range of the symbol if it can be renamed, None if not.
@@ -342,6 +344,76 @@ pub fn rename_extras(
         }
     }
     extras
+}
+
+/// basedpython: names a symbol could be renamed to, best first, from what it holds: the class
+/// its value is an instance of, `http_request` and `request` for an `HttpRequest`, and in the
+/// plural for a list of them; and what its value is computed by, `user` for `get_user(...)`, as
+/// extracting a variable names one
+///
+/// every suggestion is a name the rename would take — an identifier, no keyword, no word
+/// basedpython reads as one — and none is the name the symbol has
+pub fn name_suggestions(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> Vec<String> {
+    let PreparedRename::Ready { placeholder, .. } = prepare_rename(db, file, offset) else {
+        return Vec::new();
+    };
+    let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db));
+    let module = parsed.load(db);
+    let model = SemanticModel::new(db, file);
+    let Some(declarations) = find_goto_target(&model, &module, offset).and_then(|goto_target| {
+        goto_target
+            .definitions(&model, ReferencesMode::Rename.to_import_alias_resolution())?
+            .goto_declaration(&model, &goto_target, ClassCallName::Class)
+    }) else {
+        return Vec::new();
+    };
+
+    let minor = file.python_version(db).minor;
+    let mut suggestions: Vec<String> = Vec::new();
+    for declaration in &declarations {
+        let ResolvedDefinition::Definition(definition) = declaration else {
+            continue;
+        };
+        if let Some((class, plural)) = naming_class(db, *definition) {
+            let whole = to_snake_case(&class);
+            let last = whole.rsplit_once('_').map(|(_, last)| last.to_owned());
+            for name in std::iter::once(whole).chain(last) {
+                suggestions.push(if plural { plural_of(&name) } else { name });
+            }
+        }
+        let declared_in = ruff_db::parsed::parsed_module(db, definition.python_file(db)).load(db);
+        let value = match definition.kind(db) {
+            DefinitionKind::Assignment(assignment) => Some(assignment.value(&declared_in)),
+            DefinitionKind::AnnotatedAssignment(assignment) => assignment.value(&declared_in),
+            _ => None,
+        };
+        if let Some(value) = value {
+            suggestions.push(suggest_for_expression(value, minor));
+        }
+    }
+
+    let mut seen = FxHashSet::default();
+    suggestions.retain(|suggestion| {
+        is_identifier(suggestion)
+            && !is_keyword(suggestion)
+            && !BASEDPYTHON_WORDS.contains(&suggestion.as_str())
+            && *suggestion != placeholder
+            && seen.insert(suggestion.clone())
+    });
+    suggestions
+}
+
+/// `name` in the plural, as English mostly makes it
+fn plural_of(name: &str) -> String {
+    if let Some(stem) = name.strip_suffix('y')
+        && !stem.ends_with(['a', 'e', 'i', 'o', 'u'])
+    {
+        format!("{stem}ies")
+    } else if name.ends_with(['s', 'x', 'z']) || name.ends_with("ch") || name.ends_with("sh") {
+        format!("{name}es")
+    } else {
+        format!("{name}s")
+    }
 }
 
 /// a method that overrides another, found by [`implementations_at_each`]

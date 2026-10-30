@@ -137,8 +137,8 @@ pub use refactor::{
 };
 pub use references::ReferencesMode;
 pub use rename::{
-    PreparedRename, RenameExtra, can_rename, invalid_new_name, prepare_rename, rename,
-    rename_extras,
+    PreparedRename, RenameExtra, can_rename, invalid_new_name, name_suggestions, prepare_rename,
+    rename, rename_extras,
 };
 pub use selection_range::selection_range;
 pub use semantic_tokens::{

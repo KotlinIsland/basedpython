@@ -2330,6 +2330,32 @@ and leaves out the others; none of them touches an occurrence the rename itself
 makes. a client without the capability gets the rename alone, as plain `changes`,
 as before
 
+## a rename's new name
+
+an editor that asks for a new name can check it, and offer some, before the
+rename is asked for:
+
+| request                    | params                                | answers                                                 |
+| -------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| `by/validateRenameName`    | `textDocument`, `position`, `newName` | `{ "valid": true }`, or `{ "valid": false, "message" }` |
+| `by/renameNameSuggestions` | `textDocument`, `position`            | names the symbol could take, best first                 |
+
+`by/validateRenameName` judges the name by the rule `textDocument/rename` refuses
+it by, and gives the reason the rename would: a python symbol's new name is an
+identifier that is not a keyword (`` `class` is a keyword ``), while a django
+name may be any text. a symbol that cannot be renamed at all, such as a
+builtin, is `valid: false` with the reason, whatever the name; where there is
+nothing to rename the answer is `null`, as `textDocument/prepareRename`'s is
+
+`by/renameNameSuggestions` names a symbol after what it holds: the class of its
+value, as `http_request` and `request` for an `HttpRequest`, in the plural for a
+list, set, frozenset or tuple of one (`users`), but not after a class of
+`builtins` or `types`, which says what kind of value it is rather than what it
+is for; and what its
+value is computed by, as extracting a variable does, `user` for `get_user()`.
+every suggestion is a name the rename takes, none is a word basedpython reads as
+a keyword, and none is the name the symbol has
+
 ## renaming a module
 
 renaming `util.by` to `helpers.by` renames the module `alpha.util`, and every
