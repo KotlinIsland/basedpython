@@ -56,6 +56,7 @@ use ty_static::EnvVars;
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_commands::{BY_REPL_FILENAME, RunTarget, StagedRun, stage_run};
+use crate::by_signals::Forwarding;
 
 /// how long the interpreter has to connect and send its token once it has started: it does both
 /// before it runs anything of the session's
@@ -80,6 +81,12 @@ pub(crate) fn cmd_repl(
     lowering: &LoweringArgs,
     flags: &ReplFlags<'_>,
 ) -> anyhow::Result<ExitStatus> {
+    // from before the project is staged, as `by run` does it, so that `by` can be stopped while
+    // it stages, and the interpreter once it runs; see `by_signals`. ctrl-c in a terminal is the
+    // interpreter's to answer, with a `KeyboardInterrupt` in the input it is running, and this
+    // process lives as long as the session does
+    let signals =
+        Forwarding::install().context("could not handle the signals that end a session")?;
     let staged = match stage_run(
         min_version,
         lowering,
@@ -126,32 +133,32 @@ pub(crate) fn cmd_repl(
         // the editor's, not the program's
         .env_remove(EnvVars::BY_REPL_EVENTS_TOKEN)
         .current_dir(&cwd);
-    // ctrl-c is the interpreter's to answer, with a `KeyboardInterrupt` in the input it is
-    // running; this process lives as long as the session does, from before the interpreter
-    // can be sent one
-    ctrlc::set_handler(|| {}).context("could not hand ctrl-c to the session")?;
-    let mut child = command.spawn().with_context(|| {
+    let mut child = signals.start(&mut command).with_context(|| {
         format!(
             "could not run `{}`, the interpreter from {}",
             interpreter.path, interpreter.origin
         )
     })?;
 
-    let served = accept(&listener, &token, &mut child).and_then(|reader| match reader {
-        Some(reader) => repl.serve(reader),
-        None => Ok(()),
-    });
+    let served =
+        accept(&listener, &token, || Ok(signals.has_ended(&mut child)?)).and_then(|reader| {
+            match reader {
+                Some(reader) => repl.serve(reader),
+                None => Ok(()),
+            }
+        });
     if let Err(error) = &served {
         eprintln!("error: the session ended: {error:#}");
         // the interpreter is left with no one to answer it
         let _ = child.kill();
     }
-    let status = child
-        .wait()
+    let status = signals
+        .wait(&mut child)
         .context("the session's interpreter could not be waited for")?;
     drop(repl);
     // `process::exit` skips destructors, and the tree is a temporary directory
     drop(tree);
+    drop(signals);
     std::process::exit(crate::by_commands::exit_code(status));
 }
 
@@ -177,8 +184,8 @@ fn token() -> String {
 }
 
 /// the interpreter's connection, read through the one buffer every message after the token
-/// is read through, once it has sent `token`. `None` when the interpreter ended without
-/// making one
+/// is read through, once it has sent `token`. `None` when the interpreter ended, as
+/// `has_ended` says, without making one
 ///
 /// anything on the machine can connect to the port, so no connection holds up another: each
 /// is read as its bytes arrive, only as far as the token goes, and one that sends anything but
@@ -186,7 +193,7 @@ fn token() -> String {
 fn accept(
     listener: &TcpListener,
     token: &str,
-    child: &mut std::process::Child,
+    mut has_ended: impl FnMut() -> anyhow::Result<bool>,
 ) -> anyhow::Result<Option<BufReader<TcpStream>>> {
     listener.set_nonblocking(true)?;
     let expected = format!("{token}\n").into_bytes();
@@ -228,7 +235,7 @@ fn accept(
             }
             index += 1;
         }
-        if child.try_wait()?.is_some() {
+        if has_ended()? {
             return Ok(None);
         }
         anyhow::ensure!(
@@ -741,7 +748,7 @@ mod tests {
             .expect("sends");
 
         let started = Instant::now();
-        let reader = accept(&listener, "secret", &mut child)
+        let reader = accept(&listener, "secret", || Ok(child.try_wait()?.is_some()))
             .expect("accepts")
             .expect("a connection");
         assert!(started.elapsed() < Duration::from_secs(5));

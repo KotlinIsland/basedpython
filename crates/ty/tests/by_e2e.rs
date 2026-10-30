@@ -1193,6 +1193,132 @@ fn run_passes_a_sigint_on_to_the_program_outside_a_terminal() {
     assert!(printed.contains("got SIGINT"), "{printed}");
 }
 
+/// a signal `by` was started ignoring, as `nohup` starts it ignoring `SIGHUP`, stays ignored by
+/// the program, which is the whole of what `nohup` promises it
+#[cfg(unix)]
+#[test]
+fn run_leaves_a_signal_it_was_started_ignoring_ignored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "import signal\nprint(signal.getsignal(signal.SIGHUP) == signal.SIG_IGN)\n",
+    )
+    .unwrap();
+    let output = Command::new("sh")
+        .args(["-c", "trap '' HUP; exec \"$0\" run main"])
+        .arg(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("True"),
+        "{output:?}"
+    );
+}
+
+/// the program of a `by run` under a terminal that hangs up: `command` is what the terminal starts,
+/// and the answer is how many times the program was sent `SIGHUP`, which it counts for a second
+/// before it writes the number down
+///
+/// the terminal is hung up by closing its other end, once the program says it is ready, and the
+/// answer waits for the terminal's first process to end, since a `by` that does not end after a
+/// hangup is the failure. the number appears whole, by a rename, because a first process that is a
+/// shell ends at the hangup, before the program has written it
+#[cfg(unix)]
+fn sighups_after_a_hangup(command: &[&str]) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import os
+import signal
+import time
+
+received = 0
+
+
+def hang_up(signum: int, frame: object) -> None:
+    global received
+    received += 1
+
+
+_ = signal.signal(signal.SIGHUP, hang_up)
+print(\"ready\", flush=True)
+while received == 0:
+    time.sleep(0.01)
+time.sleep(1)
+with open(\"received.tmp\", \"w\") as file:
+    _ = file.write(str(received))
+os.replace(\"received.tmp\", \"received.txt\")
+",
+    )
+    .unwrap();
+    // a line of its own, as the program's own output is: a diagnostic that quotes the source says
+    // `ready` too. the modem control flag is what makes closing the other end a hangup
+    let driver = "\
+import os, pty, sys, termios, time
+
+pid, terminal = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+written = b\"\"
+while b\"ready\\r\\n\" not in written:
+    written += os.read(terminal, 1024)
+attributes = termios.tcgetattr(terminal)
+attributes[2] &= ~termios.CLOCAL
+termios.tcsetattr(terminal, termios.TCSANOW, attributes)
+os.close(terminal)
+deadline = time.monotonic() + 30
+while not os.path.exists(\"received.txt\"):
+    if time.monotonic() > deadline:
+        sys.exit(\"the program did not finish after the hangup\")
+    time.sleep(0.05)
+while os.waitpid(pid, os.WNOHANG)[0] == 0:
+    if time.monotonic() > deadline:
+        sys.exit(\"the terminal's first process did not end after the hangup\")
+    time.sleep(0.05)
+";
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let output = Command::new(python)
+        .args(["-c", driver])
+        .args(command)
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .current_dir(dir.path())
+        .output()
+        .expect("the driver runs");
+    assert!(output.status.success(), "{output:?}");
+    fs::read_to_string(dir.path().join("received.txt")).expect("the program finished")
+}
+
+/// a hangup is sent to the first process of the terminal's session, and to nothing else, so when
+/// that is `by` the program hears of it from `by`, and `by` ends with it
+#[cfg(unix)]
+#[test]
+fn run_passes_on_the_sighup_of_a_hangup_when_it_is_the_terminals_first_process() {
+    assert_eq!(
+        sighups_after_a_hangup(&[env!("CARGO_BIN_EXE_by"), "run", "main"]),
+        "1"
+    );
+}
+
+/// when the first process is a shell, its exit sends `SIGHUP` to the foreground process group, so
+/// the program has had it, from the kernel, and hears of it once. by then the terminal has gone, and
+/// `by` must not take that to mean it was never in the terminal's foreground
+#[cfg(unix)]
+#[test]
+fn run_passes_on_no_second_sighup_when_its_terminals_shell_hangs_up() {
+    assert_eq!(
+        sighups_after_a_hangup(&[
+            "sh",
+            "-c",
+            "\"$0\" run main; exit",
+            env!("CARGO_BIN_EXE_by"),
+        ]),
+        "1"
+    );
+}
+
 /// the program runs out of a directory of transpiled copies that is deleted when
 /// the run ends, so every path python derives from a module's origin named a
 /// temporary file — leaving a tool started anywhere but the project root with
@@ -2567,6 +2693,65 @@ fn repl_exits_with_the_signal_that_ended_its_interpreter() {
         &[],
     );
     assert_eq!(status, Some(128 + 9), "{stderr}");
+}
+
+/// a `SIGTERM` that stops a session reaches the interpreter it runs in, as one that stops a
+/// `by run` reaches its program, rather than leaving it running with no one to answer it
+#[cfg(unix)]
+#[test]
+fn repl_passes_a_sigterm_on_to_its_interpreter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let mut by = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("NO_COLOR", "1")
+        .args(["repl", "--python", &python])
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn by");
+    // the input stays open, so the session waits for more
+    let mut stdin = by.stdin.take().expect("stdin");
+    stdin
+        .write_all(b"import os\nos.getpid()\n")
+        .expect("the session reads its input");
+    let mut stdout = BufReader::new(by.stdout.take().expect("stdout"));
+    let mut line = String::new();
+    stdout.read_line(&mut line).expect("the interpreter's pid");
+    let interpreter = line.trim().to_owned();
+    assert!(interpreter.parse::<u32>().is_ok(), "{line:?}");
+
+    let sent = Command::new("kill")
+        .args(["-TERM", &by.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(sent.success());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = by.try_wait().expect("by can be waited on") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            by.kill().expect("by can be killed");
+            panic!("`by repl` did not end after SIGTERM");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    drop(stdin);
+    // the interpreter does not handle `SIGTERM`, so it ends of it, and the session with it
+    assert_eq!(status.code(), Some(128 + 15));
+    let still_running = Command::new("kill")
+        .args(["-0", &interpreter])
+        .stderr(Stdio::null())
+        .status()
+        .expect("kill runs")
+        .success();
+    assert!(
+        !still_running,
+        "the interpreter {interpreter} was left running"
+    );
 }
 
 /// a `by repl` session in a project, driven as an editor's console drives one: through pipes,
