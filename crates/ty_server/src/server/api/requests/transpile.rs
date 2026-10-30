@@ -171,6 +171,14 @@ fn config_for(db: &ProjectDatabase, uri: &Uri) -> Config {
     Config {
         is_python: matches!(extension, "py" | "pyi"),
         is_stub: matches!(extension, "pyi" | "byi"),
+        ..project_config(db)
+    }
+}
+
+/// what the project asks a transpile of one of its modules to be: lowered for the python version
+/// it targets
+pub(crate) fn project_config(db: &ProjectDatabase) -> Config {
+    Config {
         min_version: db
             .project()
             .program(db)

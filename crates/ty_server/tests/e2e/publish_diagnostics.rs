@@ -63,6 +63,57 @@ def foo() -> str:
     Ok(())
 }
 
+/// a client that is pushed diagnostics is told of a refused transpile the same way, and told
+/// again once an edit takes the refusal away
+#[test]
+fn a_refused_transpile_is_published_and_cleared() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let clash = SystemPath::new("src/clash.by");
+    let clash_content = "from typing import Optional\n\nx = Some(3)\nprint(x!)\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(clash, clash_content)?
+        .enable_pull_diagnostics(false)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let refusals = |diagnostics: &[lsp_types::Diagnostic]| {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == Some(lsp_types::Code::String("transpile-refused".to_string()))
+            })
+            .map(|diagnostic| diagnostic.range)
+            .collect::<Vec<_>>()
+    };
+
+    server.open_text_document(clash, clash_content, 1);
+    let published = server.await_notification::<PublishDiagnosticsNotification>();
+    assert_eq!(
+        refusals(&published.diagnostics),
+        vec![Range::new(Position::new(0, 19), Position::new(0, 27))]
+    );
+
+    let renamed = "from typing import Optional as Opt\n\nx = Some(3)\nprint(x!)\n";
+    server.change_text_document(
+        clash,
+        vec![
+            lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: renamed.to_string(),
+                },
+            ),
+        ],
+        2,
+    );
+    let published = server.await_notification::<PublishDiagnosticsNotification>();
+    assert_eq!(published.version, Some(2));
+    assert_eq!(refusals(&published.diagnostics), vec![]);
+
+    Ok(())
+}
+
 /// Tests that we get diagnostics for a file that is NOT saved to
 /// disk when using `OpenFilesOnly` diagnostic mode.
 #[test]

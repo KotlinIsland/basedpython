@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use insta::{assert_compact_json_snapshot, assert_debug_snapshot};
 use lsp_server::RequestId;
+use lsp_types::{Code, DiagnosticSeverity, Message, Position, Range};
 use lsp_types::{
     DocumentDiagnosticReport, FileChangeType, PartialResultParams, PreviousResultId,
     ProgressNotification, Uri, WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressParams,
@@ -66,6 +67,81 @@ def foo() -> str:
     assert_debug_snapshot!(diagnostics);
 
     Ok(())
+}
+
+/// a module that checks clean and does not transpile reports what stops it, as `by build` and
+/// `by run` would: this one takes over `Optional`, the name the runtime's `Some` helper is
+/// provided under
+#[test]
+fn by_file_reports_a_refused_transpile() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let clash = SystemPath::new("src/clash.by");
+    let clash_content = "from typing import Optional\n\nx = Some(3)\nprint(x!)\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(clash, clash_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(clash, clash_content, 1);
+    let items = full_items(server.document_diagnostic_request(clash, None))?;
+
+    let refused: Vec<_> = items
+        .iter()
+        .filter(|item| item.code == Some(Code::String("transpile-refused".to_string())))
+        .collect();
+    let [refused] = refused.as_slice() else {
+        anyhow::bail!("expected one transpile-refused diagnostic: {items:#?}");
+    };
+    assert_eq!(refused.severity, Some(DiagnosticSeverity::Error));
+    assert_eq!(
+        refused.range,
+        Range::new(Position::new(0, 19), Position::new(0, 27))
+    );
+    let Message::String(message) = &refused.message else {
+        anyhow::bail!("expected a plain message: {:?}", refused.message);
+    };
+    assert!(message.contains("`Optional`"), "{message}");
+
+    Ok(())
+}
+
+/// a module the check reports an error in is not transpiled: `by run` refuses it before it
+/// transpiles anything, and its transpile fails as often as not on what the check reported
+#[test]
+fn by_file_with_an_error_reports_no_transpile_failure() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let clash = SystemPath::new("src/clash.by");
+    let clash_content = "from typing import Optional\n\nx = Some(3)\nprint(x!)\ny: int = \"\"\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(clash, clash_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(clash, clash_content, 1);
+    let items = full_items(server.document_diagnostic_request(clash, None))?;
+
+    let codes: Vec<_> = items.iter().filter_map(|item| item.code.clone()).collect();
+    assert!(
+        codes.contains(&Code::String("invalid-assignment".to_string())),
+        "{codes:?}"
+    );
+    assert!(
+        !codes.contains(&Code::String("transpile-refused".to_string())),
+        "{codes:?}"
+    );
+
+    Ok(())
+}
+
+fn full_items(report: DocumentDiagnosticReport) -> Result<Vec<lsp_types::Diagnostic>> {
+    let DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) = report else {
+        anyhow::bail!("asked without a previous result, the report is full");
+    };
+    Ok(report.full_document_diagnostic_report.items)
 }
 
 #[test]

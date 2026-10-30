@@ -57,6 +57,7 @@ impl BackgroundDocumentRequestHandler for DocumentDiagnosticRequestHandler {
                     snapshot.encoding(),
                     snapshot.global_settings(),
                     snapshot.is_django_template(),
+                    snapshot.transpile_verdicts(),
                 )
             });
 

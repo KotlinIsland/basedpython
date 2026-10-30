@@ -41,7 +41,7 @@ use crate::command_line::CommandLine;
 use crate::db::Db as _;
 use crate::document::{DocumentKey, DocumentVersion, LanguageId, NotebookDocument};
 use crate::server::{
-    Action, LazyWorkDoneProgress, ScriptProgress, SuspendedWorkspaceRequestKind,
+    Action, LazyWorkDoneProgress, ScriptProgress, SuspendedWorkspaceRequestKind, TranspileVerdicts,
     publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
 };
 use crate::session::client::Client;
@@ -195,6 +195,10 @@ pub(crate) struct ProjectState {
     /// for so that we can clear the diagnostics for all of them before we go
     /// to update any of them.
     pub(crate) untracked_files_with_pushed_diagnostics: Vec<Uri>,
+
+    /// basedpython: whether each `.by` file the project's diagnostics were asked for transpiles,
+    /// as of a revision of `db`. it lives and dies with `db`, whose revisions it is keyed by
+    pub(crate) transpile_verdicts: Arc<TranspileVerdicts>,
 
     // Note: This field should be last to ensure the `db` gets dropped last.
     // The db drop order matters because we call `Arc::into_inner` on some Arc's
@@ -677,6 +681,12 @@ impl Session {
         &self.project_state(path).db
     }
 
+    /// basedpython: what is known of whether the files of the project `path` belongs to
+    /// transpile; see [`TranspileVerdicts`]
+    pub(crate) fn transpile_verdicts(&self, path: &AnySystemPath) -> &TranspileVerdicts {
+        &self.project_state(path).transpile_verdicts
+    }
+
     /// Returns an iterator, in arbitrary order, over all project databases
     /// in this session.
     pub(crate) fn project_dbs(&self) -> impl Iterator<Item = &ProjectDatabase> {
@@ -1142,6 +1152,7 @@ impl Session {
             ProjectState {
                 db,
                 untracked_files_with_pushed_diagnostics: untracked,
+                transpile_verdicts: Arc::default(),
             },
         );
 
@@ -1505,17 +1516,20 @@ impl Session {
     /// Captures client settings and a target for a document request.
     pub(crate) fn snapshot_document(&self, uri: &Uri) -> Result<DocumentSnapshot, DocumentError> {
         let document = self.document_target(uri)?;
+        let project = self.project_state_for_document(document.notebook_or_file_path());
 
         Ok(DocumentSnapshot {
             resolved_client_capabilities: self.resolved_client_capabilities,
             global_settings: self.global_settings.clone(),
-            workspace_settings: self
-                .project_state_for_document(document.notebook_or_file_path())
+            workspace_settings: project
                 .and_then(|(workspace_root, _)| self.workspaces.settings_for_path(workspace_root))
                 .unwrap_or_else(|| Arc::new(WorkspaceSettings::default())),
             position_encoding: self.position_encoding,
             document,
             client_name: self.client_name,
+            transpile_verdicts: project
+                .map(|(_, project)| project.transpile_verdicts.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -1828,6 +1842,7 @@ pub(crate) struct DocumentSnapshot {
     position_encoding: PositionEncoding,
     document: DocumentRequestTarget,
     client_name: ClientName,
+    transpile_verdicts: Arc<TranspileVerdicts>,
 }
 
 impl DocumentSnapshot {
@@ -1863,6 +1878,11 @@ impl DocumentSnapshot {
     /// Whether this document is a django template rather than python.
     pub(crate) fn is_django_template(&self) -> bool {
         self.document.is_django_template()
+    }
+
+    /// basedpython: what is known of whether the files of the document's project transpile
+    pub(crate) fn transpile_verdicts(&self) -> &TranspileVerdicts {
+        &self.transpile_verdicts
     }
 }
 
