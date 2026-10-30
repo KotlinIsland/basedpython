@@ -44,12 +44,25 @@
 //! v = __by_stmt_expr_0__
 //! ```
 //!
+//! A `raise` anywhere else — a call's argument, a condition, a lambda's body — has
+//! to raise partway through an expression, which only a call can do from inside one:
+//!
+//! ```text
+//! print(raise TypeError)
+//! ```
+//!
+//! ```text
+//! print(_by_raise(TypeError))
+//! ```
+//!
 //! Every rewrite keeps operand source as [`Fragment::Src`] passthrough spans, so
 //! lowerings nested inside a branch — and the comments in it — survive.
 
 use ruff_python_ast::helpers::{StatementExpressionValue, statement_expression_values};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{BoolOp, Expr, ExprStatement, ModModule, Operator, Stmt, StmtBreak};
+use ruff_python_ast::{
+    BoolOp, Expr, ExprStatement, ModModule, Operator, Stmt, StmtBreak, StmtRaise,
+};
 use ruff_text_size::{Ranged, TextRange};
 use std::collections::HashSet;
 
@@ -87,12 +100,17 @@ impl AstPass for StatementExpressionPass<'_> {
             source: self.source,
             counter: 0,
             claimed_breaks: HashSet::new(),
+            tail_statements: HashSet::new(),
+            raises_in_expression: false,
             misplaced: Vec::new(),
             text_edits: Vec::new(),
             template_edits: Vec::new(),
         };
         for stmt in &module.body {
             lower.visit_stmt(stmt);
+        }
+        if lower.raises_in_expression {
+            ctx.runtime.insert(crate::runtime::RAISE);
         }
         // a `break <value>` whose loop is not a statement expression has nothing
         // to write the value into (ty reports it as `DiscardedBreakValue`). the
@@ -125,6 +143,10 @@ struct Lower<'src> {
     counter: usize,
     /// ranges of the `break <value>` statements a statement expression claimed
     claimed_breaks: HashSet<TextRange>,
+    /// ranges of the statement expressions at the tail of their statement, which stay statements
+    tail_statements: HashSet<TextRange>,
+    /// whether a `raise` was written as a call to the runtime's helper
+    raises_in_expression: bool,
     /// statement expressions this pass cannot place (see [`AstPass::run`])
     misplaced: Vec<String>,
     text_edits: Vec<(TextRange, String)>,
@@ -133,19 +155,87 @@ struct Lower<'src> {
 
 impl<'ast> Visitor<'ast> for Lower<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if let Some(tail) = tail_expression(stmt)
-            && contains_statement_expression(tail)
-        {
-            self.lower_statement(stmt, tail);
+        if let Some(tail) = tail_expression(stmt) {
+            let tail_statements = self.tail_statements.len();
+            self.collect_tail_statements(tail);
+            if self.tail_statements.len() != tail_statements {
+                self.lower_statement(stmt, tail);
+            }
         }
 
         // descend regardless: the suites of a statement expression, like every
         // other body, may hold statement expressions of their own
         walk_stmt(self, stmt);
     }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Statement(statement) = expr
+            && let Stmt::Raise(raise) = &*statement.stmt
+            && !self.tail_statements.contains(&statement.range)
+        {
+            self.emit_raise_call(raise);
+        }
+        walk_expr(self, expr);
+    }
 }
 
 impl Lower<'_> {
+    /// Records the statement expressions in the positions [`Self::emit_value`] writes as
+    /// statements: the value itself, and what the operators that choose between operands choose.
+    fn collect_tail_statements(&mut self, expr: &Expr) {
+        match expr {
+            // a trailing lambda block needs no temporary: its value is the call it
+            // stands for, which [`trailing_lambda`] emits in place
+            //
+            // [`trailing_lambda`]: super::trailing_lambda
+            Expr::Statement(statement) if statement.is_trailing_lambda() => {}
+            Expr::Statement(statement) => {
+                self.tail_statements.insert(statement.range);
+            }
+            Expr::BoolOp(bool_op) => {
+                for value in &bool_op.values {
+                    self.collect_tail_statements(value);
+                }
+            }
+            Expr::If(if_expr) => {
+                self.collect_tail_statements(&if_expr.body);
+                self.collect_tail_statements(&if_expr.orelse);
+            }
+            Expr::BinOp(bin_op) if matches!(bin_op.op, Operator::Coalesce) => {
+                self.collect_tail_statements(&bin_op.right);
+            }
+            Expr::Named(named) => self.collect_tail_statements(&named.value),
+            _ => {}
+        }
+    }
+
+    /// Rewrites a `raise` in the middle of an expression into a call of the runtime's helper,
+    /// as minimal edits so that whatever lowers inside its operands composes with it.
+    fn emit_raise_call(&mut self, raise: &StmtRaise) {
+        self.raises_in_expression = true;
+        let helper = crate::runtime::RAISE.name();
+        let Some(exception) = &raise.exc else {
+            self.text_edits.push((raise.range, format!("{helper}()")));
+            return;
+        };
+        let exception_range =
+            parenthesized_value_range(self.source, exception.range(), raise.range.start());
+        self.text_edits.push((
+            TextRange::new(raise.range.start(), exception_range.start()),
+            format!("{helper}("),
+        ));
+        if let Some(cause) = &raise.cause {
+            let cause_range =
+                parenthesized_value_range(self.source, cause.range(), exception_range.end());
+            self.text_edits.push((
+                TextRange::new(exception_range.end(), cause_range.start()),
+                ", ".to_owned(),
+            ));
+        }
+        self.text_edits
+            .push((TextRange::empty(raise.range.end()), ")".to_owned()));
+    }
+
     fn next_temp(&mut self) -> String {
         let name = temporary_name(WrittenNames::new(self.source), "stmt_expr", self.counter);
         self.counter += 1;
@@ -375,32 +465,6 @@ fn tail_expression(stmt: &Stmt) -> Option<&Expr> {
     }
 }
 
-/// Whether `expr` holds a statement expression, without descending into one.
-fn contains_statement_expression(expr: &Expr) -> bool {
-    struct Finder {
-        found: bool,
-    }
-
-    impl<'a> Visitor<'a> for Finder {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            match expr {
-                // a trailing lambda block needs no temporary: its value is the
-                // call it stands for, which [`trailing_lambda`] emits in place
-                //
-                // [`trailing_lambda`]: super::trailing_lambda
-                Expr::Statement(statement) if statement.is_trailing_lambda() => {}
-                Expr::Statement(_) => self.found = true,
-                _ if !self.found => walk_expr(self, expr),
-                _ => {}
-            }
-        }
-    }
-
-    let mut finder = Finder { found: false };
-    finder.visit_expr(expr);
-    finder.found
-}
-
 /// Collects every `break <value>` anywhere in `body`, including inside nested
 /// loops and nested function and class bodies.
 fn collect_all_value_breaks<'a>(body: &'a [Stmt], out: &mut Vec<&'a StmtBreak>) {
@@ -612,6 +676,39 @@ mod tests {
             "}),
             "got:\n{out}"
         );
+    }
+
+    #[test]
+    fn raise_in_a_call_argument() {
+        let out = check("def f():\n    print(1, raise TypeError)\n");
+        assert!(
+            out.contains("print(1, _by_raise(TypeError))"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn raise_with_a_cause_and_parentheses() {
+        let out = check("def f():\n    print(raise (A) from (B))\n");
+        assert!(out.contains("print(_by_raise((A), (B)))"), "got:\n{out}");
+    }
+
+    #[test]
+    fn bare_raise_in_a_call_argument() {
+        let out = check("def f():\n    print(raise)\n");
+        assert!(out.contains("print(_by_raise())"), "got:\n{out}");
+    }
+
+    #[test]
+    fn raise_at_the_tail_stays_a_statement() {
+        let out = check("def f(a):\n    return a or raise TypeError\n");
+        assert!(!out.contains("_by_raise"), "got:\n{out}");
+    }
+
+    #[test]
+    fn raise_nested_under_a_choosing_operator_is_a_call() {
+        let out = check("def f(a):\n    return a ?? g(raise TypeError)\n");
+        assert!(out.contains("g(_by_raise(TypeError))"), "got:\n{out}");
     }
 
     #[test]

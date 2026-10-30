@@ -99,6 +99,7 @@ helpers! {
     GENERIC_CLASS = "generic_class",
     TYPE_ARGUMENT = "_type_argument",
     DISCARD = "_by_discard",
+    RAISE = "_by_raise",
     LOOP_BIND = "_by_loop_bind",
     STATIC_PROPERTY = "_by_static_property",
     OPTIONAL = "Optional",

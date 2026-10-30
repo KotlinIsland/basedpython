@@ -1629,12 +1629,12 @@ impl RecoveryContextKind {
             // to be admitted here — the `out X` form leads with a name and is
             // already covered by `at_expr`
             RecoveryContextKind::Slices => {
-                p.at(TokenKind::Colon) || p.at(TokenKind::In) || p.at_expr()
+                p.at(TokenKind::Colon) || p.at(TokenKind::In) || p.at_value()
             }
             RecoveryContextKind::ListElements
             | RecoveryContextKind::SetElements
-            | RecoveryContextKind::TupleElements(_) => p.at_expr(),
-            RecoveryContextKind::DictElements => p.at(TokenKind::DoubleStar) || p.at_expr(),
+            | RecoveryContextKind::TupleElements(_) => p.at_value(),
+            RecoveryContextKind::DictElements => p.at(TokenKind::DoubleStar) || p.at_value(),
             RecoveryContextKind::SequenceMatchPattern(_) => p.at_pattern_start(),
             RecoveryContextKind::MatchPatternMapping => {
                 // A star pattern is invalid as a mapping key and is here only for
@@ -1642,7 +1642,7 @@ impl RecoveryContextKind {
                 p.at(TokenKind::Star) || p.at_mapping_pattern_start()
             }
             RecoveryContextKind::MatchPatternClassArguments => p.at_pattern_start(),
-            RecoveryContextKind::Arguments => p.at_expr(),
+            RecoveryContextKind::Arguments => p.at_value(),
             RecoveryContextKind::DeleteTargets => p.at_expr(),
             RecoveryContextKind::Identifiers => p.at_identifier_or_soft_keyword(),
             RecoveryContextKind::Parameters(_) => {
@@ -1651,7 +1651,7 @@ impl RecoveryContextKind {
                     TokenKind::Star | TokenKind::DoubleStar | TokenKind::Slash
                 ) || p.at_identifier_or_soft_keyword()
             }
-            RecoveryContextKind::WithItems(_) => p.at_expr(),
+            RecoveryContextKind::WithItems(_) => p.at_value(),
             RecoveryContextKind::InterpolatedStringElements(elements_kind) => match elements_kind {
                 InterpolatedStringElementsKind::Regular(interpolated_string_kind)
                 | InterpolatedStringElementsKind::FormatSpec(interpolated_string_kind) => {
