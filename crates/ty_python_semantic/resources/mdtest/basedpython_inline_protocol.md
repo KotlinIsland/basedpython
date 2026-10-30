@@ -341,7 +341,7 @@ class A[**Kwargs]:
     def get(self) -> protocol(**Kwargs): ...
 
     def use(self) -> None:
-        reveal_type(self.get())  # revealed: protocol(**Kwargs@A)
+        reveal_type(self.get())  # revealed: protocol(**Kwargs)
 ```
 
 ### An unspecialized pack declares no members yet

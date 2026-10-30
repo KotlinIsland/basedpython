@@ -40,7 +40,7 @@ def f(a: C[str], b: C[object], c: C[str | int], d: C[Any]): ...
 ```by
 class C[T: str..object]: ...
 
-# error: [invalid-type-arguments] "Type `int` does not satisfy lower bound `str` of type variable `T@C`"
+# error: [invalid-type-arguments] "Type `int` does not satisfy lower bound `str` of type variable `T`"
 def f(c: C[int]): ...
 ```
 
@@ -49,7 +49,7 @@ def f(c: C[int]): ...
 ```by
 class C[T: str..str]: ...
 
-# error: [invalid-type-arguments] "Type `object` is not assignable to upper bound `str` of type variable `T@C`"
+# error: [invalid-type-arguments] "Type `object` is not assignable to upper bound `str` of type variable `T`"
 def f(c: C[object]): ...
 ```
 
@@ -123,9 +123,9 @@ class D[T: str..Sized]:
 class C[T: str..object]:
     def f(self, x: T):
         if isinstance(x, int):
-            reveal_type(x)  # revealed: T@C & int
+            reveal_type(x)  # revealed: T & int
         else:
-            reveal_type(x)  # revealed: T@C & not int
+            reveal_type(x)  # revealed: T & not int
 ```
 
 ## variance is unaffected
@@ -149,7 +149,7 @@ checked.
 ```by
 class C[T: str..object]: ...
 
-# error: [invalid-type-arguments] "Type `U@D` does not satisfy lower bound `str` of type variable `T@C`"
+# error: [invalid-type-arguments] "Type `U` does not satisfy lower bound `str` of type variable `T`"
 class D[U](C[U]): ...
 
 class E[U: str..object](C[U]): ...
@@ -201,7 +201,7 @@ and every call would be rejected from one side or the other. a declaration nothi
 reported where it is written.
 
 ```by
-# error: [invalid-type-variable-bound] "TypeVar bound range `T@f..int` is inhabited only by `Never`"
+# error: [invalid-type-variable-bound] "TypeVar bound range `T..int` is inhabited only by `Never`"
 def f[T: str, R: T..int](t: T, r: R) -> R:
     return r
 ```

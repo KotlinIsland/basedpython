@@ -712,6 +712,7 @@ pub(crate) fn multiline_type<'db>(
     type_params_in_scope: impl IntoIterator<Item = (BoundTypeVarInstance<'db>, Name)>,
 ) -> (String, &'static str) {
     let settings = DisplaySettings::from_possibly_ambiguous_types(db, env, [ty])
+        .with_hidden_type_variable_scopes()
         .with_type_params_in_scope(db, type_params_in_scope);
     let ty_string = ty.display_with(db, env, settings).multiline().to_string();
     let syntax = if ty_string.starts_with('<') {
@@ -7843,12 +7844,12 @@ def function():
         assert_snapshot!(test.hover(), @"
         variable main.T
         ---------------------------------------------
-        T@covariant
+        T
         ---------------------------------------------
         variable `main.T`
         ---
         ```python
-        T@covariant
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -7905,12 +7906,12 @@ def function():
         assert_snapshot!(test.hover(), @"
         variable main.T
         ---------------------------------------------
-        T@contravariant
+        T
         ---------------------------------------------
         variable `main.T`
         ---
         ```python
-        T@contravariant
+        T
         ```
         ---------------------------------------------
         info[hover]: Hovered content is

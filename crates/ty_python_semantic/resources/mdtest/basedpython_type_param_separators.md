@@ -106,8 +106,8 @@ positional, and a type variable's bound holds there just as it does without them
 ```by
 class C[A: int, /, B: str]: ...
 
-# error: [invalid-type-arguments] "Type `bytes` is not assignable to upper bound `int` of type variable `A@C`"
-# error: [invalid-type-arguments] "Type `int` is not assignable to upper bound `str` of type variable `B@C`"
+# error: [invalid-type-arguments] "Type `bytes` is not assignable to upper bound `int` of type variable `A`"
+# error: [invalid-type-arguments] "Type `int` is not assignable to upper bound `str` of type variable `B`"
 def f(c: C[bytes, int]): ...
 ```
 

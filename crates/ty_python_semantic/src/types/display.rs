@@ -161,6 +161,12 @@ pub struct DisplaySettings<'db> {
     /// whose type parameters are currently being displayed).
     /// Used to suppress redundant `@{scope}` suffixes for type variables.
     active_scopes: Rc<FxHashSet<Definition<'db>>>,
+    /// basedpython: whether a type variable leaves out its `@{scope}` suffix wherever its name
+    /// alone says which one it is. A `.by` file always does; this asks for it in a `.py` file.
+    hide_type_variable_scopes: bool,
+    /// basedpython: the names shared by different type variables in what is being displayed,
+    /// which keep their `@{scope}` suffixes because `T` alone would not say which is meant.
+    ambiguous_type_variables: Rc<FxHashSet<&'db str>>,
     /// Function types that are currently being displayed.
     /// Used to prevent infinite recursion when displaying self-referential function types.
     visited_function_types: Rc<FxHashSet<FunctionType<'db>>>,
@@ -324,6 +330,16 @@ impl<'db> DisplaySettings<'db> {
         }
     }
 
+    /// basedpython: leave out a type variable's `@{scope}` suffix wherever its name alone says
+    /// which one it is, in a `.py` file too.
+    #[must_use]
+    pub fn with_hidden_type_variable_scopes(self) -> Self {
+        Self {
+            hide_type_variable_scopes: true,
+            ..self
+        }
+    }
+
     #[must_use]
     fn with_active_scopes(&self, scopes: impl IntoIterator<Item = Definition<'db>>) -> Self {
         let mut active_scopes = (*self.active_scopes).clone();
@@ -370,6 +386,7 @@ impl<'db> DisplaySettings<'db> {
             DisplaySettings {
                 qualified: Rc::clone(&qualification_map),
                 qualified_type_aliases: qualification_map,
+                ambiguous_type_variables: Rc::new(collector.ambiguous_type_variables.take()),
                 ..DisplaySettings::default()
             }
         }
@@ -378,6 +395,8 @@ impl<'db> DisplaySettings<'db> {
             env,
             visited_types: RefCell::default(),
             names: RefCell::default(),
+            type_variables: RefCell::default(),
+            ambiguous_type_variables: RefCell::default(),
         };
 
         for ty in types {
@@ -689,9 +708,29 @@ struct AmbiguousNameCollector<'a, 'db> {
     env: &'a ProgramEnvironment<'db>,
     visited_types: RefCell<FxHashSet<Type<'db>>>,
     names: RefCell<FxHashMap<&'db str, AmbiguityState<'db>>>,
+    type_variables: RefCell<FxHashMap<&'db str, Option<String>>>,
+    ambiguous_type_variables: RefCell<FxHashSet<&'db str>>,
 }
 
 impl<'db> AmbiguousNameCollector<'_, 'db> {
+    /// Two type variables only need their `@{scope}` suffixes to tell them apart when those
+    /// suffixes differ: the `T` of each overload of `f` would read `T@f` either way.
+    fn record_type_variable(&self, db: &'db dyn Db, type_variable: BoundTypeVarInstance<'db>) {
+        let identity = type_variable.identity(db);
+        let name = identity.identity.name(db).as_str();
+        let scope = identity.binding_context.name(db);
+        let mut type_variables = self.type_variables.borrow_mut();
+        match type_variables.entry(name) {
+            Entry::Vacant(entry) => {
+                entry.insert(scope);
+            }
+            Entry::Occupied(entry) if *entry.get() != scope => {
+                self.ambiguous_type_variables.borrow_mut().insert(name);
+            }
+            Entry::Occupied(_) => {}
+        }
+    }
+
     /// Records an item for ambiguity tracking.
     ///
     /// This updates the ambiguity state for items with the same name:
@@ -804,7 +843,7 @@ impl<'db> TypeVisitor<'db> for AmbiguousNameCollector<'_, 'db> {
                 return self.visit_type(db, Type::from(class));
             }
             // no need to recurse into TypeVar bounds/constraints
-            Type::TypeVar(_) => return,
+            Type::TypeVar(type_variable) => return self.record_type_variable(db, type_variable),
             _ => {}
         }
 
@@ -2726,7 +2765,13 @@ impl<'db> BoundTypeVarIdentity<'db> {
             });
             f.write_str(in_scope.map_or_else(|| self.identity.name(db), ast::name::Name::as_str))?;
             let binding_context = self.binding_context;
+            let scope_is_hidden = (settings.hide_type_variable_scopes
+                || basedpython_display_enabled())
+                && !settings
+                    .ambiguous_type_variables
+                    .contains(self.identity.name(db).as_str());
             if in_scope.is_none()
+                && !scope_is_hidden
                 && let Some(binding_context_name) = binding_context.name(db)
                 && let Some(definition) = binding_context.definition()
                 && !settings.active_scopes.contains(&definition)

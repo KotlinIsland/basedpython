@@ -1335,6 +1335,7 @@ fn type_display_details<'db>(
 ) -> TypeDisplayDetails<'db> {
     let env = ProgramEnvironment::from_file(file);
     let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty])
+        .with_hidden_type_variable_scopes()
         .with_type_params_in_scope(db, type_params_in_scope.iter().cloned());
     let settings = if named_type_arguments {
         settings.with_named_type_arguments()
@@ -5600,7 +5601,7 @@ Source with applied edits:
         class A:
             def __init__(self, y):
                 self.x = int(1)
-                self.y[: y@__init__] = y
+                self.y[: y] = y
 
         a = A([y=]2)
         a.y = int(3)
@@ -10532,7 +10533,7 @@ Source with applied edits:
 
         def f[T](t: T):
             def g[T](u: T):
-                a[: T@f] = t
+                a[: T] = t
         ");
     }
 
@@ -10751,6 +10752,18 @@ Source with applied edits:
 
     /// basedpython: an unannotated parameter's inferred type parameter is written by the
     /// parameter's name, and a return type mentioning one is offered as no annotation
+    #[test]
+    fn inferred_return_leaves_out_the_scope_of_a_type_variable() {
+        let mut test = return_type_hint_test(
+            r#"
+        class A:
+            def f(self):
+                return self
+        "#,
+        );
+        assert!(test.inlay_hints().contains("def f(self)[ -> Self]:"));
+    }
+
     #[test]
     fn inferred_return_names_an_inferred_parameter_by_its_parameter() {
         let mut test = return_type_hint_test(

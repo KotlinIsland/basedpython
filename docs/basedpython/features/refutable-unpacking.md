@@ -134,7 +134,7 @@ def f(key):
     row, col = key  # ok
 
 def g[T: tuple[int, ...]](values: T):
-    a, b = values  # error: `T@g` may not have exactly 2 elements
+    a, b = values  # error: `T` may not have exactly 2 elements
 ```
 
 narrowing the length settles the question

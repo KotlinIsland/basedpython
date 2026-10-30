@@ -123,7 +123,7 @@ def f(b: B[int]):
 ```by
 class B[T]:
     def get(self) -> {"a": T}:
-        reveal_type(self.get())  # revealed: {"a": T@B}
+        reveal_type(self.get())  # revealed: {"a": T}
         raise NotImplementedError
 ```
 

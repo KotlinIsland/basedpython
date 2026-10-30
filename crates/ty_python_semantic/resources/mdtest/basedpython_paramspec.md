@@ -25,7 +25,7 @@ from typing import ParamSpec, Callable
 P = ParamSpec("P")
 
 def f(arrow: (**P) -> int, callable: Callable[P, int]):
-    reveal_type(arrow)  # revealed: (**P@f) -> int
+    reveal_type(arrow)  # revealed: (**P) -> int
     # the two forms are the same type — mutually assignable
     arrow = callable
     callable = arrow
@@ -131,7 +131,7 @@ from typing import ParamSpec, Callable, Concatenate
 P = ParamSpec("P")
 
 def g(arrow: (str, int, **P) -> bool, callable: Callable[Concatenate[str, int, P], bool]):
-    reveal_type(arrow)  # revealed: (str, int, /, *args: *P@g, **kwargs: **P@g) -> bool
+    reveal_type(arrow)  # revealed: (str, int, /, *args: *P, **kwargs: **P) -> bool
     arrow = callable
     callable = arrow
 ```

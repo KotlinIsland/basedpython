@@ -86,7 +86,7 @@ class Bounded[T: int]: ...
 
 def ok(x: Bounded[T=bool]) -> None: ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@Bounded`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T`"
 def bad(x: Bounded[T=str]) -> None: ...
 ```
 
@@ -103,7 +103,7 @@ class Ranged[T: Mid..Base]: ...
 
 def ok(x: Ranged[T=Mid]) -> None: ...
 
-# error: [invalid-type-arguments] "Type `Leaf` does not satisfy lower bound `Mid` of type variable `T@Ranged`"
+# error: [invalid-type-arguments] "Type `Leaf` does not satisfy lower bound `Mid` of type variable `T`"
 def bad(x: Ranged[T=Leaf]) -> None: ...
 ```
 
@@ -112,7 +112,7 @@ def bad(x: Ranged[T=Leaf]) -> None: ...
 ```by
 class Constrained[T in (int, str)]: ...
 
-# error: [invalid-type-arguments] "Type `bytes` does not satisfy constraints `int`, `str` of type variable `T@Constrained`"
+# error: [invalid-type-arguments] "Type `bytes` does not satisfy constraints `int`, `str` of type variable `T`"
 def f(x: Constrained[T=bytes]) -> None: ...
 ```
 
@@ -124,7 +124,7 @@ are still positional have to be checked there as well.
 ```by
 class Pair[T: int, U: str]: ...
 
-# error: [invalid-type-arguments] "Type `bytes` is not assignable to upper bound `int` of type variable `T@Pair`"
+# error: [invalid-type-arguments] "Type `bytes` is not assignable to upper bound `int` of type variable `T`"
 def f(x: Pair[bytes, U=str]) -> None: ...
 ```
 
@@ -133,6 +133,6 @@ def f(x: Pair[bytes, U=str]) -> None: ...
 ```by
 type Alias[T: int] = list[T]
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@Alias`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T`"
 def f(x: Alias[T=str]) -> None: ...
 ```

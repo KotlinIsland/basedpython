@@ -37,7 +37,7 @@ inside the body, the parameter has the type parameter's type
 
 ```by
 def echo(s: some str) -> s:
-    reveal_type(s)  # revealed: s@echo
+    reveal_type(s)  # revealed: s
     return s
 ```
 

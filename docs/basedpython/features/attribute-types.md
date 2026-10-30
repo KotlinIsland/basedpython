@@ -95,7 +95,7 @@ and not only where it is specialized:
 
 ```by
 class B[T: A1]:
-    x: T.nope       # error: `T@B` has no attribute `nope`
+    x: T.nope       # error: `T` has no attribute `nope`
 ```
 
 `T: (A1, A2)` is a *tuple* bound, not a constraint list — `T` is bounded by the
@@ -103,7 +103,7 @@ tuple type, which has no `a`, so `T.a` there is an unresolved attribute:
 
 ```by
 class B[T: (A1, A2)]:
-    x: T.a      # error: `T@B` has no attribute `a`
+    x: T.a      # error: `T` has no attribute `a`
 ```
 
 a parameter constrained by a [type mapping](type-mappings.md) does resolve, per
