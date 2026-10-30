@@ -175,7 +175,7 @@ def renamed(a: int) -> int: ...  # error: [invalid-overload]
 @overload
 def renamed(b: str) -> str: ...  # error: [invalid-overload]
 def renamed(z):
-    reveal_type(z)  # revealed: z@renamed
+    reveal_type(z)  # revealed: z
     return 0
 ```
 
@@ -246,7 +246,7 @@ def ident[T](x: T) -> T: ...
 @overload
 def ident[T](x: list[T]) -> list[T]: ...
 def ident(x):
-    reveal_type(x)  # revealed: T@ident | list[T@ident]
+    reveal_type(x)  # revealed: T | list[T]
     return x
 
 def use_ident(n: int, xs: list[int]) -> None:
@@ -324,8 +324,8 @@ def probe[T](x: T, y: T) -> T: ...
 @overload
 def probe[T](x: list[T], y: list[T]) -> list[T]: ...
 def probe(x, y):
-    reveal_type(x)  # revealed: T@probe | list[T@probe]
-    reveal_type(y)  # revealed: T@probe | list[T@probe]
+    reveal_type(x)  # revealed: T | list[T]
+    reveal_type(y)  # revealed: T | list[T]
     return x
 ```
 
@@ -362,7 +362,7 @@ def make[T](kind: type[T]) -> T: ...
 @overload
 def make[T](kind: list[type[T]]) -> list[T]: ...
 def make(kind):
-    reveal_type(kind)  # revealed: type[T@make] | list[type[T@make]]
+    reveal_type(kind)  # revealed: type[T] | list[type[T]]
     raise NotImplementedError
 
 def use_make(tcls: type[int], lst: list[type[int]]) -> None:

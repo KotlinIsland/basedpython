@@ -282,7 +282,7 @@ exceptions only when every type `T` can be is an exception. That is what its dec
 parameter with no bound at all can be `int` as easily as `OSError`.
 
 ```by
-# error: [invalid-raises-clause] "`T@f` is not always an exception, so it cannot appear in a `raises` clause"
+# error: [invalid-raises-clause] "`T` is not always an exception, so it cannot appear in a `raises` clause"
 def f[T](value: T) raises T:
     return
 ```
@@ -290,7 +290,7 @@ def f[T](value: T) raises T:
 A set of constraints has to be all exceptions, since the caller can pick any one of them.
 
 ```by
-# error: [invalid-raises-clause] "`T@g` is not always an exception, so it cannot appear in a `raises` clause"
+# error: [invalid-raises-clause] "`T` is not always an exception, so it cannot appear in a `raises` clause"
 def g[T in (int, KeyError)](value: T) raises T:
     return
 ```

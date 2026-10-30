@@ -108,7 +108,7 @@ parameter could never be re-checked against it — so the signature is rejected 
 silently going unchecked:
 
 ```python
-# error: unpacked value for `**kwargs` must be a TypedDict, not `T@f`
+# error: unpacked value for `**kwargs` must be a TypedDict, not `T`
 def f[T: TypedDict](proto: T, **kw: Unpack[T]) -> T: ...
 ```
 
@@ -124,7 +124,7 @@ class Node:
 class Unrelated: ...
 
 def _(node: Node) -> None:
-    node.link(Unrelated())   # error: `Unrelated` does not satisfy upper bound `Self@link`
+    node.link(Unrelated())   # error: `Unrelated` does not satisfy upper bound `Self`
 ```
 
 `Self` is bound by the enclosing class rather than by the type parameter list, so it is exempt

@@ -12,7 +12,7 @@ instance carries the argument it was constructed with, and a method reads it thr
 ```by
 class C[T]:
     def kind(self) -> type[T]:
-        reveal_type(T)  # revealed: type[T@C]
+        reveal_type(T)  # revealed: type[T]
         return T
 
 C[int]().kind()

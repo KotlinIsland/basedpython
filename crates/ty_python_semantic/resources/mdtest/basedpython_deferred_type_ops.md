@@ -160,15 +160,15 @@ the reduced form would ask only for an `int`, which `i` already is.
 
 ```by
 def wrong[I: int](i: I) -> I + 1:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@wrong + 1`, found `I@wrong`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I + 1`, found `I`"
     return i
 
 def off_by_one[I: int](i: I) -> I + 1:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@off_by_one + 1`, found `I@off_by_one + 2`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I + 1`, found `I + 2`"
     return i + 2
 
 def unrelated[I: int](i: I, n: int) -> I + 1:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@unrelated + 1`, found `int`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I + 1`, found `int`"
     return n
 ```
 
@@ -176,7 +176,7 @@ the arithmetic on values is kept symbolic for this, so the two sides can be comp
 
 ```by
 def succ[I: int](i: I) -> I + 1:
-    reveal_type(i + 1)  # revealed: I@succ + 1
+    reveal_type(i + 1)  # revealed: I + 1
     return i + 1
 ```
 
@@ -217,7 +217,7 @@ def twice_negated[I: int](i: I) -> I:
     return -(-i)
 
 def off_by_one[I: int](i: I) -> I:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@off_by_one`, found `I@off_by_one + 1`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I`, found `I + 1`"
     return i + 1
 ```
 
@@ -236,7 +236,7 @@ def sum_of[A: int, B: int](a: A, b: B) -> A + B:
     return b + a
 
 def difference[A: int, B: int](a: A, b: B) -> A - B:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `A@difference - B@difference`, found `B@difference - A@difference`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `A - B`, found `B - A`"
     return b - a
 ```
 
@@ -250,7 +250,7 @@ def twice[I: int](i: I) -> I + 2:
     return succ(succ(i))
 
 def thrice[I: int](i: I) -> I + 3:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@thrice + 3`, found `I@thrice + 1 + 1`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I + 3`, found `I + 1 + 1`"
     return succ(succ(i))
 ```
 
@@ -264,7 +264,7 @@ def negate[I: int](i: I) -> -I:
     return -i
 
 def wrong_sign[I: int](i: I) -> -I:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `-I@wrong_sign`, found `I@wrong_sign`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `-I`, found `I`"
     return i
 
 def invert[I: int](i: I) -> ~I:
@@ -275,7 +275,7 @@ def invert[I: int](i: I) -> ~I:
 
 ```by
 def spelled_out[I: int](i: I) -> ~I:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `~I@spelled_out`, found `-I@spelled_out - 1`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `~I`, found `-I - 1`"
     return -i - 1
 ```
 
@@ -298,7 +298,7 @@ def annotated_arm[I: int](i: I) -> (I + 0) | None:
     return i
 
 def not_that_value[I: int](i: I) -> (I + 1) | None:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `I@not_that_value + 1 | None`, found `I@not_that_value`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I + 1 | None`, found `I`"
     return i
 ```
 
@@ -404,7 +404,7 @@ def area[W: int, H: int](w: W, h: H) -> W * H:
     return w * h
 
 def transposed[W: int, H: int](w: W, h: H) -> W * H:
-    # error: [invalid-return-type] "Return type does not match returned value: expected `W@transposed * H@transposed`, found `H@transposed * W@transposed`"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `W * H`, found `H * W`"
     return h * w
 ```
 

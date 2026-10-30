@@ -26,7 +26,7 @@ extended type. everything the extended type has is available on it
 ```by
 extension list:
     def first_or(self, default: Element) -> Element:
-        reveal_type(self)  # revealed: Self@first_or
+        reveal_type(self)  # revealed: Self
         if len(self) > 0:
             return self[0]
         return default

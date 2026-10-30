@@ -1635,7 +1635,7 @@ in basedpython, a parenthesized tuple is an upper bound, not constraints — so 
 
 ```by
 def f[T: (int, str)](x: T):
-    reveal_type(x)  # revealed: T@f
+    reveal_type(x)  # revealed: T
     # the bound flows through: T is usable wherever a tuple[int, str] is
     reveal_type(x[0])  # revealed: int
 ```

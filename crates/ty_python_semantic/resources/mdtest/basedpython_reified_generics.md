@@ -13,7 +13,7 @@ A class reifies too, from the same rule but through its instances; that is
 
 ```by
 def f[T]():
-    reveal_type(T)  # revealed: type[T@f]
+    reveal_type(T)  # revealed: type[T]
 
 f[int]()
 ```
@@ -49,7 +49,7 @@ call needs no specialization even though nothing solves `n`:
 
 ```by
 def f[n](n: n | None = None) -> n | None:
-    reveal_type(n)  # revealed: n@f | None
+    reveal_type(n)  # revealed: n | None
     return n
 
 f()
@@ -264,7 +264,7 @@ the bare call is allowed:
 
 ```by
 def f[T = int]():
-    reveal_type(T)  # revealed: type[T@f]
+    reveal_type(T)  # revealed: type[T]
 
 f()       # ok — default supplies the reified value
 f[str]()  # ok
@@ -277,8 +277,8 @@ demands specialization:
 
 ```by
 def f[T, U = str]():
-    reveal_type(T)  # revealed: type[T@f]
-    reveal_type(U)  # revealed: type[U@f]
+    reveal_type(T)  # revealed: type[T]
+    reveal_type(U)  # revealed: type[U]
 
 f[int]()  # ok
 # error: [unspecialized-reified-generic] "Cannot call reified generic function `f` without explicit specialization"
@@ -513,7 +513,7 @@ tuple of them — and the arity of a parameter list containing one is unbounded:
 
 ```by
 def f[T, *Args]() -> None:
-    reveal_type(T)  # revealed: type[T@f]
+    reveal_type(T)  # revealed: type[T]
     reveal_type(Args)  # revealed: (*: type)
     assert T === int
     assert Args == (str, bool)

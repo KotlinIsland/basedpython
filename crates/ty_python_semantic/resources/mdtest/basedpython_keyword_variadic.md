@@ -154,7 +154,7 @@ def f():
 ```by
 class A[**Kwargs]:
     def get(self) -> {"tag": int, **Kwargs}:
-        reveal_type(self.get())  # revealed: {"tag": int, **Kwargs@A}
+        reveal_type(self.get())  # revealed: {"tag": int, **Kwargs}
         raise NotImplementedError
 ```
 
@@ -300,10 +300,10 @@ ordinary type variables beside it are filled positionally there, and their bound
 ```by
 class A[T: int, **Kwargs]: ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T`"
 def f(a: A[str, foo=str]): ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T`"
 def g(a: A[str]): ...
 
 def ok(a: A[bool, foo=str]): ...

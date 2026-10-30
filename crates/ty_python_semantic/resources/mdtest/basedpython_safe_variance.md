@@ -20,7 +20,7 @@ class A[out T]:
     private t: T
 
     def f(self) -> T:
-        reveal_type(self.t)  # revealed: T@A
+        reveal_type(self.t)  # revealed: T
         return self.t
 
     def g(self, other: Self):
@@ -80,7 +80,7 @@ class A[out T]:
     private t: T
 
     def f(self, other: A[object]):
-        # error: [invalid-assignment] "Object of type `object` is not assignable to attribute `t` of type `T@A`"
+        # error: [invalid-assignment] "Object of type `object` is not assignable to attribute `t` of type `T`"
         self.t = other.t
 ```
 
@@ -103,7 +103,7 @@ class A[out T]:
     def g(self, other: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `g`"
         # a real `T` gets no further: it is `self`'s parameter, and says nothing about the one
         # `other` is hiding
-        # error: [invalid-assignment] "Object of type `T@A` is not assignable to attribute `t` of type `Never`"
+        # error: [invalid-assignment] "Object of type `T` is not assignable to attribute `t` of type `Never`"
         other.t = t
 ```
 
@@ -119,7 +119,7 @@ class A[out T]:
         a = A[object]()
         # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         a.t = 1
-        # error: [invalid-assignment] "Object of type `T@A` is not assignable to attribute `t` of type `Never`"
+        # error: [invalid-assignment] "Object of type `T` is not assignable to attribute `t` of type `Never`"
         a.t = t
 ```
 
@@ -134,9 +134,9 @@ class A[out T]:
     private t: T
 
     def f(self: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `f`"
-        reveal_type(self.t)  # revealed: T@A
+        reveal_type(self.t)  # revealed: T
         self.t = t
-        # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T@A`"
+        # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T`"
         self.t = "asdf"
 
     def g(self: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `g`"
@@ -372,7 +372,7 @@ class A[T]:
     private t: T
 
     def g(self: A[object]):
-        # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T@A`"
+        # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T`"
         self.t = "asdf"
 ```
 

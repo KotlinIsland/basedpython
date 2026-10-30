@@ -94,5 +94,5 @@ def each[T](items: tuple[T, ...], local block: (T) -> None):
 
 def use(args: tuple[tuple[str, ...]]):
     each(*args):
-        reveal_type(it)  # revealed: T@each
+        reveal_type(it)  # revealed: T
 ```

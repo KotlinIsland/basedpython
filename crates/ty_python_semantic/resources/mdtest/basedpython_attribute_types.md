@@ -279,7 +279,7 @@ class A2:
     a: bool
 
 class B[T: (A1, A2)]:
-    # error: [unresolved-attribute] "Object of type `T@B` has no attribute `a`"
+    # error: [unresolved-attribute] "Object of type `T` has no attribute `a`"
     x: T.a
 ```
 
@@ -304,7 +304,7 @@ class A1:
     a: int
 
 class B[T: A1]:
-    # error: [unresolved-attribute] "Object of type `T@B` has no attribute `nope`"
+    # error: [unresolved-attribute] "Object of type `T` has no attribute `nope`"
     x: T.nope
 ```
 
@@ -312,7 +312,7 @@ class B[T: A1]:
 
 ```by
 class B[T]:
-    # error: [unresolved-attribute] "Object of type `T@B` has no attribute `a`"
+    # error: [unresolved-attribute] "Object of type `T` has no attribute `a`"
     x: T.a
 ```
 

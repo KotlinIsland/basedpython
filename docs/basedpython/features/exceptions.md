@@ -115,7 +115,7 @@ the parameter has to be declared an exception, since it stands for one type the
 caller chooses:
 
 ```by
-def bad[T](error: T) raises T:  # error: `T@bad` is not always an exception
+def bad[T](error: T) raises T:  # error: `T` is not always an exception
     ...
 ```
 

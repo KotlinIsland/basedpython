@@ -45,7 +45,7 @@ class A[out T]:
     # in public (see [variance](variance.md)); it is written that way here only to
     # name a real `T` inside the body
     def f(self, other: A[object], t: T):
-        reveal_type(self.t)    # T@A — `self` carries `A`'s own parameter
+        reveal_type(self.t)    # T — `self` carries `A`'s own parameter
         reveal_type(other.t)   # object — a widened view knows only the bound
 
         other.t = 1            # error: nothing is assignable to `Never`
@@ -75,7 +75,7 @@ class A[out T]:
     private t: T
 
     def f(self: A[object], t: T):   # the `t: T` parameter is reported, as above
-        reveal_type(self.t)    # T@A — not `object`, however `self` is annotated
+        reveal_type(self.t)    # T — not `object`, however `self` is annotated
         self.t = t             # ok — a real `T`
         self.t = "asdf"        # error: `str` is not a `T`
 ```

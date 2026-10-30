@@ -19,7 +19,7 @@ class A[*Ts: int]: ...
 
 def ok(a: A[int, bool]): ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable tuple `Ts@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable tuple `Ts`"
 def bad(a: A[int, str]): ...
 ```
 
@@ -33,7 +33,7 @@ def ok(a: A[int, str]): ...
 # the pack is a tuple, so the bound is covariant in its elements
 def narrower(a: A[bool, str]): ...
 
-# error: [invalid-type-arguments] "Type `(int, bytes)` is not assignable to upper bound `(int, str)` of type variable tuple `Ts@A`"
+# error: [invalid-type-arguments] "Type `(int, bytes)` is not assignable to upper bound `(int, str)` of type variable tuple `Ts`"
 def wrong_element(a: A[int, bytes]): ...
 ```
 
@@ -42,7 +42,7 @@ def wrong_element(a: A[int, bytes]): ...
 ```by
 class A[*Ts: *(int, str)]: ...
 
-# error: [invalid-type-arguments] "Type `(int,)` is not assignable to upper bound `(int, str)` of type variable tuple `Ts@A`"
+# error: [invalid-type-arguments] "Type `(int,)` is not assignable to upper bound `(int, str)` of type variable tuple `Ts`"
 def too_short(a: A[int]): ...
 ```
 
@@ -54,7 +54,7 @@ class A[*Ts: *tuple[int, ...]]: ...
 def one(a: A[int]): ...
 def many(a: A[int, bool, int]): ...
 
-# error: [invalid-type-arguments] "Type `(int, str)` is not assignable to upper bound `(*: int)` of type variable tuple `Ts@A`"
+# error: [invalid-type-arguments] "Type `(int, str)` is not assignable to upper bound `(*: int)` of type variable tuple `Ts`"
 def wrong_element(a: A[int, str]): ...
 ```
 
@@ -72,7 +72,7 @@ class A[**Kwargs: int]: ...
 
 def ok(a: A[x=int, y=bool]): ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of keyword-variadic pack `Kwargs@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of keyword-variadic pack `Kwargs`"
 def bad(a: A[x=int, y=str]): ...
 ```
 
@@ -86,7 +86,7 @@ def ok(a: A[a=int]): ...
 # an upper bound is a *lower* limit on the shape, so extra fields are fine
 def extra(a: A[a=int, b=str]): ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `{"a": int}` of keyword-variadic pack `Kwargs@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `{"a": int}` of keyword-variadic pack `Kwargs`"
 def wrong_field_type(a: A[a=str]): ...
 ```
 
@@ -95,7 +95,7 @@ def wrong_field_type(a: A[a=str]): ...
 ```by
 class A[**Kwargs: **{"a": int}]: ...
 
-# error: [invalid-type-arguments] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs@A` requires a field `a`"
+# error: [invalid-type-arguments] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs` requires a field `a`"
 def missing(a: A[b=str]): ...
 ```
 
@@ -104,7 +104,7 @@ def missing(a: A[b=str]): ...
 ```by
 class A[**Kwargs: **{"a": int}]: ...
 
-# error: [invalid-type-arguments] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs@A` requires a field `a`"
+# error: [invalid-type-arguments] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs` requires a field `a`"
 def empty(a: A[()]): ...
 ```
 
@@ -120,7 +120,7 @@ class A[**Kwargs: **TD]: ...
 
 def ok(a: A[a=int]): ...
 
-# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `TD` of keyword-variadic pack `Kwargs@A`"
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `TD` of keyword-variadic pack `Kwargs`"
 def bad(a: A[a=str]): ...
 ```
 
@@ -143,7 +143,7 @@ class A[**Kwargs: int]:
 ok = A(x=1, y=True)
 reveal_type(ok)  # revealed: final A[x=int, y=bool]
 
-# error: [invalid-argument-type] "Type `str` is not assignable to upper bound `int` of keyword-variadic pack `Kwargs@A`"
+# error: [invalid-argument-type] "Type `str` is not assignable to upper bound `int` of keyword-variadic pack `Kwargs`"
 bad = A(x=1, y="s")
 ```
 
@@ -156,7 +156,7 @@ class A[**Kwargs: **{"a": int}]:
 ok = A(a=1)
 reveal_type(ok)  # revealed: final A[a=int]
 
-# error: [invalid-argument-type] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs@A` requires a field `a`"
+# error: [invalid-argument-type] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs` requires a field `a`"
 missing = A(b=1)
 ```
 

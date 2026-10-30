@@ -259,7 +259,7 @@ type NDTuple[T, *Shape: int] = match *Shape:
         (NDTuple[T, *Rest],) * Dim
 
 
-# error: [invalid-type-arguments] "Type `"three"` is not assignable to upper bound `int` of type variable tuple `Shape@NDTuple`"
+# error: [invalid-type-arguments] "Type `"three"` is not assignable to upper bound `int` of type variable tuple `Shape`"
 def f(x: NDTuple[int, "three"]): ...
 ```
 

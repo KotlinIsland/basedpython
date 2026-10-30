@@ -20,7 +20,7 @@ that a given `T` is wide enough to hold anything at all:
 ```by
 class C[T: object]:
     def f(self) -> T:
-        return "a"   # error: expected `T@C`, found `"a"`
+        return "a"   # error: expected `T`, found `"a"`
 ```
 
 a lower bound puts a floor under every specialization, so anything at or below the lower end is
@@ -63,7 +63,7 @@ C[object]   # error: `object` is not assignable to upper bound `str`
 ```by
 class C[T: str..object]:
     def f(self, x: T) -> int:
-        return len(x)   # error: `T@C` is not `Sized` — that is the upper end's job
+        return len(x)   # error: `T` is not `Sized` — that is the upper end's job
 ```
 
 ## both ends must accept the default

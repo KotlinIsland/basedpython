@@ -115,7 +115,7 @@ from typing import Sequence
 class Pair[S, T: Sequence[S]]:
     x: T
 
-# error: [invalid-type-arguments] "Type `list[str]` is not assignable to upper bound `Sequence[int]` of type variable `T@Pair`"
+# error: [invalid-type-arguments] "Type `list[str]` is not assignable to upper bound `Sequence[int]` of type variable `T`"
 def _(bad: Pair[S=int, T=list[str]]) -> None: ...
 ```
 
