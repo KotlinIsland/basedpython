@@ -218,6 +218,17 @@ impl<'src> Parser<'src> {
     }
 
     /// Returns `true` if the current token is the start of an expression.
+    /// Whether the current token can start an element of a list of values: an expression, or in
+    /// basedpython one of the forms that leave rather than produce a value, `f(raise E)`.
+    pub(super) fn at_value(&self) -> bool {
+        self.at_expr()
+            || (self.options.is_basedpython
+                && matches!(
+                    self.current_token_kind(),
+                    TokenKind::Raise | TokenKind::Return | TokenKind::Break | TokenKind::Continue
+                ))
+    }
+
     pub(super) fn at_expr(&self) -> bool {
         self.at_ts(EXPR_SET)
             || self.at_soft_keyword()
@@ -2121,7 +2132,7 @@ impl<'src> Parser<'src> {
 
         let start = self.node_start();
 
-        let lower = if self.at_expr() {
+        let lower = if self.at_value() {
             let lower = self.parse_named_expression_or_higher(
                 ExpressionContext::starred_conditional()
                     .with_subscript_slice()

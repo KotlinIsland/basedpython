@@ -2760,7 +2760,9 @@ impl<'src> Parser<'src> {
                 // the suite continues the line the statement starts on, so anything
                 // already there would end up in front of a compound statement
                 "a statement expression with a suite must be the first statement on its line"
-            } else if !in_tail {
+            } else if !in_tail && !matches!(&*statement.1.stmt, Stmt::Raise(_)) {
+                // a `raise` can run in the middle of an expression. leaving a function or a loop
+                // from there would have to evaluate what surrounds it first
                 "a statement expression must be the tail of its statement"
             } else {
                 continue;
@@ -2949,7 +2951,7 @@ impl<'src> Parser<'src> {
             TokenKind::Pass => Stmt::Pass(self.parse_pass_statement()),
             TokenKind::Continue => Stmt::Continue(self.parse_continue_statement()),
             TokenKind::Break => Stmt::Break(self.parse_break_statement()),
-            TokenKind::Raise => Stmt::Raise(self.parse_raise_statement()),
+            TokenKind::Raise => Stmt::Raise(self.parse_raise_statement(false)),
             TokenKind::Del => Stmt::Delete(self.parse_delete_statement()),
             TokenKind::Assert => Stmt::Assert(self.parse_assert_statement()),
             TokenKind::Global => Stmt::Global(self.parse_global_statement()),
@@ -3226,12 +3228,22 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at a `raise` token.
     ///
     /// See: <https://docs.python.org/3/reference/simple_stmts.html#grammar-token-python-grammar-raise_stmt>
-    fn parse_raise_statement(&mut self) -> ast::StmtRaise {
+    fn parse_raise_statement(&mut self, in_expression: bool) -> ast::StmtRaise {
         let start = self.node_start();
         self.bump(TokenKind::Raise);
 
         let exc = match self.current_token_kind() {
             TokenKind::Newline => None,
+            // basedpython: a bare `raise` can end where the expression around it goes on
+            TokenKind::Rpar
+            | TokenKind::Rsqb
+            | TokenKind::Rbrace
+            | TokenKind::Comma
+            | TokenKind::Colon
+                if self.options.is_basedpython =>
+            {
+                None
+            }
             TokenKind::From => {
                 // test_err raise_stmt_from_without_exc
                 // raise from exc
@@ -3249,7 +3261,13 @@ impl<'src> Parser<'src> {
                 // raise *x
                 // raise yield x
                 // raise x := 1
-                let exc = self.parse_expression_list(ExpressionContext::default());
+                let exc = if in_expression {
+                    // basedpython: a comma belongs to the expression the `raise` is part of:
+                    // `f(raise A, b)` passes two arguments
+                    self.parse_conditional_expression_or_higher()
+                } else {
+                    self.parse_expression_list(ExpressionContext::default())
+                };
 
                 if let Some(ast::ExprTuple {
                     parenthesized: false,
@@ -3275,7 +3293,11 @@ impl<'src> Parser<'src> {
             // raise x from *y
             // raise x from yield y
             // raise x from y := 1
-            let cause = self.parse_expression_list(ExpressionContext::default());
+            let cause = if in_expression {
+                self.parse_conditional_expression_or_higher()
+            } else {
+                self.parse_expression_list(ExpressionContext::default())
+            };
 
             if let Some(ast::ExprTuple {
                 parenthesized: false,
@@ -3806,7 +3828,7 @@ impl<'src> Parser<'src> {
             TokenKind::For => (Stmt::For(self.parse_for_statement(start)), true),
             TokenKind::While => (Stmt::While(self.parse_while_statement()), true),
             TokenKind::Try => (Stmt::Try(self.parse_try_statement()), true),
-            TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement()), false),
+            TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement(true)), false),
             TokenKind::Return => (Stmt::Return(self.parse_return_statement()), false),
             // the loop escapes: `let first = next(it) ?? break` leaves the loop
             // when the call has no value to bind
@@ -6727,7 +6749,7 @@ impl<'src> Parser<'src> {
     ///
     /// See: <https://docs.python.org/3/reference/compound_stmts.html#the-with-statement>
     fn parse_with_items(&mut self) -> Vec<WithItem> {
-        if !self.at_expr() {
+        if !self.at_value() {
             self.add_error(
                 ParseErrorType::OtherError(
                     "Expected the start of an expression after `with` keyword".to_string(),
@@ -10075,14 +10097,60 @@ mod property_tests {
         );
     }
 
-    /// a diverging form still has to be in tail position
+    /// leaving a function or a loop has to be in tail position
     #[test]
     fn diverging_form_off_the_tail_is_rejected() {
-        let (_, errors) = parse_module("a = [raise ValueError()]\n", PySourceType::BasedPython);
-        assert!(
-            errors.iter().any(|e| e.contains("tail of its statement")),
-            "errors: {errors:?}"
-        );
+        for source in [
+            "def f(): a = [return 1]\n",
+            "def f(): print(return)\n",
+            "for x in y: print(break)\n",
+            "for x in y: print(x ?? continue)\n",
+        ] {
+            let (_, errors) = parse_module(source, PySourceType::BasedPython);
+            assert!(
+                errors.iter().any(|e| e.contains("tail of its statement")),
+                "{source:?} gave errors: {errors:?}"
+            );
+        }
+    }
+
+    /// `raise` can be written anywhere an expression can
+    #[test]
+    fn raise_anywhere_an_expression_can_be() {
+        for source in [
+            "print(raise E)\n",
+            "print(1, raise E, 2)\n",
+            "print(raise E from F, 2)\n",
+            "print(a=raise E)\n",
+            "print(raise)\n",
+            "print(raise E from F)\n",
+            "a = [1, raise E]\n",
+            "a = {raise E: 1}\n",
+            "a = {1: raise E}\n",
+            "a = {1, raise E}\n",
+            "a = (1, raise E)\n",
+            "a = b[raise E]\n",
+            "a = 1 + raise E\n",
+            "a = not raise E\n",
+            "a = lambda: raise E\n",
+            "a = [raise E for b in c]\n",
+            "a = f\"{raise E}\"\n",
+            "if raise E: pass\n",
+            "while raise E: pass\n",
+            "for a in raise E: pass\n",
+            "with raise E: pass\n",
+            "assert raise E\n",
+        ] {
+            let (_, errors) = parse_module(source, PySourceType::BasedPython);
+            assert!(errors.is_empty(), "{source:?} gave errors: {errors:?}");
+        }
+    }
+
+    /// a python file keeps its own syntax error
+    #[test]
+    fn raise_in_an_expression_is_not_python() {
+        let (_, errors) = parse_module("print(raise E)\n", PySourceType::Python);
+        assert!(!errors.is_empty());
     }
 
     /// a diverging form is allowed under the operators that choose an operand

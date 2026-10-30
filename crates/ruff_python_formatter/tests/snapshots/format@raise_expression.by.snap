@@ -1,0 +1,39 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/raise_expression.by
+---
+## Input
+```bython
+print(  raise   TypeError  )
+print( 1,raise TypeError( "a" ) from ValueError , 2 )
+print( raise )
+values = [ 1, raise   TypeError ]
+value = table[  raise KeyError ]
+value = ( raise   TypeError ) + 1
+value = (raise TypeError).attribute
+key = lambda item: raise   TypeError( item )
+if (raise   TypeError):
+    pass
+with (raise   TypeError):
+    pass
+for item in (raise   TypeError):
+    pass
+```
+
+## Output
+```bython
+print(raise   TypeError)
+print(1, raise TypeError( "a" ) from ValueError, 2)
+print(raise)
+values = [1, raise   TypeError]
+value  = table[raise KeyError]
+value  = (raise   TypeError) + 1
+value  = (raise TypeError).attribute
+key    = lambda item: raise   TypeError( item )
+if raise   TypeError:
+    pass
+with raise   TypeError:
+    pass
+for item in raise   TypeError:
+    pass
+```

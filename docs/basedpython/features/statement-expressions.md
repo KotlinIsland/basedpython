@@ -189,10 +189,19 @@ value = (found := lookup() ?? raise Missing())
 value = maybe() ?? continue
 ```
 
-anywhere else — as a call argument, inside a list, as an operand of `+`, in a
-compound statement's header — the surrounding expression would have to be
-evaluated around the statement, and is rejected. a rejected form with a suite
-is dropped along with what it wrapped, so the rest of the file still checks
+`raise` can be written anywhere an expression can — a call argument, an element
+of a list, an operand, a condition, a `lambda`'s body. what was evaluated before
+it has been evaluated, and the rest never is:
+
+```by
+print("before", raise Missing())
+key = lambda item: item.key ?? raise Missing()
+```
+
+`return`, `break` and `continue` leave more than the expression, so anywhere else
+— as a call argument, inside a list, as an operand of `+`, in a compound
+statement's header — they are rejected. a rejected form with a suite is dropped
+along with what it wrapped, so the rest of the file still checks
 
 ## lowering
 
@@ -228,4 +237,16 @@ __by_stmt_expr_0__ = table.get(k)
 if __by_stmt_expr_0__ is None:
     raise KeyError(k)
 v = __by_stmt_expr_0__
+```
+
+a `raise` anywhere else has to raise partway through an expression, which only a
+call can do from inside one, so a traceback through it has one more frame, in
+`_by_runtime.py`:
+
+```by
+print(raise TypeError)
+```
+
+```py
+print(_by_raise(TypeError))
 ```

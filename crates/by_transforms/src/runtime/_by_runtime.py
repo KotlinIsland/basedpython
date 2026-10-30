@@ -1536,6 +1536,20 @@ class _by_discard:
         return hash(self.__wrapped__)
 
 
+# --- raise expression ------------------------------------------------------
+# `f(raise E)` raises partway through evaluating an expression, and python has no
+# expression that does that, so the arguments here are the ones `raise` was written
+# with. `raise` with none re-raises what is being handled, which a call can still see
+
+
+def _by_raise(*raised):
+    if not raised:
+        raise
+    if len(raised) == 1:
+        raise raised[0]
+    raise raised[0] from raised[1]
+
+
 # --- match statement -------------------------------------------------------
 # below 3.10 there is no `match`, so one is lowered to an `if`/`elif` chain and
 # these answer the questions the chain cannot ask in an expression

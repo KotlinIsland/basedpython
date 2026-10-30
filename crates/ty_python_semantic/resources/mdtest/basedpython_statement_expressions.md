@@ -529,7 +529,6 @@ def f(items: list[int]) -> None:
 ## a statement expression is not a type expression
 
 ```by
-# error: [invalid-syntax] "a statement expression must be the tail of its statement"
 # error: [invalid-type-form] "Statement expressions are not allowed in type expressions"
 a: raise ValueError = 1
 ```
@@ -545,12 +544,68 @@ def f(c: bool):
         2
 ```
 
-## a diverging statement expression must still be in tail position
+## `raise` can be written anywhere an expression can
+
+What was evaluated before it has been evaluated, and the rest never is, so what follows it is
+unreachable.
 
 ```by
-def f() -> list[int]:
+def call_argument() -> None:
+    print("before", raise ValueError())
+    print("unreachable")  # no diagnostic
+
+def list_element() -> list[int]:
+    return [raise ValueError()]  # no diagnostic
+
+def operand(x: int | None) -> int:
+    return (x ?? raise ValueError()) + 1  # no diagnostic
+
+def condition() -> None:
+    if raise ValueError():  # no diagnostic
+        pass
+
+def with_a_cause() -> None:
+    print(raise ValueError() from TypeError())  # no diagnostic
+
+def re_raise() -> None:
+    try:
+        pass
+    except ValueError:
+        print(raise)  # no diagnostic
+```
+
+Its value is `Never`, so it fits any argument.
+
+```by
+def takes_int(x: int) -> None: ...
+
+def f() -> None:
+    takes_int(raise ValueError())  # no diagnostic
+```
+
+A lambda and a comprehension raise when they run, not where they are written, so the flow around
+them carries on.
+
+```by
+def f(items: list[int | None]) -> list[int]:
+    fail = lambda: raise ValueError()
+    reveal_type(fail)  # revealed: () -> Never
+    return [item ?? raise ValueError() for item in items]
+```
+
+## `return`, `break` and `continue` must be the tail of their statement
+
+They leave more than the expression around them, which has to finish being evaluated first.
+
+```by
+def f(xs: list[int | None]) -> list[int]:
+    for x in xs:
+        # error: [invalid-syntax] "a statement expression must be the tail of its statement"
+        print(x ?? continue)
+        # error: [invalid-syntax] "a statement expression must be the tail of its statement"
+        print(break)
     # error: [invalid-syntax] "a statement expression must be the tail of its statement"
-    return [raise ValueError()]
+    return [return []]
 ```
 
 ## `break` may only carry a value where something reads it
@@ -583,10 +638,12 @@ A compound statement has no value of its own, so nothing in its header — a `fo
 test, a base class — is the tail of anything.
 
 ```by
-def f(xs: list[int] | None):
-    # error: [invalid-syntax] "a statement expression must be the tail of its statement"
-    for x in xs ?? raise ValueError():
+def f(xs: list[int] | None, ys: list[int] | None):
+    for x in xs ?? raise ValueError():  # no diagnostic
         print(x)
+    # error: [invalid-syntax] "a statement expression must be the tail of its statement"
+    for y in ys ?? return:
+        print(y)
 ```
 
 ## a rejected statement expression is dropped along with its suite
