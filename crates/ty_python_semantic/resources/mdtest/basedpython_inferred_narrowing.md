@@ -780,6 +780,273 @@ def f(base: Base, silent: Silent, a: int | None, b: int | None):
     reveal_type(b)  # revealed: int & not AlwaysFalsy
 ```
 
+## a body that tests a variable it reads asserts it too
+
+A name the body reads without binding it is a variable of an enclosing scope, which the caller can
+see as well, so what the body establishes about it reaches the caller.
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+b = src()
+
+def check():
+    assert a is not None
+
+def f():
+    reveal_type(a)  # revealed: int | None
+    check()
+    reveal_type(a)  # revealed: int
+    reveal_type(b)  # revealed: int | None
+```
+
+## a variable of a function around the body is asserted the same way
+
+```by
+def src() -> int | None:
+    return 1
+
+def f():
+    a = src()
+
+    def check():
+        assert a is not None
+
+    check()
+    reveal_type(a)  # revealed: int
+```
+
+## a local of the same name is a different variable
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def check():
+    assert a is not None
+
+def f():
+    a = src()
+    check()
+    reveal_type(a)  # revealed: int | None
+
+def g(a: int | None):
+    check()
+    reveal_type(a)  # revealed: int | None
+```
+
+## a member of a variable is asserted too
+
+```by
+class Holder:
+    data: int | None = None
+
+holder = Holder()
+
+def check():
+    assert holder.data is not None
+
+def f():
+    check()
+    reveal_type(holder.data)  # revealed: int
+```
+
+## what a call in the body asserts, the body asserts
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def outer():
+    inner()
+
+def inner():
+    assert a is not None
+
+def f():
+    outer()
+    reveal_type(a)  # revealed: int
+```
+
+## a variable the body binds is not asserted
+
+The assignment is what `a` holds afterwards, so the test says nothing the caller can rely on, and a
+name the body binds without `global` is a local of its own.
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def rebinds():
+    global a
+    a = src()
+    assert a is not None
+
+def shadows():
+    a = src()
+    assert a is not None
+
+def f():
+    rebinds()
+    reveal_type(a)  # revealed: int | None
+    shadows()
+    reveal_type(a)  # revealed: int | None
+```
+
+## a body that returns a value does not assert a variable
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def check():
+    assert a is not None
+    return 1
+
+def f():
+    check()
+    reveal_type(a)  # revealed: int | None
+```
+
+## another module's variable is not this module's
+
+`guard.by`:
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def check():
+    assert a is not None
+```
+
+`main.by`:
+
+```by
+from guard import check, src
+
+a = src()
+
+def f():
+    check()
+    reveal_type(a)  # revealed: int | None
+```
+
+## an override makes the assertion on a variable too
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+class Base:
+    def check(self):
+        assert a is not None
+
+class Same(Base):
+    override def check(self):
+        assert a is not None
+
+class Other(Base):
+    # error: [unestablished-assertion-guard]
+    override def check(self):
+        pass
+```
+
+## a place satisfies a protocol with what its members were narrowed to
+
+Reading `.a` under the test gives `int`, so the value can stand where that is all that is asked of
+it, for as long as the narrowing holds.
+
+```by
+protocol P:
+    let a: int
+
+class A:
+    init(let a: object)
+
+def takes(p: P): ...
+
+def f(a: A):
+    if a.a is int:
+        b: P = a  # no diagnostic
+        takes(a)  # no diagnostic
+        reveal_type(a)  # revealed: A
+    # error: [invalid-assignment]
+    c: P = a
+
+def g(a: A) -> P:
+    assert a.a is int
+    return a  # no diagnostic
+```
+
+## a protocol that can write the member is not satisfied by a narrowing
+
+The claim is what reading the member gives.
+
+```by
+protocol Writable:
+    a: int
+
+class A:
+    init(var a: object)
+
+def f(a: A):
+    if a.a is int:
+        # error: [invalid-assignment]
+        b: Writable = a
+```
+
+## a place below the value counts as well
+
+```by
+protocol Inner:
+    let b: int
+
+protocol Outer:
+    let a: Inner
+
+class B:
+    init(let b: object)
+
+class A:
+    init(let a: B)
+
+def f(a: A):
+    if a.a.b is int:
+        c: Outer = a  # no diagnostic
+        d: Inner = a.a  # no diagnostic
+```
+
+## assigning to the member ends what a test established
+
+```by
+protocol P:
+    let a: int
+
+class A:
+    init(var a: object)
+
+def f(a: A):
+    if a.a is int:
+        a.a = "s"
+        # error: [invalid-assignment]
+        b: P = a
+```
+
 ## the same holds in a plain python file
 
 `sound-types` recovers a signature in a `.py` file too, and the narrowing it recovers is the same.

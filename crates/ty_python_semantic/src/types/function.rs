@@ -1885,6 +1885,17 @@ impl<'db> OverloadLiteral<'db> {
             .iter()
             .filter(|guard| guard.kind.is_assertion())
             .filter_map(|guard| {
+                // a variable of an enclosing scope is the same variable whatever the override's
+                // parameters are called
+                if matches!(
+                    guard.kind,
+                    NarrowingGuardKind::InferredAssertion {
+                        variable_scope: Some(_),
+                        ..
+                    }
+                ) {
+                    return Some(guard.clone());
+                }
                 let index = base_signature
                     .parameters()
                     .iter()

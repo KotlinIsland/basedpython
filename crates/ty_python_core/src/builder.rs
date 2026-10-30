@@ -172,6 +172,7 @@ type NestedGlobalOrNonlocalDeclarations = FxHashMap<Name, SmallVec<[NestedDeclar
 /// Each pending capture remembers the bindings visible when the nested scope was created and, for
 /// lazy scopes, any bindings added afterward.
 type PendingCaptures = FxHashMap<Name, SmallVec<[PendingCapture; 1]>>;
+type RecoveredScopePlaces = FxHashMap<Name, Vec<(Name, Box<[Name]>)>>;
 
 #[derive(Debug)]
 struct PendingCapture {
@@ -362,6 +363,8 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// basedpython: places this file's narrowing return annotations name, computed on
     /// demand. See [`Self::basedpython_guard_targets`].
     basedpython_guard_targets: Option<GuardTargets>,
+    /// basedpython: whether the expression about to be visited is what an attribute is read from.
+    visiting_attribute_object: bool,
 
     /// basedpython: whether a `let` / `var` declaration inside a block is visible
     /// only within that block. See [`Db::block_scoped_declarations`].
@@ -483,6 +486,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             destructures: FxHashMap::default(),
             case_names: FxHashMap::default(),
             basedpython_guard_targets: None,
+            visiting_attribute_object: false,
 
             block_scoped_declarations: db.block_scoped_declarations(file.file(db)),
             open_blocks: Vec::new(),
@@ -1623,6 +1627,33 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             return;
         }
         self.use_def_maps[scope].record_places_at_use(members.into_iter(), use_id);
+    }
+
+    /// basedpython: capture the state of the narrowed places below the place a load of `expr`
+    /// names, so that the value can be read as what the flow established about its members.
+    ///
+    /// After `if a.b is int:`, an `a` that has to be some structural type gets to count its `.b`
+    /// as `int`, which only this use can say. A load that goes on to read an attribute of the
+    /// place is not the place being used as a value, and those are most loads.
+    fn record_narrowed_members_at_use(&mut self, place_id: ScopedPlaceId, expr: &'ast ast::Expr) {
+        if !self.source_type.is_basedpython() {
+            return;
+        }
+        let scope = self.current_scope();
+        let Some(use_id) = self.ast_ids[scope].try_use_id(expr) else {
+            return;
+        };
+        let use_def = &self.use_def_maps[scope];
+        let members: Vec<ScopedPlaceId> = self.place_tables[scope]
+            .associated_place_ids(place_id)
+            .iter()
+            .copied()
+            .map(ScopedPlaceId::from)
+            .filter(|member| use_def.is_narrowing_target(*member))
+            .collect();
+        if !members.is_empty() {
+            self.use_def_maps[scope].record_places_at_use(members.into_iter(), use_id);
+        }
     }
 
     /// basedpython: note where `stmt` returns, for the assertion its function makes.
@@ -3036,7 +3067,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         if function.returns.is_some() || function.is_asserts_return {
             return;
         }
-        let places = self.parameter_places(scope, function);
+        let mut places = self.parameter_places(scope, function);
+        places.extend(self.free_narrowed_places(scope, function));
         if places.is_empty() {
             return;
         }
@@ -3087,6 +3119,47 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .collect()
     }
 
+    /// basedpython: the places `function`'s body has narrowed under a name it reads but neither
+    /// binds nor takes as a parameter, and the places below those.
+    ///
+    /// Such a name is a variable of an enclosing scope, which the caller can see as well, so
+    /// `def check(): assert a is not None` tells the caller about `a` just as a parameter's
+    /// assertion tells it about the argument.
+    fn free_narrowed_places(
+        &self,
+        scope: FileScopeId,
+        function: &ast::StmtFunctionDef,
+    ) -> Vec<ScopedPlaceId> {
+        // only a basedpython call statement narrows by assertion
+        if !self.source_type.is_basedpython() {
+            return Vec::new();
+        }
+        let place_table = &self.place_tables[scope];
+        let use_def = &self.use_def_maps[scope];
+        place_table
+            .symbols()
+            .filter(|symbol| {
+                !symbol.is_bound()
+                    && !function
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name().id == *symbol.name())
+            })
+            .filter_map(|symbol| place_table.symbol_id(symbol.name()))
+            .flat_map(|symbol| {
+                let place = ScopedPlaceId::Symbol(symbol);
+                std::iter::once(place).chain(
+                    place_table
+                        .associated_place_ids(place)
+                        .iter()
+                        .copied()
+                        .map(ScopedPlaceId::from),
+                )
+            })
+            .filter(|place| use_def.is_narrowing_target(*place))
+            .collect()
+    }
+
     /// basedpython: the places this file's narrowing return annotations name.
     ///
     /// `def f() -> a is int` narrows a place no call site mentions, and
@@ -3110,6 +3183,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 targets.scope_places.dedup();
                 targets.member_chains.sort_unstable();
                 targets.member_chains.dedup();
+                targets.propagate_recovered_scope_places();
             }
             self.basedpython_guard_targets = Some(targets);
         }
@@ -3150,12 +3224,16 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 return Vec::new();
             }
             let mut chains = targets.member_chains.clone();
+            let mut scope_places = targets.scope_places.clone();
             for name in called_names {
                 if let Some(recovered) = targets.recovered_member_chains.get(name) {
                     chains.extend(recovered.iter().cloned());
                 }
+                if let Some(recovered) = targets.recovered_scope_places.get(name) {
+                    scope_places.extend(recovered.iter().cloned());
+                }
             }
-            (targets.scope_places.clone(), chains)
+            (scope_places, chains)
         };
 
         // a guard on a parameter or a receiver narrows a member of whatever the call passes
@@ -4918,6 +4996,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.scopes_by_expression
             .record_expression(expr, self.current_scope());
 
+        let is_attribute_object = std::mem::take(&mut self.visiting_attribute_object);
+        self.visiting_attribute_object = expr.is_attribute_expr();
+
         match expr {
             ast::Expr::Name(ast::ExprName { ctx, .. })
             | ast::Expr::Attribute(ast::ExprAttribute { ctx, .. })
@@ -4983,6 +5064,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                     if is_use {
                         self.record_place_use(place_id, expr);
+                        if !is_attribute_object {
+                            self.record_narrowed_members_at_use(place_id, expr);
+                        }
 
                         // Keep track of any uses of fluid specialization candidates.
                         if let Some(candidate_def) = self.fluid_candidate_binding(expr) {
@@ -6997,6 +7081,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     value: Some(value), ..
                 }) = stmt
                     && recovers_from_body
+                    // a load in a basedpython file already recorded them
+                    && !self.source_type.is_basedpython()
                 {
                     self.record_returned_place_members(value);
                 }
@@ -8282,6 +8368,14 @@ struct GuardTargets {
     /// writes the name it was recovered from. A call that reaches its callee some other way —
     /// through a variable, an alias — registers nothing and so narrows nothing.
     recovered_member_chains: FxHashMap<Name, Vec<Box<[Name]>>>,
+    /// The places a body that returns nothing tests without being handed them, as a root name and
+    /// the attribute segments below it, keyed by the name of the `def` like the chains above.
+    ///
+    /// `def check(): assert a is not None` asserts something about `a`, which no call mentions.
+    recovered_scope_places: RecoveredScopePlaces,
+    /// The names a body that returns nothing calls as statements, keyed by the name of the `def`.
+    /// What such a call asserts, the body asserts as well, so it tests those places too.
+    recovered_statement_calls: FxHashMap<Name, Vec<Name>>,
 }
 
 impl GuardTargets {
@@ -8289,6 +8383,72 @@ impl GuardTargets {
         self.scope_places.is_empty()
             && self.member_chains.is_empty()
             && self.recovered_member_chains.is_empty()
+            && self.recovered_scope_places.is_empty()
+    }
+
+    /// Hands each `def` the places tested by the ones it calls as statements, until nothing more
+    /// is handed on: `def outer(): inner()` asserts what `inner` does.
+    ///
+    /// Callees go first, so a chain of calls settles in one pass however long it is, and only a
+    /// cycle of calls takes another.
+    fn propagate_recovered_scope_places(&mut self) {
+        let calls = std::mem::take(&mut self.recovered_statement_calls);
+
+        let mut functions: Vec<&Name> = calls.keys().collect();
+        functions.sort_unstable();
+        let mut visited = FxHashSet::default();
+        let mut callees_first = Vec::with_capacity(functions.len());
+        for function in functions {
+            let mut stack = vec![(function, 0)];
+            if !visited.insert(function) {
+                continue;
+            }
+            while let Some((function, next_callee)) = stack.last_mut() {
+                let callee = calls
+                    .get(*function)
+                    .and_then(|callees| callees.get(*next_callee));
+                *next_callee += 1;
+                match callee {
+                    Some(callee) => {
+                        if visited.insert(callee) {
+                            stack.push((callee, 0));
+                        }
+                    }
+                    None => {
+                        callees_first.push(*function);
+                        stack.pop();
+                    }
+                }
+            }
+        }
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for function in &callees_first {
+                let Some(callees) = calls.get(*function) else {
+                    continue;
+                };
+                let mut handed_on: Vec<(Name, Box<[Name]>)> = callees
+                    .iter()
+                    .filter_map(|callee| self.recovered_scope_places.get(callee))
+                    .flatten()
+                    .cloned()
+                    .collect();
+                if handed_on.is_empty() {
+                    continue;
+                }
+                let places = self
+                    .recovered_scope_places
+                    .entry((*function).clone())
+                    .or_default();
+                let before = places.len();
+                places.append(&mut handed_on);
+                places.sort_unstable();
+                places.dedup();
+                changed |= places.len() != before;
+            }
+        }
     }
 }
 
@@ -8350,6 +8510,31 @@ impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
                     recovered.extend(chains);
                     recovered.sort_unstable();
                     recovered.dedup();
+                }
+                if !returns_value.0 {
+                    let mut tested = TestedPlaceCollector {
+                        parameters: &function.parameters,
+                        places: Vec::new(),
+                        statement_calls: Vec::new(),
+                    };
+                    walk_body(&mut tested, &function.body);
+                    if !tested.places.is_empty() {
+                        let recovered = self
+                            .targets
+                            .recovered_scope_places
+                            .entry(function.name.id.clone())
+                            .or_default();
+                        recovered.append(&mut tested.places);
+                        recovered.sort_unstable();
+                        recovered.dedup();
+                    }
+                    if !tested.statement_calls.is_empty() {
+                        self.targets
+                            .recovered_statement_calls
+                            .entry(function.name.id.clone())
+                            .or_default()
+                            .append(&mut tested.statement_calls);
+                    }
                 }
             }
         }
@@ -8447,6 +8632,101 @@ impl<'ast> Visitor<'ast> for ReturnsValue {
     }
 
     fn visit_expr(&mut self, _expr: &'ast ast::Expr) {}
+}
+
+/// basedpython: collects the places a body tests that are not its parameters or below them.
+///
+/// Only an expression that can narrow counts: a condition, a `match` subject, a statement-level
+/// call's arguments, and a value holding a diverging form such as `a ?? raise E`. Every place
+/// collected here is registered at every statement-level call of the `def`, so reading a name is
+/// not enough to be one, and the name a call writes for its callee never is.
+struct TestedPlaceCollector<'ast> {
+    parameters: &'ast ast::Parameters,
+    places: Vec<(Name, Box<[Name]>)>,
+    statement_calls: Vec<Name>,
+}
+
+impl TestedPlaceCollector<'_> {
+    fn collect_places(&mut self, expr: &ast::Expr) {
+        struct Places<'a, 'ast> {
+            collector: &'a mut TestedPlaceCollector<'ast>,
+        }
+
+        impl<'expr> Visitor<'expr> for Places<'_, '_> {
+            fn visit_stmt(&mut self, _stmt: &'expr ast::Stmt) {}
+
+            fn visit_expr(&mut self, expr: &'expr ast::Expr) {
+                if let ast::Expr::Call(call) = expr {
+                    // the callee's own value is only reached through what it is called on
+                    if let ast::Expr::Attribute(attribute) = &*call.func {
+                        self.visit_expr(&attribute.value);
+                    }
+                    self.visit_arguments(&call.arguments);
+                    return;
+                }
+                if matches!(expr, ast::Expr::Name(_) | ast::Expr::Attribute(_))
+                    && let Some(path) = UnqualifiedName::from_expr(expr)
+                    && let [root, members @ ..] = path.segments()
+                    && !self
+                        .collector
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name().id == *root)
+                {
+                    self.collector.places.push((
+                        Name::new(*root),
+                        members.iter().copied().map(Name::new).collect(),
+                    ));
+                }
+                walk_expr(self, expr);
+            }
+        }
+
+        Places { collector: self }.visit_expr(expr);
+    }
+}
+
+impl<'ast> Visitor<'ast> for TestedPlaceCollector<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        match stmt {
+            // a nested `def` or `class` narrows its own places, not the function's around it
+            ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_) => return,
+            ast::Stmt::Assert(assert) => self.collect_places(&assert.test),
+            ast::Stmt::If(if_stmt) => {
+                self.collect_places(&if_stmt.test);
+                for clause in &if_stmt.elif_else_clauses {
+                    if let Some(test) = &clause.test {
+                        self.collect_places(test);
+                    }
+                }
+            }
+            ast::Stmt::While(while_stmt) => self.collect_places(&while_stmt.test),
+            ast::Stmt::Match(match_stmt) => self.collect_places(&match_stmt.subject),
+            ast::Stmt::Expr(statement) => {
+                if let Some(callee) = asserted_call(&statement.value).and_then(called_name) {
+                    self.statement_calls.push(callee.clone());
+                }
+                self.collect_places(&statement.value);
+            }
+            ast::Stmt::Assign(assign) if contains_diverging_form(&assign.value) => {
+                self.collect_places(&assign.value);
+            }
+            ast::Stmt::AnnAssign(ast::StmtAnnAssign {
+                value: Some(value), ..
+            }) if contains_diverging_form(value) => self.collect_places(value),
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, _expr: &'ast ast::Expr) {
+        // a statement is walked for the suites inside it alone
+    }
+}
+
+/// Whether `expr` holds a statement expression, which is how a value can end the flow.
+fn contains_diverging_form(expr: &ast::Expr) -> bool {
+    any_over_expr(expr, &ast::Expr::is_statement_expr)
 }
 
 /// basedpython: collects the attribute chains an expression names below a parameter.

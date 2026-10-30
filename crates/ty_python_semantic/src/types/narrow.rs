@@ -11,6 +11,7 @@ use crate::subscript::PyIndex;
 use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::infer::{ExpressionInference, infer_same_file_expression_type};
+use crate::types::inferred_narrowing::variable_scope_of;
 use crate::types::iteration::extract_literal_container_element_types;
 use crate::types::match_pattern::PatternCacheKey;
 use crate::types::narrowing_guards::{
@@ -257,7 +258,19 @@ fn asserts_guard_targets<'db>(
                     narrowed_place(db, scope, guard, receiver)?
                 }
                 GuardRoot::Receiver(_) => return None,
-                GuardRoot::Scope => narrowed_scope_place(db, scope, guard)?,
+                GuardRoot::Scope => {
+                    // a recovered assertion is about the variable the body read, and the caller's
+                    // name may be a local of its own
+                    if let NarrowingGuardKind::InferredAssertion {
+                        variable_scope: Some(variable_scope),
+                        ..
+                    } = guard.kind
+                        && variable_scope_of(db, scope, &guard.name) != Some(variable_scope)
+                    {
+                        return None;
+                    }
+                    narrowed_scope_place(db, scope, guard)?
+                }
             };
 
             Some((target, narrowed_to))

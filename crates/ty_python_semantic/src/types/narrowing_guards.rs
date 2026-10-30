@@ -14,7 +14,7 @@ use ty_python_core::scope::ScopeId;
 use crate::Db;
 use crate::types::Type;
 use crate::types::function::FunctionDecorators;
-use crate::types::signatures::{NarrowingGuard, Parameters};
+use crate::types::signatures::{NarrowingGuard, NarrowingGuardKind, Parameters};
 
 /// What a guard's root name refers to at a call site.
 pub(crate) enum GuardRoot<'ast> {
@@ -48,6 +48,17 @@ pub(crate) fn guard_root<'ast, 'db>(
     parameters: &Parameters<'db>,
     call: &'ast ast::ExprCall,
 ) -> GuardRoot<'ast> {
+    // a variable of an enclosing scope, whatever parameter an override happens to name after it
+    if matches!(
+        guard.kind,
+        NarrowingGuardKind::InferredAssertion {
+            variable_scope: Some(_),
+            ..
+        }
+    ) {
+        return GuardRoot::Scope;
+    }
+
     if let Some(index) = parameters
         .iter()
         .position(|parameter| parameter.name() == Some(&guard.name))

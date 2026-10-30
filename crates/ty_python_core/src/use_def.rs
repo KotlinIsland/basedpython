@@ -2269,6 +2269,9 @@ pub(super) struct UseDefMapBuilder<'db> {
     /// Predicate-place pairs for which a narrowing constraint was recorded.
     predicate_narrowing_targets: Vec<(ScopedPredicateId, ScopedPlaceId)>,
 
+    /// basedpython: the places in `predicate_narrowing_targets`, to ask about one per load.
+    narrowed_places: FxHashSet<ScopedPlaceId>,
+
     /// Builder of reachability constraints.
     pub(super) reachability_constraints: ReachabilityConstraintsBuilder,
 
@@ -2371,6 +2374,7 @@ impl<'db> UseDefMapBuilder<'db> {
             all_definitions: IndexVec::from_iter([DefinitionEntry::Undefined]),
             predicates: PredicatesBuilder::default(),
             predicate_narrowing_targets: Vec::new(),
+            narrowed_places: FxHashSet::default(),
             reachability_constraints: ReachabilityConstraintsBuilder::default(),
             narrowing_constraints: NarrowingConstraintsBuilder::default(),
             bindings_by_use: IndexVec::new(),
@@ -2572,6 +2576,7 @@ impl<'db> UseDefMapBuilder<'db> {
 
         self.predicate_narrowing_targets
             .extend(places.iter().map(|place| (predicate, *place)));
+        self.narrowed_places.extend(places.iter().copied());
 
         let atom = self.narrowing_constraints.add_atom(predicate);
         self.record_narrowing_constraint_node_for_places(atom, places);
@@ -2592,6 +2597,7 @@ impl<'db> UseDefMapBuilder<'db> {
         }
 
         self.predicate_narrowing_targets.push((predicate, place));
+        self.narrowed_places.insert(place);
 
         let constraint = self.narrowing_constraints.add_atom(predicate);
         let pending = self.pending_reachability.current;
@@ -2624,6 +2630,7 @@ impl<'db> UseDefMapBuilder<'db> {
         }
 
         self.predicate_narrowing_targets.push((predicate, place));
+        self.narrowed_places.insert(place);
 
         let constraint = self.narrowing_constraints.add_atom(predicate);
         let pending = self.pending_reachability.current;
@@ -3142,6 +3149,11 @@ impl<'db> UseDefMapBuilder<'db> {
 
     /// basedpython: record the state of `places` where the body returns, with every way out of it
     /// already merged into the current state.
+    /// basedpython: whether a predicate recorded so far narrows `place`.
+    pub(super) fn is_narrowing_target(&self, place: ScopedPlaceId) -> bool {
+        self.narrowed_places.contains(&place)
+    }
+
     pub(super) fn record_normal_exit(&mut self, places: impl Iterator<Item = ScopedPlaceId>) {
         self.normal_exit = self.current_place_bindings(places).into_vec();
     }

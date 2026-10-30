@@ -137,6 +137,7 @@ use crate::types::infer::{
     TypeAndRange, TypeExpressionFlags, infer_statement_types, nearest_enclosing_class,
     nearest_enclosing_function, original_class_type,
 };
+use crate::types::inferred_narrowing::with_narrowed_members;
 use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_positional_result};
 use crate::types::match_type::literal_pattern_type;
 use crate::types::member::inherited_class_body_declaration;
@@ -8330,8 +8331,42 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
 
+        let ty = self.with_narrowed_members_the_context_needs(expression, ty, tcx);
         self.store_expression_type(expression, ty);
         ty
+    }
+
+    /// basedpython: read a place the type context does not accept as what the flow established
+    /// about its members, if that is what it takes.
+    ///
+    /// After `if a.b is int:`, `a` is still an `A`, but reading `.b` from it gives `int`, so it
+    /// satisfies a protocol that asks for that. Only a mismatch pays for this, and a place that
+    /// fails either way is reported as the type it was written as.
+    fn with_narrowed_members_the_context_needs(
+        &self,
+        expression: &ast::Expr,
+        ty: Type<'db>,
+        tcx: TypeContext<'db>,
+    ) -> Type<'db> {
+        let db = self.db();
+        let env = self.program_environment();
+        if !self.is_basedpython_file()
+            || !matches!(expression, ast::Expr::Name(_) | ast::Expr::Attribute(_))
+        {
+            return ty;
+        }
+        let Some(annotation) = tcx.annotation() else {
+            return ty;
+        };
+        if ty.is_assignable_to(db, env, annotation) {
+            return ty;
+        }
+        let carrying = with_narrowed_members(db, env, self.scope(), expression, ty);
+        if carrying.is_assignable_to(db, env, annotation) {
+            carrying
+        } else {
+            ty
+        }
     }
 
     /// Applies the provided type context to an already inferred type.

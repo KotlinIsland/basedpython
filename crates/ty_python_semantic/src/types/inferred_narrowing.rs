@@ -36,9 +36,10 @@ use ruff_text_size::TextRange;
 use rustc_hash::FxHashSet;
 use ty_python_core::ast_ids::try_scoped_use_id;
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
-use ty_python_core::place::{PlaceExpr, PlaceExprRef, ScopedPlaceId};
+use ty_python_core::place::{PlaceExpr, PlaceExprRef, PlaceTable, ScopedPlaceId};
 use ty_python_core::predicate::{Predicate, PredicateNode};
 use ty_python_core::scope::ScopeId;
+use ty_python_core::symbol::Symbol;
 use ty_python_core::{
     BindingWithConstraintsIterator, FileScopeId, SemanticIndex, UseDefMap, semantic_index,
 };
@@ -224,14 +225,63 @@ pub(crate) fn may_recover_assertions<'db>(db: &'db dyn Db, overload: OverloadLit
 
     let place_table = index.place_table(file_scope_id);
     let targets = use_def.predicate_narrowing_targets();
-    node.parameters.iter_non_variadic_params().any(|parameter| {
-        let name = &parameter.parameter.name.id;
-        place_table.symbol_id(name).is_some_and(|symbol| {
-            std::iter::once(ScopedPlaceId::Symbol(symbol))
-                .chain(place_table.members_of_symbol(name))
-                .any(|place| targets.contains_place(place))
+    let parameters = node
+        .parameters
+        .iter_non_variadic_params()
+        .map(|parameter| &parameter.parameter.name.id);
+    parameters
+        .chain(free_names(&node.parameters, place_table))
+        .any(|name| {
+            place_table.symbol_id(name).is_some_and(|symbol| {
+                std::iter::once(ScopedPlaceId::Symbol(symbol))
+                    .chain(place_table.members_of_symbol(name))
+                    .any(|place| targets.contains_place(place))
+            })
         })
-    })
+}
+
+/// The names a function's body reads without binding them or taking them as parameters, which
+/// are variables of an enclosing scope.
+fn free_names<'a>(
+    parameters: &'a ast::Parameters,
+    place_table: &'a PlaceTable,
+) -> impl Iterator<Item = &'a Name> {
+    place_table
+        .symbols()
+        .filter(|symbol| !symbol.is_bound())
+        .map(Symbol::name)
+        .filter(|name| {
+            !parameters
+                .iter()
+                .any(|parameter| parameter.name().id == **name)
+        })
+}
+
+/// The scope whose variable `name` is when it is read in `scope`, or `None` if nothing in the
+/// file binds it.
+pub(crate) fn variable_scope_of<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    name: &Name,
+) -> Option<ScopeId<'db>> {
+    let program_file = scope.program_file(db);
+    let index = semantic_index(db, program_file);
+    let start = scope.file_scope_id(db);
+    index
+        .ancestor_scopes(start)
+        // a nested scope does not see the names of a class around it
+        .filter(|(ancestor, ancestor_scope)| {
+            *ancestor == start || !ancestor_scope.kind().is_class()
+        })
+        .find_map(|(ancestor, _)| {
+            let symbol = index.place_table(ancestor).symbol_by_name(name)?;
+            if symbol.is_global() {
+                Some(FileScopeId::global())
+            } else {
+                (symbol.is_bound() && !symbol.is_nonlocal()).then_some(ancestor)
+            }
+        })
+        .map(|found| found.to_scope_id(db, program_file))
 }
 
 /// The assertions `overload`'s body establishes, for a `def` that wrote no return type and hands
@@ -272,9 +322,17 @@ pub(crate) fn recovered_assertion_guards<'db>(
         .map(ast::AnyParameterRef::name);
     let env = &ProgramEnvironment::from_file(program_file);
 
+    let parameters = node
+        .parameters
+        .iter_non_variadic_params()
+        .map(|parameter| (&parameter.parameter.name.id, None));
+    let free_variables = free_names(&node.parameters, place_table).filter_map(|name| {
+        let variable_scope = variable_scope_of(db, overload.body_scope(db), name)?;
+        Some((name, Some(variable_scope)))
+    });
+
     let mut guards = Vec::new();
-    for parameter in node.parameters.iter_non_variadic_params() {
-        let name = &parameter.parameter.name.id;
+    for (name, variable_scope) in parameters.chain(free_variables) {
         let Some(symbol) = place_table.symbol_id(name) else {
             continue;
         };
@@ -304,7 +362,7 @@ pub(crate) fn recovered_assertion_guards<'db>(
                 root_is_first_parameter: first_parameter.is_some_and(|first| first.id == *name),
                 name: name.clone(),
                 members: members.into_boxed_slice(),
-                kind: NarrowingGuardKind::InferredAssertion { ty },
+                kind: NarrowingGuardKind::InferredAssertion { ty, variable_scope },
             });
         }
     }
