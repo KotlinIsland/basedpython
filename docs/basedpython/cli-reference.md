@@ -296,19 +296,15 @@ reading it can tell whether it still describes what is on disk — see
 
 ## `by compile`
 
-> **status: early.** integer, float and bool arithmetic, control flow, and calls
-> within a module compile natively. everything else falls back to the interpreted
-> definition — see [native compilation](development/compilation/index.md)
-
 for how to use it, see [native compilation](features/compilation.md)
 
 ```sh
-by compile                      # every .by file under the project root → build/
-by compile hot.by               # one file
+by compile                      # every .by and .py file under the project root → build/
+by compile hot.by               # one file, named by its path rather than its module
 by compile -o native hot.by     # a different output directory
 by compile --verbose            # report every function left interpreted, and why
 by compile --emit-c-only        # write the generated C without compiling it
-by compile --no-any             # refuse to leave a gradual-typed function interpreted
+by compile --no-any             # refuse a gradual type in a compiled function
 by compile --require-native     # refuse to leave *any* function interpreted
 by compile --licence-recheck    # re-ask, at runtime, every lookup a call skipped
 by compile --no-verify-install  # leave out the import-time install check
@@ -366,32 +362,42 @@ marker or keep the directory outside its source roots.
 > build refreshes.
 
 `--no-any` buys no speed on its own — it is a **predictability contract**. a
-gradual type is the commonest reason a function silently stays interpreted, and a
-decline is invisible unless you look for it, so a module that means to be fully
-compiled can say so and be held to it:
+gradual type still compiles, through python's object protocol, so it costs speed
+with nothing to say so, and a module that means to be fully typed can be held to
+it:
 
-```console
-$ by compile app.by --no-any
-error: could not compile app.by
-
-Caused by:
-    `no-any` is on and 1 function(s) could not be compiled because a type was gradual:
-      loose: a gradual type has no known representation
+```by
+def loose(x: dynamic) -> dynamic:
+    return x
 ```
 
-`--require-native` asks a different, stricter question. `--no-any` asks *is this
-module fully typed*; `--require-native` asks *does this module compile
-entirely*, and so also fails on a type that is perfectly precise but that the
-compiler does not represent yet:
+```console
+$ by compile loose.by --no-any
+by failed
+  Cause: could not compile /app/loose.by
+  Cause: `no-any` is on and 2 place(s) in this module have a gradual type:
+  loose: `x` is gradual
+  loose: `return` is gradual
+```
+
+`--require-native` asks a different question. `--no-any` asks *is this module
+fully typed*; `--require-native` asks *does this module compile entirely*, and so
+fails on a function the compiler cannot lower, however precise its types:
+
+```by
+def run_code(source: str) -> object:
+    return eval(source)
+```
 
 ```console
-$ by compile app.by --require-native
-error: could not compile app.by
-
-Caused by:
-    `require-native` is on and 1 function(s) were left interpreted:
-      describe: `list[int]` has no native representation yet
+$ by compile hot.by --require-native
+by failed
+  Cause: could not compile /app/hot.by
+  Cause: `require-native` is on and 1 function(s) were left interpreted:
+  run_code: `eval` with no namespace of its own runs in the calling frame's, and a compiled function pushes none
 ```
+
+either failure exits 2 and writes no extension for that module
 
 `--licence-recheck` is for chasing a wrong answer rather than for shipping. the
 compiler *licenses* a call to go straight to a compiled body wherever nothing can
@@ -421,8 +427,15 @@ compiled functions are installed over the top
 
 ```console
 $ by compile hot.by --verbose
-hot.by -> build/hot.cpython-313-darwin.so
-  declined describe: `list[int]` has no native representation yet
+/app/hot.by -> /app/build/hot.cpython-313-darwin.so
+info[declined]: `run_code` was left to its interpreted definition
+ --> hot.by:1:1
+  |
+1 | / def run_code(source: str) -> object:
+2 | |     return eval(source)
+  | |_______________________^ `eval` with no namespace of its own runs in the calling frame's, and a compiled function pushes none
+
+Found 1 diagnostic
 
 compiled 1 module(s)
 1 function(s) left to the interpreted definition

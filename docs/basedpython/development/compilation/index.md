@@ -10,8 +10,8 @@ transpiled python it replaces:
 
 ```sh
 by compile                 # compile the whole project to ./build/
-by compile app.hot         # compile one module, leave the rest interpreted
-python -c "import app"     # the extension is picked up ahead of the .py
+by compile app/hot.by      # compile one module, leave the rest interpreted
+PYTHONPATH=build python -c "import app.hot"     # the extension is picked up ahead of the .py
 ```
 
 `by compile` writes everything `by build` writes and the extensions as well, so

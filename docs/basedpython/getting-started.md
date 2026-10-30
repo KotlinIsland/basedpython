@@ -9,14 +9,21 @@ basedpython ships as the `basedpython` package, which installs two executables:
 `by`, the type checker and transpiler, and `buff`, the linter and formatter
 
 ```sh
-uv add --dev basedpython
+uv add --dev "basedpython>=0.0.1b2"
 ```
+
+name the version: basedpython has only published pre-releases, and without one in the requirement
+uv installs `0.0.0`, an empty placeholder with no executables. a directory that has no
+`pyproject.toml` yet needs `uv init --bare` first
 
 verify it works:
 
 ```sh
-by --help
+uv run by --help
 ```
+
+the executables are in the project's environment, so run them through `uv run`, or activate the
+environment. the rest of these docs write `by` on its own
 
 ## your first file
 
@@ -108,12 +115,10 @@ see [native compilation](features/compilation.md)
 
 ```yaml
 - name: Build
-  run: |
-    uv add --dev basedpython
-    by build
+  run: uv run by build
 
 - name: Test
-  run: pytest build/
+  run: uv run pytest build/
 ```
 
 ## converting python to basedpython
