@@ -4425,6 +4425,33 @@ impl<'db> Type<'db> {
         env: &ProgramEnvironment<'db>,
         file: ruff_db::files::File,
     ) -> Type<'db> {
+        self.promote_with_literals_in(db, env, file, LiteralPromotion::Widen)
+    }
+
+    /// [`Self::promote_in`], except that a literal value stays as it is, wherever in the type
+    /// it is. the exactness of a constructor call (`final A[int]`) still drops, since that
+    /// says nothing about the type's arguments
+    fn promote_keeping_literals_in(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: ruff_db::files::File,
+    ) -> Type<'db> {
+        match self.promote_with_literals_in(db, env, file, LiteralPromotion::Keep) {
+            Type::Restricted(restricted) if restricted.modifier(db) == TypeModifier::Final => {
+                restricted.type_argument(db)
+            }
+            promoted => promoted,
+        }
+    }
+
+    fn promote_with_literals_in(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: ruff_db::files::File,
+        literals: LiteralPromotion,
+    ) -> Type<'db> {
         let basedpython = file.source_type(db).is_basedpython();
         let numeric = if basedpython || db.analysis_settings(file).strict_float {
             NumericPromotion::Exact
@@ -4441,7 +4468,11 @@ impl<'db> Type<'db> {
             env,
             &TypeMapping::Promote(
                 PromotionMode::On,
-                PromotionKind::regular(numeric, functions),
+                PromotionKind::Regular {
+                    literals,
+                    numeric,
+                    functions,
+                },
             ),
             TypeContext::default(),
         )

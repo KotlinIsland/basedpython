@@ -40,38 +40,8 @@
 //! the pass is inert below that target, and stubs have no runtime to observe,
 //! so stub sources are left alone
 //!
-//! # TODO: a subscript the *source* wrote on an unsubscriptable class
-//!
-//! this pass only declines to *invent* a subscript. one the source writes
-//! itself is copied through, and for a class the runtime won't subscript that
-//! is python which raises on the line it appears:
-//!
-//! ```text
-//! a = zip[int]                # a = zip[int]
-//! type a = zip[int]           # TypeAliasType("a", zip[int]) — the polyfill
-//!                             #   evaluates its value, unlike native pep 695
-//! def f(x: zip[int]): ...     # crashes on a 3.10–3.13 target, where no
-//!                             #   `from __future__ import annotations` is emitted
-//! ```
-//!
-//! this is faithful — the same three lines raise in plain python — so it is a
-//! missing diagnostic rather than a bad lowering. but a lowering is available
-//! and is probably the better answer: emit a generic *alias* object instead of
-//! subscripting the class, the way `typing.List` stood in for a `list` nobody
-//! could subscript before 3.9. the alias carries the same `__origin__` and
-//! `__args__` a real `zip[int]` would have, so every static reader and the
-//! `_parametric_is` probe keep working, and nothing evaluates a subscript the
-//! class does not support
-//!
-//! two things to settle first. which spelling — a `typing` alias where one
-//! exists, else a constructed `types.GenericAlias(zip, (int,))`, which is
-//! exactly the object the subscript would have produced. and which positions
-//! are worth rewriting, since an annotation is already inert wherever the
-//! `from __future__ import annotations` preamble is emitted, and pep 649 makes
-//! it inert on 3.14+ regardless
-//!
-//! either way it needs to know *which* classes the runtime refuses, which is
-//! the open question on `RuntimeSubscript::Unknown` in ty's `reified_infer`
+//! one the source writes itself is another matter, since the source asked for it:
+//! that is [`class_subscript`](super::class_subscript)'s
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
@@ -107,6 +77,8 @@ fn is_version_info(expr: &Expr) -> bool {
 struct Reifier<'ti> {
     types: &'ti dyn TypeInfo,
     written: WrittenNames<'ti>,
+    min_version: PythonVersion,
+    in_f_string: bool,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -144,14 +116,27 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                 // specialization explicit. an explicit `A[int](…)` (subscript
                 // callee) already carries it
                 if !matches!(call.func.as_ref(), Expr::Subscript(_))
-                    && let Some(arguments) = self.types.constructor_specialization(call)
+                    && let Some(arguments) = self
+                        .types
+                        .constructor_specialization(call, self.min_version)
                 {
-                    self.edits.push((
-                        TextRange::empty(call.func.range().end()),
-                        format!("[{}]", self.written.spelled(&arguments)),
-                    ));
+                    let arguments = self.written.spelled(&arguments);
+                    // python before 3.12 lets an f-string's replacement field hold neither a
+                    // backslash nor the f-string's own quote, so a string literal has no
+                    // spelling in one, and a construction with no spelling records nothing
+                    if !self.in_f_string || !arguments.contains(['"', '\\']) {
+                        self.edits.push((
+                            TextRange::empty(call.func.range().end()),
+                            format!("[{arguments}]"),
+                        ));
+                    }
                 }
                 walk_expr(self, expr);
+            }
+            Expr::FString(_) if self.min_version < PythonVersion::PY312 => {
+                let outer = std::mem::replace(&mut self.in_f_string, true);
+                walk_expr(self, expr);
+                self.in_f_string = outer;
             }
             Expr::Compare(compare) if compare.operands.iter().any(is_version_info) => {}
             Expr::Subscript(subscript) => {
@@ -202,6 +187,8 @@ impl TypeAwarePass for TypeReificationPass<'_> {
         let mut reifier = Reifier {
             types,
             written: self.written,
+            min_version: self.min_version,
+            in_f_string: false,
             edits: Vec::new(),
         };
         for stmt in stmts {
@@ -261,6 +248,19 @@ mod tests {
     }
 
     #[test]
+    fn a_written_subscript_of_a_class_gaining_one_later_is_left_to_the_runtime() {
+        // `memoryview` has a `__class_getitem__` from 3.14. a call is not rewritten to one, but
+        // the source asked for this one, so what it evaluates to is the runtime's to settle
+        let older = out_checked_at("a = memoryview[int]\n", PythonVersion::PY313);
+        assert!(
+            older.contains("a = _by_subscript(memoryview, int)\n"),
+            "{older}"
+        );
+        let newer = out_checked_at("a = memoryview[int]\n", PythonVersion::PY314);
+        assert!(newer.contains("a = memoryview[int]\n"), "{newer}");
+    }
+
+    #[test]
     fn generic_constructor_gets_inferred_specialization() {
         let out = out_at(
             indoc! {"
@@ -272,11 +272,11 @@ mod tests {
             PythonVersion::PY312,
         );
         assert!(
-            out.contains("a = A[int](1)"),
+            out.contains("a = A[_by_lit(1)](1)"),
             "int ctor should inject: {out}"
         );
         assert!(
-            out.contains("b = A[str](\"x\")"),
+            out.contains("b = A[_by_lit(\"x\")](\"x\")"),
             "str ctor should inject: {out}"
         );
     }
@@ -299,6 +299,25 @@ mod tests {
     }
 
     #[test]
+    fn a_string_solution_stays_out_of_an_f_string_python_cannot_hold_it_in() {
+        let source = indoc! {"
+            class A[out T]:
+                def __init__(self, t: T): ...
+            print(f\"{A('x')}\", f\"{A(1)}\", A('x'))
+        "};
+        let below = out_at(source, PythonVersion::PY311);
+        assert!(
+            below.contains("print(f\"{A('x')}\", f\"{A[_by_lit(1)](1)}\", A[_by_lit(\"x\")]('x'))"),
+            "{below}"
+        );
+        let above = out_at(source, PythonVersion::PY312);
+        assert!(
+            above.contains("print(f\"{A[_by_lit(\"x\")]('x')}\""),
+            "{above}"
+        );
+    }
+
+    #[test]
     fn declared_variance_beside_an_inferred_parameter() {
         // a parameter used only by `__init__` is bivariant, which constrains
         // nothing — its argument must still reach the specialization
@@ -311,7 +330,7 @@ mod tests {
             PythonVersion::PY312,
         );
         assert!(
-            out.contains("a = A[int, str](1, \"x\")"),
+            out.contains("a = A[_by_lit(1), _by_lit(\"x\")](1, \"x\")"),
             "both arguments should reify: {out}"
         );
     }

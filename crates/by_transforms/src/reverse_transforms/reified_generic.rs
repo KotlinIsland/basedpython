@@ -1,6 +1,7 @@
 //! reverse of `crate::transforms::reified_generic` and
 //! `crate::transforms::reified_class`:
 //!   `@generic  # basedpython: reified\ndef f[T]: …` → `def f[T]: …`
+//!   `@generic.forwarding("T")  # basedpython: reified\ndef f[T]: …` → `def f[T]: …`
 //!   `@generic_class  # basedpython: reified\nclass A[T]: …` → `class A[T]: …`
 //!
 //! the forward transforms tag the decorator line they synthesize with the
@@ -40,7 +41,17 @@ impl<'src> ReifiedGenericReverse<'src> {
     /// AST), so it is matched against the source slice from the decorator's end
     /// to the end of its physical line
     fn is_marked(&self, decorator: &Decorator, wrapper: &str) -> bool {
-        if !matches!(&decorator.expression, Expr::Name(n) if n.id.as_str() == wrapper) {
+        // `@generic.forwarding("T")` is the wrapper too, for a parameter only forwarded
+        let name = match &decorator.expression {
+            Expr::Call(call) => match call.func.as_ref() {
+                Expr::Attribute(attribute) if attribute.attr.as_str() == "forwarding" => {
+                    attribute.value.as_ref()
+                }
+                _ => return false,
+            },
+            name => name,
+        };
+        if !matches!(name, Expr::Name(n) if n.id.as_str() == wrapper) {
             return false;
         }
         let after = usize::from(decorator.range().end());
@@ -160,6 +171,24 @@ mod tests {
             "wrapper should be removed: {out}"
         );
         assert!(out.contains("def f[T]():"), "def should remain: {out}");
+    }
+
+    #[test]
+    fn marked_forwarding_generic_is_unwrapped() {
+        let src =
+            format!("@generic.forwarding(\"T\"){REIFIED_MARKER}\ndef f[T]():\n    print(T)\n");
+        let out = rev(&src);
+        assert!(
+            !out.contains("@generic"),
+            "wrapper should be removed: {out}"
+        );
+        assert!(out.contains("def f[T]():"), "def should remain: {out}");
+    }
+
+    #[test]
+    fn unmarked_forwarding_generic_is_left_alone() {
+        let out = rev("@generic.forwarding(\"T\")\ndef f[T]():\n    print(T)\n");
+        assert!(out.contains("@generic.forwarding"), "{out}");
     }
 
     #[test]

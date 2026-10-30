@@ -571,17 +571,20 @@ step out and leaving it off reach the same answer:
 def f[*Ts](*args: *Ts) -> None:
     assert Ts == (int, str)
 
-f(1, "a")
+f(int(1), str("a"))
 f[int, str](1, "a")
 ```
 
-Each element of the run is the argument's runtime type, so a literal widens to its class under the
-file's numeric model. `2.0` binds `float` — not the `int | float` that a float argument is merely
-*accepted* as:
+Each element of the run is what the checker solved for that argument, so a literal stays one. Equal
+floats can be different values (`0.0 == -0.0`), so the runtime can't tell one float literal from
+another, and `2.0` binds `float` — not the `int | float` that a float argument is merely *accepted*
+as:
 
 ```by
+from typing import Literal
+
 def g[*Ts](*args: *Ts) -> None:
-    assert Ts == (int, float)
+    assert Ts == (Literal[1], float)
 
 g(1, 2.0)
 ```
@@ -680,17 +683,88 @@ def outer[reified T](data: list[T]) -> None:
 outer(list[int]())
 ```
 
-## an erased type parameter has no cell to forward
+## a type parameter only forwarded is inferred to be reified
 
-The mirror of the above. An erased type parameter is not a runtime value, so there is nothing to
-forward and the call still needs an explicit specialization:
+A parameter nothing else reifies gets a cell when the body hands it to something that needs one, so
+a specialization survives every hop that only passes a value along. No keyword is needed:
 
 ```by
-def inner[reified T](data: list[T]) -> None: ...
+def inner[reified T](data: list[T]) -> None:
+    assert T == int
+
+def middle[T](data: list[T]) -> None:
+    inner(data)  # runs as inner[T](data)
 
 def outer[T](data: list[T]) -> None:
+    middle(data)  # runs as middle[T](data)
+
+outer(list[int]())
+```
+
+## a recursive call hands on its own type parameter
+
+```by
+def count[reified T](t: T, n: int) -> int:
+    assert T == int
+    return n if n == 0 else count(t, n - 1)  # no diagnostic
+
+assert count(int(1), 2) == 0
+```
+
+## a type parameter holds the literal it was solved to
+
+`f(1)` solves `T` to `1`, and that is what the cell holds. A test against the cell asks whether the
+value is of that type, whatever kind of type it is:
+
+```by
+from typing import Literal
+
+def holds[T](t: T) -> object:
+    return T
+
+assert holds(1) == Literal[1]
+assert holds(int(1)) == int
+
+def test[T](t: T, value: object) -> bool:
+    return value is T
+
+assert test(1, 1)
+assert not test(1, 2)
+assert not test(1, True)
+assert test("a", "a")
+assert not test("a", "b")
+assert test(int(1), 2)
+assert not test(int(1), "b")
+assert not test(list[int](), 1)
+```
+
+## a forwarded type parameter a callee reads has to be supplied
+
+A hop that reads the value through its callee has to be given it, as a declared `reified` would:
+
+```by
+def inner[reified T](data: T) -> None: ...
+
+def outer[T](data: T) -> None:
+    inner(data)  # no diagnostic
+
+def dynamic(x):
     # error: [unspecialized-reified-generic]
-    inner(data)
+    outer(x)
+```
+
+## a classmethod has no cell to forward
+
+The binding hides the function a type argument would be rebuilt into:
+
+```by
+def inner[reified T](data: T) -> None: ...
+
+class C:
+    @classmethod
+    def m[T](cls, data: T) -> None:
+        # error: [unspecialized-reified-generic]
+        inner(data)
 ```
 
 ## an erased class type parameter has no cell to forward

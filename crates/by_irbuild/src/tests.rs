@@ -12237,6 +12237,23 @@ def label[reified T](value: object) -> str:
 }
 
 #[test]
+fn a_forwarded_type_parameter_is_declined() {
+    // `Box(value)` is `Box[T](value)`, so the body needs the type argument as much as one that
+    // read `T` itself, though nothing in the function's own source says so
+    let reason = decline(
+        "\
+class Box[T]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+def wrap[T](value: T) -> object:
+    return Box(value)
+",
+    );
+    assert!(reason.contains("reified type parameter"), "{reason}");
+}
+
+#[test]
 fn a_reified_class_type_parameter_is_declined() {
     let reasons = declines(
         "\

@@ -1,0 +1,17 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_reification: true, ..InlayHintSettings::none() })"
+---
+
+class Box[T]:
+    def __init__(self, t: T):
+        self.t: T = t
+
+def forwarded[[reified ]T](t: T) -> object:
+    return Box(t)
+
+def hop[[reified ]U](u: U) -> object:
+    return forwarded(u)
+
+def erased[V](v: V) -> list[V]:
+    return [v]

@@ -335,7 +335,11 @@ pub(crate) trait TypeInfo {
     /// wrapped in the `generic` polyfill, so their specialized call sites
     /// (`f[int](…)`) must NOT have their `[…]` stripped — they route through
     /// `generic.__getitem__`
-    fn is_reified_function(&self, name: &ExprName) -> bool;
+    fn is_reified_function(
+        &self,
+        name: &ExprName,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool;
 
     /// the specialization step to splice in after the callee of a bare call of
     /// a reified generic (`f(1)` → `"[int]"`, or a `".__getitem__(foo=int)"`
@@ -345,7 +349,24 @@ pub(crate) trait TypeInfo {
     fn reified_call_specialization(
         &self,
         call: &ruff_python_ast::ExprCall,
-    ) -> Option<RuntimeSpelling>;
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<ty_python_semantic::CallSpecialization>;
+
+    /// the type parameters `function`'s body forwards into a specialization without its
+    /// source reifying them: the function takes a specialization, as a reified one does,
+    /// but a call need not supply the ones it does not require
+    fn forwarded_type_params(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> ty_python_semantic::ForwardedTypeParams;
+
+    /// whether `value` is a generic class that nothing in view attests the runtime can
+    /// subscript, so that a subscript of it may raise where the checker accepts it
+    fn class_subscript_is_unattested(&self, value: &Expr) -> bool;
+
+    /// whether the runtime refuses to subscript `value`, as far as can be told. stricter than
+    /// [`Self::class_subscript_is_unattested`], whose lowering asks the runtime as it runs
+    fn class_subscript_is_refused(&self, value: &Expr) -> bool;
 
     /// the comma-joined type arguments to inject at a bare constructor call
     /// of a generic class (`A(1)` → `"int"`), or `None` when the callee is
@@ -355,6 +376,7 @@ pub(crate) trait TypeInfo {
     fn constructor_specialization(
         &self,
         call: &ruff_python_ast::ExprCall,
+        min_version: ruff_python_ast::PythonVersion,
     ) -> Option<RuntimeSpelling>;
 
     /// when the parameter annotation `annotation` denotes a union of
@@ -1016,24 +1038,45 @@ impl TypeInfo for LoweringModel<'_> {
             .is_some_and(|function| function.is_return_value_marker(self.db()))
     }
 
-    fn is_reified_function(&self, name: &ExprName) -> bool {
+    fn is_reified_function(
+        &self,
+        name: &ExprName,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool {
         name.inferred_type(self)
             .and_then(Type::as_function_literal)
-            .is_some_and(|function| function.is_reified(self.db()))
+            .is_some_and(|function| self.takes_type_arguments_at(function, min_version))
     }
 
     fn reified_call_specialization(
         &self,
         call: &ruff_python_ast::ExprCall,
-    ) -> Option<RuntimeSpelling> {
-        LoweringModel::reified_call_specialization(self, call)
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<ty_python_semantic::CallSpecialization> {
+        LoweringModel::reified_call_specialization(self, call, min_version)
+    }
+
+    fn forwarded_type_params(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> ty_python_semantic::ForwardedTypeParams {
+        SemanticModel::forwarded_type_params(self, function)
+    }
+
+    fn class_subscript_is_unattested(&self, value: &Expr) -> bool {
+        SemanticModel::class_subscript_is_unattested(self, value)
+    }
+
+    fn class_subscript_is_refused(&self, value: &Expr) -> bool {
+        SemanticModel::class_subscript_is_refused(self, value)
     }
 
     fn constructor_specialization(
         &self,
         call: &ruff_python_ast::ExprCall,
+        min_version: ruff_python_ast::PythonVersion,
     ) -> Option<RuntimeSpelling> {
-        self.reified_constructor_type_arguments(call)
+        self.reified_constructor_type_arguments(call, min_version)
     }
 
     fn restricted_member_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String> {

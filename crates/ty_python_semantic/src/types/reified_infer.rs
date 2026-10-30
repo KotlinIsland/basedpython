@@ -9,39 +9,49 @@
 //! argument types, never their own private notion of the solution
 //!
 //! a spelling is only produced when evaluating it at the call site would
-//! yield the intended runtime object: literals promote to their instance
-//! class first (`Literal[1]` → `int`), and a class name is used only if the
-//! bare name resolves in the module's globals (or builtins) to that same
-//! class. anything else — unsolved parameters, dynamic types, scope-local
+//! yield the intended runtime object. the solution is spelled as the checker
+//! reports it, so where the checker keeps a literal the runtime records one
+//! (`Literal[1]` → `_by_lit(1)`), and a class name is used only if the bare
+//! name resolves in the module's globals (or builtins) to that same class.
+//! anything else — unsolved parameters, dynamic types, scope-local
 //! classes, exotic type forms — has no spelling and the bare call stays an
 //! error
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
 
 use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast::{self as ast, name::Name};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{self as ast, PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use ty_module_resolver::{KnownModule, SearchPath, file_to_module};
+use ty_python_core::definition::{Definition, DefinitionKind};
+use ty_python_core::scope::{NodeWithScopeKind, NodeWithScopeRef, ScopeId};
+use ty_python_core::semantic_index;
 
 use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, builtins_symbol, global_symbol, runtime_binding};
+use crate::semantic_model::{HasType, SemanticModel};
 use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
 use crate::types::check_order::InferredInCheckOrder;
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::class_base::ClassBase;
+use crate::types::exceptions::CallSolution;
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
-use crate::types::literal::LiteralValueTypeKind;
+use crate::types::literal::{LiteralValueType, LiteralValueTypeKind};
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
 use crate::types::tuple::Tuple;
-use crate::types::typevar::TypeVarKind;
+use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
-use crate::types::{KnownClass, MemberLookupPolicy, Type};
+use crate::types::visitor::any_over_type;
+use crate::types::{KnownClass, MemberLookupPolicy, Type, TypeModifier};
 
 /// why a bare call of a reified generic cannot be accepted
 pub(crate) enum ReifiedInferenceError<'db> {
@@ -66,21 +76,58 @@ pub(crate) fn inferred_call_type_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
-    callee: Type<'db>,
-    function: FunctionType<'db>,
-    arguments: &CallArguments<'_, 'db>,
+    call: &BareGenericCall<'_, 'db>,
     site: Option<RuntimeSite<'db>>,
+    cells: TypeParamCells<'_, 'db>,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
-    let bindings = callee
-        .try_call(db, env, arguments)
-        .map_err(|_| ReifiedInferenceError::NoBinding)?;
-    let specialization = bindings
-        .single_element()
-        .and_then(|callable| callable.matching_overloads().exactly_one().ok())
-        .ok_or(ReifiedInferenceError::NoBinding)?
-        .1
-        .merged_specialization(db, env);
-    rendered_type_arguments(db, env, file, function, specialization, site)
+    let BareGenericCall {
+        callee, function, ..
+    } = *call;
+    let arguments = call
+        .arguments
+        .as_ref()
+        .ok_or(ReifiedInferenceError::NoBinding)?;
+    // what inference solved the call to, the expected type included, is what the rest of the
+    // program takes the value to be: `y: Box[object] = make(1)` is a `make[object]`. inference
+    // leaves out a solution that substitutes nothing, so only the arguments can say more
+    let specialization = match call.solution {
+        Some(CallSolution::Solved(specialization)) => Some(specialization),
+        Some(CallSolution::Unbound) => return Err(ReifiedInferenceError::NoBinding),
+        None => callee
+            .try_call(db, env, arguments)
+            .map_err(|_| ReifiedInferenceError::NoBinding)?
+            .single_element()
+            .and_then(|callable| callable.matching_overloads().exactly_one().ok())
+            .ok_or(ReifiedInferenceError::NoBinding)?
+            .1
+            .merged_specialization(db, env),
+    };
+    // a recursive call handing on a value of the function's own type parameter has `T` on
+    // both sides of the constraint, which leaves the solver nothing to record. the answer
+    // is still `T`, as the call's return type already says
+    let handed_on = |bound_typevar: BoundTypeVarInstance<'db>| {
+        arguments.iter().any(|argument| {
+            argument.source_types().get_default().is_some_and(|ty| {
+                any_over_type(
+                    db,
+                    env,
+                    ty,
+                    false,
+                    |ty| matches!(ty, Type::TypeVar(typevar) if typevar == bound_typevar),
+                )
+            })
+        })
+    };
+    rendered_type_arguments(
+        db,
+        env,
+        file,
+        function,
+        specialization,
+        site,
+        cells,
+        &handed_on,
+    )
 }
 
 /// [`inferred_call_type_arguments`] for callers outside the `types` module:
@@ -90,28 +137,32 @@ pub(crate) fn inferred_call_type_arguments<'db>(
 /// keyword-variadic pack contributes fields, since a subscript takes no
 /// keywords. any failure collapses to `None` — the checker reports those, the
 /// caller just skips injection
-#[expect(clippy::too_many_arguments)]
 pub(crate) fn injectable_call_specialization<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
-    callee: Type<'db>,
-    function: FunctionType<'db>,
-    positional: Vec<Type<'db>>,
-    keywords: Vec<(&str, Type<'db>)>,
+    bare_call: &BareGenericCall<'_, 'db>,
     site: Option<RuntimeSite<'db>>,
-) -> Option<RuntimeSpelling> {
-    let arguments: CallArguments<'_, 'db> = positional
-        .into_iter()
-        .map(|ty| (Argument::Positional, Some(ty)))
-        .chain(
-            keywords
-                .into_iter()
-                .map(|(name, ty)| (Argument::Keyword(name), Some(ty))),
-        )
-        .collect();
-    let rendered =
-        inferred_call_type_arguments(db, env, file, callee, function, &arguments, site).ok()?;
+    min_version: PythonVersion,
+) -> Option<CallSpecialization> {
+    let function = bare_call.function;
+    let hard = function.is_unspecialized_reified(db);
+    // a function that only forwards takes its type arguments where the target can give it
+    // the cells to hold them, and otherwise is left the plain function it was written as
+    if !(hard
+        || function.is_unspecialized_forwarding(db) && function.can_forward_at(db, min_version))
+    {
+        return None;
+    }
+    let rendered = inferred_call_type_arguments(
+        db,
+        env,
+        file,
+        bare_call,
+        site,
+        TypeParamCells::Lowered(Some(min_version)),
+    )
+    .ok()?;
     // an empty prefix means everything defaults — the bare call is already
     // correct and nothing is injected
     if rendered.is_empty() {
@@ -128,7 +179,13 @@ pub(crate) fn injectable_call_specialization<'db>(
             .map(|argument| argument.text.clone()),
         ", ",
     );
-    let (open, close) = if fields.is_empty() {
+    // a method that only forwards is not bound to be what the receiver runs: an override may
+    // forward nothing, and so be a plain method that takes no specialization. a reified
+    // method has no such override, which `reified_override_error` rejects
+    let through_helper = !hard && bare_call.through_attribute;
+    let (open, close) = if through_helper {
+        (", ", ")")
+    } else if fields.is_empty() {
         ("[", "]")
     } else {
         (".__getitem__(", ")")
@@ -136,7 +193,340 @@ pub(crate) fn injectable_call_specialization<'db>(
     let mut injected = RuntimeSpelling::text(open);
     injected.push(&parts);
     injected.push_str(close);
-    Some(injected)
+    Some(CallSpecialization {
+        through_helper,
+        suffix: injected,
+    })
+}
+
+/// what the transpiler splices around the callee of a bare call of a generic function
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSpecialization {
+    /// the callee is written as the first argument of the `_by_specialized` runtime helper
+    pub through_helper: bool,
+    /// the text that follows the callee: `[int]`, `.__getitem__(int, a=str)`, or the rest of
+    /// the helper's arguments
+    pub suffix: RuntimeSpelling,
+}
+
+/// a call of a generic function that names no specialization, with its arguments as the
+/// inference of the module left them
+pub(crate) struct BareGenericCall<'a, 'db> {
+    callee: Type<'db>,
+    pub(crate) function: FunctionType<'db>,
+    /// `None` when an argument is unpacked, so that which parameters it fills is not known
+    pub(crate) arguments: Option<CallArguments<'a, 'db>>,
+    solution: Option<CallSolution<'db>>,
+    /// the callee is looked up on something, a receiver or a module
+    through_attribute: bool,
+}
+
+impl<'a, 'db> BareGenericCall<'a, 'db> {
+    /// `call`, if it is a bare call of a function with its own type parameters. a classmethod
+    /// is not one: its binding hides the function a specialization would be given to
+    pub(crate) fn of(
+        db: &'db dyn Db,
+        model: &SemanticModel<'db>,
+        call: &'a ast::ExprCall,
+    ) -> Option<Self> {
+        if matches!(call.func.as_ref(), ast::Expr::Subscript(_)) {
+            return None;
+        }
+        let callee = call.func.inferred_type(model)?;
+        let function = generic_call_target(db, callee)?;
+        Some(Self {
+            callee,
+            function,
+            arguments: Self::arguments(model, call),
+            solution: model.call_solution(call),
+            through_attribute: call.func.is_attribute_expr(),
+        })
+    }
+
+    fn arguments(
+        model: &SemanticModel<'db>,
+        call: &'a ast::ExprCall,
+    ) -> Option<CallArguments<'a, 'db>> {
+        let positional = call.arguments.args.iter().map(|argument| {
+            (!argument.is_starred_expr())
+                .then(|| Some((Argument::Positional, Some(argument.inferred_type(model)?))))
+                .flatten()
+        });
+        let keywords = call.arguments.keywords.iter().map(|keyword| {
+            let name = keyword.arg.as_ref()?;
+            Some((
+                Argument::Keyword(name.as_str()),
+                Some(keyword.value.inferred_type(model)?),
+            ))
+        });
+        positional.chain(keywords).collect()
+    }
+}
+
+/// the function a call of `callee` runs, if a specialization could be given to it
+pub(crate) fn generic_call_target<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<FunctionType<'db>> {
+    match callee {
+        Type::FunctionLiteral(function) => (!function.is_classmethod(db)).then_some(function),
+        Type::BoundMethod(method) if !method.binds_classmethod(db) => method.function(db),
+        _ => None,
+    }
+}
+
+/// which function type parameters a spelling may name, as the runtime cell holding the type
+/// argument
+#[derive(Clone, Copy)]
+pub(crate) enum TypeParamCells<'a, 'db> {
+    /// those the function's source reifies, which is all there is to ask about while the
+    /// module is being inferred: what a body forwards is decided from that inference
+    Written,
+    /// those the lowering makes cells of, a type parameter the body forwards included. at a
+    /// target version, only where that target can hold the cell; without one, wherever the
+    /// program ends up being lowered for
+    Lowered(Option<PythonVersion>),
+    /// every function type parameter, recording each one read. this is how
+    /// [`forwarded_type_params`] finds what a call would need
+    Assumed(&'a RefCell<Vec<BoundTypeVarInstance<'db>>>),
+}
+
+impl<'db> TypeParamCells<'_, 'db> {
+    fn has_cell(self, db: &'db dyn Db, bound_typevar: BoundTypeVarInstance<'db>) -> bool {
+        match self {
+            Self::Written => is_reified_function_typevar(db, bound_typevar),
+            Self::Lowered(min_version) => {
+                is_reified_function_typevar(db, bound_typevar)
+                    || typevar_function_scope(db, bound_typevar).is_some_and(|scope| {
+                        forwarded_type_params(db, scope)
+                            .names
+                            .contains(bound_typevar.name(db))
+                            && min_version
+                                .is_none_or(|version| target_can_forward(db, scope, version))
+                    })
+            }
+            Self::Assumed(reads) => {
+                let is_function_parameter = matches!(
+                    bound_typevar.binding_context(db),
+                    BindingContext::Definition(definition)
+                        if matches!(definition.kind(db), DefinitionKind::Function(_))
+                );
+                if is_function_parameter {
+                    reads.borrow_mut().push(bound_typevar);
+                }
+                is_function_parameter
+            }
+        }
+    }
+}
+
+/// the body scope of the function that binds `bound_typevar`
+fn typevar_function_scope<'db>(
+    db: &'db dyn Db,
+    bound_typevar: BoundTypeVarInstance<'db>,
+) -> Option<ScopeId<'db>> {
+    let BindingContext::Definition(definition) = bound_typevar.binding_context(db) else {
+        return None;
+    };
+    let DefinitionKind::Function(function) = definition.kind(db) else {
+        return None;
+    };
+    let file = db.program_file(definition.file(db));
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    Some(
+        semantic_index(db, file)
+            .node_scope(NodeWithScopeRef::Function(function.node(&module)))
+            .to_scope_id(db, file),
+    )
+}
+
+/// a forwarded type parameter is a pep 695 closure cell, so the generated python keeps the
+/// native parameter list of the function with this body: python 3.12's syntax, or 3.13's when
+/// a parameter has a default. a declared `reified` is a hard error below those; a forwarded
+/// parameter is best-effort, and the function just stays erased
+pub(crate) fn target_can_forward<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    min_version: PythonVersion,
+) -> bool {
+    let module = parsed_module(db, scope.python_file(db)).load(db);
+    let function = scope.node(db).expect_function().node(&module);
+    let has_default = function
+        .type_params
+        .as_deref()
+        .is_some_and(|params| params.iter().any(|param| param.default().is_some()));
+    min_version
+        >= if has_default {
+            PythonVersion::PY313
+        } else {
+            PythonVersion::PY312
+        }
+}
+
+/// the type parameters of a function that nothing in its source reifies but that its body
+/// forwards: a construction or a bare call in it solves to a specialization mentioning one, so
+/// the value that specialization is recorded on, or the callee it is handed to, needs the type
+/// argument at runtime
+///
+/// ```by
+/// def f[T](t: T) -> object:
+///     return A(t)          # `A[T](t)`, which needs `T`'s value
+/// ```
+///
+/// this reads the inference of the body, so nothing inference asks may depend on it. that is
+/// the reason for `TypeParamCells`, and the reason a bare call and a reified construction
+/// are checked in `runtime_reads` instead of as they are inferred. it is a
+/// fixed point over the call graph, starting from nothing: a parameter is added only by
+/// what a callee already forwards, so it only grows
+#[derive(Debug, Default, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub struct ForwardedTypeParams {
+    /// every one, in declaration order
+    pub names: Box<[Name]>,
+    /// those whose value something *reads*, rather than only records: a reified class, or a
+    /// callee that requires it. a call must then supply them, as it must for a declared
+    /// `reified`. the rest are best-effort, as a bare construction is: a call the solver has
+    /// no spelling for leaves the parameter's cell as it was and records nothing useful
+    pub required: Box<[Name]>,
+}
+
+impl ForwardedTypeParams {
+    fn requires(&self, name: &Name) -> bool {
+        self.required.contains(name)
+    }
+
+    /// the parameters a call may leave out
+    pub fn optional(&self) -> impl Iterator<Item = &Name> {
+        self.names.iter().filter(|name| !self.requires(name))
+    }
+}
+
+#[salsa::tracked(
+    returns(ref),
+    cycle_initial=|_, _, _| ForwardedTypeParams::default(),
+    heap_size=ruff_memory_usage::heap_size
+)]
+pub(crate) fn forwarded_type_params<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+) -> ForwardedTypeParams {
+    let source_type = scope.file(db).source_type(db);
+    if !source_type.is_basedpython() || source_type.is_stub() {
+        return ForwardedTypeParams::default();
+    }
+    let module = parsed_module(db, scope.python_file(db)).load(db);
+    let NodeWithScopeKind::Function(function) = scope.node(db) else {
+        return ForwardedTypeParams::default();
+    };
+    let function = function.node(&module);
+    let candidates = crate::reified::forwardable_type_param_names(function);
+    if candidates.is_empty() {
+        return ForwardedTypeParams::default();
+    }
+    let written = crate::reified::reified_type_param_names(source_type, function);
+    let file = scope.program_file(db);
+    let definition = semantic_index(db, file).expect_single_definition(function);
+    let model = SemanticModel::new(db, file);
+    let env = ProgramEnvironment::from_file(file);
+    let mut forwarded = ForwardedCalls {
+        db,
+        env: &env,
+        file: scope.file(db),
+        model: &model,
+        definition,
+        names: FxHashSet::default(),
+        required: FxHashSet::default(),
+    };
+    forwarded.visit_body(&function.body);
+    let of = |set: &FxHashSet<Name>| {
+        candidates
+            .iter()
+            .filter(|name| set.contains(*name) && !written.contains(*name))
+            .cloned()
+            .collect()
+    };
+    ForwardedTypeParams {
+        names: of(&forwarded.names),
+        required: of(&forwarded.required),
+    }
+}
+
+/// walks a function's body for what its calls need of its own type parameters
+struct ForwardedCalls<'a, 'db> {
+    db: &'db dyn Db,
+    env: &'a ProgramEnvironment<'db>,
+    file: File,
+    model: &'a SemanticModel<'db>,
+    definition: Definition<'db>,
+    names: FxHashSet<Name>,
+    required: FxHashSet<Name>,
+}
+
+impl ForwardedCalls<'_, '_> {
+    fn call(&mut self, call: &ast::ExprCall) {
+        let (db, env, file, model) = (self.db, self.env, self.file, self.model);
+        let reads = RefCell::new(Vec::new());
+        let cells = TypeParamCells::Assumed(&reads);
+        let Some(callee) = call.func.inferred_type(model) else {
+            return;
+        };
+        let required = if let Some(class_literal) = callee.as_class_literal() {
+            let Some(constructed) = call.inferred_type(model) else {
+                return;
+            };
+            if constructor_specialization(db, env, file, class_literal, constructed, None, cells)
+                .is_err()
+            {
+                return;
+            }
+            class_literal
+                .as_static()
+                .is_some_and(|class| class.inherits_reification(db))
+        } else if let Some(bare_call) = BareGenericCall::of(db, model, call) {
+            let function = bare_call.function;
+            let hard = function.is_unspecialized_reified(db);
+            if !hard && !function.is_unspecialized_forwarding(db) {
+                return;
+            }
+            if inferred_call_type_arguments(db, env, file, &bare_call, None, cells).is_err() {
+                return;
+            }
+            hard || !function.forwarded_type_params(db).required.is_empty()
+        } else {
+            return;
+        };
+        for bound_typevar in reads.into_inner() {
+            if matches!(
+                bound_typevar.binding_context(db),
+                BindingContext::Definition(definition) if definition == self.definition
+            ) {
+                let name = bound_typevar.name(db);
+                self.names.insert(name.clone());
+                if required {
+                    self.required.insert(name.clone());
+                }
+            }
+        }
+    }
+}
+
+impl<'ast> Visitor<'ast> for ForwardedCalls<'_, '_> {
+    fn visit_annotation(&mut self, _expr: &'ast ast::Expr) {}
+    fn visit_type_params(&mut self, _type_params: &'ast ast::TypeParams) {}
+
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        if !matches!(stmt, ast::Stmt::TypeAlias(_)) {
+            walk_stmt(self, stmt);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        if let ast::Expr::Call(call) = expr
+            && !matches!(call.func.as_ref(), ast::Expr::Subscript(_))
+        {
+            self.call(call);
+        }
+        walk_expr(self, expr);
+    }
 }
 
 /// The rendered runtime spellings to inject, in declaration order, from the
@@ -147,6 +537,7 @@ pub(crate) fn injectable_call_specialization<'db>(
 /// need no injection — the wrapper reads defaults off `__type_params__` at
 /// runtime — so their defaults never need a spelling. An empty result means
 /// the bare call is legal exactly as written (everything defaults).
+#[expect(clippy::too_many_arguments)]
 fn rendered_type_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -154,6 +545,8 @@ fn rendered_type_arguments<'db>(
     function: FunctionType<'db>,
     specialization: Option<Specialization<'db>>,
     site: Option<RuntimeSite<'db>>,
+    cells: TypeParamCells<'_, 'db>,
+    handed_on: &dyn Fn(BoundTypeVarInstance<'db>) -> bool,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let signature = function.signature(db);
     let generic_context = signature
@@ -177,7 +570,11 @@ fn rendered_type_arguments<'db>(
         let solution = solved
             .get(index)
             .copied()
-            .filter(|ty| kind.is_solution(db, env, *ty));
+            .filter(|ty| kind.is_solution(db, env, *ty, cells))
+            .or_else(|| {
+                let own = Type::TypeVar(bound_typevar);
+                (handed_on(bound_typevar) && kind.is_solution(db, env, own, cells)).then_some(own)
+            });
         if solution.is_some() {
             last_solved = Some(index);
         }
@@ -193,10 +590,12 @@ fn rendered_type_arguments<'db>(
     // without a default always needs a value, and a hole inside the prefix
     // cannot be spelled positionally
     let must_have_value = function.reified_type_params_requiring_argument(db);
+    let forwarded = function.forwarded_type_params(db);
     for (index, parameter) in resolved.iter().enumerate() {
         if parameter.value.is_none()
             && (last_solved.is_some_and(|last| index < last)
-                || must_have_value.contains(parameter.name))
+                || must_have_value.contains(parameter.name)
+                || forwarded.requires(parameter.name))
         {
             return Err(ReifiedInferenceError::Unsolved(parameter.name.clone()));
         }
@@ -211,12 +610,12 @@ fn rendered_type_arguments<'db>(
             let ty = parameter
                 .value
                 .ok_or_else(|| ReifiedInferenceError::Unsolved(parameter.name.clone()))?;
-            let promoted = ty.promote_in(db, env, file);
+            let solution = ty.promote_keeping_literals_in(db, env, file);
             let text = parameter
                 .kind
-                .spelling(db, env, file, promoted)
+                .spelling(db, env, file, solution, cells)
                 .ok_or_else(|| {
-                    ReifiedInferenceError::Unspellable(parameter.name.clone(), promoted)
+                    ReifiedInferenceError::Unspellable(parameter.name.clone(), solution)
                 })?;
             if let Some(site) = site
                 && let Some((name, binding)) = text.unbound_read(db, env, site)
@@ -241,13 +640,6 @@ pub(crate) struct TypeArgument {
     text: RuntimeSpelling,
     /// whether the text is keyword-spelled, and so cannot go in a subscript
     keyword: bool,
-}
-
-impl TypeArgument {
-    /// every binding of the module's global scope the argument's spelling reads
-    pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
-        self.text.global_reads()
-    }
 }
 
 /// a type parameter paired with the value the call solved it to
@@ -288,9 +680,10 @@ impl ParameterKind {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         ty: Type<'db>,
+        cells: TypeParamCells<'_, 'db>,
     ) -> bool {
         match self {
-            Self::Single => is_solution(db, ty),
+            Self::Single => is_solution(db, ty, cells),
             Self::Variadic => variadic_elements(db, env, ty).is_some(),
             Self::KeywordPack => ty.keyword_pack_fields(db).is_some(),
         }
@@ -304,14 +697,21 @@ impl ParameterKind {
         env: &ProgramEnvironment<'db>,
         file: File,
         ty: Type<'db>,
+        cells: TypeParamCells<'_, 'db>,
     ) -> Option<RuntimeSpelling> {
         let fields = match self {
-            Self::Single => return runtime_spelling(db, env, file, ty),
+            Self::Single => return spell_type(db, env, file, ty, cells),
             Self::Variadic => {
                 let spellings = variadic_elements(db, env, ty)?
                     .into_iter()
                     .map(|element| {
-                        runtime_spelling(db, env, file, element.promote_in(db, env, file))
+                        spell_type(
+                            db,
+                            env,
+                            file,
+                            element.promote_keeping_literals_in(db, env, file),
+                            cells,
+                        )
                     })
                     .collect::<Option<Vec<_>>>()?;
                 return Some(RuntimeSpelling::join(spellings, ", "));
@@ -322,11 +722,12 @@ impl ParameterKind {
             .into_iter()
             .map(|(name, field)| {
                 let mut spelling = RuntimeSpelling::text(format!("{name}="));
-                spelling.push(&runtime_spelling(
+                spelling.push(&spell_type(
                     db,
                     env,
                     file,
-                    field.promote_in(db, env, file),
+                    field.promote_keeping_literals_in(db, env, file),
+                    cells,
                 )?);
                 Some(spelling)
             })
@@ -354,7 +755,7 @@ fn variadic_elements<'db>(
 /// whether the solver produced an actual answer for a type parameter — a
 /// dynamic type means "nothing to reify", and so does a typevar with no
 /// runtime cell behind it. a *reified* typevar does have one, so it counts
-fn is_solution<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+fn is_solution<'db>(db: &'db dyn Db, ty: Type<'db>, cells: TypeParamCells<'_, 'db>) -> bool {
     match ty {
         Type::Dynamic(_) | Type::Never => false,
         // a reified type parameter is a live runtime cell holding its type
@@ -362,7 +763,7 @@ fn is_solution<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
         // that cell (`f(data)` inside a reified caller becomes `f[T](data)`).
         // the cell is in scope by construction: the solver only reaches it
         // through an argument whose type mentions it
-        Type::TypeVar(bound_typevar) => is_reified_function_typevar(db, bound_typevar),
+        Type::TypeVar(bound_typevar) => cells.has_cell(db, bound_typevar),
         _ => true,
     }
 }
@@ -375,27 +776,90 @@ fn runtime_spelling<'db>(
     file: File,
     ty: Type<'db>,
 ) -> Option<RuntimeSpelling> {
+    spell_type(db, env, file, ty, TypeParamCells::Written)
+}
+
+/// [`runtime_spelling`], reading the type parameters `cells` holds
+fn spell_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Option<RuntimeSpelling> {
     if ty.is_none(db) {
         return Some(RuntimeSpelling::text("None"));
     }
     match ty {
-        Type::NominalInstance(instance) => spell_class(db, env, file, instance.class(db, env)),
+        Type::NominalInstance(instance) => {
+            spell_class_with(db, env, file, instance.class(db, env), cells)
+        }
         // a reified type parameter spells as its own name: pep 695 compiles it
         // into the enclosing function's closure, and the `generic` wrapper fills
         // that cell with the type argument, so the name evaluates to the type
-        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
+        Type::TypeVar(bound_typevar) if cells.has_cell(db, bound_typevar) => {
             Some(RuntimeSpelling::text(bound_typevar.name(db).as_str()))
         }
+        Type::Restricted(restricted) if restricted.modifier(db) == TypeModifier::Final => {
+            spell_type(db, env, file, restricted.type_argument(db), cells)
+        }
+        Type::LiteralValue(literal) => match literal_value_spelling(db, env, file, literal) {
+            LiteralValueSpelling::Value(value) => Some(RuntimeSpelling::literal(&value)),
+            LiteralValueSpelling::Unknown => None,
+            LiteralValueSpelling::NotRecordable => {
+                spell_type(db, env, file, ty.promote_in(db, env, file), cells)
+            }
+        },
         Type::Union(union) => Some(RuntimeSpelling::join(
             union
                 .elements(db)
                 .iter()
-                .map(|element| runtime_spelling(db, env, file, *element))
+                .map(|element| spell_type(db, env, file, *element, cells))
                 .collect::<Option<Vec<_>>>()?,
             " | ",
         )),
         _ => None,
     }
+}
+
+/// what the runtime can say about the value a literal type holds
+enum LiteralValueSpelling {
+    /// the value, as a python expression
+    Value(RuntimeSpelling),
+    /// an enum member whose class has no spelling where the expression is written
+    Unknown,
+    /// a type the runtime has no way of telling apart from its class: a `float` or `complex`,
+    /// whose equality does not decide the type (`0.0 == -0.0`), or `LiteralString` and a
+    /// template literal type, which are not one value at all
+    NotRecordable,
+}
+
+fn literal_value_spelling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    literal: LiteralValueType<'db>,
+) -> LiteralValueSpelling {
+    let text = match literal.kind() {
+        LiteralValueTypeKind::Bool(value) => (if value { "True" } else { "False" }).to_owned(),
+        LiteralValueTypeKind::Int(value) => value.as_i64().to_string(),
+        LiteralValueTypeKind::String(value) => python_str_literal(value.value(db)),
+        LiteralValueTypeKind::Bytes(value) => python_bytes_literal(value.value(db)),
+        LiteralValueTypeKind::Enum(member) => {
+            return match spell_class_literal(db, env, file, member.enum_class(db)) {
+                Some(mut class) => {
+                    class.push_str(&format!(".{}", member.name(db)));
+                    LiteralValueSpelling::Value(class)
+                }
+                None => LiteralValueSpelling::Unknown,
+            };
+        }
+        LiteralValueTypeKind::LiteralString
+        | LiteralValueTypeKind::Float(_)
+        | LiteralValueTypeKind::Complex(_)
+        | LiteralValueTypeKind::Template(_) => return LiteralValueSpelling::NotRecordable,
+    };
+    LiteralValueSpelling::Value(RuntimeSpelling::text(text))
 }
 
 fn spell_class<'db>(
@@ -404,14 +868,30 @@ fn spell_class<'db>(
     file: File,
     class: ClassType<'db>,
 ) -> Option<RuntimeSpelling> {
+    spell_class_with(db, env, file, class, TypeParamCells::Written)
+}
+
+fn spell_class_with<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    class: ClassType<'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Option<RuntimeSpelling> {
     match class {
         ClassType::NonGeneric(literal) => spell_class_literal(db, env, file, literal),
         ClassType::Generic(alias) => {
             let origin = ClassLiteral::Static(alias.origin(db));
             let mut spelling = spell_class_literal(db, env, file, origin)?;
-            let arguments =
-                spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
-                    .ok()?;
+            let arguments = spell_specialization_arguments(
+                db,
+                env,
+                file,
+                origin,
+                alias.specialization(db),
+                cells,
+            )
+            .ok()?;
             spelling.push_str("[");
             spelling.push(&arguments);
             spelling.push_str("]");
@@ -449,37 +929,11 @@ enum RuntimeSubscript {
     /// a `__class_getitem__` is written for this class, but not for the version
     /// being targeted — the runtime gained it in a later release
     Unsupported,
-    /// nothing in view settles it: a stub class with no `__class_getitem__`
-    /// anywhere in its mro *and* no base of its own to inherit one from. after
-    /// the pep 695 conversion that is an empty base list and a parameter list,
-    /// which is what `zip`, `map`, `filter`, `reversed` and nearly all of
-    /// `itertools` look like — and also what `typing.IO` looks like, though it
-    /// subscripts perfectly well
-    ///
-    /// TODO: settle this bucket from [`KnownClass`] rather than from the stub.
-    /// the fact is not in the stub to be read: the conversion drops the
-    /// `Generic[…]` base upstream typeshed wrote, so `zip` and `typing.IO` come
-    /// out identical with opposite runtime answers. a `KnownClass` arm keyed on
-    /// the target version is the natural place for it — the same table that
-    /// already knows `list` from `dict` would answer "does cpython let you
-    /// subscript this, and since when"
-    ///
-    /// the table is small. of the 140 generic classes in the vendored stdlib
-    /// stubs, 44 declare the method and most of the rest inherit a base that
-    /// does; the bucket left over is about 40, of which `typing.IO` is the only
-    /// one that subscripts at runtime. everything else in it really does raise
-    ///
-    /// the same table would close the residual on the other side. a stub class
-    /// *does* reach [`Supported`](RuntimeSubscript::Supported) through a
-    /// declared base that the runtime turns out not to have —
-    /// `email.message.MIMEPart` is spelled as a `Message[…]` subclass and
-    /// raises when subscripted — so a specialization of one would be injected
-    /// and would not run. no such class is reachable through a constructor call
-    /// that solves a specialization today, which is why it is a residual rather
-    /// than a bug
-    ///
-    /// once the fact comes from a table this enum collapses to two arms, and
-    /// the two thresholds at the call sites below become one question
+    /// nothing in view settles it: a stub class with no `__class_getitem__` anywhere in its
+    /// mro, no specialized base of its own to inherit one from, and no `Generic` underneath.
+    /// that is `zip`, `map`, `filter`, `reversed`, nearly all of `itertools`, and plenty of
+    /// python classes the stubs alone make generic (`weakref.finalize`), which all raise.
+    /// a third-party stub class lands here too, and that one usually subscripts
     Unknown,
 }
 
@@ -520,7 +974,55 @@ fn runtime_subscript<'db>(
     if origin.explicit_bases(db).iter().any(Type::is_generic_alias) {
         return RuntimeSubscript::Supported;
     }
+    // the pep 695 conversion drops a `Generic[…]` or `Protocol[…]` base, but `Generic` is
+    // still what a protocol, and every generic class `typing` defines, is built on
+    if origin.is_protocol(db)
+        || file_to_module(db, db.program_file(origin.file(db)).resolver_file(db))
+            .is_some_and(|module| module.is_known(db, KnownModule::Typing))
+    {
+        return RuntimeSubscript::Supported;
+    }
     RuntimeSubscript::Unknown
+}
+
+/// whether `ty` is a generic class whose subscript is not attested to evaluate. a source
+/// that subscripts one is asking for its specialization all the same, so the lowering has
+/// the runtime settle it
+pub(crate) fn class_subscript_is_unattested<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    ty.as_class_literal().is_some_and(|origin| {
+        origin.generic_context(db).is_some()
+            && runtime_subscript(db, env, origin) != RuntimeSubscript::Supported
+    })
+}
+
+/// whether the runtime refuses to subscript `ty`, as far as can be told: a generic class of
+/// the standard library that nothing attests is one, which is what the bucket
+/// [`RuntimeSubscript::Unknown`] comes to there. a third-party stub says nothing either way
+/// and its runtime is left to answer
+pub(crate) fn class_subscript_is_refused<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    ty.as_class_literal().is_some_and(|origin| {
+        origin.generic_context(db).is_some()
+            && match runtime_subscript(db, env, origin) {
+                RuntimeSubscript::Supported => false,
+                RuntimeSubscript::Unsupported => true,
+                RuntimeSubscript::Unknown => {
+                    file_to_module(db, db.program_file(origin.file(db)).resolver_file(db))
+                        .is_some_and(|module| {
+                            module
+                                .search_path(db)
+                                .is_some_and(SearchPath::is_standard_library)
+                        })
+                }
+            }
+    })
 }
 
 /// whether any class in `origin`'s mro writes a `__class_getitem__` in its body
@@ -557,6 +1059,7 @@ fn spell_specialization_arguments<'db>(
     file: File,
     origin: ClassLiteral<'db>,
     specialization: Specialization<'db>,
+    cells: TypeParamCells<'_, 'db>,
 ) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
     // the caller may be about to *invent* an `origin[…]` the source never wrote,
     // so it fires only on positive evidence. a wrong yes kills the program at
@@ -571,7 +1074,15 @@ fn spell_specialization_arguments<'db>(
         let elements = fixed
             .elements_slice()
             .iter()
-            .map(|element| runtime_spelling(db, env, file, element.promote_in(db, env, file)))
+            .map(|element| {
+                spell_type(
+                    db,
+                    env,
+                    file,
+                    element.promote_keeping_literals_in(db, env, file),
+                    cells,
+                )
+            })
             .collect::<Option<Vec<_>>>()
             .ok_or(ReifiedInferenceError::NoBinding)?;
         return Ok(if elements.is_empty() {
@@ -593,18 +1104,18 @@ fn spell_specialization_arguments<'db>(
         if matches!(kind, ParameterKind::KeywordPack) {
             return Err(ReifiedInferenceError::NoBinding);
         }
-        // a covariant parameter keeps the literal type it was inferred from
-        // (`B[Literal[1]]`), and a literal has no runtime spelling, so each argument
-        // is promoted on its own, outside the class's variance, to the class it is
-        // an instance of — under the numeric model of the module it is written into
-        let promoted = argument.promote_in(db, env, file);
+        // each argument is promoted on its own, outside the class's variance, under the
+        // numeric model of the module it is written into. a literal stays: whether one
+        // widens is the checker's to say, and it already has (`B(1)` is a `B[1]`, `A(1)` an
+        // `A[int]`), so what the runtime records is what the checker reports
+        let promoted = argument.promote_keeping_literals_in(db, env, file);
         // an unsolved parameter reads as `Never`, and one solved from something
         // the checker cannot see reads as `Unknown`. neither is an argument
         // anybody wrote down, so both say the same thing: name one
         if matches!(kind, ParameterKind::Single) && (promoted.is_never() || promoted.is_dynamic()) {
             return Err(ReifiedInferenceError::Unsolved(typevar.name(db).clone()));
         }
-        let Some(spelling) = kind.spelling(db, env, file, promoted) else {
+        let Some(spelling) = kind.spelling(db, env, file, promoted, cells) else {
             return Err(ReifiedInferenceError::Unspellable(
                 typevar.name(db).clone(),
                 promoted,
@@ -622,7 +1133,7 @@ fn spell_specialization_arguments<'db>(
 /// The specialization a construction of `class_literal` builds, or the reason
 /// it has none.
 ///
-/// Read from the (already inferred, literal-promoted) type of the constructed
+/// Read from the (already inferred) type of the constructed
 /// instance, so the answer always matches the checker's solved specialization —
 /// including PEP 696 defaults and any usage-based widening. This is the single
 /// decision behind both directions: [`constructor_specialization_display`] is
@@ -640,8 +1151,10 @@ pub(crate) fn constructor_specialization<'db>(
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
     site: Option<RuntimeSite<'db>>,
+    cells: TypeParamCells<'_, 'db>,
 ) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
-    let Type::NominalInstance(instance) = constructed.promote_in(db, env, file) else {
+    let Type::NominalInstance(instance) = constructed.promote_keeping_literals_in(db, env, file)
+    else {
         return Err(ReifiedInferenceError::NoBinding);
     };
     let ClassType::Generic(alias) = instance.class(db, env) else {
@@ -651,7 +1164,8 @@ pub(crate) fn constructor_specialization<'db>(
     if origin != class_literal {
         return Err(ReifiedInferenceError::NoBinding);
     }
-    let spelling = spell_specialization_arguments(db, env, file, origin, alias.specialization(db))?;
+    let spelling =
+        spell_specialization_arguments(db, env, file, origin, alias.specialization(db), cells)?;
     if let Some(site) = site
         && let Some((name, binding)) = spelling.unbound_read(db, env, site)
     {
@@ -674,8 +1188,18 @@ pub(crate) fn constructor_specialization_display<'db>(
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
     site: Option<RuntimeSite<'db>>,
+    min_version: PythonVersion,
 ) -> Option<RuntimeSpelling> {
-    constructor_specialization(db, env, file, class_literal, constructed, site).ok()
+    constructor_specialization(
+        db,
+        env,
+        file,
+        class_literal,
+        constructed,
+        site,
+        TypeParamCells::Lowered(Some(min_version)),
+    )
+    .ok()
 }
 
 /// the class's bare name, provided that name resolves — in the module's
@@ -751,6 +1275,10 @@ pub enum ParametricIsPlan {
     /// spells the target itself and should be passed through, which names even
     /// a class no module global does (an enum's `Shape.Circle`)
     Isinstance(TargetSpelling),
+    /// `_by_cell_is(value, <cell>)` — the target is a reified type parameter, which holds
+    /// whatever type argument the call supplied. that may be something `isinstance` refuses
+    /// (`Literal[1]`, `list[int]`), and only the runtime knows which
+    Cell(RuntimeSpelling),
     /// `callable(value)` — a `Callable` with no signature, which asks only what
     /// the runtime records
     IsCallable,
@@ -826,6 +1354,7 @@ impl ParametricIsPlan {
         match self {
             Self::Fold(_)
             | Self::Isinstance(_)
+            | Self::Cell(_)
             | Self::IsCallable
             | Self::IsNone
             | Self::Equality { .. }
@@ -862,6 +1391,7 @@ impl ParametricIsPlan {
             }
         }
         match self {
+            Self::Cell(cell) => vec![cell],
             Self::Probe { target, .. }
             | Self::Isinstance(target)
             | Self::Identity(target)
@@ -901,6 +1431,7 @@ impl ParametricIsPlan {
             | Self::ProtocolStructural(_)
             | Self::ErasedTarget(_)
             | Self::Isinstance(_)
+            | Self::Cell(_)
             | Self::IsCallable
             | Self::IsNone
             | Self::Equality { .. }
@@ -1441,9 +1972,7 @@ fn runtime_test_plan<'db>(
         // the value's type is carried by a reified type parameter on the
         // *target* side — `x is T` where `T` is reified spells `T` itself
         Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
-            ParametricIsPlan::Isinstance(TargetSpelling::Rebuilt(RuntimeSpelling::text(
-                bound_typevar.name(db).as_str(),
-            )))
+            ParametricIsPlan::Cell(RuntimeSpelling::text(bound_typevar.name(db).as_str()))
         }
 
         // `Any` really does admit every value and is worth rejecting. `Unknown`
@@ -1982,40 +2511,22 @@ pub(crate) fn protocol_structural_members<'db>(
 /// [`runtime_spelling`] for a protocol member's specialized type, which may be a
 /// *literal* (`A[True]` specializes `T` to `Literal[True]`).
 ///
-/// A literal has no bare runtime spelling, so it is rendered as a call to the
-/// structural check's own `_by_lit` helper, which rebuilds `typing.Literal[…]`.
-/// That keeps the check exact — an invariant member typed `Literal[True]` must
-/// not match a `bool` annotation — and, because the helper travels with the
-/// protocol runtime, the use site never has to ask for it separately.
-///
-/// This deliberately does *not* widen [`runtime_spelling`] itself: that spelling
-/// is also injected into reified calls (`f[int](…)`) and constructor
-/// specializations (`A[int](1)`), where `_by_lit` is not in scope.
+/// An invariant member typed `Literal[True]` must not match a `bool` annotation, so a literal
+/// the runtime cannot record exactly has no spelling here, where a type argument would
+/// stand for it with its class.
 fn protocol_member_spelling<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
 ) -> Option<RuntimeSpelling> {
-    if let Type::LiteralValue(literal) = ty {
-        let value = match literal.kind() {
-            LiteralValueTypeKind::Bool(boolean) => {
-                (if boolean { "True" } else { "False" }).to_owned()
-            }
-            LiteralValueTypeKind::Int(int) => int.as_i64().to_string(),
-            // only a plain-ascii string round-trips through rust's escaping as
-            // valid python; anything else has no faithful spelling here
-            LiteralValueTypeKind::String(string) => {
-                let value = string.value(db);
-                if value.is_ascii() && !value.contains(|c: char| c.is_ascii_control()) {
-                    format!("{value:?}")
-                } else {
-                    return None;
-                }
-            }
-            _ => return None,
-        };
-        return Some(RuntimeSpelling::text(format!("_by_lit({value})")));
+    if let Type::LiteralValue(literal) = ty
+        && !matches!(
+            literal_value_spelling(db, env, file, literal),
+            LiteralValueSpelling::Value(_)
+        )
+    {
+        return None;
     }
     runtime_spelling(db, env, file, ty)
 }

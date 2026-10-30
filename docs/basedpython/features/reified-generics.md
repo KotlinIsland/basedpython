@@ -211,12 +211,14 @@ specialization at the call site, so the two-step call still happens at runtime
 def f[T](t: T):
     print(1 is T)
 
-f(1)    # transpiles to f[int](1) — prints True
-f("")   # transpiles to f[str]("") — prints False
+f(1)    # T is `1`: prints True
+f("")   # T is `""`: prints False
 ```
 
-the injected argument is a *runtime type expression*: literal solutions
-promote to their class first (`1` infers `int`, not a `Literal`), structured
+the injected argument is a *runtime type expression* for what the checker
+solved, so `f(1)` hands `f` the type `Literal[1]`. a float or complex literal
+hands on its class instead, because equal floats can be different values
+(`0.0 == -0.0`) and the runtime couldn't tell them apart. structured
 annotations solve through their type arguments (`list[T]` + `[1]` → `int`),
 and unions and tuples spell as `int | str` / `tuple[int, str]`. a class name
 is injected only when the bare name resolves — in the module's globals or
@@ -262,6 +264,47 @@ def f[T = int]():
 f()         # prints int — default supplies the reified value
 f[str]()    # prints str
 ```
+
+## a type parameter the body forwards
+
+a body that only ever hands a type parameter on still needs its value when what
+it hands it to records or reads a specialization. it needs no keyword: the
+parameter is reified because the body forwards it, however many hops the type
+argument travels
+
+```by
+class Box[T]:
+    init(var t: T)
+
+def wrap[T](t: T) -> object:
+    return Box(t)            # transpiles to Box[T](t)
+
+def hop[U](u: U) -> object:
+    return wrap(u)           # transpiles to wrap[U](u)
+
+print(hop(1) is Box[1])      # `U` and `T` are both `1` — prints True
+```
+
+a forwarded parameter stays out of the signature's contract. `wrap` is still an
+ordinary callable to the checker: it can be passed to `map`, and a call with no
+spelling for the type argument — an untyped value, a class local to a function —
+runs anyway. the cell then keeps the `TypeVar`, so the box records nothing
+useful and `is Box[int]` answers `False`. this is the same best-effort rule as
+[type reification](type-reification.md)
+
+the exception is a parameter forwarded to something that *reads* the value: a
+reified function, or a reified class. a call that cannot supply it is then
+`unspecialized-reified-generic`, exactly as if it were declared `reified`
+
+a function that forwards pays what a reified one does, a closure rebuilt per
+specialized call, and is left to the interpreter by
+[`by compile`](../development/compilation/index.md). two places have no cell to
+forward from, so a construction there records nothing: a classmethod, whose
+binding hides the function, and a class's own type parameter, which would have
+to be read off the instance, and so make that parameter invariant. below python
+3.12, or 3.13 for a type parameter with a default, a function that forwards is a
+transpile error, as a reified one is: erased, it would build values that record
+nothing, and `hop(1) is Box[1]` would answer `False`
 
 ## subtyping
 
@@ -396,13 +439,14 @@ writing the step out and leaving it off reach the same answer:
 def f[*Ts](*args: *Ts) -> None:
     print(Ts)
 
-f(1, "a")            # Ts is (int, str)
+f(1, "a")            # Ts is (Literal[1], Literal["a"])
 f[int, str](1, "a")  # Ts is (int, str)
 ```
 
-each element of the run is the argument's runtime type, so a literal widens to
-its class under the file's numeric model — `2.0` binds `float`, not the
-`int | float` that a float argument is merely *accepted* as
+each element of the run is what the checker solved for that argument. a float
+literal hands on its class under the file's numeric model, as a lone type
+parameter's does — `2.0` binds `float`, not the `int | float` that a float
+argument is merely *accepted* as
 
 inference can only fill the step with types that have a runtime spelling at the
 call site. a class local to a function does not, so rather than bind a run

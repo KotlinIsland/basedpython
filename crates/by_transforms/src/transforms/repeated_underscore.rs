@@ -192,6 +192,10 @@ pub struct WrittenNames<'src> {
     private: Option<&'src PrivateNames>,
     /// the names of the classes the module's lowerings synthesize for a shape
     synthesized: Option<&'src SynthesizedClasses>,
+    /// set once a spelling written out for the module needs the helper that builds a
+    /// literal type. whether one does is known only from the types it spells, which reach
+    /// many lowerings, so the one place they are all written out answers for them
+    literal_helper: Option<&'src Cell<bool>>,
 }
 
 /// the name of each class a lowering synthesizes for a shape — an anonymous named tuple, a
@@ -539,6 +543,7 @@ impl<'src> WrittenNames<'src> {
             code: None,
             private: None,
             synthesized: None,
+            literal_helper: None,
         }
     }
 
@@ -568,6 +573,19 @@ impl<'src> WrittenNames<'src> {
             code: Some(code),
             private: self.private,
             synthesized: self.synthesized,
+            literal_helper: self.literal_helper,
+        }
+    }
+
+    /// these names, with `literal_helper` set once a spelling they write needs the helper
+    /// that builds a literal type
+    pub(crate) fn with_literal_helper<'a>(self, literal_helper: &'a Cell<bool>) -> WrittenNames<'a>
+    where
+        'src: 'a,
+    {
+        WrittenNames {
+            literal_helper: Some(literal_helper),
+            ..self
         }
     }
 
@@ -582,6 +600,7 @@ impl<'src> WrittenNames<'src> {
             code: self.code,
             private: Some(private),
             synthesized: self.synthesized,
+            literal_helper: self.literal_helper,
         }
     }
 
@@ -597,6 +616,7 @@ impl<'src> WrittenNames<'src> {
             code: self.code,
             private: self.private,
             synthesized: self.synthesized,
+            literal_helper: self.literal_helper,
         }
     }
 
@@ -663,6 +683,11 @@ impl<'src> WrittenNames<'src> {
     /// `spelling`, which the checker spelled for this module, as the module is emitted: each
     /// module-level `private` symbol it reads under the name the symbol is emitted under
     pub(crate) fn spelled(self, spelling: &RuntimeSpelling) -> String {
+        if spelling.reads_literal_helper()
+            && let Some(literal_helper) = self.literal_helper
+        {
+            literal_helper.set(true);
+        }
         spelling.spelled(|symbol| self.module_private(symbol))
     }
 

@@ -32,9 +32,10 @@ use crate::types::diagnostic::{
 };
 use crate::types::infer::infer_scope_types;
 use crate::types::reified_infer::{
-    ParametricIsPlan, ReifiedInferenceError, WrittenTarget, type_test_plan, written_unbound_read,
+    BareGenericCall, ParametricIsPlan, TypeParamCells, WrittenTarget, constructor_specialization,
+    inferred_call_type_arguments, type_test_plan, written_unbound_read,
 };
-use crate::types::runtime_spelling::{RuntimeSite, first_unbound_read};
+use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::{CastCheck, cast_check_plan, cast_is_redundant};
 use crate::types::{ProgramEnvironment, TypeContext};
 use crate::{Db, FxIndexMap, FxIndexSet};
@@ -54,12 +55,12 @@ pub(crate) enum RuntimeReadSite {
     TypeTest { value: NodeIndex, target: NodeIndex },
     /// `value cast! target` or `value cast? target`
     CheckedCast { value: NodeIndex, target: NodeIndex },
-    /// a bare call or construction of a reified generic, with the module-level names the
-    /// specialization the lowering injects reads
+    /// a bare call of a generic function or a construction of a reified class, which is
+    /// checked here because whether a type parameter of the function around it has a runtime
+    /// value depends on the inference of that function's body, which holds this very site
     Reified {
         call: NodeIndex,
         generic: ReifiedGeneric,
-        reads: Box<[Name]>,
     },
 }
 
@@ -202,35 +203,86 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                     self.checked_cast(value, target, reports);
                 }
             }
-            RuntimeReadSite::Reified {
-                call,
-                generic,
-                reads,
-            } => {
-                if reports && let Some(call) = self.expression(*call) {
-                    self.reified(call, generic, reads);
+            RuntimeReadSite::Reified { call, generic } => {
+                if reports && let Some(ast::Expr::Call(call)) = self.expression(*call) {
+                    self.reified(call, generic);
                 }
             }
         }
     }
 
-    /// a bare reified call or construction whose specialization reads a name that does not
-    /// hold, where the call runs, the binding the checker resolved
-    fn reified(&mut self, call: &ast::Expr, generic: &ReifiedGeneric, reads: &[Name]) {
-        let Some((name, binding)) = first_unbound_read(self.db, self.env, reads, self.site(call))
-        else {
-            return;
-        };
-        let failure = ReifiedInferenceError::NotAtRuntime(name, binding);
-        let Some(context) = self.context(call) else {
-            return;
-        };
+    /// a bare call or construction that has to name a specialization, where no spelling of the
+    /// solved one holds where the call runs
+    fn reified(&mut self, call: &'a ast::ExprCall, generic: &ReifiedGeneric) {
+        let (db, env, file, model) = (self.db, self.env, self.file, self.model);
+        let site = RuntimeSite::at(call, self.in_check_order);
         match generic {
             ReifiedGeneric::Function(callee) => {
-                report_unspecialized_reified_call(context, call.range(), callee, Some(failure));
+                let Some(bare_call) = BareGenericCall::of(db, model, call) else {
+                    return;
+                };
+                let function = bare_call.function;
+                if !function.is_unspecialized_reified(db)
+                    && function.forwarded_type_params(db).required.is_empty()
+                {
+                    return;
+                }
+                // a reason of the call's own comes ahead of a name the spelling reads not being
+                // bound, whichever argument each is about
+                let inference = if bare_call.arguments.is_some() {
+                    let arguments = |site| {
+                        inferred_call_type_arguments(
+                            db,
+                            env,
+                            file,
+                            &bare_call,
+                            site,
+                            TypeParamCells::Lowered(None),
+                        )
+                    };
+                    arguments(None)
+                        .and_then(|_| arguments(Some(site)))
+                        .map(|_| ())
+                        .map_err(Some)
+                } else {
+                    Err(None)
+                };
+                if let Err(failure) = inference
+                    && let Some(context) = self.context(&call.func)
+                {
+                    report_unspecialized_reified_call(context, call.range(), callee, failure);
+                }
             }
             ReifiedGeneric::Class(class) => {
-                report_unspecialized_reified_construction(context, call.range(), class, failure);
+                let (Some(callee), Some(constructed)) =
+                    (call.func.inferred_type(model), call.inferred_type(model))
+                else {
+                    return;
+                };
+                let Some(class_literal) = callee.as_class_literal() else {
+                    return;
+                };
+                let specialization = |site| {
+                    constructor_specialization(
+                        db,
+                        env,
+                        file,
+                        class_literal,
+                        constructed,
+                        site,
+                        TypeParamCells::Lowered(None),
+                    )
+                };
+                if let Err(failure) = specialization(None).and_then(|_| specialization(Some(site)))
+                    && let Some(context) = self.context(&call.func)
+                {
+                    report_unspecialized_reified_construction(
+                        context,
+                        call.range(),
+                        class,
+                        failure,
+                    );
+                }
             }
         }
     }

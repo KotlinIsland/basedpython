@@ -38,6 +38,12 @@
 //! on — so a reified function with a defaulted parameter on a 3.12 target is a
 //! hard error too.
 //!
+//! a parameter that is only *forwarded* — the body hands it to a construction or
+//! a call that needs its value, `A(t)` becoming `A[T](t)` — is reified the same
+//! way, by ty's answer rather than the syntax. a call may leave one out unless
+//! something reads it, so its wrapper is `@generic.forwarding("T")`, and a target
+//! that cannot keep the native list leaves the function erased instead of erroring
+//!
 //! the decorator is inserted *innermost* — directly above the `def` header,
 //! below any user decorators — so the wrapper always receives the raw function
 //! object whose closure it rebuilds. outer decorators then compose with the
@@ -53,7 +59,7 @@ use ruff_python_ast::{Expr, PySourceType, PythonVersion, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::reified::reified_type_param_names;
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
@@ -67,6 +73,7 @@ pub(crate) const REIFIED_MARKER: &str = "  # basedpython: reified";
 
 struct ReifiedGeneric<'src> {
     source: &'src str,
+    types: &'src dyn TypeInfo,
     /// zero-width insertions of the `@generic` decorator line
     edits: Vec<(TextRange, String)>,
     /// at least one function reified — emit the polyfill + its imports
@@ -75,6 +82,8 @@ struct ReifiedGeneric<'src> {
     below_312: Vec<String>,
     /// a reified function has a pep 696 default but the target is below 3.13
     defaulted_below_313: Vec<String>,
+    /// a function that forwards its type parameters, with the version the target is below
+    forwarding_too_old: Vec<(String, &'static str)>,
     /// a reified function is classmethod-decorated — unsupported
     classmethods: Vec<String>,
     supports_native_generics: bool,
@@ -82,13 +91,15 @@ struct ReifiedGeneric<'src> {
 }
 
 impl<'src> ReifiedGeneric<'src> {
-    fn new(source: &'src str, min_version: PythonVersion) -> Self {
+    fn new(source: &'src str, types: &'src dyn TypeInfo, min_version: PythonVersion) -> Self {
         Self {
             source,
+            types,
             edits: Vec::new(),
             used: false,
             below_312: Vec::new(),
             defaulted_below_313: Vec::new(),
+            forwarding_too_old: Vec::new(),
             classmethods: Vec::new(),
             supports_native_generics: min_version >= PythonVersion::PY312,
             supports_param_defaults: min_version >= PythonVersion::PY313,
@@ -96,8 +107,27 @@ impl<'src> ReifiedGeneric<'src> {
     }
 
     fn wrap(&mut self, function: &StmtFunctionDef) {
+        let forwarded = self.types.forwarded_type_params(function);
         if reified_type_param_names(PySourceType::BasedPython, function).is_empty() {
-            return;
+            if forwarded.names.is_empty() {
+                return;
+            }
+            // erased, the function would build a value that records nothing, and a test of it
+            // would answer `False` where the checker says `True`
+            let has_default = function
+                .type_params
+                .as_deref()
+                .is_some_and(|tp| tp.type_params.iter().any(|p| p.default().is_some()));
+            if !self.supports_native_generics {
+                self.forwarding_too_old
+                    .push((function.name.id.to_string(), "3.12"));
+                return;
+            }
+            if has_default && !self.supports_param_defaults {
+                self.forwarding_too_old
+                    .push((function.name.id.to_string(), "3.13"));
+                return;
+            }
         }
         if !self.supports_native_generics {
             self.below_312.push(function.name.id.to_string());
@@ -128,9 +158,18 @@ impl<'src> ReifiedGeneric<'src> {
         let name_start = function.name.range().start();
         let indent = line_indent(self.source, name_start);
         let anchor = line_start(self.source, name_start) + TextSize::of(indent);
+        let optional = forwarded
+            .optional()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>();
+        let wrapper = if optional.is_empty() {
+            "@generic".to_owned()
+        } else {
+            format!("@generic.forwarding({})", optional.join(", "))
+        };
         self.edits.push((
             TextRange::empty(anchor),
-            format!("@generic{REIFIED_MARKER}\n{indent}"),
+            format!("{wrapper}{REIFIED_MARKER}\n{indent}"),
         ));
         self.used = true;
     }
@@ -149,7 +188,12 @@ impl<'ast> Visitor<'ast> for ReifiedGeneric<'_> {
 struct SpecializationInjector<'ti> {
     types: &'ti dyn TypeInfo,
     written: WrittenNames<'ti>,
+    min_version: PythonVersion,
     edits: Vec<(TextRange, String)>,
+    /// the callees written as an argument of the `_by_specialized` runtime helper. each is one
+    /// edit passing the callee through, so a wrapper around the whole call stays outside the
+    /// helper and a lowering of the receiver stays inside it
+    helper_edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'ast> Visitor<'ast> for SpecializationInjector<'_> {
@@ -157,12 +201,25 @@ impl<'ast> Visitor<'ast> for SpecializationInjector<'_> {
         if let Expr::Call(call) = expr
             // an explicit `f[int](…)` already carries its specialization
             && !matches!(call.func.as_ref(), Expr::Subscript(_))
-            && let Some(specialization) = self.types.reified_call_specialization(call)
+            && let Some(specialization) = self
+                .types
+                .reified_call_specialization(call, self.min_version)
         {
-            self.edits.push((
-                TextRange::empty(call.func.range().end()),
-                self.written.spelled(&specialization),
-            ));
+            let suffix = self.written.spelled(&specialization.suffix);
+            if specialization.through_helper {
+                let callee = call.func.range();
+                self.helper_edits.push((
+                    callee,
+                    vec![
+                        Fragment::Lit("_by_specialized(".to_owned()),
+                        Fragment::Src(callee),
+                        Fragment::Lit(suffix),
+                    ],
+                ));
+            } else {
+                self.edits
+                    .push((TextRange::empty(call.func.range().end()), suffix));
+            }
         }
         walk_expr(self, expr);
     }
@@ -196,7 +253,7 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = ReifiedGeneric::new(self.source, self.min_version);
+        let mut inner = ReifiedGeneric::new(self.source, types, self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -207,11 +264,17 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
         let mut injector = SpecializationInjector {
             types,
             written: self.written,
+            min_version: self.min_version,
             edits: Vec::new(),
+            helper_edits: Vec::new(),
         };
         for stmt in stmts {
             injector.visit_stmt(stmt);
         }
+        if !injector.helper_edits.is_empty() {
+            ctx.runtime.insert(crate::runtime::SPECIALIZED);
+        }
+        ctx.template_edits.extend(injector.helper_edits);
         ctx.text_edits.extend(injector.edits);
         if let Some(name) = inner.below_312.first() {
             ctx.errors.push(format!(
@@ -227,6 +290,14 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
                  which requires python 3.13 or newer: reification keeps the native \
                  pep 695 parameter list in the generated python, and pep 696 \
                  defaults are not valid syntax before 3.13"
+            ));
+            return;
+        }
+        if let Some((name, version)) = inner.forwarding_too_old.first() {
+            ctx.errors.push(format!(
+                "generic function `{name}` forwards its type parameters into a specialization, \
+                 which requires python {version} or newer: it takes its type arguments as a \
+                 reified function does, through the native pep 695 parameter list"
             ));
             return;
         }
@@ -349,6 +420,187 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("@generic"), "should wrap: {out}");
+    }
+
+    const BOX: &str = "class Box[T]:\n    def __init__(self, t: T):\n        self.t: T = t\n";
+
+    #[test]
+    fn a_construction_forwards_a_parameter_it_records() {
+        let out = out_at(
+            &format!("{BOX}def f[T](t: T) -> object:\n    return Box(t)\nf(1)\n"),
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains(
+                "@generic.forwarding(\"T\")  # basedpython: reified\n\
+                 def f[T](t: T) -> object:\n    return Box[T](t)\nf[_by_lit(1)](1)\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_function_nothing_is_forwarded_from_stays_erased() {
+        let out = out_at(
+            "def f[T](t: T) -> list[T]:\n    return [t]\nf(1)\n",
+            PythonVersion::PY312,
+        );
+        assert!(!out.contains("generic"), "{out}");
+        assert!(out.contains("\nf(1)\n"), "{out}");
+    }
+
+    #[test]
+    fn a_call_forwards_what_its_callee_forwards() {
+        let out = out_at(
+            &format!(
+                "{BOX}def f[T](t: T) -> object:\n    return Box(t)\n\
+                 def g[U](u: U) -> object:\n    return f(u)\ng(1)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains(
+                "@generic.forwarding(\"U\")  # basedpython: reified\n\
+                 def g[U](u: U) -> object:\n    return f[U](u)\ng[_by_lit(1)](1)\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_recursive_call_hands_on_its_own_parameter() {
+        let out = out_at(
+            &format!(
+                "{BOX}def f[T](t: T, n: int) -> object:\n    \
+                 if n == 0:\n        return Box(t)\n    return f(t, n - 1)\nf(1, 1)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("return Box[T](t)"), "{out}");
+        assert!(out.contains("return f[T](t, n - 1)"), "{out}");
+    }
+
+    #[test]
+    fn a_reified_callee_requires_what_is_forwarded_to_it() {
+        // the callee reads the value, so the plain `@generic` wrapper rejects a call without it
+        let out = out_at(
+            "def f[T](t: T):\n    print(T)\ndef g[U](u: U):\n    f(u)\ng(1)\n",
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains(
+                "@generic  # basedpython: reified\ndef g[U](u: U):\n    f[U](u)\ng[_by_lit(1)](1)\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_call_with_no_spelling_for_a_forwarded_parameter_stays_bare() {
+        let out = out_at(
+            &format!(
+                "{BOX}def f[T](t: T) -> object:\n    return Box(t)\n\
+                 def g(x):\n    return f(x)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("def g(x):\n    return f(x)\n"), "{out}");
+    }
+
+    #[test]
+    fn a_method_that_forwards_tolerates_an_override_that_does_not() {
+        let out = out_at(
+            &format!(
+                "{BOX}class C:\n    def m[T](self, t: T) -> object:\n        return Box(t)\n\
+                 def f(c: C):\n    return c.m(1)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains("return _by_specialized(c.m, _by_lit(1))(1)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_wrapper_around_a_forwarding_method_call_stays_outside_the_helper() {
+        let out = transpile(
+            &format!(
+                "{BOX}class C:\n    def m[T](self, t: T) -> Box[T]:\n        return Box(t)\n\
+                 def f(c: C?):\n    y = c!.m(1)\n    return y\n"
+            ),
+            &Config {
+                min_version: PythonVersion::PY312,
+                soundness: crate::config::SoundnessPositions::all(),
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "y = _soundness_parametric(_by_specialized(_force_unwrap(c).m, int)(1), Box[int], (0,))"
+            ),
+            "{out}"
+        );
+    }
+
+    /// erased, the function would build a value that records nothing, and `f(1) is Box[1]`
+    /// would answer `False`, so a target without native generics refuses it as it refuses a
+    /// function that reads the type argument itself
+    #[test]
+    fn a_target_without_native_generics_refuses_a_forwarded_parameter() {
+        let err = transpile(
+            &format!("{BOX}def f[T](t: T) -> object:\n    return Box(t)\nf(1)\n"),
+            &Config {
+                min_version: PythonVersion::PY311,
+                ..Config::test_default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("`f` forwards its type parameters") && err.contains("python 3.12"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_default_needs_3_13_to_forward() {
+        let source = format!("{BOX}def f[T = int](t: T) -> object:\n    return Box(t)\n");
+        let err = transpile(
+            &source,
+            &Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("`f` forwards its type parameters") && err.contains("python 3.13"),
+            "{err}"
+        );
+        assert!(out_at(&source, PythonVersion::PY313).contains("generic.forwarding"));
+    }
+
+    #[test]
+    fn a_classmethod_has_no_function_to_rebuild() {
+        let out = out_at(
+            &format!(
+                "{BOX}class C:\n    @classmethod\n    \
+                 def m[T](cls, t: T) -> object:\n        return Box(t)\n"
+            ),
+            PythonVersion::PY312,
+        );
+        assert!(!out.contains("generic"), "{out}");
+        assert!(out.contains("return Box(t)"), "{out}");
+    }
+
+    #[test]
+    fn a_parameter_that_hides_the_type_parameter_is_not_forwarded() {
+        let out = out_at(
+            &format!("{BOX}def f[T](T: T) -> object:\n    return Box(T)\n"),
+            PythonVersion::PY312,
+        );
+        assert!(!out.contains("generic.forwarding"), "{out}");
     }
 
     #[test]
@@ -485,7 +737,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("f[int, str](1, \"a\")"),
+            out.contains("f[_by_lit(1), _by_lit(\"a\")](1, \"a\")"),
             "the solved run should inject: {out}"
         );
     }
@@ -505,9 +757,12 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(out.contains("f[int](1)"), "int call should inject: {out}");
         assert!(
-            out.contains("f[str](\"x\")"),
+            out.contains("f[_by_lit(1)](1)"),
+            "int call should inject: {out}"
+        );
+        assert!(
+            out.contains("f[_by_lit(\"x\")](\"x\")"),
             "str call should inject: {out}"
         );
     }
@@ -528,7 +783,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("Box().m[int](1)"),
+            out.contains("Box().m[_by_lit(1)](1)"),
             "method call should inject: {out}"
         );
     }

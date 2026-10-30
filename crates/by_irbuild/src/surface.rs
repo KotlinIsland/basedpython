@@ -49,9 +49,13 @@ pub(crate) fn gate_function(
     // and the step is the `[int]` subscript on the function object. an emitted
     // function is not subscriptable and carries no closure to rebuild, so the
     // parameter is not merely missing — the body reads its name as a module global.
-    // reification is inferred from the body as well as declared, so the marker on the
-    // type parameter is not enough to find it
-    if let Some(first) = reified_type_param_names(source_type, function).first() {
+    // reification is inferred from the body as well as declared, and from what the body
+    // forwards as well as what it reads, so the marker on the type parameter is not enough to
+    // find it
+    if let Some(first) = reified_type_param_names(source_type, function)
+        .first()
+        .or(model.forwarded_type_params(function).names.first())
+    {
         return Err(Decline::new(format!(
             "`{first}` is a reified type parameter, and a specialization has no emitted function to rebuild"
         )));

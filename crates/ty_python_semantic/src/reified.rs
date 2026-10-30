@@ -63,14 +63,10 @@ pub fn reified_type_param_names(
         return Vec::new();
     }
 
-    let mut active: FxHashSet<&str> = candidates.iter().map(|(name, _)| name.as_str()).collect();
-    // the body reads a parameter under its own name, which a type parameter of that name does
-    // not reach: the parameter is bound in the body's scope, the type parameter in the one
-    // around it
-    for parameter in &function.parameters {
-        active.remove(parameter.name().id.as_str());
-    }
-    shadow_bound_names(&function.body, &mut active);
+    let active = readable_type_params(
+        function,
+        candidates.iter().map(|(name, _)| name.as_str()).collect(),
+    );
     let param_typevars = param_annotation_typevars(&function.parameters, &active);
     let mut finder = ValueUseFinder {
         source_type,
@@ -88,6 +84,60 @@ pub fn reified_type_param_names(
         .filter(|(name, declared)| *declared || found.contains(name.as_str()))
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// the `names` the body of `function` reaches as its type parameters. the body reads a
+/// parameter under its own name, which a type parameter of that name does not reach: the
+/// parameter is bound in the body's scope, the type parameter in the one around it, and a
+/// local binding hides it the same way
+fn readable_type_params<'a>(
+    function: &'a ast::StmtFunctionDef,
+    mut names: FxHashSet<&'a str>,
+) -> FxHashSet<&'a str> {
+    for parameter in &function.parameters {
+        names.remove(parameter.name().id.as_str());
+    }
+    shadow_bound_names(&function.body, &mut names);
+    names
+}
+
+/// the type parameters of `function` that its body could read as a runtime value, had they
+/// been given one: plain `T`s, in declaration order, under a name nothing in the body hides.
+/// a `some T` hole is type-only, and a `*Ts` or `**Kwargs` is only ever filled by a
+/// specialization the source spells
+pub(crate) fn forwardable_type_param_names(function: &ast::StmtFunctionDef) -> Vec<Name> {
+    let Some(type_params) = function.type_params.as_deref() else {
+        return Vec::new();
+    };
+    if ast::helpers::is_type_def(function) || has_classmethod_binding(function) {
+        return Vec::new();
+    }
+    let plain = || {
+        type_params
+            .type_params
+            .iter()
+            .filter_map(|param| match param {
+                ast::TypeParam::TypeVar(tv) if !tv.is_some_hole => Some(&tv.name.id),
+                _ => None,
+            })
+    };
+    let readable = readable_type_params(function, plain().map(Name::as_str).collect());
+    plain()
+        .filter(|name| readable.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// whether `function` is a classmethod, whose binding hides the function a reified parameter
+/// is rebuilt into
+fn has_classmethod_binding(function: &ast::StmtFunctionDef) -> bool {
+    matches!(
+        function.name.as_str(),
+        "__init_subclass__" | "__class_getitem__"
+    ) || function
+        .decorator_list
+        .iter()
+        .any(|decorator| matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "classmethod"))
 }
 
 /// where a class's reified type parameters are read, and which of them are

@@ -7,6 +7,7 @@ pub(crate) mod callable;
 pub(crate) mod character_type;
 pub(crate) mod checked_cast;
 pub(crate) mod class_pattern_star;
+pub(crate) mod class_subscript;
 pub(crate) mod coalesce;
 pub(crate) mod compat;
 pub(crate) mod conformance;

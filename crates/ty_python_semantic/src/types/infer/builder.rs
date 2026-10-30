@@ -112,8 +112,7 @@ use crate::types::diagnostic::{
     report_repeated_underscore_read, report_restricted_constructor,
     report_too_many_positional_patterns_for_class_pattern, report_undefined_reveal,
     report_unfilled_decoration_context_parameters, report_unplaceable_starred_class_pattern,
-    report_unsound_assignment, report_unsound_yield, report_unspecialized_reified_call,
-    report_unspecialized_reified_construction, report_unsupported_augmented_assignment,
+    report_unsound_assignment, report_unsound_yield, report_unsupported_augmented_assignment,
     report_unsupported_comparison,
 };
 use crate::types::dict::dict_literal_key_value_types;
@@ -13461,56 +13460,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // (`obj.m()`) is the same: its underlying function carries the reified
         // type parameters. a reified classmethod is reported at the def site,
         // so it is skipped here
-        let reified_target = match callable_type {
-            Type::FunctionLiteral(function) => Some(function),
-            Type::BoundMethod(bound_method) => bound_method.function(self.db()),
-            _ => None,
-        };
         if self.is_basedpython_file()
-            && let Some(function) =
-                reified_target.filter(|function| !function.is_classmethod(self.db()))
-            && function.is_unspecialized_reified(self.db())
+            && let Some(function) = reified_infer::generic_call_target(self.db(), callable_type)
+            && function
+                .signature(self.db())
+                .overloads
+                .first()
+                .is_some_and(|overload| overload.generic_context.is_some())
         {
-            let has_unpacked_arguments = arguments.args.iter().any(ast::Expr::is_starred_expr)
-                || arguments
-                    .keywords
-                    .iter()
-                    .any(|keyword| keyword.arg.is_none());
-            let inference = if has_unpacked_arguments {
-                Err(None)
-            } else {
-                reified_infer::inferred_call_type_arguments(
-                    self.db(),
-                    env,
-                    self.file(),
-                    callable_type,
-                    function,
-                    &call_arguments,
-                    None,
-                )
-                .map_err(Some)
-            };
-            let name = function.name(self.db());
-            match inference {
-                Ok(arguments) => {
-                    self.context
-                        .record_runtime_read_check(RuntimeReadSite::Reified {
-                            call: call_expression.node_index().load(),
-                            generic: ReifiedGeneric::Function(name.clone()),
-                            reads: arguments
-                                .iter()
-                                .flat_map(reified_infer::TypeArgument::global_reads)
-                                .cloned()
-                                .collect(),
-                        });
-                }
-                Err(failure) => report_unspecialized_reified_call(
-                    &self.context,
-                    call_expression.range(),
-                    name,
-                    failure,
-                ),
-            }
+            self.context
+                .record_runtime_read_check(RuntimeReadSite::Reified {
+                    call: call_expression.node_index().load(),
+                    generic: ReifiedGeneric::Function(function.name(self.db()).clone()),
+                });
         }
 
         self.report_optional_object_arguments(call_expression, &bindings);
@@ -13618,7 +13580,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             _ => return_ty,
         };
 
-        self.check_reified_construction(call_expression, callable_type, return_ty);
+        self.check_reified_construction(call_expression, callable_type);
 
         self.check_narrowing_guard_as_value(call_expression, &bindings);
 
@@ -13645,7 +13607,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &self,
         call_expression: &ast::ExprCall,
         callable_type: Type<'db>,
-        return_ty: Type<'db>,
     ) {
         let db = self.db();
         if !self.is_basedpython_file() {
@@ -13667,30 +13628,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if class.generic_context(db).is_none() {
             return;
         }
-        let env = self.program_environment();
-        match reified_infer::constructor_specialization(
-            db,
-            env,
-            self.file(),
-            class_literal,
-            return_ty,
-            None,
-        ) {
-            Ok(spelling) => {
-                self.context
-                    .record_runtime_read_check(RuntimeReadSite::Reified {
-                        call: call_expression.node_index().load(),
-                        generic: ReifiedGeneric::Class(class.name(db).clone()),
-                        reads: spelling.global_reads().cloned().collect(),
-                    });
-            }
-            Err(failure) => report_unspecialized_reified_construction(
-                &self.context,
-                call_expression.range(),
-                class.name(db),
-                failure,
-            ),
-        }
+        self.context
+            .record_runtime_read_check(RuntimeReadSite::Reified {
+                call: call_expression.node_index().load(),
+                generic: ReifiedGeneric::Class(class.name(db).clone()),
+            });
     }
 
     /// basedpython: record what `call` solved its callee's own type parameters to, for the

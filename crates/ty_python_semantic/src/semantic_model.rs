@@ -6,7 +6,7 @@ use ruff_db::files::{File, FilePath};
 use ruff_db::parsed::{parsed_module, parsed_string_annotation};
 use ruff_db::source::{line_index, source_text};
 use ruff_python_ast::find_node::CoveringNode;
-use ruff_python_ast::{self as ast, ExprStringLiteral, ModExpression};
+use ruff_python_ast::{self as ast, ExprStringLiteral, ModExpression, PythonVersion};
 use ruff_python_ast::{Expr, ExprRef, name::Name};
 use ruff_python_parser::Parsed;
 use ruff_source_file::LineIndex;
@@ -38,7 +38,9 @@ use crate::types::ide_support::{
 };
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
-use crate::types::reified_infer::WrittenTarget;
+use crate::types::reified_infer::{
+    BareGenericCall, CallSpecialization, ForwardedTypeParams, WrittenTarget,
+};
 use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::CastCheck;
 use crate::types::{
@@ -82,6 +84,57 @@ impl<'db> SemanticModel<'db> {
             file,
             in_string_annotation_expr: None,
         }
+    }
+
+    /// basedpython: what inference solved the callee's own type parameters to at `call`
+    pub(crate) fn call_solution(
+        &self,
+        call: &ast::ExprCall,
+    ) -> Option<crate::types::exceptions::CallSolution<'db>> {
+        let file = self.program_file();
+        let file_scope =
+            semantic_index(self.db, file).try_expression_scope_id(&ExprRef::from(call))?;
+        infer_complete_scope_types(self.db, file_scope.to_scope_id(self.db, file))
+            .call_solution(call)
+    }
+
+    /// basedpython: whether `value` is a generic class that nothing in view attests the runtime
+    /// can subscript
+    pub fn class_subscript_is_unattested(&self, value: &ast::Expr) -> bool {
+        value.inferred_type(self).is_some_and(|ty| {
+            crate::types::reified_infer::class_subscript_is_unattested(
+                self.db,
+                &self.program_environment(),
+                ty,
+            )
+        })
+    }
+
+    /// basedpython: whether the runtime refuses to subscript `value`, to the best of what the
+    /// checker knows
+    pub fn class_subscript_is_refused(&self, value: &ast::Expr) -> bool {
+        value.inferred_type(self).is_some_and(|ty| {
+            crate::types::reified_infer::class_subscript_is_refused(
+                self.db,
+                &self.program_environment(),
+                ty,
+            )
+        })
+    }
+
+    /// basedpython: the type parameters of `function` its body forwards into a specialization
+    /// without its source reifying them. see [`ForwardedTypeParams`]
+    pub fn forwarded_type_params(&self, function: &ast::StmtFunctionDef) -> ForwardedTypeParams {
+        let file = self.program_file();
+        semantic_index(self.db, file)
+            .try_node_scope(NodeWithScopeRef::Function(function))
+            .map_or_else(ForwardedTypeParams::default, |scope| {
+                crate::types::reified_infer::forwarded_type_params(
+                    self.db,
+                    scope.to_scope_id(self.db, file),
+                )
+                .clone()
+            })
     }
 
     pub fn db(&self) -> &'db dyn Db {
@@ -2331,40 +2384,33 @@ impl<'db> LoweringModel<'db> {
     /// callee of a bare reified-generic call (`f(1)` → `"[int]"`). `None` when
     /// the call is not a bare reified-generic call or no injectable spelling
     /// exists — the checker reports the latter as `unspecialized-reified-generic`
-    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<RuntimeSpelling> {
-        let env = &self.program_environment();
-        let db = self.db;
-        let callee_ty = call.func.inferred_type(self)?;
-        let (function, is_classmethod) = match callee_ty {
-            Type::FunctionLiteral(function) => (function, function.is_classmethod(db)),
-            Type::BoundMethod(method) => (method.function(db)?, method.binds_classmethod(db)),
-            _ => return None,
-        };
-        if is_classmethod || !function.is_unspecialized_reified(db) {
-            return None;
-        }
-        let mut positional = Vec::with_capacity(call.arguments.args.len());
-        for argument in &call.arguments.args {
-            if argument.is_starred_expr() {
-                return None;
-            }
-            positional.push(argument.inferred_type(self)?);
-        }
-        let mut keywords = Vec::with_capacity(call.arguments.keywords.len());
-        for keyword in &call.arguments.keywords {
-            let name = keyword.arg.as_ref()?;
-            keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
-        }
+    pub fn reified_call_specialization(
+        &self,
+        call: &ast::ExprCall,
+        min_version: PythonVersion,
+    ) -> Option<CallSpecialization> {
+        let bare_call = BareGenericCall::of(self.db, self, call)?;
         crate::types::reified_infer::injectable_call_specialization(
-            db,
-            env,
+            self.db,
+            &self.program_environment(),
             self.file(),
-            callee_ty,
-            function,
-            positional,
-            keywords,
+            &bare_call,
             Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+            min_version,
         )
+    }
+
+    /// basedpython: whether a function called `function` here is given its type arguments at
+    /// `min_version`, rather than having them erased: it reifies them, or its body forwards
+    /// them and the target can hold them
+    pub fn takes_type_arguments_at(
+        &self,
+        function: crate::types::function::FunctionType<'db>,
+        min_version: PythonVersion,
+    ) -> bool {
+        function.is_reified(self.db)
+            || (!function.forwarded_type_params(self.db).names.is_empty()
+                && function.can_forward_at(self.db, min_version))
     }
 
     /// basedpython: whether every name `expr` reads holds, where it is written, the binding the
@@ -2402,6 +2448,7 @@ impl<'db> LoweringModel<'db> {
     pub fn reified_constructor_type_arguments(
         &self,
         call: &ast::ExprCall,
+        min_version: PythonVersion,
     ) -> Option<RuntimeSpelling> {
         let env = &self.program_environment();
         let callee_ty = call.func.inferred_type(self)?;
@@ -2414,6 +2461,7 @@ impl<'db> LoweringModel<'db> {
             class_literal,
             constructed,
             Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+            min_version,
         )
     }
 
