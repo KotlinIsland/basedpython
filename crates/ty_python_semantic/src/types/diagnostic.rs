@@ -7650,6 +7650,24 @@ pub(crate) fn report_attempted_instantiation_of_abstract_class<'db>(
     }
 }
 
+/// basedpython: a value of a `sealed` class is an instance of one of its subclasses, which is what
+/// lets a `match` over those subclasses be exhaustive, so the class itself cannot be instantiated.
+pub(crate) fn report_attempted_instantiation_of_sealed_class<'db>(
+    context: &InferContext<'db, '_>,
+    call: &ast::ExprCall,
+    class: ClassType<'db>,
+) {
+    let Some(builder) = context.report_lint(&CALL_NON_CALLABLE, call) else {
+        return;
+    };
+    let db = context.db();
+    let class_name = class.name(db);
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Cannot instantiate sealed class `{class_name}`"
+    ));
+    diagnostic.info("A value of a sealed class is an instance of one of its subclasses");
+}
+
 pub(super) fn abstract_method_span<'db>(
     db: &'db dyn Db,
     function: FunctionType<'db>,

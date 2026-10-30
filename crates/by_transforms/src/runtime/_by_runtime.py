@@ -7,6 +7,18 @@ imported by hand
 """
 
 
+# --- sealed classes -------------------------------------------------------
+# a subclass adds itself to the tuple of each sealed class it directly derives
+# from, as its class statement runs. only a sealed class has a tuple of its own,
+# since a subclass of one inherits the attribute
+
+
+def _by_sealed_member(_cls):
+    for _base in _cls.__bases__:
+        if "__sealed_members__" in vars(_base):
+            _base.__sealed_members__ += (_cls,)
+
+
 # --- runtime type-soundness checks ---------------------------------------
 # inserted where ty accepts a value on an annotation-level claim it cannot
 # verify: a generic call's result, a projection out of a specialized container,

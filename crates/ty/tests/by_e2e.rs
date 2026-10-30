@@ -4078,6 +4078,123 @@ print(A.__sealed_members__ == (B, C))
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "True");
 }
 
+/// a subclass in another module adds itself to the tuple as its statement runs, however it
+/// spells the sealed class. an `import` is lazy, so a module nothing has read from yet has
+/// added nothing
+#[test]
+fn sealed_class_lists_members_from_other_modules_at_runtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("shapes.by"),
+        "\
+sealed class Shape
+class Circle(Shape)
+
+sealed class Box[T]
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("square.by"),
+        "\
+import shapes
+from shapes import Box, Shape as Renamed
+
+class Square(Renamed)
+class Triangle(shapes.Shape)
+class Full[T](Box[T])
+
+sealed class Own
+class Mixed(Own, Renamed)
+
+def make():
+    class Local(Renamed): ...
+    return Local
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import shapes
+
+def names(cls):
+    return [member.__name__ for member in cls.__sealed_members__]
+
+print(names(shapes.Shape))
+
+import square
+
+print(names(shapes.Shape))
+own = names(square.Own)
+print(names(shapes.Shape), names(shapes.Box), own)
+square.make()
+print(names(shapes.Shape))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    assert_eq!(
+        stdout.trim(),
+        "\
+['Circle']
+['Circle']
+['Circle', 'Square', 'Triangle', 'Mixed'] ['Full'] ['Mixed']
+['Circle', 'Square', 'Triangle', 'Mixed', 'Local']"
+    );
+}
+
+/// the `match` a sealed hierarchy makes exhaustive produces its value at runtime
+#[test]
+fn sealed_class_match_expression_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+sealed class A
+
+class B(A)
+class C(A)
+
+def f(a: A) -> str:
+    let result = match a:
+        case B(): \"b\"
+        case C(): \"c\"
+    return result
+
+print(f(B()), f(C()))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "b c");
+}
+
 /// a sealed class declared in a function or class body has its members tuple at
 /// runtime too, assigned in the body that declares it
 #[test]

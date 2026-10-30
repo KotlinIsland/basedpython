@@ -5309,7 +5309,7 @@ def on_open(o: Open) -> int:
 
 #[test]
 fn a_sealed_class_is_not_exact() {
-    // `sealed` closes the world *outside* the declaring module and says nothing
+    // `sealed` closes the world *outside* the workspace and says nothing
     // about a subclass inside it — one right here may override the method
     with_source(
         "\

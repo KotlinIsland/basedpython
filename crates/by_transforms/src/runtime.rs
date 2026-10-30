@@ -67,6 +67,7 @@ macro_rules! helpers {
 }
 
 helpers! {
+    SEALED_MEMBER = "_by_sealed_member",
     SOUNDNESS_CHECK = "_soundness_check",
     SOUNDNESS_ITER = "_soundness_iter",
     SOUNDNESS_AITER = "_soundness_aiter",

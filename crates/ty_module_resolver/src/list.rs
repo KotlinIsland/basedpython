@@ -11,6 +11,16 @@ pub fn all_modules<'db>(
     resolve::list_all_modules(db, resolver_environment).to_vec()
 }
 
+/// List the file modules `keep` selects, sorted by name, without enumerating what is under a module
+/// it turns down, so a caller interested in one search path pays for no other.
+pub fn modules_where<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+    keep: impl Fn(Module<'db>) -> bool,
+) -> Vec<Module<'db>> {
+    resolve::list_modules_where(db, resolver_environment, keep)
+}
+
 /// List all available top-level modules.
 pub fn list_modules<'db>(
     db: &'db dyn Db,

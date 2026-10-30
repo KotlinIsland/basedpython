@@ -23,7 +23,7 @@ pub use by_typed::{BY_TYPED, ExportIndex, Marker, export_index};
 pub use distributions::{
     DistributionIndex, DistributionName, RequirementIndex, distribution_index, requirement_index,
 };
-pub use list::{all_modules, list_modules};
+pub use list::{all_modules, list_modules, modules_where};
 pub use module_glob::{ModuleGlobError, ModuleGlobSet, ModuleGlobSetBuilder, ModuleNameMatch};
 pub use resolve::{ModuleResolveMode, SearchPathIterator, search_paths};
 

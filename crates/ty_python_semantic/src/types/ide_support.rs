@@ -5465,39 +5465,58 @@ pub fn is_union_special_form(ty: Type) -> bool {
     matches!(ty, Type::SpecialForm(SpecialFormType::Union))
 }
 
-/// basedpython: the `sealed` classes whose `__sealed_members__` the class `class_def` declares
-/// is a member of, each by the range of its name, which is in the same file and scope
-///
-/// the transpiler adds the class to each of their tuples as its statement runs, and the checker
-/// types the tuples from the same members, so the two agree on which classes are members however
-/// a base is written
+/// basedpython: the `sealed` classes a class statement is a direct subclass of, as the transpiler
+/// needs them to add it to their `__sealed_members__` tuples
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SealedListing {
+    /// the sealed classes the statement's own scope binds, each by the range of its name
+    pub in_scope: Vec<TextRange>,
+    /// whether the statement also subclasses a sealed class bound anywhere else, which it may not
+    /// be able to spell a reference to
+    pub elsewhere: bool,
+}
+
+impl SealedListing {
+    pub fn is_empty(&self) -> bool {
+        self.in_scope.is_empty() && !self.elsewhere
+    }
+}
+
+/// basedpython: the `sealed` classes `class_def` is a direct subclass of
 pub fn sealed_classes_listing(
     model: &SemanticModel<'_>,
     class_def: &ast::StmtClassDef,
-) -> Vec<TextRange> {
+) -> SealedListing {
     let db = model.db();
     let file = db.program_file(model.file());
     let index = semantic_index(db, file);
+    let mut listing = SealedListing::default();
     let Some(ClassLiteral::Static(class)) =
         original_class_type(db, index.expect_single_definition(class_def))
     else {
-        return Vec::new();
+        return listing;
     };
     let module = parsed_module(db, file.python_file(db)).load(db);
-    let mut sealed: Vec<TextRange> = Vec::new();
     for base in class.explicit_bases(db) {
         if let Some(base) = base.to_class_type(db)
             && let ClassLiteral::Static(base) = base.class_literal(db)
             && base.is_sealed(db)
-            && base.sealed_members(db).contains(&class)
+            && base != class
         {
-            let name = base.definition(db).focus_range(db, &module).range();
-            if !sealed.contains(&name) {
-                sealed.push(name);
+            let definition = base.definition(db);
+            if definition.program_file(db) == file
+                && definition.file_scope(db) == class.definition(db).file_scope(db)
+            {
+                let name = definition.focus_range(db, &module).range();
+                if !listing.in_scope.contains(&name) {
+                    listing.in_scope.push(name);
+                }
+            } else {
+                listing.elsewhere = true;
             }
         }
     }
-    sealed
+    listing
 }
 
 #[cfg(test)]

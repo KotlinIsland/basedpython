@@ -521,7 +521,7 @@ rebind a method on one, or override it in a subclass. that is a fact about the
 because no subclass can exist.
 
 ⚠️ `sealed` is **not** exactness, and the difference is easy to miss: it closes the
-world *outside* the declaring module and says nothing about a subclass inside it.
+world *outside* the workspace and says nothing about a subclass inside it.
 treating it as exactness produced a direct call to a base's method where a subclass
 declared a few lines down overrode it. sealing licenses a **switch** over the known
 subclasses (§5), which is a different and weaker thing than a direct call.
