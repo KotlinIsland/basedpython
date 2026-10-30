@@ -147,6 +147,46 @@ def f(flag):
     Ok(())
 }
 
+/// inverting a boolean reads every module of the project, so it waits to be asked for rather than
+/// answering each move of the caret
+#[test]
+fn invert_boolean_is_not_offered_as_the_caret_moves() -> Result<()> {
+    let file = SystemPath::new("src/flags.by");
+    let source = "flag = True\nprint(flag)\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(file, source)?
+        .enable_code_action_edit_resolve()
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(file, source, 1);
+    let invert_boolean = Some(CodeActionKind::new("refactor.rewrite.invertBoolean"));
+    let inverts =
+        |actions: Vec<CodeAction>| actions.iter().any(|action| action.kind == invert_boolean);
+
+    let automatic = request(
+        &mut server,
+        file,
+        caret(0, 1),
+        None,
+        Some(CodeActionTriggerKind::Automatic),
+    );
+    assert!(!inverts(automatic));
+    let invoked = request(
+        &mut server,
+        file,
+        caret(0, 1),
+        None,
+        Some(CodeActionTriggerKind::Invoked),
+    );
+    assert!(inverts(invoked));
+    // a client from before the trigger kind says nothing of the caret
+    let unsaid = request(&mut server, file, caret(0, 1), None, None);
+    assert!(inverts(unsaid));
+
+    Ok(())
+}
+
 /// Asking only for another kind of action leaves the refactorings out.
 #[test]
 fn refactoring_is_left_out_when_another_kind_is_requested() -> Result<()> {

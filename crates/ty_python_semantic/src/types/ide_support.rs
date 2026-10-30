@@ -4558,6 +4558,15 @@ pub fn inherited_parameter_annotation<'db>(
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
 }
 
+/// basedpython: whether the value of `expr` is a `bool`, as far as its type says. a value of a
+/// type nothing is known of may be one
+pub fn is_bool_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
+    let db = model.db();
+    let env = model.program_environment();
+    expr.inferred_type(model)
+        .is_some_and(|ty| ty.is_assignable_to(db, &env, KnownClass::Bool.to_instance(db, &env)))
+}
+
 /// basedpython: the class a value bound by `definition` is named after, when there is one worth
 /// naming it after: `HttpRequest` for an `HttpRequest`, and for a `list[User]` the `User` its
 /// elements are, with `true` to say the value holds many of them

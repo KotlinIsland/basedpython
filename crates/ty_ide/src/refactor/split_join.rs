@@ -123,6 +123,7 @@ pub(super) fn plan(
             }
         };
         return Ok(Plan {
+            foreign: Vec::new(),
             title: title.to_string(),
             edits: vec![Edit::range_replacement(text, inside)],
             name: None,
