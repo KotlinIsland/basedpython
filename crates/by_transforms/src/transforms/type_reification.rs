@@ -78,7 +78,6 @@ struct Reifier<'ti> {
     types: &'ti dyn TypeInfo,
     written: WrittenNames<'ti>,
     min_version: PythonVersion,
-    in_f_string: bool,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -120,23 +119,12 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                         .types
                         .constructor_specialization(call, self.min_version)
                 {
-                    let arguments = self.written.spelled(&arguments);
-                    // python before 3.12 lets an f-string's replacement field hold neither a
-                    // backslash nor the f-string's own quote, so a string literal has no
-                    // spelling in one, and a construction with no spelling records nothing
-                    if !self.in_f_string || !arguments.contains(['"', '\\']) {
-                        self.edits.push((
-                            TextRange::empty(call.func.range().end()),
-                            format!("[{arguments}]"),
-                        ));
-                    }
+                    self.edits.push((
+                        TextRange::empty(call.func.range().end()),
+                        format!("[{}]", self.written.spelled(&arguments)),
+                    ));
                 }
                 walk_expr(self, expr);
-            }
-            Expr::FString(_) if self.min_version < PythonVersion::PY312 => {
-                let outer = std::mem::replace(&mut self.in_f_string, true);
-                walk_expr(self, expr);
-                self.in_f_string = outer;
             }
             Expr::Compare(compare) if compare.operands.iter().any(is_version_info) => {}
             Expr::Subscript(subscript) => {
@@ -188,7 +176,6 @@ impl TypeAwarePass for TypeReificationPass<'_> {
             types,
             written: self.written,
             min_version: self.min_version,
-            in_f_string: false,
             edits: Vec::new(),
         };
         for stmt in stmts {
@@ -299,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn a_string_solution_stays_out_of_an_f_string_python_cannot_hold_it_in() {
+    fn a_string_solution_is_written_without_quotes_for_an_f_string_that_cannot_hold_them() {
         let source = indoc! {"
             class A[out T]:
                 def __init__(self, t: T): ...
@@ -307,7 +294,10 @@ mod tests {
         "};
         let below = out_at(source, PythonVersion::PY311);
         assert!(
-            below.contains("print(f\"{A('x')}\", f\"{A[_by_lit(1)](1)}\", A[_by_lit(\"x\")]('x'))"),
+            below.contains(
+                "print(f\"{A[_by_lit(text=(120,))]('x')}\", f\"{A[_by_lit(1)](1)}\", \
+                 A[_by_lit(text=(120,))]('x'))"
+            ),
             "{below}"
         );
         let above = out_at(source, PythonVersion::PY312);

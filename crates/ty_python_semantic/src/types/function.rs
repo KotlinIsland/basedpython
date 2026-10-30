@@ -3036,6 +3036,24 @@ impl<'db> FunctionType<'db> {
         forwarded_type_params(db, self.literal(db).last_definition.body_scope(db))
     }
 
+    /// basedpython: whether the type parameter `name` has a pep 696 default, so a call that
+    /// supplies nothing for it still gives it a value
+    pub(crate) fn type_param_has_default(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        name: &ast::name::Name,
+    ) -> bool {
+        self.signature(db).overloads.iter().any(|overload| {
+            overload.generic_context.is_some_and(|context| {
+                context.variables(db).any(|bound_typevar| {
+                    let typevar = bound_typevar.typevar(db);
+                    typevar.name(db) == name && typevar.default_type(db, env).is_some()
+                })
+            })
+        })
+    }
+
     /// basedpython: a function that takes a specialization only because its body forwards
     /// one, and has not been given it yet
     pub(crate) fn is_unspecialized_forwarding(self, db: &'db dyn Db) -> bool {

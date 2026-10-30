@@ -22,7 +22,7 @@ use ruff_python_ast::visitor::transformer::{Transformer, walk_expr, walk_stmt};
 use ruff_python_ast::visitor::{
     Visitor, walk_expr as visit_walk_expr, walk_stmt as visit_walk_stmt,
 };
-use ruff_python_ast::{Expr, ModModule, Parameter, Parameters, Stmt};
+use ruff_python_ast::{Expr, ModModule, Parameter, Parameters, PythonVersion, Stmt};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::RuntimeSpelling;
@@ -196,6 +196,9 @@ pub struct WrittenNames<'src> {
     /// literal type. whether one does is known only from the types it spells, which reach
     /// many lowerings, so the one place they are all written out answers for them
     literal_helper: Option<&'src Cell<bool>>,
+    /// a `str` or `bytes` value of a literal type is written without quotes, for a target
+    /// whose f-strings can't hold them
+    values_without_quotes: bool,
 }
 
 /// the name of each class a lowering synthesizes for a shape — an anonymous named tuple, a
@@ -544,6 +547,7 @@ impl<'src> WrittenNames<'src> {
             private: None,
             synthesized: None,
             literal_helper: None,
+            values_without_quotes: false,
         }
     }
 
@@ -574,17 +578,23 @@ impl<'src> WrittenNames<'src> {
             private: self.private,
             synthesized: self.synthesized,
             literal_helper: self.literal_helper,
+            values_without_quotes: self.values_without_quotes,
         }
     }
 
-    /// these names, with `literal_helper` set once a spelling they write needs the helper
-    /// that builds a literal type
-    pub(crate) fn with_literal_helper<'a>(self, literal_helper: &'a Cell<bool>) -> WrittenNames<'a>
+    /// these names, as written for `min_version`, with `literal_helper` set once a spelling they
+    /// write needs the helper that builds a literal type
+    pub(crate) fn writing_literals<'a>(
+        self,
+        literal_helper: &'a Cell<bool>,
+        min_version: PythonVersion,
+    ) -> WrittenNames<'a>
     where
         'src: 'a,
     {
         WrittenNames {
             literal_helper: Some(literal_helper),
+            values_without_quotes: min_version < PythonVersion::PY312,
             ..self
         }
     }
@@ -601,6 +611,7 @@ impl<'src> WrittenNames<'src> {
             private: Some(private),
             synthesized: self.synthesized,
             literal_helper: self.literal_helper,
+            values_without_quotes: self.values_without_quotes,
         }
     }
 
@@ -617,6 +628,7 @@ impl<'src> WrittenNames<'src> {
             private: self.private,
             synthesized: self.synthesized,
             literal_helper: self.literal_helper,
+            values_without_quotes: self.values_without_quotes,
         }
     }
 
@@ -688,7 +700,12 @@ impl<'src> WrittenNames<'src> {
         {
             literal_helper.set(true);
         }
-        spelling.spelled(|symbol| self.module_private(symbol))
+        let module_private = |symbol: &str| self.module_private(symbol);
+        if self.values_without_quotes {
+            spelling.spelled_without_quotes(module_private)
+        } else {
+            spelling.spelled(module_private)
+        }
     }
 
     /// the name a lowering writes `name`, which `module` exports, under — `typing`,

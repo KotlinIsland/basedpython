@@ -1100,7 +1100,7 @@ mod tests {
             "literal argument spelled through `_by_lit`: {out}"
         );
         assert!(
-            out.contains("def _by_lit(*values):"),
+            out.contains("def _by_lit("),
             "the literal helper is emitted: {out}"
         );
     }

@@ -1280,7 +1280,7 @@ pub(crate) fn run_against_source<'a>(
     project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
     let literal_helper = Cell::new(false);
-    let written = written.with_literal_helper(&literal_helper);
+    let written = written.writing_literals(&literal_helper, config.min_version);
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the

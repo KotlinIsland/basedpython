@@ -736,6 +736,155 @@ assert not test("a", "b")
 assert test(int(1), 2)
 assert not test(int(1), "b")
 assert not test(list[int](), 1)
+assert test(None, None)
+assert not test(None, 1)
+```
+
+A body reads the cell the way it would read a class. `isinstance` asks the same question, `T()` is
+the one value the type holds, and building any other value is refused:
+
+```by
+def reads[T](t: T) -> tuple[bool, bool, T, str]:
+    return isinstance(1, T), isinstance(2, T), T(), T.__name__
+
+assert reads(1) == (True, False, 1, "Literal[1]")
+
+def builds[T: int](t: T, text: str) -> T:
+    return T(text)
+
+assert builds(1, "1") == 1
+
+try:
+    builds(1, "2")
+except TypeError:
+    pass
+else:
+    raise AssertionError
+```
+
+## a type parameter holds the class of a literal the runtime can't record
+
+The runtime can't tell one float literal from an equal one, and `LiteralString` or a template
+literal type isn't one value at all, so the cell holds the class instead:
+
+```by
+from typing import LiteralString
+
+def holds[T](t: T) -> object:
+    return T
+
+def text(s: LiteralString) -> object:
+    return holds(s)
+
+def number(n: 1.5) -> object:
+    return holds(n)
+
+def pattern(s: f"a{int}b") -> object:
+    return holds(s)
+
+assert text("a") == str
+assert number(1.5) == float
+assert pattern("a1b") == str
+```
+
+## a name that hides a type parameter
+
+A forwarded type argument is read by the type parameter's name, so a nearer binding of that name
+hides it. The value then records nothing rather than recording what the name holds:
+
+```by
+class Box[T]:
+    init(var t: T)
+
+def hidden_by_a_parameter[T](t: T) -> object:
+    def inner(T: int) -> object:
+        return Box(t)  # no diagnostic
+    return inner(1)
+
+def hidden_by_a_class[T](t: T) -> object:
+    class Holder:
+        T = 1
+        value = Box(t)
+    return Holder.value
+
+def hidden_by_a_lambda[T](t: T) -> object:
+    return (lambda T: Box(t))(1)
+
+for value in hidden_by_a_parameter("x"), hidden_by_a_class("x"), hidden_by_a_lambda("x"):
+    assert not value is Box[1]
+    assert not value is Box["x"]
+```
+
+A class's binding is only seen by the code written directly in it:
+
+```by
+class Box2[T]:
+    init(var t: T)
+
+def method_in_class[T](t: T) -> object:
+    class Holder:
+        T = 1
+        def build(self) -> object:
+            return Box2(t)
+    return Holder().build()
+
+assert method_in_class("x") is Box2["x"]
+```
+
+A callee that has to be given the type argument can't be, so that call is rejected:
+
+```by
+def read[reified T](t: T) -> None: ...
+
+def hidden[T](t: T) -> None:
+    def inner(T: int) -> None:
+        # error: [unspecialized-reified-generic]
+        read(t)
+```
+
+## an override of a method that forwards
+
+A call through the base reaches the override. An override whose body needs its type argument can't
+be reached by a call through a base that doesn't take one:
+
+```by
+from typing import override
+
+def read[reified T](t: T) -> None: ...
+
+class Base:
+    def method[T](self, t: T) -> object:
+        return t
+
+class Requires(Base):
+    @override
+    def method[T](self, t: T) -> object:  # error: [invalid-method-override]
+        read(t)
+        return t
+```
+
+A specialization through the base fills the override's type parameters by position, so they have to
+be in the same order. What they are called doesn't matter:
+
+```by
+from typing import override
+
+class Box3[T]:
+    init(var t: T)
+
+class Pair:
+    def method[A, B](self, a: A, b: B) -> object:
+        return Box3(a)
+
+class Swapped(Pair):
+    @override
+    def method[B, A](self, a: A, b: B) -> object:  # error: [invalid-method-override]
+        return Box3(a)
+
+class Renamed(Pair):
+    @override
+    def method[X, Y](self, a: X, b: Y) -> object:  # no diagnostic
+        return Box3(a)
 ```
 
 ## a forwarded type parameter a callee reads has to be supplied

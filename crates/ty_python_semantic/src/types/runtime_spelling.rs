@@ -21,6 +21,7 @@ use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
 use crate::types::ProgramEnvironment;
 use crate::types::check_order::InferredInCheckOrder;
+use crate::types::reified_infer::{python_bytes_literal, python_str_literal};
 use crate::types::visibility::private_symbols;
 
 /// where a lowering writes a spelling into code that runs, which decides what each name it
@@ -72,6 +73,10 @@ enum SpellingPart {
     ModulePrivate(Name),
     /// the runtime helper that builds a literal type, which a module has only if asked for
     LiteralHelper,
+    /// a `str` value, whose quotes depend on the python it is written for
+    Str(String),
+    /// a `bytes` value, whose quotes depend on the python it is written for
+    Bytes(Vec<u8>),
 }
 
 impl RuntimeSpelling {
@@ -91,6 +96,20 @@ impl RuntimeSpelling {
         spelling.push(value);
         spelling.push_str(")");
         spelling
+    }
+
+    /// the `str` value `value`
+    pub(crate) fn string(value: &str) -> Self {
+        Self {
+            parts: vec![SpellingPart::Str(value.to_owned())],
+        }
+    }
+
+    /// the `bytes` value `value`
+    pub(crate) fn bytes(value: &[u8]) -> Self {
+        Self {
+            parts: vec![SpellingPart::Bytes(value.to_vec())],
+        }
     }
 
     /// whether the spelling needs the runtime helper that builds a literal type
@@ -119,7 +138,10 @@ impl RuntimeSpelling {
     pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
-            SpellingPart::Text(_) | SpellingPart::LiteralHelper => None,
+            SpellingPart::Text(_)
+            | SpellingPart::LiteralHelper
+            | SpellingPart::Str(_)
+            | SpellingPart::Bytes(_) => None,
         })
     }
 
@@ -133,7 +155,10 @@ impl RuntimeSpelling {
                     parts: vec![part.clone()],
                 },
             )),
-            SpellingPart::Text(_) | SpellingPart::LiteralHelper => None,
+            SpellingPart::Text(_)
+            | SpellingPart::LiteralHelper
+            | SpellingPart::Str(_)
+            | SpellingPart::Bytes(_) => None,
         })
     }
 
@@ -165,7 +190,9 @@ impl RuntimeSpelling {
                 SpellingPart::Text(text) => self.push_str(text),
                 SpellingPart::Global(_)
                 | SpellingPart::ModulePrivate(_)
-                | SpellingPart::LiteralHelper => {
+                | SpellingPart::LiteralHelper
+                | SpellingPart::Str(_)
+                | SpellingPart::Bytes(_) => {
                     self.parts.push(part.clone());
                 }
             }
@@ -191,6 +218,21 @@ impl RuntimeSpelling {
     /// the expression as the transpiled module reads it, each module-level `private`
     /// symbol written under the name `module_private` gives it
     pub fn spelled(&self, module_private: impl Fn(&str) -> String) -> String {
+        self.written(module_private, true)
+    }
+
+    /// [`Self::spelled`], writing a `str` or `bytes` value of a literal type as its code points.
+    /// below python 3.12 an f-string's replacement field can hold neither a backslash nor the
+    /// f-string's own quote, and what writes a spelling doesn't know whether it is in one
+    pub fn spelled_without_quotes(&self, module_private: impl Fn(&str) -> String) -> String {
+        self.written(module_private, false)
+    }
+
+    fn written(&self, module_private: impl Fn(&str) -> String, quotes: bool) -> String {
+        let code_points = |keyword: &str, points: Vec<String>| {
+            let trailing = if points.len() == 1 { "," } else { "" };
+            format!("{keyword}=({}{trailing})", points.join(", "))
+        };
         let mut spelled = String::new();
         for part in &self.parts {
             match part {
@@ -198,6 +240,20 @@ impl RuntimeSpelling {
                 SpellingPart::Global(name) => spelled.push_str(name),
                 SpellingPart::ModulePrivate(name) => spelled.push_str(&module_private(name)),
                 SpellingPart::LiteralHelper => spelled.push_str("_by_lit"),
+                SpellingPart::Str(value) if quotes => {
+                    spelled.push_str(&python_str_literal(value));
+                }
+                SpellingPart::Bytes(value) if quotes => {
+                    spelled.push_str(&python_bytes_literal(value));
+                }
+                SpellingPart::Str(value) => spelled.push_str(&code_points(
+                    "text",
+                    value.chars().map(|c| u32::from(c).to_string()).collect(),
+                )),
+                SpellingPart::Bytes(value) => spelled.push_str(&code_points(
+                    "data",
+                    value.iter().map(ToString::to_string).collect(),
+                )),
             }
         }
         spelled

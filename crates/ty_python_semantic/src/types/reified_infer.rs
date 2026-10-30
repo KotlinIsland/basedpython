@@ -29,8 +29,9 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{KnownModule, SearchPath, file_to_module};
 use ty_python_core::definition::{Definition, DefinitionKind};
-use ty_python_core::scope::{NodeWithScopeKind, NodeWithScopeRef, ScopeId};
-use ty_python_core::semantic_index;
+use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, NodeWithScopeRef, ScopeId, ScopeKind};
+use ty_python_core::symbol::Symbol;
+use ty_python_core::{ProgramFile, semantic_index};
 
 use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, builtins_symbol, global_symbol, runtime_binding};
@@ -47,11 +48,12 @@ use crate::types::instance::Protocol;
 use crate::types::literal::{LiteralValueType, LiteralValueTypeKind};
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
+use crate::types::signatures::Signature;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
 use crate::types::visitor::any_over_type;
-use crate::types::{KnownClass, MemberLookupPolicy, Type, TypeModifier};
+use crate::types::{CallableType, KnownClass, MemberLookupPolicy, Type, TypeModifier};
 
 /// why a bare call of a reified generic cannot be accepted
 pub(crate) enum ReifiedInferenceError<'db> {
@@ -83,6 +85,15 @@ pub(crate) fn inferred_call_type_arguments<'db>(
     let BareGenericCall {
         callee, function, ..
     } = *call;
+    let written_in = cells;
+    let cells = match call.scope {
+        Some((file, scope)) => TypeParamCells::Visible {
+            cells: &written_in,
+            file,
+            scope,
+        },
+        None => written_in,
+    };
     let arguments = call
         .arguments
         .as_ref()
@@ -180,9 +191,11 @@ pub(crate) fn injectable_call_specialization<'db>(
         ", ",
     );
     // a method that only forwards is not bound to be what the receiver runs: an override may
-    // forward nothing, and so be a plain method that takes no specialization. a reified
-    // method has no such override, which `reified_override_error` rejects
-    let through_helper = !hard && bare_call.through_attribute;
+    // forward nothing, and so be a plain method that takes no specialization. a function of
+    // another file may be plain too: its `.py` was built on its own terms, for a target that
+    // can't hold the cell or by a `by` that didn't forward. a reified callee has neither, which
+    // `reified_override_error` and its own file's build reject
+    let through_helper = !hard && (bare_call.through_attribute || function.file(db) != file);
     let (open, close) = if through_helper {
         (", ", ")")
     } else if fields.is_empty() {
@@ -219,6 +232,8 @@ pub(crate) struct BareGenericCall<'a, 'db> {
     solution: Option<CallSolution<'db>>,
     /// the callee is looked up on something, a receiver or a module
     through_attribute: bool,
+    /// the code the call is written in, which is what a spelling of it reads names from
+    scope: Option<(ProgramFile<'db>, FileScopeId)>,
 }
 
 impl<'a, 'db> BareGenericCall<'a, 'db> {
@@ -240,6 +255,9 @@ impl<'a, 'db> BareGenericCall<'a, 'db> {
             arguments: Self::arguments(model, call),
             solution: model.call_solution(call),
             through_attribute: call.func.is_attribute_expr(),
+            scope: semantic_index(db, model.program_file())
+                .try_expression_scope_id(&*call.func)
+                .map(|scope| (model.program_file(), scope)),
         })
     }
 
@@ -289,9 +307,23 @@ pub(crate) enum TypeParamCells<'a, 'db> {
     /// every function type parameter, recording each one read. this is how
     /// [`forwarded_type_params`] finds what a call would need
     Assumed(&'a RefCell<Vec<BoundTypeVarInstance<'db>>>),
+    /// those of `cells` that the code in `scope` can read: a spelling names a cell by its
+    /// name, so a nearer binding of that name is what it would read instead
+    ///
+    /// ```by
+    /// def f[T](t: T) -> object:
+    ///     def inner(T: int) -> object:
+    ///         return Box(t)  # `Box[T]` here would be a `Box[<the int>]`
+    ///     return inner(1)
+    /// ```
+    Visible {
+        cells: &'a TypeParamCells<'a, 'db>,
+        file: ProgramFile<'db>,
+        scope: FileScopeId,
+    },
 }
 
-impl<'db> TypeParamCells<'_, 'db> {
+impl<'a, 'db> TypeParamCells<'a, 'db> {
     fn has_cell(self, db: &'db dyn Db, bound_typevar: BoundTypeVarInstance<'db>) -> bool {
         match self {
             Self::Written => is_reified_function_typevar(db, bound_typevar),
@@ -316,11 +348,57 @@ impl<'db> TypeParamCells<'_, 'db> {
                 }
                 is_function_parameter
             }
+            Self::Visible { cells, file, scope } => {
+                !type_param_hidden_at(db, bound_typevar, file, scope)
+                    && cells.has_cell(db, bound_typevar)
+            }
+        }
+    }
+
+    /// these cells, as the code `call` is written in can read them
+    fn visible_to(&'a self, model: &SemanticModel<'db>, call: &ast::ExprCall) -> Self {
+        let file = model.program_file();
+        match semantic_index(model.db(), file).try_expression_scope_id(&*call.func) {
+            Some(scope) => Self::Visible {
+                cells: self,
+                file,
+                scope,
+            },
+            None => *self,
         }
     }
 }
 
+/// whether the name of `bound_typevar` reads something other than its type parameter in the
+/// code of `scope`
+fn type_param_hidden_at<'db>(
+    db: &'db dyn Db,
+    bound_typevar: BoundTypeVarInstance<'db>,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+) -> bool {
+    let Some(body) = typevar_function_scope(db, bound_typevar) else {
+        return false;
+    };
+    let index = semantic_index(db, file);
+    let own_scope = index.parent_scope_id(body.file_scope_id(db));
+    let name = bound_typevar.name(db);
+    index
+        .ancestor_scopes(scope)
+        // a class body's bindings are seen by the code written directly in it, and by nothing
+        // nested inside that
+        .filter(|(id, ancestor)| *id == scope || ancestor.kind() != ScopeKind::Class)
+        .find(|(id, _)| {
+            index
+                .place_table(*id)
+                .symbol_by_name(name)
+                .is_some_and(Symbol::is_bound)
+        })
+        .is_some_and(|(id, _)| Some(id) != own_scope)
+}
+
 /// the body scope of the function that binds `bound_typevar`
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
 fn typevar_function_scope<'db>(
     db: &'db dyn Db,
     bound_typevar: BoundTypeVarInstance<'db>,
@@ -349,18 +427,25 @@ pub(crate) fn target_can_forward<'db>(
     scope: ScopeId<'db>,
     min_version: PythonVersion,
 ) -> bool {
-    let module = parsed_module(db, scope.python_file(db)).load(db);
-    let function = scope.node(db).expect_function().node(&module);
-    let has_default = function
-        .type_params
-        .as_deref()
-        .is_some_and(|params| params.iter().any(|param| param.default().is_some()));
     min_version
-        >= if has_default {
+        >= if type_params_have_default(db, scope) {
             PythonVersion::PY313
         } else {
             PythonVersion::PY312
         }
+}
+
+/// whether a type parameter of the function with this body scope has a pep 696 default
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
+fn type_params_have_default<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> bool {
+    let module = parsed_module(db, scope.python_file(db)).load(db);
+    scope
+        .node(db)
+        .expect_function()
+        .node(&module)
+        .type_params
+        .as_deref()
+        .is_some_and(|params| params.iter().any(|param| param.default().is_some()))
 }
 
 /// the type parameters of a function that nothing in its source reifies but that its body
@@ -473,7 +558,8 @@ impl ForwardedCalls<'_, '_> {
             let Some(constructed) = call.inferred_type(model) else {
                 return;
             };
-            if constructor_specialization(db, env, file, class_literal, constructed, None, cells)
+            let visible = cells.visible_to(model, call);
+            if constructor_specialization(db, env, file, class_literal, constructed, None, visible)
                 .is_err()
             {
                 return;
@@ -807,7 +893,7 @@ fn spell_type<'db>(
             LiteralValueSpelling::Value(value) => Some(RuntimeSpelling::literal(&value)),
             LiteralValueSpelling::Unknown => None,
             LiteralValueSpelling::NotRecordable => {
-                spell_type(db, env, file, ty.promote_in(db, env, file), cells)
+                spell_type(db, env, file, literal.fallback_instance(db, env), cells)
             }
         },
         Type::Union(union) => Some(RuntimeSpelling::join(
@@ -840,26 +926,25 @@ fn literal_value_spelling<'db>(
     file: File,
     literal: LiteralValueType<'db>,
 ) -> LiteralValueSpelling {
-    let text = match literal.kind() {
-        LiteralValueTypeKind::Bool(value) => (if value { "True" } else { "False" }).to_owned(),
-        LiteralValueTypeKind::Int(value) => value.as_i64().to_string(),
-        LiteralValueTypeKind::String(value) => python_str_literal(value.value(db)),
-        LiteralValueTypeKind::Bytes(value) => python_bytes_literal(value.value(db)),
+    LiteralValueSpelling::Value(match literal.kind() {
+        LiteralValueTypeKind::Bool(value) => {
+            RuntimeSpelling::text(if value { "True" } else { "False" })
+        }
+        LiteralValueTypeKind::Int(value) => RuntimeSpelling::text(value.as_i64().to_string()),
+        LiteralValueTypeKind::String(value) => RuntimeSpelling::string(value.value(db)),
+        LiteralValueTypeKind::Bytes(value) => RuntimeSpelling::bytes(value.value(db)),
         LiteralValueTypeKind::Enum(member) => {
-            return match spell_class_literal(db, env, file, member.enum_class(db)) {
-                Some(mut class) => {
-                    class.push_str(&format!(".{}", member.name(db)));
-                    LiteralValueSpelling::Value(class)
-                }
-                None => LiteralValueSpelling::Unknown,
+            let Some(mut class) = spell_class_literal(db, env, file, member.enum_class(db)) else {
+                return LiteralValueSpelling::Unknown;
             };
+            class.push_str(&format!(".{}", member.name(db)));
+            class
         }
         LiteralValueTypeKind::LiteralString
         | LiteralValueTypeKind::Float(_)
         | LiteralValueTypeKind::Complex(_)
         | LiteralValueTypeKind::Template(_) => return LiteralValueSpelling::NotRecordable,
-    };
-    LiteralValueSpelling::Value(RuntimeSpelling::text(text))
+    })
 }
 
 fn spell_class<'db>(
@@ -2212,7 +2297,7 @@ fn evaluates_to_its_target(node: &ast::Expr, subscript_evaluates: bool) -> bool 
 
 /// a python string literal for `value`, escaped so the emitted source reads it
 /// back character for character.
-fn python_str_literal(value: &str) -> String {
+pub(super) fn python_str_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {
@@ -2228,7 +2313,7 @@ fn python_str_literal(value: &str) -> String {
 
 /// a python bytes literal for `value`, written one `\xNN` escape per byte so
 /// every byte round-trips whatever it is
-fn python_bytes_literal(value: &[u8]) -> String {
+pub(super) fn python_bytes_literal(value: &[u8]) -> String {
     let mut out = String::with_capacity(value.len() * 4 + 3);
     out.push_str("b\"");
     for byte in value {
@@ -2898,6 +2983,9 @@ pub(crate) enum ReifiedOverrideError<'db> {
         base_admissible: Type<'db>,
         sub_admissible: Type<'db>,
     },
+    /// a specialization through the base fills the override's type parameters by position,
+    /// and the override's are in another order than the base's
+    Reordered,
 }
 
 /// Compatibility of an override's reified type-parameter list with its base
@@ -2952,6 +3040,73 @@ pub(crate) fn reified_override_error<'db>(
             None
         }
     }
+}
+
+/// [`reified_override_error`], for what a method's body forwards. this reads the inference of
+/// both bodies, so it is asked once the file is inferred ([`crate::types::runtime_reads`])
+pub(crate) fn forwarded_override_error<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    base: FunctionType<'db>,
+    sub: FunctionType<'db>,
+) -> Option<ReifiedOverrideError<'db>> {
+    if base.is_classmethod(db) || sub.is_classmethod(db) {
+        return None;
+    }
+    let forwarded = sub.forwarded_type_params(db);
+    let base_requires = base.is_reified(db) || !base.forwarded_type_params(db).required.is_empty();
+    let missing: Box<[Name]> = forwarded
+        .required
+        .iter()
+        .filter(|name| !sub.type_param_has_default(db, env, name))
+        .cloned()
+        .collect();
+    if !base_requires && !missing.is_empty() {
+        return Some(ReifiedOverrideError::ReifiesErased(missing));
+    }
+    let takes_arguments = |function: FunctionType<'db>| {
+        function.is_reified(db) || !function.forwarded_type_params(db).names.is_empty()
+    };
+    (takes_arguments(base) && takes_arguments(sub) && !type_params_line_up(db, env, base, sub))
+        .then_some(ReifiedOverrideError::Reordered)
+}
+
+/// whether the signature of `sub` still overrides that of `base` when each of its type
+/// parameters is read as the base's in the same position, which is how a specialization through
+/// the base reaches it
+fn type_params_line_up<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    base: FunctionType<'db>,
+    sub: FunctionType<'db>,
+) -> bool {
+    let (base_signature, sub_signature) = (base.signature(db), sub.signature(db));
+    let ([base_overload], [sub_overload]) = (
+        base_signature.overloads.as_ref(),
+        sub_signature.overloads.as_ref(),
+    ) else {
+        return true;
+    };
+    let (Some(base_context), Some(sub_context)) =
+        (base_overload.generic_context, sub_overload.generic_context)
+    else {
+        return true;
+    };
+    let base_params: Vec<Type<'db>> = base_context.variables(db).map(Type::TypeVar).collect();
+    if base_params.len() < 2 || base_params.len() != sub_context.variables(db).count() {
+        return true;
+    }
+    let in_base_order = sub_context.specialize(db, base_params);
+    let as_callable = |signature: &Signature<'db>| {
+        let mut bound = signature.bind_self(db, env, None);
+        bound.generic_context = None;
+        Type::Callable(CallableType::single(db, bound))
+    };
+    as_callable(&sub_overload.apply_specialization(db, in_base_order)).is_assignable_to(
+        db,
+        env,
+        as_callable(base_overload),
+    )
 }
 
 /// the positional type-parameter interface of a reified generic: one

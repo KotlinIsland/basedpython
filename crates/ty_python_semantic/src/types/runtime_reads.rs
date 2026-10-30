@@ -28,16 +28,18 @@ use crate::types::check_order::{InferredInCheckOrder, infer_scope_in_check_order
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     ERASED_TYPE_CHECK, TypeCheckDiagnostics, report_erased_type_check,
-    report_unspecialized_reified_call, report_unspecialized_reified_construction,
+    report_invalid_reified_override, report_unspecialized_reified_call,
+    report_unspecialized_reified_construction,
 };
-use crate::types::infer::infer_scope_types;
+use crate::types::infer::{infer_scope_types, original_class_type};
+use crate::types::overrides::{OverrideStep, overridden_declarations};
 use crate::types::reified_infer::{
     BareGenericCall, ParametricIsPlan, TypeParamCells, WrittenTarget, constructor_specialization,
-    inferred_call_type_arguments, type_test_plan, written_unbound_read,
+    forwarded_override_error, inferred_call_type_arguments, type_test_plan, written_unbound_read,
 };
 use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::{CastCheck, cast_check_plan, cast_is_redundant};
-use crate::types::{ProgramEnvironment, TypeContext};
+use crate::types::{ProgramEnvironment, Type, TypeContext, binding_type};
 use crate::{Db, FxIndexMap, FxIndexSet};
 
 /// a site inference found that writes module-level names into code that runs, and whether
@@ -62,6 +64,9 @@ pub(crate) enum RuntimeReadSite {
         call: NodeIndex,
         generic: ReifiedGeneric,
     },
+    /// a method with type parameters of its own, whose override compatibility depends on what
+    /// its body forwards, and on what the body of the method it overrides does
+    GenericMethod { function: NodeIndex },
 }
 
 /// the reified generic a bare call specializes
@@ -208,6 +213,63 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                     self.reified(call, generic);
                 }
             }
+            RuntimeReadSite::GenericMethod { function } => {
+                if reports
+                    && let AnyRootNodeRef::Stmt(ast::Stmt::FunctionDef(function)) =
+                        self.parsed.get_by_index(*function)
+                {
+                    self.generic_method(function);
+                }
+            }
+        }
+    }
+
+    /// a method's forwarded type parameters are part of its runtime interface, as a declared
+    /// `reified` list is: a call through the base reaches this method
+    fn generic_method(&mut self, function: &'a ast::StmtFunctionDef) {
+        let (db, env) = (self.db, self.env);
+        let file = self.model.program_file();
+        let index = semantic_index(db, file);
+        let definition = index.expect_single_definition(function);
+        let Type::FunctionLiteral(sub) = binding_type(db, definition) else {
+            return;
+        };
+        let Some(class_node) = index.scope(definition.file_scope(db)).node().as_class() else {
+            return;
+        };
+        let Some(class) = original_class_type(db, index.expect_single_definition(class_node))
+        else {
+            return;
+        };
+        let class = class.identity_specialization(db);
+        for step in overridden_declarations(db, env, class, &function.name.id) {
+            let OverrideStep::Overrides(declaration) = step else {
+                continue;
+            };
+            let base = match declaration.ty {
+                Type::FunctionLiteral(base) => Some(base),
+                Type::BoundMethod(method) => method.function(db),
+                _ => None,
+            };
+            if let Some(base) = base
+                && let Some(error) = forwarded_override_error(db, env, base, sub)
+            {
+                let (source_file, parsed) = (self.file, self.parsed);
+                let scope = definition.file_scope(db);
+                let context = self.contexts.entry(scope).or_insert_with(|| {
+                    InferContext::new(db, env, definition.scope(db), source_file, file, parsed)
+                });
+                report_invalid_reified_override(
+                    context,
+                    function.name.id.as_str(),
+                    definition,
+                    sub,
+                    declaration.superclass,
+                    error,
+                );
+            }
+            // the nearest declaration is the one a more distant one is already checked against
+            return;
         }
     }
 

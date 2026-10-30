@@ -216,9 +216,12 @@ f("")   # T is `""`: prints False
 ```
 
 the injected argument is a *runtime type expression* for what the checker
-solved, so `f(1)` hands `f` the type `Literal[1]`. a float or complex literal
-hands on its class instead, because equal floats can be different values
-(`0.0 == -0.0`) and the runtime couldn't tell them apart. structured
+solved, so `f(1)` hands `f` the type `Literal[1]`. the body reads it as it would
+read a class: `isinstance(x, T)` asks whether `x` is that value, `T()` is that
+value, and `T("2")` is a `TypeError`, since `2` isn't of that type. to have `T` be
+`int`, pass something that is only known to be one, such as `int(1)`. a float or
+complex literal hands on its class instead, because equal floats can be different
+values (`0.0 == -0.0`) and the runtime couldn't tell them apart. structured
 annotations solve through their type arguments (`list[T]` + `[1]` → `int`),
 and unions and tuples spell as `int | str` / `tuple[int, str]`. a class name
 is injected only when the bare name resolves — in the module's globals or
