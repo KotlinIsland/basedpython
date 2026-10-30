@@ -318,3 +318,196 @@ fn apply(source: &str, mut edits: Vec<lsp_types::TextEdit>) -> String {
     }
     lines.concat()
 }
+
+/// `textDocument/rename`, answered as the json the server sent
+///
+/// An annotated text edit reads as a plain one through `lsp_types::Edit`, which tries the plain
+/// shape first, so the annotations are read off the json instead.
+enum RawRename {}
+
+impl lsp_types::Request for RawRename {
+    type Params = lsp_types::RenameParams;
+    type Result = serde_json::Value;
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::TextDocumentRename;
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
+}
+
+/// rename what is at `line` and `character` of `animal.by` to `new_name`, and summarize the
+/// edit one line per text edit — the file, where, the new text, and the change annotation it
+/// carries — then each file renamed and each annotation
+fn rename_summary(server: &mut TestServer, line: u32, character: u32, new_name: &str) -> String {
+    use std::fmt::Write as _;
+
+    let edit = server.send_request_await::<RawRename>(lsp_types::RenameParams {
+        text_document_position_params: lsp_types::TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: server.file_uri("animal.by"),
+            },
+            position: lsp_types::Position::new(line, character),
+        },
+        new_name: new_name.to_string(),
+        work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+    });
+    let name = |uri: &serde_json::Value| {
+        uri.as_str()
+            .and_then(|uri| uri.rsplit('/').next())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut summary = String::new();
+    for change in edit["documentChanges"].as_array().into_iter().flatten() {
+        if change["kind"] == "rename" {
+            let _ = writeln!(
+                summary,
+                "rename {} -> {} {}",
+                name(&change["oldUri"]),
+                name(&change["newUri"]),
+                change["annotationId"].as_str().unwrap_or("-")
+            );
+            continue;
+        }
+        let mut edits: Vec<&serde_json::Value> =
+            change["edits"].as_array().into_iter().flatten().collect();
+        edits.sort_by_key(|edit| {
+            (
+                edit["range"]["start"]["line"].as_u64(),
+                edit["range"]["start"]["character"].as_u64(),
+            )
+        });
+        for edit in edits {
+            let start = &edit["range"]["start"];
+            let _ = writeln!(
+                summary,
+                "{} {}:{} {} {}",
+                name(&change["textDocument"]["uri"]),
+                start["line"].as_u64().unwrap_or_default() + 1,
+                start["character"].as_u64().unwrap_or_default() + 1,
+                edit["newText"],
+                edit["annotationId"].as_str().unwrap_or("-")
+            );
+        }
+    }
+    let mut annotations: Vec<(&String, &serde_json::Value)> = edit["changeAnnotations"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .collect();
+    annotations.sort_by_key(|(id, _)| id.as_str());
+    for (id, annotation) in annotations {
+        let _ = writeln!(
+            summary,
+            "{id}: {} / {} / confirm {}",
+            annotation["label"], annotation["description"], annotation["needsConfirmation"]
+        );
+    }
+    summary
+}
+
+const ANIMAL: &str = "\
+class Animal:
+    def speak(self, loud: bool) -> str:
+        return \"\"
+";
+
+const DOG: &str = "\
+from animal import Animal
+
+
+class Dog(Animal):
+    override def speak(self, loud: bool) -> str:
+        return \"woof\" if loud else \"w\"
+
+
+def f(d: Dog, a: Animal) -> None:
+    print(d.speak(loud=True))
+    print(a.speak(loud=False))
+";
+
+fn animals(annotated: bool) -> anyhow::Result<TestServer> {
+    let builder = TestServerBuilder::new()?
+        .with_file("animal.by", ANIMAL)?
+        .with_file("dog.by", DOG)?;
+    let builder = if annotated {
+        builder.enable_annotated_workspace_edits()
+    } else {
+        builder
+    };
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+    server.open_text_document("animal.by", ANIMAL, 1);
+    Ok(server)
+}
+
+/// renaming a method offers the methods that override it, which then keep overriding it, as
+/// edits the user confirms: they are `Dog.speak`'s own uses, which the rename of `Animal.speak`
+/// does not reach
+#[test]
+fn a_method_rename_offers_its_overrides() -> anyhow::Result<()> {
+    let mut server = animals(true)?;
+    insta::assert_snapshot!(rename_summary(&mut server, 1, 9, "talk"), @r#"
+    animal.by 2:9 "talk" -
+    dog.by 5:18 "talk" override:0
+    dog.by 10:13 "talk" override:0
+    dog.by 11:13 "talk" -
+    override:0: "Rename overriding methods" / "`dog.Dog.speak`" / confirm true
+    "#);
+    Ok(())
+}
+
+/// a parameter of a method is offered renamed in the methods that override it, with its uses
+/// there, keyword arguments included
+#[test]
+fn a_parameter_rename_offers_the_overrides_parameters() -> anyhow::Result<()> {
+    let mut server = animals(true)?;
+    insta::assert_snapshot!(rename_summary(&mut server, 1, 21, "shout"), @r#"
+    animal.by 2:21 "shout" -
+    dog.by 5:30 "shout" parameter:0
+    dog.by 6:26 "shout" parameter:0
+    dog.by 10:19 "shout" parameter:0
+    dog.by 11:19 "shout" -
+    parameter:0: "Rename parameters of overriding methods" / "`loud` of `dog.Dog.speak`" / confirm true
+    "#);
+    Ok(())
+}
+
+/// a class rename offers to move the module named after it, with the imports of it
+#[test]
+fn a_class_rename_offers_the_module_named_after_it() -> anyhow::Result<()> {
+    let mut server = animals(true)?;
+    insta::assert_snapshot!(rename_summary(&mut server, 0, 7, "Beast"), @r#"
+    animal.by 1:7 "Beast" -
+    dog.by 1:6 "beast" module:0
+    dog.by 1:20 "Beast" -
+    dog.by 4:11 "Beast" -
+    dog.by 9:18 "Beast" -
+    rename animal.by -> beast.by module:0
+    module:0: "Rename module" / "`animal.by` to `beast.by`" / confirm true
+    "#);
+    Ok(())
+}
+
+/// a client that cannot be asked to confirm part of an edit gets the rename alone, as plain
+/// `changes`
+#[test]
+fn a_client_without_change_annotations_gets_the_rename_alone() -> anyhow::Result<()> {
+    let mut server = animals(false)?;
+    let edit = server
+        .rename(
+            &server.file_uri("animal.by"),
+            lsp_types::Position::new(1, 9),
+            "talk",
+        )
+        .expect("`speak` can be renamed")
+        .expect("and is");
+    assert!(edit.document_changes.is_none());
+    assert!(edit.change_annotations.is_none());
+    let edited: usize = edit
+        .changes
+        .iter()
+        .flatten()
+        .map(|(_, edits)| edits.len())
+        .sum();
+    assert_eq!(edited, 2, "{edit:#?}");
+    Ok(())
+}

@@ -136,7 +136,10 @@ pub use refactor::{
     move_symbol, pull_members_up, push_members_down, refactor, refactors,
 };
 pub use references::ReferencesMode;
-pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};
+pub use rename::{
+    PreparedRename, RenameExtra, can_rename, invalid_new_name, prepare_rename, rename,
+    rename_extras,
+};
 pub use selection_range::selection_range;
 pub use semantic_tokens::{
     Fragments, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,

@@ -1675,6 +1675,24 @@ impl TestServerBuilder {
         self
     }
 
+    /// take workspace edits as ordered `documentChanges` with change annotations, and file
+    /// renames among them
+    pub(crate) fn enable_annotated_workspace_edits(mut self) -> Self {
+        let workspace_edit = self
+            .client_capabilities
+            .workspace
+            .get_or_insert_default()
+            .workspace_edit
+            .get_or_insert_default();
+        workspace_edit.document_changes = Some(true);
+        workspace_edit.resource_operations = Some(vec![lsp_types::ResourceOperationKind::Rename]);
+        workspace_edit.change_annotation_support =
+            Some(lsp_types::ChangeAnnotationsSupportOptions {
+                groups_on_label: Some(true),
+            });
+        self
+    }
+
     /// Enable dynamic file watching, optionally with relative patterns.
     pub(crate) fn with_watched_file_support(mut self, relative_pattern_support: bool) -> Self {
         self.client_capabilities

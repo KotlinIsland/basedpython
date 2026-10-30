@@ -2281,6 +2281,55 @@ whose value comes out of a call, like `make().d`, is answered only when it may.
 reading an attribute or an item is answered either way, as every python
 debugger's value tooltip does
 
+## renaming what goes with a symbol
+
+a rename (`textDocument/rename`) renames a symbol's declaration and every use of
+it. beside that, as PyCharm does for a `.py` rename, it offers the renames that
+usually go with it, for the user to choose:
+
+| label                                     | offered when renaming   | renames                                                                     |
+| ----------------------------------------- | ----------------------- | --------------------------------------------------------------------------- |
+| `Rename overriding methods`               | a method                | each method that overrides it, and its uses, so it keeps overriding         |
+| `Rename parameters of overriding methods` | a parameter of a method | the parameter of that name in each overriding method, keyword arguments too |
+| `Rename module`                           | a module's class        | the module the class names, `animal.by` for `Animal`, and the imports of it |
+
+a module is named after a class when its file's name is the class's but for
+case; the new file is named the same way and put beside the old one, and none
+is offered when a file of that name is there already
+
+they are offered only to a client that says it takes them: one whose
+`workspace.workspaceEdit` capability has `documentChanges: true` and a
+`changeAnnotationSupport`. its rename is answered as `documentChanges`, a
+`TextDocumentEdit` per file followed by a `RenameFile` for a module, which is
+sent only when `resourceOperations` includes `rename`. the rename itself is
+plain text edits, and each offered rename is a change annotation with
+`needsConfirmation: true`, which its text edits — and its `RenameFile` — carry:
+
+```json
+{
+  "documentChanges": [
+    { "textDocument": { "uri": "file:///p/dog.by", "version": null },
+      "edits": [
+        { "range": { "start": { "line": 10, "character": 12 }, "end": { "line": 10, "character": 17 } },
+          "newText": "talk" },
+        { "range": { "start": { "line": 4, "character": 17 }, "end": { "line": 4, "character": 22 } },
+          "newText": "talk", "annotationId": "override:0" } ] }
+  ],
+  "changeAnnotations": {
+    "override:0": { "label": "Rename overriding methods",
+                    "description": "`dog.Dog.speak`", "needsConfirmation": true }
+  }
+}
+```
+
+the identifiers are `override:<n>`, `parameter:<n>` and `module:<n>`, numbered
+from 0 within each kind. the label is the kind, shared by every offer of it, so a
+client that groups on labels shows one group per kind, and the description names
+what one offer renames. a client applies the edits of the offers the user keeps
+and leaves out the others; none of them touches an occurrence the rename itself
+makes. a client without the capability gets the rename alone, as plain `changes`,
+as before
+
 ## renaming a module
 
 renaming `util.by` to `helpers.by` renames the module `alpha.util`, and every
