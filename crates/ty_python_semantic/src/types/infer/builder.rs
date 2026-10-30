@@ -395,6 +395,10 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// An expression cache shared across builders during multi-inference.
     expression_cache: Option<Rc<RefCell<ExpressionCache<'db>>>>,
 
+    /// basedpython: whether a `raise`, `return`, `break` or `continue` written inside an expression
+    /// has been inferred in this scope, without which no expression can always leave
+    leaves_inside_expression: bool,
+
     /// Reachability evaluations reused while inferring this region.
     ///
     /// Most inference regions never evaluate reachability, so allocate the cache lazily. Speculative
@@ -699,6 +703,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expressions: FxHashMap::default(),
             comparison_truthiness: FxHashMap::default(),
             expression_cache: None,
+            leaves_inside_expression: false,
             reachability_cache: OnceCell::new(),
             qualifiers: FxHashMap::default(),
             type_expression_flags: FxHashMap::default(),
@@ -8297,7 +8302,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // the type expression inference path is responsible
                 todo_type!("inline protocol type in value context")
             }
-            ast::Expr::Statement(statement) => self.infer_statement_expression(statement),
+            ast::Expr::Statement(statement) => {
+                self.leaves_inside_expression |= !matches!(
+                    *statement.stmt,
+                    ast::Stmt::If(_)
+                        | ast::Stmt::For(_)
+                        | ast::Stmt::While(_)
+                        | ast::Stmt::Try(_)
+                        | ast::Stmt::Match(_)
+                );
+                self.infer_statement_expression(statement)
+            }
+        };
+
+        // the operation an operand of which never finishes evaluating doesn't happen, so
+        // `print(raise E)` is not a `None`
+        let ty = if self.leaves_inside_expression
+            && ast::helpers::expression_always_leaves(expression)
+        {
+            Type::Never
+        } else {
+            ty
         };
 
         self.finish_expression_type(expression, ty, tcx)
@@ -17454,6 +17479,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
             typevar_binding_context: _,
@@ -17527,6 +17553,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
@@ -17649,6 +17676,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bindings,
             called_functions,
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
@@ -17733,6 +17761,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
@@ -17902,6 +17931,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // Builder only state
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             reachability_cache: _,
@@ -18004,6 +18034,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             discards_dict_key_assignments: _,
             qualifiers: _,
             type_expression_flags: _,
+            leaves_inside_expression: _,
         } = *self;
 
         let mut builder = TypeInferenceBuilder::new(
@@ -18080,6 +18111,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            leaves_inside_expression: _,
             basedpython_chain_present,
             basedpython_statement_expression_values: _,
             reachability_cache: _,

@@ -593,6 +593,70 @@ def f(items: list[int | None]) -> list[int]:
     return [item ?? raise ValueError() for item in items]
 ```
 
+It can be written where a parameter's default, an `assert` message, a guard, or the subject of a
+`match` goes, and in a replacement field, ahead of a conversion or a `=`. A bare `raise` ends where
+no value starts:
+
+```by
+class E(Exception): ...
+
+def default(a: int = raise E) -> int:  # no diagnostic
+    return a
+
+def as_lambda() -> object:
+    return lambda x=raise E: x  # no diagnostic
+
+def message(x: int) -> None:
+    assert x, raise E  # no diagnostic
+
+def guard(x: int) -> int:
+    match x:
+        case 1 if raise E:  # no diagnostic
+            return 1
+    return 0
+
+def subject() -> None:
+    match raise E:  # no diagnostic
+        case _:
+            pass
+
+def replacement_fields() -> None:
+    print(f"{raise E!r}", f"{raise E:>5}")  # no diagnostic
+
+def bare(x: bool) -> None:
+    try:
+        pass
+    except E:
+        print(raise, 1)  # no diagnostic
+        print(f"{raise!r}", f"{raise=}")  # no diagnostic
+        print(raise if x else 2)  # no diagnostic
+        raise; print(2)  # no diagnostic
+```
+
+An expression with an operand that always raises has no value of its own, so it is `Never` wherever
+that is seen. An operand that is only sometimes evaluated doesn't make it so:
+
+```by
+from typing import reveal_type
+
+def returned() -> int:
+    return print(raise ValueError)  # no diagnostic
+
+def branch(c: bool) -> None:
+    x = 1 if c else print(raise ValueError)
+    reveal_type(x)  # revealed: 1
+
+def both_branches(c: bool) -> None:
+    reveal_type(print(raise ValueError) if c else [raise ValueError])  # revealed: Never
+
+def operands(c: bool, q: int?) -> None:
+    reveal_type(q ?? print(raise ValueError))  # revealed: int
+    reveal_type(c and print(raise ValueError))  # revealed: False
+
+def first_operand(c: bool) -> None:
+    reveal_type((raise ValueError) and c)  # revealed: Never
+```
+
 ## `return`, `break` and `continue` must be the tail of their statement
 
 They leave more than the expression around them, which has to finish being evaluated first.
