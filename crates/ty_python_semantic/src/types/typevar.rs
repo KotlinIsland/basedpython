@@ -2003,30 +2003,6 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.variance_with_polarity(db, TypeVarVariance::Covariant)
     }
 
-    /// basedpython: the variance a *runtime* probe should test, which is the inferred
-    /// answer without the typing spec's rule that a bivariant class parameter is
-    /// reported covariant. A parameter no member mentions really does match either
-    /// way, and the parametric `is`-test skips comparing it rather than checking a
-    /// direction that cannot fail.
-    pub(crate) fn probe_variance(self, db: &'db dyn Db) -> TypeVarVariance {
-        match self.typevar(db).explicit_variance(db) {
-            Some(explicit_variance) => explicit_variance,
-            None => match self.binding_context(db) {
-                BindingContext::Definition(definition) => {
-                    let binding_ty = binding_type(db, definition);
-                    if self.reifies_on(db, binding_ty) {
-                        return TypeVarVariance::Invariant;
-                    }
-                    let env = ProgramEnvironment::from_definition(definition);
-                    binding_ty
-                        .variance_of(db, &env, self.identity(db))
-                        .evaluate(db)
-                }
-                BindingContext::Synthetic(_) => TypeVarVariance::Invariant,
-            },
-        }
-    }
-
     /// basedpython: whether this parameter is bivariant only because nothing but a private
     /// member mentions it.
     ///

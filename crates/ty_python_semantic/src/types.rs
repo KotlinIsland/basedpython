@@ -263,6 +263,7 @@ mod subclass_of;
 pub(crate) mod template;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod told_classes;
 pub(crate) mod trailing_lambda;
 mod tuple;
 pub(crate) mod type_alias;

@@ -113,6 +113,44 @@ impl<'db> SemanticModel<'db> {
         crate::types::reified_infer::variances_told_at_a_subscript(self.db, literal)
     }
 
+    /// basedpython: what the runtime has to be told of the classes `expr`, read as a type, names,
+    /// because what the checker read of them is in no object the runtime holds
+    pub fn told_classes(&self, expr: &ast::Expr) -> crate::types::told_classes::ToldClasses {
+        use crate::types::told_classes::{told_classes_of_class_read, told_classes_of_type};
+        let env = self.program_environment();
+        let file = self.file.file(self.db);
+        expr.inferred_type(self)
+            .map_or_else(Default::default, |ty| match expr {
+                // a name reads the class it names, however a type argument reads it
+                ast::Expr::Name(_) | ast::Expr::Attribute(_) => {
+                    told_classes_of_class_read(self.db, &env, file, ty)
+                }
+                _ => told_classes_of_type(self.db, &env, file, ty),
+            })
+    }
+
+    /// basedpython: [`Self::told_classes`], of `expr`, a base of a class
+    pub fn told_classes_of_base(
+        &self,
+        expr: &ast::Expr,
+    ) -> crate::types::told_classes::ToldClasses {
+        expr.inferred_type(self)
+            .map_or_else(Default::default, |ty| {
+                crate::types::told_classes::told_classes_of_class_read(
+                    self.db,
+                    &self.program_environment(),
+                    self.file.file(self.db),
+                    ty,
+                )
+            })
+    }
+
+    /// basedpython: whether `expr` reads `typing.Self`
+    pub fn reads_typing_self(&self, expr: &ast::Expr) -> bool {
+        expr.inferred_type(self)
+            .is_some_and(|ty| crate::types::told_classes::is_typing_self(self.db, ty))
+    }
+
     /// basedpython: whether subscripting `value` gives a function type arguments it keeps as
     /// runtime values
     pub fn subscript_specializes_reified_function(&self, value: &ast::Expr) -> bool {

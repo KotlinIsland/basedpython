@@ -23,6 +23,7 @@ use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
 use crate::types::ProgramEnvironment;
 use crate::types::check_order::InferredInCheckOrder;
 use crate::types::reified_infer::{ArgVariance, python_bytes_literal, python_str_literal};
+use crate::types::told_classes::ToldClasses;
 use crate::types::visibility::private_symbols;
 
 /// where a lowering writes a spelling into code that runs, which decides what each name it
@@ -86,6 +87,9 @@ enum SpellingPart {
     Project(UseSiteVariance),
     /// what closes [`Self::TellVariance`] or [`Self::Project`]
     Close,
+    /// what the runtime is to be told of the classes the spelling names, which a module says
+    /// once rather than where it writes the spelling. it writes nothing here
+    Told(Box<ToldClasses>),
     /// what opens the specialization of a class that answers a subscript for itself, the
     /// class up to [`Self::OwnSubscriptArguments`] and its arguments up to
     /// [`Self::OwnSubscriptClose`]. a matter for the program that runs: the source reads it as
@@ -181,6 +185,22 @@ impl RuntimeSpelling {
         spelling
     }
 
+    /// this spelling, with what the runtime is to be told of what it names
+    pub(crate) fn telling(mut self, told: ToldClasses) -> Self {
+        if !told.is_empty() {
+            self.parts.push(SpellingPart::Told(Box::new(told)));
+        }
+        self
+    }
+
+    /// what the runtime is to be told of the classes the spelling names
+    pub fn told(&self) -> impl Iterator<Item = &ToldClasses> {
+        self.parts.iter().filter_map(|part| match part {
+            SpellingPart::Told(told) => Some(&**told),
+            _ => None,
+        })
+    }
+
     /// each runtime helper the spelling writes a call to
     pub fn helpers(&self) -> impl Iterator<Item = SpellingHelper> {
         self.parts.iter().filter_map(|part| match part {
@@ -197,6 +217,7 @@ impl RuntimeSpelling {
             | SpellingPart::Bytes(_)
             | SpellingPart::OwnSubscriptArguments
             | SpellingPart::OwnSubscriptClose
+            | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
     }
@@ -231,6 +252,7 @@ impl RuntimeSpelling {
             | SpellingPart::OwnSubscriptOpen
             | SpellingPart::OwnSubscriptArguments
             | SpellingPart::OwnSubscriptClose
+            | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
     }
@@ -254,6 +276,7 @@ impl RuntimeSpelling {
             | SpellingPart::OwnSubscriptOpen
             | SpellingPart::OwnSubscriptArguments
             | SpellingPart::OwnSubscriptClose
+            | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
     }
@@ -294,6 +317,7 @@ impl RuntimeSpelling {
                 | SpellingPart::OwnSubscriptOpen
                 | SpellingPart::OwnSubscriptArguments
                 | SpellingPart::OwnSubscriptClose
+                | SpellingPart::Told(_)
                 | SpellingPart::Close => {
                     self.parts.push(part.clone());
                 }
@@ -404,6 +428,7 @@ impl RuntimeSpelling {
                 SpellingPart::TellVariance(_)
                 | SpellingPart::Project(UseSiteVariance::InOut)
                 | SpellingPart::OwnSubscriptOpen
+                | SpellingPart::Told(_)
                 | SpellingPart::Close => {}
             }
         }

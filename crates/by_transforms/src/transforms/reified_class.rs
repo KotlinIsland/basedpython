@@ -19,7 +19,7 @@
 //! @generic_class  # basedpython: reified
 //! class A[T]:
 //!     def f(self):
-//!         T = _type_argument(self, "T")
+//!         T = _type_argument(self, "T", __class__)
 //!         print(T)
 //!
 //! a: A[int] = A[int]()
@@ -32,6 +32,9 @@
 //! and one function object serves both. so the lowering goes the other way
 //! round — `A[int]` builds a subclass that records the arguments, and each
 //! method reads its own from the receiver it already has.
+//!
+//! the class the method is written in says whose parameter the read names, since a subclass may
+//! call its own parameter the same thing: `class B[T](A[list[T]])`
 //!
 //! that makes the receiver the one thing a read needs. every function nested
 //! inside a method closes over the binding the prologue writes, so a read at
@@ -68,7 +71,7 @@ impl PrologueStatement for TypeArgumentBinding {
     fn push(&self, frags: &mut Vec<Fragment>, _indent: &str) {
         let Self { name, receiver } = self;
         frags.push(Fragment::Lit(format!(
-            "{name} = _type_argument({receiver}, \"{name}\")"
+            "{name} = _type_argument({receiver}, \"{name}\", __class__)"
         )));
     }
 }
@@ -314,7 +317,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "    def f(self):\n        T = _type_argument(self, \"T\")\n        print(T)"
+                "    def f(self):\n        T = _type_argument(self, \"T\", __class__)\n        print(T)"
             ),
             "the read should be bound from the receiver: {out}"
         );
@@ -328,7 +331,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "    def f(self): \n        T = _type_argument(self, \"T\")\n        return T"
+                "    def f(self): \n        T = _type_argument(self, \"T\", __class__)\n        return T"
             ),
             "the body should move below the binding: {out}"
         );
@@ -344,7 +347,7 @@ mod tests {
         "#});
         assert!(
             out.contains(
-                "        \"what f does\"\n        T = _type_argument(self, \"T\")\n        return T"
+                "        \"what f does\"\n        T = _type_argument(self, \"T\", __class__)\n        return T"
             ),
             "the binding should follow the docstring: {out}"
         );
@@ -359,7 +362,7 @@ mod tests {
                     return T
         "});
         assert!(
-            out.contains("T = _type_argument(cls, \"T\")"),
+            out.contains("T = _type_argument(cls, \"T\", __class__)"),
             "a classmethod reads through its class: {out}"
         );
     }
@@ -373,7 +376,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "        T = _type_argument(self, \"T\")\n        U = _type_argument(self, \"U\")\n"
+                "        T = _type_argument(self, \"T\", __class__)\n        U = _type_argument(self, \"U\", __class__)\n"
             ),
             "both parameters bind, in declaration order: {out}"
         );
@@ -392,7 +395,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "    def f(self):\n        T = _type_argument(self, \"T\")\n        def inner():"
+                "    def f(self):\n        T = _type_argument(self, \"T\", __class__)\n        def inner():"
             ),
             "the binding goes in the method, not the nested function: {out}"
         );
@@ -478,7 +481,7 @@ mod tests {
                         return T
         "});
         assert!(
-            out.contains("            T = _type_argument(self, \"T\")"),
+            out.contains("            T = _type_argument(self, \"T\", __class__)"),
             "a guarded method binds like any other: {out}"
         );
     }

@@ -999,9 +999,9 @@ mod tests {
     }
 
     #[test]
-    fn bivariant_typevar_probes_with_code_three() {
-        // a parameter unused in the class body is bivariant; the probe matches
-        // either way (code 3)
+    fn an_unused_typevar_probes_as_the_covariant_one_the_checker_reads() {
+        // the typing spec has a parameter unused in the class body be covariant, and the probe
+        // answers what an assignment does
         let out = out(indoc! {"
             class Box[T]:
                 def __init__(self): ...
@@ -1009,8 +1009,25 @@ mod tests {
                 return x is Box[int]
         "});
         assert!(
+            out.contains("return _parametric_is(x, Box[int], (1,))"),
+            "an unused parameter probes with code 1: {out}"
+        );
+    }
+
+    #[test]
+    fn a_privately_used_typevar_probes_with_code_three() {
+        // a parameter only a private member mentions matches either way
+        let out = out(indoc! {"
+            class Box[T]:
+                private x: T
+                def __init__(self, x: T):
+                    self.x = x
+            def f(x: object) -> bool:
+                return x is Box[int]
+        "});
+        assert!(
             out.contains("return _parametric_is(x, Box[int], (3,))"),
-            "bivariant parameter probes with code 3: {out}"
+            "a privately used parameter probes with code 3: {out}"
         );
     }
 

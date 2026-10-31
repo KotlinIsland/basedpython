@@ -1074,6 +1074,7 @@ fn run_lazy_import_phase(
         lazy.needs_module_helper,
         !deferred_names.is_empty(),
         lazy.needs_ty_ext_marker,
+        lazy.needs_intersection,
         lazy.needs_character_class,
     );
     if edits.is_empty() && helpers.is_empty() {

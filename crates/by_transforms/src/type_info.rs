@@ -272,6 +272,16 @@ pub(crate) trait TypeInfo {
     /// itself, whatever a type expression reads the same subscript as
     fn subscript_calls_the_class(&self, value: &Expr) -> bool;
 
+    /// what the runtime has to be told of the classes `expr`, read as a type, names, as a row of
+    /// python data for each class by the path that names it
+    fn told_classes(&self, expr: &Expr) -> std::collections::BTreeMap<String, String>;
+
+    /// [`Self::told_classes`], of `expr`, a base of a class
+    fn told_classes_of_base(&self, expr: &Expr) -> std::collections::BTreeMap<String, String>;
+
+    /// whether `expr` reads `typing.Self`
+    fn reads_typing_self(&self, expr: &Expr) -> bool;
+
     /// whether the subscript of `value` written as a value specializes it, so that its slice
     /// holds type arguments rather than a key
     fn subscript_applies_type_arguments(&self, value: &Expr) -> bool {
@@ -1020,6 +1030,18 @@ impl TypeInfo for LoweringModel<'_> {
 
     fn subscript_calls_the_class(&self, value: &Expr) -> bool {
         SemanticModel::subscript_calls_the_class(self, value)
+    }
+
+    fn told_classes(&self, expr: &Expr) -> std::collections::BTreeMap<String, String> {
+        SemanticModel::told_classes(self, expr)
+    }
+
+    fn told_classes_of_base(&self, expr: &Expr) -> std::collections::BTreeMap<String, String> {
+        SemanticModel::told_classes_of_base(self, expr)
+    }
+
+    fn reads_typing_self(&self, expr: &Expr) -> bool {
+        SemanticModel::reads_typing_self(self, expr)
     }
 
     fn subscript_erases_type_arguments(

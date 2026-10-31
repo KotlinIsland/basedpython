@@ -32,6 +32,11 @@
 //!
 //! `a = list[F](); class F: ...` → `a = list["F"]()`
 //!
+//! a type test may read that argument once the class exists, and nothing in a string says whose
+//! name it is, so a specialization written as a value says so where the runtime is told what
+//! tests need to know: `a = _by_forward(list["F"], __name__)()`. a base says whose name it is by
+//! whose base it is, and a name a function binds has no module to be looked up in
+//!
 //! a position the checker reads where it is written — a base itself
 //! (`class A(A)`), a reified class's type arguments — reports a name not yet bound
 //! there, and is left alone
@@ -54,6 +59,8 @@ use crate::type_info::TypeInfo;
 
 pub(crate) struct AutoQuote<'src> {
     pub(crate) quotes: &'src WrittenQuotes,
+    /// whether a forward reference a type test may read says whose name it is
+    pub(crate) told_forward: bool,
 }
 
 impl TypeAwarePass for AutoQuote<'_> {
@@ -75,11 +82,19 @@ impl TypeAwarePass for AutoQuote<'_> {
             quotes: self.quotes,
             types,
             edits: walk.edits,
+            told_forward: self.told_forward,
+            in_function: false,
+            in_base: false,
+            told: Vec::new(),
         };
         for stmt in stmts {
             deferred.visit_stmt(stmt);
         }
+        if !deferred.told.is_empty() {
+            ctx.runtime.insert(crate::runtime::FORWARD);
+        }
         ctx.template_edits.extend(deferred.edits);
+        ctx.template_edits.extend(deferred.told);
     }
 }
 
@@ -222,6 +237,12 @@ struct DeferredReads<'a> {
     /// every quote written so far, the annotations' included: nothing inside one is evaluated
     /// where it stands any more
     edits: Vec<(TextRange, Vec<Fragment>)>,
+    told_forward: bool,
+    in_function: bool,
+    in_base: bool,
+    /// the specializations that say whose name a forward reference in them is, which hold what
+    /// is quoted inside them and so aren't quotes themselves
+    told: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl DeferredReads<'_> {
@@ -261,7 +282,22 @@ impl<'a> Visitor<'a> for DeferredReads<'_> {
                         self.quote_forward_references(&keyword.value, false);
                     }
                 }
+                for decorator in &class.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                if let Some(arguments) = &class.arguments {
+                    let in_base = std::mem::replace(&mut self.in_base, true);
+                    for base in &arguments.args {
+                        self.visit_expr(base);
+                    }
+                    self.in_base = in_base;
+                }
+                self.visit_body(&class.body);
+            }
+            Stmt::FunctionDef(_) => {
+                let in_function = std::mem::replace(&mut self.in_function, true);
                 walk_stmt(self, stmt);
+                self.in_function = in_function;
             }
             _ => walk_stmt(self, stmt),
         }
@@ -279,7 +315,22 @@ impl<'a> Visitor<'a> for DeferredReads<'_> {
         }
         match expr {
             Expr::Subscript(subscript) if self.types.is_read_deferred(&subscript.slice) => {
+                let quoted = self.edits.len();
                 self.quote_forward_references(expr, true);
+                if self.told_forward
+                    && !self.in_function
+                    && !self.in_base
+                    && self.edits.len() > quoted
+                {
+                    self.told.push((
+                        expr.range(),
+                        vec![
+                            Fragment::Lit(format!("{}(", crate::runtime::FORWARD.name())),
+                            Fragment::Src(expr.range()),
+                            Fragment::Lit(", __name__)".to_owned()),
+                        ],
+                    ));
+                }
             }
             Expr::Call(call) => {
                 for argument in self.types.call_type_expression_arguments(call) {

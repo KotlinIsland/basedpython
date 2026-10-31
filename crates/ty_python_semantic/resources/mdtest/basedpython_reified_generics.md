@@ -75,7 +75,7 @@ assert guarded[int]() == 0
 assert guarded[None]() is None
 ```
 
-a literal the checker solved is held as a class that builds that value, so it takes the first branch
+a literal the checker solved is a type argument and not a class, so it takes the other branch
 
 ```by
 def solved[T](t: T) -> object:
@@ -83,8 +83,8 @@ def solved[T](t: T) -> object:
         return T()
     return None
 
-assert solved(1) == 1
-assert solved("a") == "a"
+assert solved(1) is None
+assert solved("a") is None
 assert solved(int(1)) == 0
 ```
 
@@ -1528,29 +1528,23 @@ assert test(None, None)
 assert not test(None, 1)
 ```
 
-A literal cell is a class, so a body that narrows `T` to one reads it the way it would read any
-class. `isinstance` asks the same question, `T()` is the one value the type holds, and building any
-other value is refused:
+A literal cell holds the `typing.Literal` the type argument is, so a body that narrows `T` to a
+class never reads one as a class:
 
 ```by
-def reads[T](t: T) -> tuple[bool, bool, T, str]:
-    assert isinstance(T, type)
-    return isinstance(1, T), isinstance(2, T), T(), T.__name__
+from typing import Literal
 
-assert reads(1) == (True, False, 1, "Literal[1]")
+def is_class[T](t: T) -> bool:
+    return isinstance(T, type)
 
-def builds[T: int](t: T, text: str) -> T:
-    assert isinstance(T, type)
-    return T(text)
+assert not is_class(1)
+assert is_class(int(1))
 
-assert builds(1, "1") == 1
+def holds[T](t: T) -> object:
+    return T
 
-try:
-    builds(1, "2")
-except TypeError:
-    pass
-else:
-    raise AssertionError
+assert holds(1) == Literal[1]
+assert holds(True) != Literal[1]
 ```
 
 ## a type parameter holds the class of a literal the runtime can't record

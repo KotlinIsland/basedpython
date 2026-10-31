@@ -119,7 +119,7 @@ impl<'src> ReifiedGenericReverse<'src> {
     }
 }
 
-/// whether the statement is a `T = _type_argument(receiver, "T")` binding the
+/// whether the statement is a `T = _type_argument(receiver, "T", __class__)` binding the
 /// forward transform wrote — the name assigned and the name asked for have to
 /// agree, which a hand-written call to the polyfill need not
 fn is_type_argument_binding(stmt: &Stmt) -> bool {
@@ -137,7 +137,9 @@ fn is_type_argument_binding(stmt: &Stmt) -> bool {
     }
     matches!(
         &call.arguments.args[..],
-        [Expr::Name(_), Expr::StringLiteral(asked)] if asked.value.to_str() == target.id.as_str()
+        [Expr::Name(_), Expr::StringLiteral(asked)]
+            | [Expr::Name(_), Expr::StringLiteral(asked), Expr::Name(_)]
+            if asked.value.to_str() == target.id.as_str()
     )
 }
 
@@ -223,7 +225,7 @@ mod tests {
     fn marked_generic_class_is_unwrapped() {
         let src = lowered("class A[T]:\n    def f(self):\n        print(T)\n");
         assert!(
-            src.contains("        T = _type_argument(self, \"T\")\n"),
+            src.contains("        T = _type_argument(self, \"T\", __class__)\n"),
             "the fixture should be the lowering it is testing: {src}"
         );
         let out = rev(&src);
@@ -260,7 +262,7 @@ mod tests {
                 "# a class that keeps its type argument\n",
                 "class A[T]:\n",
                 "    def f(self):\n",
-                "        T = _type_argument(self, \"T\")\n",
+                "        T = _type_argument(self, \"T\", __class__)\n",
                 "        print(T)\n",
             )
         );
@@ -289,7 +291,7 @@ mod tests {
             "forward should re-wrap the bare reified class: {forward}"
         );
         assert!(
-            forward.contains("        T = _type_argument(self, \"T\")"),
+            forward.contains("        T = _type_argument(self, \"T\", __class__)"),
             "forward should re-bind the read: {forward}"
         );
     }
@@ -302,7 +304,7 @@ mod tests {
             "@generic_class\n",
             "class A[T]:\n",
             "    def f(self):\n",
-            "        U = _type_argument(self, \"T\")\n",
+            "        U = _type_argument(self, \"T\", __class__)\n",
             "        return U\n",
         );
         let out = rev(src);
