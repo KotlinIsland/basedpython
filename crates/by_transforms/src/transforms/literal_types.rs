@@ -22,6 +22,7 @@ use ty_python_semantic::RuntimeSpelling;
 
 use crate::config::{Config, FloatLiteralLowering};
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::optional_type::collect_edits;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, RootKind, TypeExprVisitor, TypePos, walk_type_positions_skipping,
@@ -155,6 +156,13 @@ impl<'src> LiteralType<'src> {
                 self.written.builtin(nominal),
                 expr.range(),
             )));
+            return;
+        }
+        // `1?` and `not 1` hold a type, and only their own marker is another pass's to lower
+        if let Expr::UnaryOp(u) = expr
+            && matches!(u.op, UnaryOp::Optional | UnaryOp::Not)
+        {
+            self.emit_type_edits(&u.operand, false);
             return;
         }
         if let Expr::BinOp(b) = expr {
@@ -320,13 +328,15 @@ pub(crate) enum LiteralReading {
 }
 
 /// `expr`, a type expression a lowering is writing whole, with the literals it holds written as
-/// [`LiteralType`] would have, and whether that needs `typing.Literal`. `None` when it holds none
+/// [`LiteralType`] would have and the `?`s around them lowered, and whether that needs
+/// `typing.Literal`. `None` when it holds no literal
 pub(crate) fn lower_literals(
     source: &str,
     written: WrittenNames,
     types: &dyn TypeInfo,
     expr: &Expr,
     reading: LiteralReading,
+    min_version: PythonVersion,
 ) -> Option<(String, bool)> {
     let mut inner = LiteralType::new(source, written, types, FloatLiteralLowering::default());
     inner.in_application = reading == LiteralReading::Application;
@@ -339,7 +349,13 @@ pub(crate) fn lower_literals(
     if edits.is_empty() {
         return None;
     }
-    edits.sort_by_key(Ranged::start);
+    edits.extend(
+        collect_edits(source, written, expr, min_version)
+            .into_iter()
+            .map(|(range, lowered)| Edit::range_replacement(lowered, range)),
+    );
+    // an insertion at an offset goes ahead of a replacement starting there
+    edits.sort_by_key(|edit| (edit.start(), edit.end()));
     let mut lowered = String::new();
     let mut at = expr.start();
     for edit in edits {
@@ -1063,6 +1079,28 @@ mod tests {
     }
 
     /// a union with no literal arm can still hold one inside an arm
+    #[test]
+    fn a_literal_under_an_optional_is_lowered() {
+        for (written, lowered) in [
+            ("1?", "Literal[1] | None"),
+            ("\"a\"?", "Literal[\"a\"] | None"),
+            ("(1 | 2)?", "(Literal[1, 2]) | None"),
+            ("list[1?]", "list[Literal[1] | None]"),
+            ("(1?, \"a\")", "tuple[Literal[1] | None, Literal[\"a\"]]"),
+            ("not 1", "Not[Literal[1]]"),
+            ("M[a=1?]", "M[[Literal[1] | None]]"),
+            ("M[a=list[1]?]", "M[[list[Literal[1]] | None]]"),
+            ("M[a=1??]", "M[[Optional[Literal[1] | None]]]"),
+        ] {
+            let source = format!("class M[**K]:\n    pass\n\na: {written}\n");
+            let out = transpile(&source, &Config::test_default()).unwrap();
+            assert!(
+                out.contains(&format!("a: {lowered}\n")),
+                "{written}:\n{out}"
+            );
+        }
+    }
+
     #[test]
     fn a_literal_inside_an_arm_of_a_union_is_lowered() {
         check(
