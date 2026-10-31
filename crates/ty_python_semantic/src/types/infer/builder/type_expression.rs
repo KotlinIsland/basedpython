@@ -368,8 +368,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
         // basedpython: a bare enum member (`E.A`) in type position denotes its
         // enum-literal type — `a: E.A` is `a: Literal[E.A]`
-        if self.is_basedpython_file() && ty.as_enum_literal().is_some() {
-            return ty;
+        if self.is_basedpython_file()
+            && let Type::LiteralValue(literal) = ty
+            && literal.is_enum()
+        {
+            return Type::LiteralValue(literal.to_unpromotable());
         }
         // a type test's target is complete without type arguments: it asks
         // whether the value is one of these, and the arguments are what the
@@ -657,7 +660,33 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     }
 
     /// Infer the type of a type expression without storing the result.
+    // a type nested deep recurses through here once a level, and this must not add a frame to
+    // that where nothing inlines by itself
+    #[expect(clippy::inline_always)]
+    #[inline(always)]
     pub(super) fn infer_type_expression_no_store(&mut self, expression: &ast::Expr) -> Type<'db> {
+        let ty = self.infer_type_expression_spelling(expression);
+        // an expression that spells a literal wrote it as a type: `1` is `Literal[1]`. a form that
+        // reads a value's type, `typeof x` where `x = 1`, says what the value's inference says
+        if let Type::LiteralValue(literal) = ty
+            && matches!(
+                expression,
+                ast::Expr::NumberLiteral(_)
+                    | ast::Expr::StringLiteral(_)
+                    | ast::Expr::BytesLiteral(_)
+                    | ast::Expr::BooleanLiteral(_)
+                    | ast::Expr::FString(_)
+                    | ast::Expr::UnaryOp(_)
+                    | ast::Expr::BinOp(_)
+                    | ast::Expr::Call(_)
+            )
+        {
+            return Type::LiteralValue(literal.to_unpromotable());
+        }
+        ty
+    }
+
+    fn infer_type_expression_spelling(&mut self, expression: &ast::Expr) -> Type<'db> {
         let db = self.db();
         let env = self.program_environment();
         let ignore_runtime_errors = |builder: &Self| {
