@@ -27,6 +27,7 @@ use crate::types::infer::builder::{ArgExpr, ArgumentsIter, MultiInferenceGuard};
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::regex;
+use crate::types::runtime_reads::RuntimeReadSite;
 use crate::types::special_form::AliasSpec;
 use crate::types::subscript::{
     DunderMethod, LegacyGenericOrigin, SubscriptError, SubscriptErrorKind,
@@ -474,6 +475,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // `None if a is None else a.b[0]` lowering, so index the present-receiver value and
         // let the `None` ride out to the end of the chain
         let (value_ty, in_chain) = self.basedpython_chain_receiver(&subscript.value, value_ty);
+
+        // basedpython: what a written specialization's type arguments go on to be used for, and
+        // what the names it is written with hold where it runs, is asked once the file is inferred
+        if matches!(
+            value_ty,
+            Type::ClassLiteral(_) | Type::FunctionLiteral(_) | Type::BoundMethod(_)
+        ) {
+            self.record_runtime_read(RuntimeReadSite::Specialization {
+                subscript: subscript.node_index.load(),
+            });
+        }
 
         // basedpython: the type arguments of a specialization written as a value — `list[F]()`,
         // `Alias = dict[str, F]`, `Foo[F]` among a class's bases — are read as deferred, as an

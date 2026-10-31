@@ -749,10 +749,14 @@ impl<'a> Visitor<'a> for ValueUseFinder<'a> {
                 walk_expr(self, expr);
             }
             // every `cast` form parses as a call whose first argument is the
-            // target type — a type position
+            // target type — a type position, though a checked cast tests its value against what
+            // a type parameter there holds
             Expr::Call(call) if call.cast_kind.is_some() => {
                 if let [type_arg, value_arg] = &*call.arguments.args {
                     self.check_parametric_cast(type_arg, value_arg);
+                    if call.cast_kind != Some(ast::CastKind::Static) {
+                        self.visit_expr(type_arg);
+                    }
                     self.visit_expr(value_arg);
                 } else {
                     walk_expr(self, expr);

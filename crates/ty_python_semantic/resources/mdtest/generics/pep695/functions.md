@@ -5063,7 +5063,7 @@ class BoundedSetter(Base):
 basedpython allows explicit type arguments at generic function call sites: `f[T](args)`. the type
 argument specializes the function, and the return type reflects the explicit binding.
 
-```py
+```by
 def f[T](t1: T, t2: T) -> T:
     return t1
 
@@ -5073,12 +5073,12 @@ reveal_type(result)  # revealed: object
 
 multiple type parameters are also supported:
 
-```py
+```by
 def pair[A, B](a: A, b: B) -> tuple[A, B]:
     return (a, b)
 
 result = pair[int, str](1, "a")
-reveal_type(result)  # revealed: tuple[int, str]
+reveal_type(result)  # revealed: (int, str)
 ```
 
 [implies_subtype_of]: ../../type_properties/implies_subtype_of.md

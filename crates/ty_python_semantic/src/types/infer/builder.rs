@@ -11938,11 +11938,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // claim; the plain `cast` never reaches a check in the first place
             if cast_kind.verifies_at_runtime() {
                 self.report_erased_cast_argument(type_arg, value_ty, target);
-                self.context
-                    .record_runtime_read_check(RuntimeReadSite::CheckedCast {
-                        value: value_arg.node_index().load(),
-                        target: type_arg.node_index().load(),
-                    });
+                self.record_runtime_read(RuntimeReadSite::CheckedCast {
+                    value: value_arg.node_index().load(),
+                    target: type_arg.node_index().load(),
+                });
             }
             // an unsound plain `cast` is already the sharper report — a
             // non-overlapping one would only repeat that the value is not the
@@ -13493,11 +13492,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .first()
                 .is_some_and(|overload| overload.generic_context.is_some())
         {
-            self.context
-                .record_runtime_read_check(RuntimeReadSite::Reified {
-                    call: call_expression.node_index().load(),
-                    generic: ReifiedGeneric::Function(function.name(self.db()).clone()),
-                });
+            self.record_runtime_read(RuntimeReadSite::Reified {
+                call: call_expression.node_index().load(),
+                generic: ReifiedGeneric::Function(function.name(self.db()).clone()),
+            });
+        }
+
+        // a classmethod reached through a class itself has no specialization to read
+        if self.is_basedpython_file()
+            && let Type::BoundMethod(method) = callable_type
+            && method.binds_classmethod(self.db())
+            && let Type::ClassLiteral(class) = method.self_instance(self.db())
+            && class.generic_context(self.db()).is_some()
+        {
+            self.record_runtime_read(RuntimeReadSite::BareClassmethod {
+                call: call_expression.node_index().load(),
+            });
         }
 
         self.report_optional_object_arguments(call_expression, &bindings);
@@ -13653,11 +13663,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if class.generic_context(db).is_none() {
             return;
         }
-        self.context
-            .record_runtime_read_check(RuntimeReadSite::Reified {
-                call: call_expression.node_index().load(),
-                generic: ReifiedGeneric::Class(class.name(db).clone()),
-            });
+        self.record_runtime_read(RuntimeReadSite::Reified {
+            call: call_expression.node_index().load(),
+            generic: ReifiedGeneric::Class(class.name(db).clone()),
+        });
     }
 
     /// basedpython: record what `call` solved its callee's own type parameters to, for the
@@ -14644,14 +14653,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn reified_type_parameter_read(&self, ty: Type<'db>) -> Option<Type<'db>> {
         let db = self.db();
         let env = self.program_environment();
-        if !self.is_basedpython_file()
-            || self.inference_flags().intersects(
-                // a dotted type expression infers its own receiver as a value, so
-                // the type-expression flag alone does not say `T.a` is a type
-                InferenceFlags::IN_TYPE_EXPRESSION
-                    | InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION,
-            )
-        {
+        if !self.is_basedpython_file() || self.reads_type_parameter_as_type() {
             return None;
         }
         let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty else {
@@ -14704,6 +14706,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } else {
             TypeFormType::from_type_expression(db, Type::TypeVar(bound_typevar))
         })
+    }
+
+    /// records a site whose runtime reads are asked about once the file is inferred. what a string
+    /// annotation holds never runs, and its nodes belong to its own parse rather than the module's
+    fn record_runtime_read(&self, site: RuntimeReadSite) {
+        if !self.in_string_annotation() {
+            self.context.record_runtime_read_check(site);
+        }
+    }
+
+    /// whether a name read here means the type parameter it names rather than the value that
+    /// parameter holds. a dotted type expression infers its own receiver as a value, so the
+    /// type-expression flag alone does not say `T.a` is a type, and a base list has the flag for
+    /// the sake of `dynamic`, while a bare name in it is a class the program reads
+    fn reads_type_parameter_as_type(&self) -> bool {
+        self.inference_flags().intersects(
+            InferenceFlags::IN_TYPE_EXPRESSION | InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION,
+        ) && !self
+            .inference_flags()
+            .contains(InferenceFlags::READING_CLASS_BASE_NAME)
     }
 
     /// Infer the type of a place expression from its ordered load sources.
@@ -14833,6 +14855,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             place
         } else {
             place.map_type(|ty| {
+                // what a guard narrows is the value a type parameter holds, which a type
+                // expression does not read
+                if self.is_basedpython_file()
+                    && matches!(ty, Type::KnownInstance(KnownInstanceType::TypeVar(_)))
+                    && self.reads_type_parameter_as_type()
+                {
+                    return ty;
+                }
                 // a test of a reified type parameter is a test of the value it holds, and that
                 // value is what the test narrows: `isinstance(T, type)` asks about the type
                 // argument, which the `TypeVar` object would give a different answer to
@@ -15714,9 +15744,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
                 error.fallback_member(db)
             });
+        // what narrowing says about a dotted name is what its value is, which a type expression
+        // does not read. it also rebuilds the type, which folds the one member of an enum into
+        // the enum, where `E.A` as a type means the member
+        let narrows = !(self.is_basedpython_file()
+            && self
+                .inference_flags()
+                .contains(InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION));
         let mut fallback_place = member_lookup.member(db).map_type(|ty| {
-            self.narrow_expr_with_applicable_constraints(attribute, ty, &constraint_keys)
+            if narrows {
+                self.narrow_expr_with_applicable_constraints(attribute, ty, &constraint_keys)
+            } else {
+                ty
+            }
         });
+        // a type form may be a class, `None` or a union, and an attribute means something else on
+        // each: even `object`'s are looked up on a class as functions that want an instance
+        if value_type.holds_type_form(db) {
+            fallback_place = Place::Undefined.into();
+        }
 
         // An augmented assignment also loads its target, but its write validation reports this
         // error. Avoid reporting the same invalid access twice.
@@ -17344,11 +17390,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } else {
             // whether the names the test is written with hold where it runs is asked once
             // the module is inferred
-            self.context
-                .record_runtime_read_check(RuntimeReadSite::TypeTest {
-                    value: left.node_index().load(),
-                    target: right.node_index().load(),
-                });
+            self.record_runtime_read(RuntimeReadSite::TypeTest {
+                value: left.node_index().load(),
+                target: right.node_index().load(),
+            });
             // a target with no runtime test has already been rejected, and
             // saying it can also never hold would pile a second report on one
             // mistake

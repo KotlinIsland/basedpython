@@ -667,7 +667,11 @@ impl<'db> StaticClassLiteral<'db> {
             recursion_guard: TypeCollector::default(),
         };
         for base in self.explicit_bases(db) {
-            visitor.visit_type(db, *base);
+            // a base read as a value doesn't parameterize this class by the type parameter it
+            // holds: `class C(T)` subclasses whatever `T` holds at runtime
+            if !matches!(base, Type::TypeForm(_) | Type::SubclassOf(_)) {
+                visitor.visit_type(db, *base);
+            }
         }
         visitor.typevars.into_inner()
     }

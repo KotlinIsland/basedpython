@@ -282,6 +282,83 @@ def describe(value: Decimal) -> str:
     return kind_of(value)
 ```
 
+## A written type argument the program does not bind
+
+a type argument a reified function or class keeps is evaluated where it is written, as the class a
+specialization subscripts is. everything else about a specialization is written as a forward
+reference or left out, which reads nothing
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from decimal import Decimal
+
+class Keeps[T]:
+    def kind(self) -> object:
+        return T
+
+class Out[T]: ...
+
+def tests[T](x: object) -> bool:
+    return x is T
+
+def shows[T]() -> object:
+    return T
+
+# error: [unresolved-reference] "Name `Decimal` is not bound where this runs"
+tests[Decimal](1)
+shows[Decimal]()  # error: [unresolved-reference]
+Keeps[Decimal]()  # error: [unresolved-reference]
+tests[Out[Decimal]](1)  # error: [unresolved-reference]
+tests[Decimal | None](1)  # error: [unresolved-reference]
+Sequence[int]  # error: [unresolved-reference]
+class Base(Sequence[int]): ...  # error: [unresolved-reference]
+```
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+
+class Keeps[T]:
+    def kind(self) -> object:
+        return T
+
+class Out[T]: ...
+
+def erases[T](x: object) -> object:
+    return x
+
+def annotated(value: Keeps[Decimal] | None = None) -> Out[Decimal]:
+    return Out[Decimal]()  # no diagnostic
+
+alias = list[Decimal]  # no diagnostic
+Out[Decimal]()  # no diagnostic
+print(erases[Decimal](1))  # no diagnostic
+annotated()  # no diagnostic
+held: list[Keeps[Decimal]] = []  # no diagnostic
+```
+
+## A class the program binds differently, as a written type argument
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+else:
+    Decimal = float
+
+def shows[T]() -> object:
+    return T
+
+# error: [unresolved-reference] "the `Decimal` bound where this runs need not be the class the checker resolved"
+shows[Decimal]()
+```
+
 ## A type test or checked cast against a class the program does not bind
 
 `is` and `cast!` test the value against the class at runtime, so they cannot test against one the

@@ -341,6 +341,389 @@ def passes[T]() -> None:
 passes[int]()
 ```
 
+## nothing on a type form is promised, `object`'s members included
+
+a type argument can be a class, `None` or a union, and an attribute means something different on
+each: `T.__repr__()` misses its instance when `T` is a class, and `None` has no `__module__`.
+`getattr` reads the same attribute, so it fails the same way unless it is given a default
+
+```by
+def reads[T]() -> None:
+    T.__repr__()  # error: [unresolved-attribute]
+    T.__str__()  # error: [unresolved-attribute]
+    T.__hash__()  # error: [unresolved-attribute]
+    T.__eq__(1)  # error: [unresolved-attribute]
+    T.__ne__(1)  # error: [unresolved-attribute]
+    T.__sizeof__()  # error: [unresolved-attribute]
+    T.__module__  # error: [unresolved-attribute]
+    T.__dict__  # error: [unresolved-attribute]
+    # error: [unresolved-attribute] "Object of type `TypeForm[T]` has no attribute `__name__`"
+    getattr(T, "__name__")
+    T.__doc__ = "x"  # error: [unresolved-attribute]
+    del T.__doc__  # error: [unresolved-attribute]
+
+def stored[T]() -> None:
+    held = T
+    held.__repr__()  # error: [unresolved-attribute]
+
+def elements[*Ts]() -> None:
+    for element in Ts:
+        element.__repr__()  # error: [unresolved-attribute]
+
+def optional[T](flag: bool) -> None:
+    held = T if flag else None
+    held.__repr__()  # error: [unresolved-attribute]
+```
+
+narrowing to a class gives the attributes of a class
+
+```by
+def narrowed[T]() -> object:
+    if isinstance(T, type):
+        T.__module__  # no diagnostic
+        return getattr(T, "__name__")  # no diagnostic
+    return None
+
+assert narrowed[int]() == "int"
+assert narrowed[None]() is None
+```
+
+what works on every value still does, because it asks the value's type rather than the value
+
+```by
+def everywhere[T]() -> None:
+    print(repr(T))  # no diagnostic
+    print(str(T))  # no diagnostic
+    print(hash(T))  # no diagnostic
+    type(T)  # no diagnostic
+    print(hasattr(T, "__name__"))  # no diagnostic
+    print(getattr(T, "__name__", "no name"))  # no diagnostic
+
+everywhere[int]()
+everywhere[None]()
+everywhere[int | str]()
+```
+
+## a class base written as a type form is named as one
+
+```by
+def base[T]() -> None:
+    # error: [invalid-base] "Invalid class base with type `TypeForm[T]`"
+    class C(T): ...
+```
+
+## a guard only changes what the value read is
+
+`isinstance(T, type)` is the route to `T()`, and a type expression inside it still means the type
+parameter rather than the narrowed value
+
+```by
+def g[U]() -> object:
+    return U
+
+def guarded[T](x: object) -> object:
+    if isinstance(T, type):
+        print(x is T)  # no diagnostic
+        print(x is list[T])  # no diagnostic
+        print(g[T]())  # no diagnostic
+        y: list[T] = []  # no diagnostic
+        return T()
+    print(x is T)  # no diagnostic
+    print(g[T]())  # no diagnostic
+    return None
+
+assert guarded[int](1) == 0
+assert guarded[None](1) is None
+assert guarded[int | str](1) is None
+```
+
+## a single-member enum's member is a type argument
+
+an enum with one member keeps its member as a type argument, as one with several does
+
+```by
+from enum import Enum
+
+class Only(Enum):
+    RED = 1
+
+class Out[out T]: ...
+
+def f[T]() -> object:
+    return T
+
+only: Only.RED = Only.RED  # no diagnostic
+Out[Only.RED]()  # no diagnostic
+print(f[Only.RED]())  # no diagnostic
+```
+
+## a type argument the test of a type parameter cannot ask about
+
+`x is T` asks the runtime about whatever `T` holds, so a type argument with no runtime test is
+refused where it is given, for the reason `x is UserId` is refused where that is written
+
+```by
+from typing import Annotated, Any, Callable, LiteralString, NewType, Self, TypedDict, TypeGuard, TypeVar
+
+UserId = NewType("UserId", int)
+
+class TD(TypedDict):
+    a: int
+
+LT = TypeVar("LT")
+type Alias = UserId
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# error: [erased-type-check] "`is UserId` cannot be checked at runtime: `UserId` has no runtime form"
+chk[UserId](1)
+chk[TD]({"a": 1})  # error: [erased-type-check]
+chk[LiteralString]("a")  # error: [erased-type-check]
+chk[TypeGuard[int]](1)  # error: [erased-type-check]
+chk[UserId | None](1)  # error: [erased-type-check]
+chk[Annotated[UserId, "x"]](1)  # error: [erased-type-check]
+chk[Alias](1)  # error: [erased-type-check]
+chk[Any](1)  # error: [erased-type-check]
+chk[Callable[[int], str]](1)  # error: [erased-type-check]
+
+def legacy(x: LT) -> LT:
+    chk[LT](x)  # error: [erased-type-check]
+    return x
+
+class Own:
+    def m(self) -> bool:
+        return chk[Self](self)  # error: [erased-type-check]
+
+# a specialization is refused where it is written, whatever it goes on to do
+stored = chk[UserId]  # error: [erased-type-check]
+```
+
+## a protocol held by a type parameter
+
+a protocol that isn't `@runtime_checkable` is refused because `isinstance` refuses it. a test
+written in place checks it member by member, which needs to know the protocol where it is written
+
+```by
+from typing import Protocol, runtime_checkable
+
+class P(Protocol):
+    a: int
+
+class G[T](Protocol):
+    a: T
+
+@runtime_checkable
+class R(Protocol):
+    a: int
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+chk[P](1)  # error: [erased-type-check]
+chk[G[int]](1)  # error: [erased-type-check]
+chk[R](1)  # no diagnostic
+
+def place(x: object) -> bool:
+    return x is P  # no diagnostic
+```
+
+## a type argument forwarded to a test
+
+the refusal follows the type parameter to whatever tests it
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+def subscripts[U](x: object) -> bool:
+    return chk[U](x)
+
+def unions[U](x: object) -> bool:
+    return chk[U | None](x)
+
+def twice[U](x: object) -> bool:
+    return subscripts[U](x)
+
+def casts[T](x: object) -> T:
+    return x cast! T
+
+def try_casts[T](x: object) -> T | None:
+    return x cast? T
+
+subscripts[UserId](1)  # error: [erased-type-check]
+unions[UserId](1)  # error: [erased-type-check]
+twice[UserId](1)  # error: [erased-type-check]
+casts[UserId](1)  # error: [erased-type-check]
+try_casts[UserId](1)  # error: [erased-type-check]
+```
+
+## a type argument given by name, or past a variadic
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+def after[*Ts, T](x: object) -> bool:
+    return x is T
+
+chk[T=UserId](1)  # error: [erased-type-check]
+after[int, str, UserId](1)  # error: [erased-type-check]
+after[UserId, int](1)  # no diagnostic
+```
+
+## an override that tests what its base doesn't
+
+a specialization through the base reaches the override, so the base's interface has to say so
+
+```by
+class Base:
+    def shows[T](self, x: object) -> object:
+        return T
+
+    def tests[T](self, x: object) -> object:
+        return x is T
+
+class Sub(Base):
+    # error: [invalid-method-override]
+    def shows[T](self, x: object) -> object:
+        return x is T
+
+    def tests[T](self, x: object) -> object:  # no diagnostic
+        return x is T
+```
+
+## a checked cast reads the type parameter
+
+a checked cast tests its value against what the type parameter holds, so it reifies the parameter as
+`x is T` does
+
+```by
+def casts[T](x: object) -> T:
+    return x cast! T
+
+def try_casts[T](x: object) -> T | None:
+    return x cast? T
+
+assert casts[int](1) == 1
+assert try_casts[int](1) == 1
+assert try_casts[str](1) is None
+```
+
+## a type argument forwarded to a test the checker solved
+
+a parameter handed on through a call the checker solves is tested as much as one handed on in
+writing, and a type the runtime can't test has no spelling, so a call has to name it
+
+```by
+from typing import NewType, Protocol
+
+UserId = NewType("UserId", int)
+
+class P(Protocol):
+    a: int
+
+def tests[T](x: T, y: object) -> bool:
+    return y is T
+
+def hands_on[U](x: U) -> bool:
+    return tests(x, 1)
+
+hands_on[UserId](UserId(1))  # error: [erased-type-check]
+tests(UserId(1), 1)  # error: [unspecialized-reified-generic]
+
+def given(value: P) -> None:
+    tests(value, 1)  # error: [unspecialized-reified-generic]
+
+def defaults[T = UserId](y: object) -> bool:
+    return y is T
+
+defaults(1)  # error: [unspecialized-reified-generic]
+defaults[int](1)  # no diagnostic
+```
+
+## a type argument that is only printed or handed on is not tested
+
+```by
+from typing import LiteralString, NewType, TypedDict
+
+UserId = NewType("UserId", int)
+
+class TD(TypedDict):
+    a: int
+
+def show[T]() -> object:
+    return T
+
+def hands_on[U]() -> object:
+    return show[U]()
+
+def nested[T](x: object) -> bool:
+    return x is list[T]
+
+show[UserId]()  # no diagnostic
+show[TD]()  # no diagnostic
+show[LiteralString]()  # no diagnostic
+hands_on[UserId]()  # no diagnostic
+nested[UserId]([])  # no diagnostic
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+assert chk[int](1)
+assert not chk[None](1)
+assert chk[int | None](None)
+assert chk[object](1)
+assert not chk[list[UserId]](1)  # no diagnostic
+```
+
+## subscripting a function in a `.py` file
+
+python functions aren't subscriptable and a `.py` file is run as written, so the subscript raises. a
+`.by` function that takes type arguments is lowered to one that accepts them
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+`lib.by`:
+
+```by
+def reads[T](x: object) -> object:
+    return T
+
+def erases[T](x: object) -> object:
+    return x
+```
+
+`main.py`:
+
+```py
+from lib import reads, erases
+
+def own[T](x: object) -> object:
+    return x
+
+class C:
+    def m[T](self, x: object) -> object:
+        return x
+
+own[int](1)  # error: [not-subscriptable]
+stored = own[int]  # error: [not-subscriptable]
+C().m[int](1)  # error: [not-subscriptable]
+reads[int](1)  # no diagnostic
+erases[int](1)  # error: [not-subscriptable]
+```
+
 ## the elements of a variadic and a pack are type forms
 
 a `*Ts` holds the run of type arguments and a `**Kwargs` holds its fields, and each of those can be

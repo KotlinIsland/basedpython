@@ -547,6 +547,42 @@ class A: ...
 reveal_type(as_type(A))  # revealed: type[A] | None
 ```
 
+## Attributes
+
+a `TypeForm[T]` value may be a class, `None` or a union, so no attribute can be promised for it, not
+even those of `object`: `form.__repr__()` misses its instance when the form is a class. asking the
+value's type still works
+
+```py
+from typing_extensions import TypeForm
+
+def attributes(form: TypeForm[int]) -> None:
+    form.__name__  # error: [unresolved-attribute]
+    form.__repr__()  # error: [unresolved-attribute]
+    form.__module__  # error: [unresolved-attribute]
+    form.__doc__ = "x"  # error: [unresolved-attribute]
+    del form.__doc__  # error: [unresolved-attribute]
+    getattr(form, "__name__")  # error: [unresolved-attribute]
+    repr(form)  # no diagnostic
+    hash(form)  # no diagnostic
+    getattr(form, "__name__", None)  # no diagnostic
+    form == int  # no diagnostic
+
+def narrowed[T](form: TypeForm[T]) -> None:
+    if isinstance(form, type):
+        form.__name__  # no diagnostic
+        getattr(form, "__name__")  # no diagnostic
+```
+
+the same holds in a basedpython file
+
+```by
+from typing_extensions import TypeForm
+
+def declared[T](form: TypeForm[T]) -> None:
+    form.__repr__()  # error: [unresolved-attribute]
+```
+
 ## Availability from `typing`
 
 `TypeForm` is available from the standard-library `typing` module starting in Python 3.15.
