@@ -530,6 +530,88 @@ fn only_typing_cast_takes_a_type() {
     );
 }
 
+/// each way a value is tested against `target`: through a type parameter, in place, and by a
+/// checked cast either way it reports. each is asked of `v(0)`, `v(1)` and `v(2)`
+fn every_test_form(indent: &str, target: &str) -> String {
+    format!(
+        "{indent}print(chk[{target}](v(0)), chk[{target}](v(1)), chk[{target}](v(2)))\n\
+         {indent}print(v(0) is {target}, v(1) is {target}, v(2) is {target})\n\
+         {indent}print((v(0) cast? {target}) is not None, (v(1) cast? {target}) is not None, (v(2) cast? {target}) is not None)\n\
+         {indent}print(raises(lambda: v(0) cast! {target}), raises(lambda: v(1) cast! {target}), raises(lambda: v(2) cast! {target}))\n"
+    )
+}
+
+const TEST_FORMS: &str = indoc::indoc! {"
+    def chk[T](x: object) -> bool:
+        return x is T
+    def raises(f: () -> object) -> bool:
+        try:
+            f()
+        except TypeError:
+            return False
+        return True
+"};
+
+const SOLVED_BY_DEFAULTS: [&str; 4] = [
+    "False True False",
+    "False True False",
+    "False True False",
+    "False True False",
+];
+
+/// a test written in place reads a bare class as a type argument does: what its defaults solve
+#[test]
+fn every_test_of_a_class_with_defaults_reads_what_they_solve() {
+    let class = "class O[T = int]:\n    v: T\n    def __init__(self, v: T):\n        self.v = v\n";
+    for (setup, target) in [
+        ("", "O"),
+        ("type X = O\n", "X"),
+        ("A = O\n", "A"),
+        ("B = O | None\n", "B"),
+        ("", "O | None"),
+    ] {
+        prints(
+            &format!(
+                "{TEST_FORMS}{class}{setup}def v(n: int) -> object:\n    return O[str](\"a\") if n == 0 else O[int](1) if n == 1 else 3\n{}",
+                every_test_form("", target)
+            ),
+            &SOLVED_BY_DEFAULTS,
+        );
+    }
+    // read from a method of the class, which the class statement has not finished binding
+    prints(
+        &format!(
+            "{TEST_FORMS}class O[T = int]:\n    v: T\n    def __init__(self, v: T):\n        self.v = v\n    def m(self, x: object) -> bool:\n        return x is O\nprint(O[int](1).m(O[str](\"a\")), O[int](1).m(O[int](1)))\n"
+        ),
+        &["False True"],
+    );
+    // reached through a class
+    prints(
+        &format!(
+            "{TEST_FORMS}class Outer:\n    {}\ndef v(n: int) -> object:\n    return Outer.O[str](\"a\") if n == 0 else Outer.O[int](1) if n == 1 else 3\n{}",
+            class.replace('\n', "\n    ").trim_end(),
+            every_test_form("", "Outer.O")
+        ),
+        &SOLVED_BY_DEFAULTS,
+    );
+    // defined in a function
+    for (setup, target) in [
+        ("", "O"),
+        ("    A = O\n", "A"),
+        ("    B = O | None\n", "B"),
+        ("", "O | None"),
+    ] {
+        prints(
+            &format!(
+                "{TEST_FORMS}def g() -> None:\n    {}\n{setup}    def v(n: int) -> object:\n        return O[str](\"a\") if n == 0 else O[int](1) if n == 1 else 3\n{}g()\n",
+                class.replace('\n', "\n    ").trim_end(),
+                every_test_form("    ", target)
+            ),
+            &SOLVED_BY_DEFAULTS,
+        );
+    }
+}
+
 /// a name that is the class itself stays one where nothing reads it as a type argument
 #[test]
 fn a_class_with_defaults_is_itself_where_it_is_not_a_type_argument() {

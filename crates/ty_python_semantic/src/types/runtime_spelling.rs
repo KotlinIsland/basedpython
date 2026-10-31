@@ -265,6 +265,17 @@ impl RuntimeSpelling {
         Self { parts: vec![part] }
     }
 
+    /// `name`, which the source wrote where this is written, so it holds there what the source's
+    /// does whichever binding it is, and is written as the module binds it
+    pub(crate) fn global_private(db: &dyn Db, file: File, name: &str) -> Self {
+        let name = Name::new(name);
+        if private_symbols(db, file).contains(&name) {
+            Self::global(db, file, &name)
+        } else {
+            Self::text(name.as_str())
+        }
+    }
+
     /// every binding of the module's global scope the spelling reads, by the name the
     /// source binds it under
     pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
