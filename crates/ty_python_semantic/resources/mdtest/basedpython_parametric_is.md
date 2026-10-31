@@ -1285,3 +1285,210 @@ type Key = int | str
 def f(v: object) -> None:
     print(v is Key)
 ```
+
+## a test the runtime answers has the answer an assignment has
+
+what a test through a cell says of two specializations is what assigning one to the other says. each
+pair here is checked both ways, so that a block that checks clean is also the runtime agreeing
+
+### a class of a stub has the bases its stub gives it
+
+```by
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Hashable, NamedTuple, Sized, TypedDict
+import numbers
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+a: Out[Sequence[str]] = Out[str]()  # no diagnostic
+assert chk[Out[Sequence[str]]](Out[str]())
+b: Out[Iterable[object]] = Out[dict[str, int]]()  # no diagnostic
+assert chk[Out[Iterable[object]]](Out[dict[str, int]]())
+c: Out[Sequence[int | str]] = Out[(int, str)]()  # no diagnostic
+assert chk[Out[Sequence[int | str]]](Out[(int, str)]())
+
+class TD(TypedDict):
+    a: int
+class NT(NamedTuple):
+    a: int
+
+d: Out[Mapping[str, object]] = Out[TD]()  # no diagnostic
+assert chk[Out[Mapping[str, object]]](Out[TD]())
+e: Out[Sequence[int]] = Out[NT]()  # no diagnostic
+assert chk[Out[Sequence[int]]](Out[NT]())
+```
+
+a registration with an abc is something only the runtime says, and a protocol has only what it
+declares
+
+```by
+from typing import Hashable, Sized
+import numbers
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# error: [invalid-assignment]
+a: Out[numbers.Number] = Out[int]()
+# error: [invalid-assignment]
+b: Out[Hashable] = Out[Sized]()
+```
+
+```by
+from typing import Hashable, Sized
+import numbers
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+assert not chk[Out[numbers.Number]](Out[int]())
+assert not chk[Out[Hashable]](Out[Sized]())
+```
+
+### a class is called as its constructor says
+
+```by
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+a: Out[() -> int] = Out[type[int]]()  # no diagnostic
+assert chk[Out[() -> int]](Out[type[int]]())
+b: Out[(bool) -> object] = Out[type[int]]()  # no diagnostic
+assert chk[Out[(bool) -> object]](Out[type[int]]())
+assert not chk[Out[(object) -> int]](Out[type[int]]())
+```
+
+### an intersection is what all of its members are
+
+```by
+class A: pass
+class C: pass
+class D(A, C): pass
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+a: Out[A & C] = Out[D]()  # no diagnostic
+assert chk[Out[A & C]](Out[D]())
+b: Out[A] = Out[A & C]()  # no diagnostic
+assert chk[Out[A]](Out[A & C]())
+```
+
+### `type[A]` through a cell
+
+```by
+class A: pass
+class B(A): pass
+
+def in_place(x: object) -> bool:
+    return x is type[A]
+
+def cell[T](x: object) -> bool:
+    return x is T
+
+assert in_place(B) and cell[type[A]](B)
+assert not in_place(int) and not cell[type[A]](int)
+assert not in_place(A()) and not cell[type[A]](A())
+```
+
+### a parameter no member mentions
+
+the typing spec has it be covariant, and a test agrees
+
+```by
+class P[T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+a: P[object] = P[bool]()  # no diagnostic
+assert chk[P[object]](P[bool]())
+assert not chk[P[bool]](P[object]())
+```
+
+```by
+class P[T]: pass
+
+def a(x: P[object]) -> P[bool]:
+    return x  # error: [invalid-return-type]
+```
+
+### a pack, `LiteralString` and `Self`
+
+```by
+from typing import LiteralString, Self
+
+class V[*Ts]: pass
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+assert chk[V[()]](V[()]())
+assert chk[V[*tuple[int, ...]]](V[int, int]())
+assert not chk[V[*tuple[int, ...]]](V[int, str]())
+assert chk[Out[str]](Out[LiteralString]())
+assert chk[Out[LiteralString]](Out["a"]())
+
+class K:
+    def m(self) -> bool:
+        return chk[Out[K]](Out[Self]())
+
+assert K().m()
+```
+
+### a forward reference relates as the class it names
+
+```by
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class Other: pass
+x = Out[Later]()
+class S(Out[Later]): pass
+class Later(Other): pass
+
+assert chk[Out[Later]](x)
+assert chk[Out[Other]](x)
+assert chk[Out[Later]](S())
+```
+
+### a type argument substituted through a base
+
+```by
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class A[T]:
+    def t(self) -> object:
+        return T
+    def holds(self, x: object) -> bool:
+        return chk[T](x)
+
+class C[U](A[list[U]]): pass
+class D(C[str]): pass
+class G[U](A[Out[U]]): pass
+class Same[T](A[list[T]]):
+    def own(self) -> object:
+        return T
+
+assert C[int]().t() == list[int]
+assert D().t() == list[str]
+assert G[bool]().holds(Out[bool]())
+assert Same[int]().t() == list[int]
+assert Same[int]().own() == int
+```

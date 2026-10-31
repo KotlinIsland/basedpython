@@ -18,9 +18,12 @@
 //! a specialization the forward direction injected stays too, as `f[int](1)` does: it says the
 //! same thing as the bare call
 //!
-//! `_by_lit` builds a class, so it only reverses where a type is read: a type argument, or the
-//! right side of a type test. written as a value, the literal it would leave isn't that class. a
-//! projection is the same
+//! `_by_told(__name__, ...)` tells the runtime what the checker of the source says for itself, so
+//! the statement is dropped. `_by_forward(list["F"], __name__)` → `list["F"]`
+//!
+//! `_by_lit` builds a literal type, so it only reverses where a type is read: a type argument, or
+//! the right side of a type test. written as a value, the literal it would leave isn't that type.
+//! a projection is the same
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::is_dotted_name;
@@ -38,7 +41,9 @@ use super::literal_types::is_literal_value;
 use crate::runtime::{self, Helper};
 use crate::transforms::source_util::{line_past_end, line_start};
 
-const REVERSED: [Helper; 9] = [
+const REVERSED: [Helper; 11] = [
+    runtime::TOLD,
+    runtime::FORWARD,
     runtime::SUBSCRIPT,
     runtime::SPECIALIZATION,
     runtime::RAISE,
@@ -458,6 +463,36 @@ impl<'src> RuntimeHelpersReverse<'src> {
         true
     }
 
+    /// `_by_forward(list["F"], __name__)` → `list["F"]`
+    fn forward(&mut self, call: &ExprCall, enclosing: Enclosing) -> bool {
+        let [specialization, Expr::Name(module)] = &*call.arguments.args else {
+            return false;
+        };
+        let span = self.argument_spans(call)[0];
+        if !call.arguments.keywords.is_empty()
+            || module.id.as_str() != "__name__"
+            || self.source[TextRange::new(call.start(), span.start())].contains('#')
+            || self.source[TextRange::new(span.end(), call.end())].contains('#')
+        {
+            return false;
+        }
+        for gap in [
+            TextRange::new(call.start(), span.start()),
+            TextRange::new(span.end(), call.end()),
+        ] {
+            self.edits.push(Fix::safe_edit(Edit::range_deletion(gap)));
+        }
+        self.visit_operand(specialization, enclosing);
+        true
+    }
+
+    /// whether `stmt` is what telling the runtime about the classes of a stub is written as
+    fn is_telling_classes(&self, stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Expr(expr) if matches!(expr.value.as_ref(), Expr::Call(call)
+            if matches!(call.func.as_ref(), Expr::Name(name)
+                if self.reads_helper(name.id.as_str()) == Some(runtime::TOLD))))
+    }
+
     /// rewrite `call` if it is a call of one of the helpers in a shape the forward transforms
     /// write, along with what is inside it
     fn reverse_call(&mut self, call: &ExprCall, enclosing: Enclosing, in_type: bool) -> bool {
@@ -479,6 +514,7 @@ impl<'src> RuntimeHelpersReverse<'src> {
             runtime::CELL_IS => self.cell_is(call, enclosing),
             runtime::OUT => in_type && self.projection(call, "out"),
             runtime::IN => in_type && self.projection(call, "in"),
+            runtime::FORWARD => self.forward(call, enclosing),
             _ => false,
         }
     }
@@ -508,6 +544,14 @@ fn is_runtime_import(stmt: &Stmt, name: &str, local: &str) -> bool {
 impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if self.provided.is_empty() || self.is_pasted(stmt.range()) {
+            return;
+        }
+        if self.is_telling_classes(stmt) {
+            self.edits
+                .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                    line_start(self.source, stmt.start()),
+                    line_past_end(self.source, stmt.end()),
+                ))));
             return;
         }
         let (enclosing, in_type) = (self.enclosing, self.in_type);
@@ -619,6 +663,26 @@ mod tests {
         let lowered = transpile(source, &config).unwrap();
         let reversed = reverse_transpile(&lowered, &config).unwrap();
         (lowered, reversed)
+    }
+
+    #[test]
+    fn what_a_module_tells_the_runtime_about_stub_classes_is_dropped() {
+        let (lowered, reversed) =
+            round_trip("class Out[out T]: ...\nclass Later: ...\na = Out[str]()\nb = Later\n");
+        assert!(lowered.contains("_by_told(__name__, "), "{lowered}");
+        assert!(!reversed.contains("_by_told"), "{reversed}");
+        assert!(reversed.contains("a = Out[str]()"), "{reversed}");
+    }
+
+    #[test]
+    fn a_forward_reference_that_says_whose_it_is_is_written_as_a_name() {
+        let (lowered, reversed) =
+            round_trip("class Out[out T]: ...\na = Out[Later]()\nclass Later: ...\n");
+        assert!(
+            lowered.contains("a = _by_forward(Out[\"Later\"], __name__)()"),
+            "{lowered}"
+        );
+        assert!(reversed.contains("a = Out[Later]()"), "{reversed}");
     }
 
     #[test]

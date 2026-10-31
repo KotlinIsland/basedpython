@@ -50,10 +50,32 @@ def make[T: Base]() -> object:
     return None
 ```
 
+the read promises no attributes at all, not even `object`'s, since a type argument
+need not be an object with the ones a class has. `getattr(T, name)` with no default
+is refused for the same reason (`unresolved-attribute`). either ask first, or give it
+a default:
+
+```by
+def named[T](name: str) -> object:
+    T.__doc__                # error: `TypeForm[T]` has no attribute `__doc__`
+    getattr(T, name)         # error
+    getattr(T, name, None)   # ok
+    if isinstance(T, type):
+        return T.__name__    # ok
+    return None
+```
+
 the elements of a [variadic and a keyword pack](#variadics-and-keyword-packs) are
 type forms too, and narrow the same way
 
+a `.py` file has no way to write a specialization, so it can't subscript a function
+(`not-subscriptable`). the exception is a `.by` function that takes type arguments,
+which it calls as `f[int](1)`
+
 ## declaring it
+
+a reified function can be pickled, with or without its type arguments, by the name
+it is defined under
 
 reification is inferred from the body, which means it can also be *declared*.
 `reified` ahead of a type parameter reifies it whether or not the body ever
@@ -253,11 +275,10 @@ f("")   # T is `""`: prints False
 ```
 
 the injected argument is a *runtime type expression* for what the checker
-solved, so `f(1)` hands `f` the type `Literal[1]`. `x is T` asks whether `x` is
-that value. the literal is held as a class, so `isinstance(T, type)` is true of it,
-and once narrowed `isinstance(x, T)` asks the same question, `T()` is that value,
-and `T("2")` is a `TypeError`, since `2` isn't of that type. to have `T` be `int`,
-pass something that is only known to be one, such as `int(1)`. a float or
+solved, so `f(1)` hands `f` the type `Literal[1]`, and `print(T)` prints
+`typing.Literal[1]`. `x is T` asks whether `x` is that value. a literal is not a
+class, so it fails `isinstance(T, type)` and takes the other branch of a guard. to
+have `T` be `int`, pass something that is only known to be one, such as `int(1)`. a float or
 complex literal hands on its class instead, because equal floats can be different
 values (`0.0 == -0.0`) and the runtime couldn't tell them apart. structured
 annotations solve through their type arguments (`list[T]` + `[1]` → `int`),
@@ -269,13 +290,74 @@ intended type object
 `x is T` answers what the same target written in place would. a subscripted class
 is compared argument by argument, by the variance the checker read for the class,
 whether it was declared, inferred or inherited, through nested generics, unions,
-literals, tuples and `None`, and a use-site `out` or `in` written in the type
-argument is kept with it
+intersections, literals, tuples, packs, `type[...]`, `LiteralString`, `Self` and
+`None`, and a use-site `out` or `in` written in the type argument is kept with it
+
+a class of the standard library relates as its stub says it does, whatever its
+runtime class says. `str` is a `Sequence[str]` because `class str(Sequence[str])`
+says so, a `tuple[int, str]` is a `Sequence[int | str]`, a `TypedDict` is a
+`Mapping[str, object]`, and calling a class is what its constructor says. being
+registered with an abc is something only the runtime says, so `int` is no
+`numbers.Number`, and a protocol has the members it declares and not whatever every
+object has:
+
+```by
+from collections.abc import Sequence
+from typing import Hashable, Sized
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+assert chk[Out[Sequence[str]]](Out[str]())
+assert chk[Out[() -> int]](Out[type[int]]())
+assert not chk[Out[Hashable]](Out[Sized]())
+```
+
+a type argument that names a class further down the module is read once the class
+exists, and relates as that class does:
+
+```by
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+x = Out[Later]()
+
+class Later: pass
+
+assert chk[Out[Later]](x)
+```
 
 a class no `.by` module defines is known to the runtime once a `.by` module has
-subscripted it, and until then is treated as invariant unless its own `TypeVar`
-declares otherwise. what the runtime can't see, such as the arguments of a value
-that records none, answers `False`
+read it as a type, and until then is treated as invariant unless its own `TypeVar`
+declares otherwise, and as deriving from what its runtime class derives from. what
+the runtime can't see, such as the arguments of a value that records none, answers
+`False`. a tuple records none, but its elements are there to ask: `(1, "a")` is a
+`(int, str)`
+
+a function that tests `x is T`, or hands `T` to something that does, refuses a type
+argument the runtime can't test (`erased-type-check`), for the same reason
+`x is UserId` is refused: a `NewType`, a `TypedDict`, `LiteralString`, `Any`, a
+callable with a signature, and a protocol that isn't `@runtime_checkable`. nothing
+about a value says it is one of those:
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+def hands[T](x: object) -> bool:
+    return chk[T](x)
+
+chk[UserId](1)     # error
+hands[UserId](1)   # error
+```
 
 when no injectable solution exists, the bare call is an error
 (`unspecialized-reified-generic`):

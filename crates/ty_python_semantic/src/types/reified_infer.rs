@@ -48,6 +48,7 @@ use crate::types::instance::Protocol;
 use crate::types::literal::{LiteralValueType, LiteralValueTypeKind};
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
+use crate::types::told_classes::{told_classes_of_class, told_classes_of_type};
 use crate::types::signatures::Signature;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarKind};
@@ -927,7 +928,9 @@ fn spell_type<'db>(
             spell_type(db, env, file, restricted.type_argument(db), cells)
         }
         Type::LiteralValue(literal) => match literal_value_spelling(db, env, file, literal) {
-            LiteralValueSpelling::Value(value) => Some(RuntimeSpelling::literal(&value)),
+            LiteralValueSpelling::Value(value) => Some(
+                RuntimeSpelling::literal(&value).telling(told_classes_of_type(db, env, file, ty)),
+            ),
             LiteralValueSpelling::Unknown => None,
             LiteralValueSpelling::NotRecordable => {
                 spell_type(db, env, file, literal.fallback_instance(db, env), cells)
@@ -1507,13 +1510,17 @@ fn spell_class_literal<'db>(
         .place
         .ignore_possibly_undefined()
     {
-        return (global.as_class_literal()? == literal)
-            .then(|| RuntimeSpelling::global(db, file, name));
+        return (global.as_class_literal()? == literal).then(|| {
+            RuntimeSpelling::global(db, file, name)
+                .telling(told_classes_of_class(db, env, file, literal))
+        });
     }
     let builtin = builtins_symbol(db, env, name)
         .place
         .ignore_possibly_undefined()?;
-    (builtin.as_class_literal()? == literal).then(|| RuntimeSpelling::text(name.as_str()))
+    (builtin.as_class_literal()? == literal).then(|| {
+        RuntimeSpelling::text(name.as_str()).telling(told_classes_of_class(db, env, file, literal))
+    })
 }
 
 /// How a parametric type test (`x is C[args]`, keyword form) resolves.
@@ -1980,7 +1987,7 @@ pub(crate) fn class_variances<'db>(
     let variances: Box<[ArgVariance]> = class
         .generic_context(db)?
         .variables(db)
-        .map(|bound_typevar| ArgVariance::of(bound_typevar.probe_variance(db)))
+        .map(|bound_typevar| ArgVariance::of(bound_typevar.variance(db)))
         .collect();
     variances
         .iter()
@@ -3177,7 +3184,7 @@ fn target_variances<'db>(db: &'db dyn Db, alias: GenericAlias<'db>) -> Box<[ArgV
     generic_context
         .variables(db)
         .map(|bound_typevar| {
-            let declared = bound_typevar.probe_variance(db);
+            let declared = bound_typevar.variance(db);
             let effective = combine_use_site_projections(
                 declared,
                 None,

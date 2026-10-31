@@ -282,6 +282,9 @@ class _by_guarded_generic:
     # documented by the function it wraps
     __doc__ = property(lambda self: self._by_inner.__doc__)
 
+    def __reduce_ex__(self, protocol):
+        return self._by_inner.__reduce_ex__(protocol)
+
     def __init__(self, _inner, _wrap):
         self._by_inner = _inner
         self._by_wrap = _wrap
@@ -592,7 +595,7 @@ def _bind_type_params(params, supplied, fields, owner):
             continue
         has_default = getattr(param, "has_default", None)
         if has_default is not None and has_default():
-            bound[name] = _by_literal_type(param.__default__)
+            bound[name] = param.__default__
         elif isinstance(param, TypeVarTuple):
             bound[name] = ()
         elif param is pack:
@@ -648,6 +651,21 @@ class generic:
     def __repr__(self):
         return f"<generic {self.fn!r}>"
 
+    # the function can't be pickled, since its name holds this rather than it. this can, by that name
+    def __reduce_ex__(self, protocol):
+        fn = self.fn
+        place = (fn.__module__, fn.__qualname__)
+        try:
+            _by_generic_named(*place)
+        except (AttributeError, ImportError) as error:
+            import pickle
+            raise pickle.PicklingError(f"Can't pickle {self!r}: {error}") from error
+        items = self.args
+        return (
+            _by_generic_named,
+            (*place, self.instance, None if items is None else tuple(map(_by_pickled, items)), self.fields),
+        )
+
     def __getattr__(self, name):
         if name == "fn":
             raise AttributeError(name)
@@ -663,7 +681,6 @@ class generic:
             raise TypeError("type arguments already specified")
         if len(items) == 1 and isinstance(items[0], tuple):
             items = items[0]
-        items = tuple(_by_literal_type(item) for item in items)
         # reject a bad arity here, not at the call
         _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
         return generic(self.fn, items, self.instance, fields, self.optional)
@@ -700,6 +717,19 @@ class generic:
         if self.instance is not None:
             return temp_fn(self.instance, *args, **kwargs)
         return temp_fn(*args, **kwargs)
+
+
+# what a pickled reified function is read back from
+def _by_generic_named(module, qualified, instance=None, items=None, fields=None):
+    import importlib
+    found = importlib.import_module(module)
+    for part in qualified.split("."):
+        found = getattr(found, part)
+    if instance is not None:
+        found = found.__get__(instance, type(instance))
+    if items is not None or fields is not None:
+        found = found.__getitem__(items or (), **(fields or {}))
+    return found
 
 
 # what the cell of a forwarded type parameter holds when the call supplied nothing for it. a
@@ -869,19 +899,55 @@ def _by_subst(annotation, mapping):
         pass
     if isinstance(annotation, _ByProjection):
         return _by_project(annotation.__by_variance__, _by_subst(annotation.__by_projected__, mapping))
+    # what a literal lists are its values, and a value is no type to replace
+    if _by_literal_args(annotation) is not None:
+        return annotation
     args = getattr(annotation, "__args__", ())
     if not args:
         return annotation
-    replaced = tuple(_by_subst(arg, mapping) for arg in args)
-    if replaced == args:
-        return annotation
-    origin = getattr(annotation, "__origin__", None)
-    if origin is None:
-        return annotation
-    try:
-        return origin[replaced]
-    except TypeError:
-        return annotation
+    replaced = []
+    for arg in args:
+        # a `*Ts` becomes the run of arguments it stands for
+        pack = _by_unpacked(arg)
+        try:
+            run = mapping.get(pack)
+        except TypeError:
+            run = None
+        if isinstance(run, tuple):
+            replaced.extend(run)
+        else:
+            replaced.append(_by_subst(arg, mapping))
+    replaced = tuple(replaced)
+    return annotation if replaced == args else _by_rebuilt(annotation, replaced)
+
+def _by_rebuilt(alias, args):
+    # `alias` with `args` for its arguments, which each kind of alias takes in a shape of its own
+    import typing
+    from collections.abc import Callable
+    from types import GenericAlias
+    origin = getattr(alias, "__origin__", None)
+    if _by_union_args(alias) is not None:
+        return typing.Union[args]
+    if hasattr(alias, "copy_with"):
+        return alias.copy_with(args)
+    if origin is Callable:
+        params = ... if args[:-1] == (Ellipsis,) else list(args[:-1])
+        return Callable[params, args[-1]]
+    # a reified class's specialization is a class. anything else that subscripts is asked nothing:
+    # a class may answer a subscript for itself with whatever it likes
+    if getattr(origin, "__by_reified_class__", False):
+        return origin[args]
+    return GenericAlias(origin, args)
+
+def _by_unpacked(element):
+    # what a `*` in a list of type arguments unpacks, `*Ts` or `*tuple[int, ...]`, and `None` for
+    # an argument that isn't one
+    import typing
+    if getattr(element, "__unpacked__", False):
+        return element
+    if getattr(element, "__origin__", None) is getattr(typing, "Unpack", _by_absent):
+        return element.__args__[0]
+    return None
 
 def _by_type_params(klass):
     # a class the pep 695 polyfill wrote declares its parameters through
@@ -891,40 +957,109 @@ def _by_type_params(klass):
     params = getattr(klass, "__type_params__", ()) or getattr(klass, "__parameters__", ())
     return params if isinstance(params, tuple) else ()
 
+def _by_param_mapping(params, args):
+    # each of `params` with what `args` binds it to, a `*Ts` with the run it takes
+    import typing
+    variadic = getattr(typing, "TypeVarTuple", ())
+    mapping = {}
+    for index, param in enumerate(params):
+        if isinstance(param, variadic):
+            end = len(args) - (len(params) - index - 1)
+            mapping[param] = tuple(args[index:end])
+            for later, arg in zip(params[index + 1:], args[end:]):
+                mapping[later] = arg
+            return mapping
+        if index < len(args):
+            mapping[param] = args[index]
+    return mapping
+
+def _by_tuple_element(args):
+    # what a tuple listing `args` specializes its base with: any of its elements
+    import typing
+    head, run, tail = _by_tuple_parts(args)
+    elements = (*head, *(() if run is None else (run,)), *tail)
+    return typing.Union[elements] if elements else typing.NoReturn
+
+def _by_bound_forward(annotation, module):
+    # `annotation` with each forward reference in it saying that its name is one of `module`'s.
+    # a base is written with one saying nothing, and is said for by the class it is a base of
+    import typing
+    if isinstance(annotation, str):
+        return annotation if isinstance(annotation, _ByForwardName) else _ByForwardName(annotation, module)
+    if isinstance(annotation, typing.ForwardRef):
+        name = annotation.__forward_arg__
+        if isinstance(name, _ByForwardName) or getattr(annotation, "__forward_module__", None) is not None:
+            return annotation
+        return typing.ForwardRef(_ByForwardName(name, module))
+    if _by_literal_args(annotation) is not None:
+        return annotation
+    args = getattr(annotation, "__args__", ())
+    if not args:
+        return annotation
+    replaced = tuple(_by_bound_forward(arg, module) for arg in args)
+    # what was bound is equal to what wasn't, by design
+    if all(new is old for new, old in zip(replaced, args)):
+        return annotation
+    return _by_rebuilt(annotation, replaced)
+
 def _by_specialize(alias, origin, depth=0):
     # the arguments with which `alias` satisfies `origin`, resolved *down the
     # declared base chain* rather than assumed to line up positionally. a base
     # that fixes or reorders its arguments is then followed faithfully:
     # `class Odd[T](list[int])` is a `list[int]` whatever `T` is, and
-    # `class Swap[A, B](dict[B, A])` specializes `dict` in the other order
+    # `class Swap[A, B](dict[B, A])` specializes `dict` in the other order. `None` when it
+    # doesn't reach `origin`, or reaches it with arguments nothing says
     if depth > 16:
         return None
-    alias = _by_alias(alias)
+    alias = _by_type_normal(alias)
     klass = getattr(alias, "__origin__", alias)
     if not isinstance(klass, type):
         return None
-    args = getattr(alias, "__args__", ())
+    import typing
+    args = getattr(alias, "__args__", None)
+    row = _by_told_row(klass)
     params = _by_type_params(klass)
-    if not args:
-        defaulted = _by_type_param_defaults(params)
-        if defaulted is not params:
-            args = defaulted
+    if args is None:
+        if row is not None:
+            args = _by_told_defaults(row)
+        else:
+            defaulted = _by_type_param_defaults(params)
+            if defaulted is not params:
+                args = defaulted
     if klass is origin:
-        return args or None
-    mapping = {}
-    for param, arg in zip(params, args):
-        try:
-            mapping[param] = arg
-        except TypeError:
-            pass
+        return args
+    if issubclass(klass, tuple):
+        if klass is not tuple:
+            elements, known = _by_tuple_args(alias)
+            if known and elements is not None and hasattr(klass, "_fields"):
+                return _by_specialize(tuple[elements], origin, depth + 1)
+        elif args is not None:
+            # the arguments of a tuple are its elements. its base has one
+            args = (_by_tuple_element(args),)
+    if row is not None:
+        for base in row[3]:
+            try:
+                told = _by_told_type(base, () if args is None else args)
+            except IndexError:
+                # a parameter of a class written with no arguments
+                continue
+            found = _by_specialize(told, origin, depth + 1)
+            if found is not None:
+                return found
+        return None
+    mapping = _by_param_mapping(params, args or ())
     bases = klass.__dict__.get("__orig_bases__")
     if bases is None:
         # a class inheriting only plain classes records no `__orig_bases__`
         bases = getattr(klass, "__bases__", ())
     for base in bases:
+        base = _by_bound_forward(base, klass.__module__)
         found = _by_specialize(_by_subst(base, mapping) if mapping else base, origin, depth + 1)
         if found is not None:
             return found
+    if _by_is_typed_dict(klass):
+        from collections.abc import Mapping
+        return _by_specialize(Mapping[str, object], origin, depth + 1)
     # the declared bases don't reach `origin`: a builtin registered as a *virtual*
     # subclass of an abc (`list` for `Sequence`) has no base to walk. its
     # arguments do line up positionally once membership is established. this runs
@@ -978,21 +1113,41 @@ def _by_generic_args(value, origin):
 def _parametric_is(value, alias, variances):
     alias = _by_type_normal(alias)
     origin = getattr(alias, "__origin__", alias)
+    target_args = getattr(alias, "__args__", ())
+    # what a class is an instance of says nothing of `type`'s argument: the class itself does
+    if origin is type and target_args:
+        return isinstance(value, type) and _by_is_sub(value, target_args[0])
     if not isinstance(value, origin):
         return False
-    target_args = getattr(alias, "__args__", ())
     # a tuple's arguments are its elements, however many of them the target lists
     if origin is tuple and hasattr(alias, "__args__"):
         recorded = _by_recorded_alias(value)
+        if recorded is None and _by_tuple_args(type(value)) == (None, True):
+            return _by_tuple_value_is(value, alias)
         return _by_tuple_is_sub(recorded if recorded is not None else type(value), alias, (), False)
     if len(target_args) != len(variances):
         return False
-    for reified_args in _by_generic_args(value, origin):
-        if len(reified_args) != len(target_args):
-            continue
-        if all(_by_variance_ok(r, t, v) for r, t, v in zip(reified_args, target_args, variances)):
-            return True
-    return False
+    # the base of a tuple is specialized with what its elements are, as a tuple's own target is
+    if type(value) is tuple and variances == (1,):
+        mapped = _by_specialize(tuple[_ByUnseen], origin)
+        if mapped == (_ByUnseen,):
+            return all(_by_cell_is(element, target_args[0]) for element in value)
+    return any(
+        _by_arguments_ok(origin, reified_args, target_args, variances)
+        for reified_args in _by_generic_args(value, origin)
+    )
+
+def _by_tuple_value_is(value, alias):
+    # a tuple records no arguments, but its elements are there to ask
+    head, run, tail = _by_tuple_parts(alias.__args__)
+    if len(value) < len(head) + len(tail) or (run is None and len(value) != len(head)):
+        return False
+    end = len(value) - len(tail)
+    return (
+        all(map(_by_cell_is, value[:len(head)], head))
+        and all(_by_cell_is(element, run) for element in value[len(head):end])
+        and all(map(_by_cell_is, value[end:], tail))
+    )
 
 def _by_cell_is(value, cell):
     # `value is T`, for a reified `T`. the cell holds whatever the call supplied, and
@@ -1009,10 +1164,32 @@ def _by_cell_is(value, cell):
         return _by_cell_is(value, cell.__by_projected__)
     if _by_union_args(cell) is not None:
         return any(_by_cell_is(value, arm) for arm in _by_union_args(cell))
-    if _by_literal_args(cell) is not None:
-        return isinstance(value, _by_literal_type(cell))
+    values = _by_literal_args(cell)
+    if values is not None:
+        return any(type(value) is type(member) and value == member for member in values)
+    conjuncts = _by_intersection_args(cell)
+    if conjuncts is not None:
+        return all(_by_cell_is(value, conjunct) for conjunct in conjuncts)
+    # a protocol `isinstance` can't be asked about is asked as the target in place is, of the
+    # annotations of the value's class
+    origin = getattr(cell, "__origin__", cell)
+    if getattr(origin, "_is_protocol", False) and (
+        hasattr(cell, "__args__") or not getattr(origin, "_is_runtime_protocol", False)
+    ):
+        attrs = _by_protocol_attrs(origin)
+        if not all(hasattr(value, name) for name in attrs):
+            return False
+        try:
+            return _by_protocol_is(value, _by_protocol_members(cell, attrs))
+        except TypeError:
+            # what no annotation says is left to the members being there
+            return True
     if not hasattr(cell, "__args__"):
-        return isinstance(value, cell)
+        try:
+            return isinstance(value, cell)
+        except TypeError:
+            # a `NewType`, a `TypedDict` or a `LiteralString`: nothing about a value says it is one
+            return False
     args = cell.__args__
     return _parametric_is(value, cell, _by_told_variance(cell.__origin__, len(args)))
 
@@ -1049,81 +1226,29 @@ def _by_member_annotation(klass, name):
             return annotations[name]
     return _by_proto_missing
 
-# a literal type as the runtime holds it, equal to its `typing.Literal[…]`. the cell of a reified
-# type parameter may hold one (`f(1)` solves `T` to `1`), and a body reads that cell as a class:
-# `isinstance(x, T)` and `T()` both refuse a `typing.Literal`
-class _ByLiteral(type):
-    types = {}
-
-    def __instancecheck__(cls, value):
-        return any(type(value) is type(member) and value == member for member in cls.__by_values__)
-
-    def __subclasscheck__(cls, other):
-        return cls == other or (
-            isinstance(other, _ByLiteral)
-            and all(isinstance(member, cls) for member in other.__by_values__)
-        )
-
-    def __call__(cls, *args, **kwargs):
-        # the one value the type holds, unless asked to build one, which has to be that value
-        members = cls.__by_values__
-        if not args and not kwargs and len(members) == 1:
-            return members[0]
-        value = type(members[0])(*args, **kwargs)
-        if not isinstance(value, cls):
-            raise TypeError(f"{value!r} is not a {cls!r}")
-        return value
-
-    def __getattr__(cls, name):
-        return getattr(type(cls.__by_values__[0]), name)
-
-    def __eq__(cls, other):
-        values = _by_literal_args(other)
-        return values is not None and _by_literal_members(values) == _by_literal_members(cls.__by_values__)
-
-    def __hash__(cls):
-        return hash(cls.__by_literal__)
-
-    def __repr__(cls):
-        return repr(cls.__by_literal__)
-
-
-__import__("copyreg").pickle(_ByLiteral, lambda literal: (_by_lit, literal.__by_values__))
-
-
 def _by_literal_members(values):
     return {(type(value), value) for value in values}
 
+# a literal type argument (`A[True]` specializes `T` to `Literal[True]`), spelled as a call so that
+# it needs no import of its own. a string written below python 3.12 comes as its code points: it
+# may be going into an f-string's replacement field, which can hold neither a backslash nor the
+# f-string's own quote. the same literal is the same object, which `typing`'s own bounded cache
+# doesn't promise
+_by_literals = {}
+
 def _by_lit(*values, text=None, data=None):
-    # a literal type argument (`A[True]` specializes `T` to `Literal[True]`), spelled as a call
-    # so that it needs no import of its own. a string written below python 3.12 comes as its
-    # code points: it may be going into an f-string's replacement field, which can hold neither
-    # a backslash nor the f-string's own quote
     if text is not None:
         values += ("".join(map(chr, text)),)
     if data is not None:
         values += (bytes(data),)
     key = tuple((type(value), value) for value in values)
-    literal = _ByLiteral.types.get(key)
+    literal = _by_literals.get(key)
     if literal is None:
         import typing
-        written = typing.Literal[values]
-        literal = _ByLiteral(
-            repr(written).removeprefix("typing."),
-            (),
-            {"__by_values__": values, "__by_literal__": written, "__module__": "typing"},
-        )
-        _ByLiteral.types[key] = literal
+        literal = _by_literals[key] = typing.Literal[values]
     return literal
 
-def _by_literal_type(t):
-    # a `typing.Literal[…]` written out, as `f[1](1)` lowers to, read as a cell can hold it
-    values = _by_literal_args(t)
-    return t if values is None or isinstance(t, _ByLiteral) else _by_lit(*values)
-
 def _by_literal_args(t):
-    if isinstance(t, _ByLiteral):
-        return t.__by_values__
     import typing
     return typing.get_args(t) if typing.get_origin(t) is typing.Literal else None
 
@@ -1165,6 +1290,106 @@ def _by_variance(*codes):
             pass
         return cls
     return told
+
+# the bases a stub gives a class are in no object the runtime holds: `class str(Sequence[str])` is
+# a `str` whose `__bases__` is `(object,)`. a module tells the runtime about each class of a stub it
+# reads as a type, and each class those derive from, as one row each: the class, a default or `...`
+# for each of its type parameters (`None` if it has none), the members it declares if the checker
+# reads it as a protocol (`None` if not), its bases, and what calling it is
+#
+# a row is data, so that it can be written ahead of anything the module binds, and read by what
+# each name means in whichever module it was read from. a class is `"module:qualified.name"`, a
+# leading `:` being the module doing the telling. a type is a class, an `int` for a type parameter
+# of the row's class, `None`, a tuple of a class and its arguments, a tuple `("|", ...)` of a union's
+# arms or `("=", ...)` of a literal's values. what can't be spelled is `"?"`, which names nothing
+#
+# each way of calling it is `(required, params, rest, returned)`: how many of `params` must be
+# given, the type of each positional parameter, that of a `*args` or `None`, and the type returned
+def _by_told_registry():
+    # one per process, as the conformance registry is and for the same reason. a row is pending
+    # until the class it describes can be looked up: a module imported lazily has no class yet
+    import sys
+    import types
+    module = sys.modules.get("_by_told_registry")
+    if module is None:
+        module = types.ModuleType("_by_told_registry")
+        module.pending = {}
+        module.rows = {}
+        sys.modules["_by_told_registry"] = module
+    return module
+
+_by_told_rows = _by_told_registry()
+
+# a class a stub has that nothing at runtime is: it is a subtype of nothing else
+class _ByUnseen:
+    pass
+
+def _by_told(teller, *rows):
+    def absolute(part):
+        if isinstance(part, str) and part.startswith(":"):
+            return teller + part
+        if isinstance(part, tuple):
+            return tuple(map(absolute, part))
+        return part
+    for row in rows:
+        row = absolute(row)
+        _by_told_rows.pending[row[0]] = row
+
+def _by_told_class(path):
+    # the class `path` names, or `None` if nothing at runtime is, or isn't yet. `typing` names the
+    # classes of `collections.abc` as aliases of them
+    import sys
+    module, _, qualified = path.partition(":")
+    found = sys.modules.get(module)
+    if found is None:
+        return None
+    try:
+        for part in qualified.split("."):
+            found = getattr(found, part)
+    except AttributeError:
+        return None
+    return getattr(found, "__origin__", found)
+
+def _by_told_row(klass):
+    pending = _by_told_rows.pending
+    if pending:
+        for path in list(pending):
+            found = _by_told_class(path)
+            if found is not None:
+                _by_told_rows.rows[found] = pending.pop(path)
+    try:
+        return _by_told_rows.rows.get(klass)
+    except TypeError:
+        return None
+
+def _by_told_defaults(row):
+    # the arguments a class told about has when it is written with none, if they all have one
+    params = row[1]
+    if not params or any(param is Ellipsis for param in params):
+        return None
+    return tuple(_by_told_type(param, ()) for param in params)
+
+def _by_told_type(part, args):
+    # the type `part` stands for, with `args` for the parameters of the class it is about
+    import typing
+    from types import GenericAlias
+    if part is None:
+        return type(None)
+    if part is Ellipsis:
+        return Ellipsis
+    if isinstance(part, int):
+        return args[part]
+    if isinstance(part, str):
+        found = _by_told_class(part)
+        return _ByUnseen if found is None else found
+    head = part[0]
+    if head == "=":
+        return typing.Literal[part[1:]]
+    arguments = tuple(_by_told_type(element, args) for element in part[1:])
+    if head == "|":
+        return typing.Union[arguments]
+    found = _by_told_class(head)
+    return _ByUnseen if found is None else GenericAlias(found, arguments)
 
 def _by_told_variance(origin, count):
     # the code of each of `count` type arguments of `origin`. the checker told the runtime or
@@ -1228,13 +1453,50 @@ def _by_out(inner):
 def _by_in(inner):
     return _by_project(2, inner)
 
+# a forward reference is a string, and nothing in `"F"` says whose `F` it is. this one does, and is
+# otherwise the same string, in whatever `typing` makes of it, so that what reads the alias it is
+# in reads what the same alias holds where it says nothing
+class _ByForwardName(str):
+    def __new__(cls, name, module=None):
+        self = super().__new__(cls, name)
+        self.__by_module__ = module
+        return self
+
+def _by_forward(specialization, module):
+    # a specialization whose type arguments python evaluates before what they name is bound,
+    # which a test reads once it is
+    return _by_bound_forward(specialization, module)
+
+def _by_forward_value(ref):
+    # what a forward reference names now, or `_by_absent` if that can't be read yet, or can't be
+    # read at all: a name local to a function has no module to look it up in
+    import sys
+    import typing
+    name = ref.__forward_arg__ if isinstance(ref, typing.ForwardRef) else ref
+    module = sys.modules.get(
+        getattr(name, "__by_module__", None) or getattr(ref, "__forward_module__", None)
+    )
+    if module is None:
+        return _by_absent
+    try:
+        return eval(str(name), vars(module))
+    except Exception:
+        return _by_absent
+
 def _by_type_normal(t):
     # what a type stands for once what only spells it is gone: an alias, a metadata wrapper, the
-    # `None` that means `NoneType`, a reified class's specialization. each step strictly opens
-    # one, so the bound only stops an alias that is its own value
+    # `None` that means `NoneType`, a forward reference, a reified class's specialization. each
+    # step strictly opens one, so the bound only stops an alias that is its own value
+    import typing
     for _ in range(64):
         if t is None:
             return type(None)
+        if isinstance(t, (str, typing.ForwardRef)):
+            named = _by_forward_value(t)
+            if named is _by_absent:
+                return t
+            t = named
+            continue
         origin = getattr(t, "__origin__", None)
         if hasattr(t, "__metadata__"):
             t = origin
@@ -1247,6 +1509,12 @@ def _by_type_normal(t):
         else:
             return t
     return t
+
+def _by_intersection_args(t):
+    # asked of the class rather than by identity: a module with nowhere to import this file from
+    # has its own copy of it
+    origin = getattr(t, "__origin__", None)
+    return t.__args__ if getattr(origin, "__by_intersection__", False) else None
 
 def _by_union_args(t):
     import types
@@ -1269,31 +1537,148 @@ def _by_finite_members(t):
     return None
 
 def _by_value_is_sub(value, b, seen):
+    import typing
     arms = _by_union_args(b)
     if arms is not None:
         return any(_by_value_is_sub(value, _by_type_normal(arm), seen) for arm in arms)
     values = _by_literal_args(b)
     if values is not None:
         return (type(value), value) in _by_literal_members(values)
+    if b is getattr(typing, "LiteralString", _by_absent):
+        return type(value) is str
     return _by_is_sub(type(value), b, seen)
 
-def _by_class_is_sub(a, b):
+def _by_is_typed_dict(klass):
     import typing
-    is_typeddict = getattr(typing, "is_typeddict", lambda _: False)
-    if b in a.__mro__:
-        # the runtime's mro of a `TypedDict` says `dict`, which no checker agrees with
-        return b is a or not is_typeddict(a)
-    if is_typeddict(a):
-        return any(
-            is_typeddict(base) and _by_class_is_sub(base, b)
-            for base in getattr(a, "__orig_bases__", ())
-        )
-    try:
-        return issubclass(a, b)
-    except TypeError:
-        # a protocol that isn't runtime checkable, or one with data members, and a `TypedDict`,
-        # which `issubclass` refuses: no subclass relation the runtime can show
+    return getattr(typing, "is_typeddict", lambda _: False)(klass)
+
+def _by_has_ancestor(klass, target, depth=0):
+    # whether `target` is among the classes `klass` derives from, as the checker reads them. a
+    # class told about has the bases its stub says. a `TypedDict` is a `Mapping[str, object]`,
+    # whatever the runtime's mro says
+    if klass is target:
+        return True
+    if depth > 32:
         return False
+    row = _by_told_row(klass)
+    if row is not None:
+        bases = [_by_told_class(base if isinstance(base, str) else base[0]) for base in row[3]]
+    elif _by_is_typed_dict(klass):
+        from collections.abc import Mapping
+        bases = [
+            base
+            for base in getattr(klass, "__orig_bases__", ())
+            if _by_is_typed_dict(base)
+        ] + [Mapping]
+    else:
+        bases = klass.__bases__
+    return any(
+        isinstance(base, type) and _by_has_ancestor(base, target, depth + 1)
+        for base in bases
+    )
+
+def _by_protocol_attrs(klass):
+    # the members `klass` declares if the checker reads it as a protocol, which a class of the
+    # standard library may be only in its stub, and `None` if it doesn't
+    row = _by_told_row(klass)
+    if row is not None:
+        return None if row[2] is None else frozenset(row[2])
+    if not getattr(klass, "_is_protocol", False):
+        return None
+    attrs = getattr(klass, "__protocol_attrs__", None)
+    if attrs is None:
+        import typing
+        attrs = typing._get_protocol_attrs(klass)
+    return frozenset(attrs)
+
+def _by_protocol_members(protocol, attrs):
+    # `attrs`, in the form `_by_protocol_is` reads, as far as the annotations of `protocol` say what
+    # each is: a parameter is contravariant and a return covariant, and a data member is invariant
+    # unless it is read-only
+    import inspect, typing
+    klass = getattr(protocol, "__origin__", protocol)
+    mapping = _by_param_mapping(_by_type_params(klass), getattr(protocol, "__args__", ()))
+    expected = lambda hint: _by_subst(hint, mapping) if mapping else hint
+    members = []
+    for name in attrs:
+        member = getattr(klass, name, None)
+        if isinstance(member, property):
+            member = member.fget
+            try:
+                hints = typing.get_type_hints(member)
+            except Exception:
+                continue
+            if "return" in hints:
+                members.append(("attr", name, expected(hints["return"]), 1))
+        elif callable(member):
+            try:
+                hints = typing.get_type_hints(member)
+                parameters = list(inspect.signature(member).parameters.values())[1:]
+            except Exception:
+                continue
+            if all(p.name in hints for p in parameters) and "return" in hints:
+                members.append((
+                    "method",
+                    name,
+                    [(expected(hints[p.name]), 2) for p in parameters],
+                    (expected(hints["return"]), 1),
+                ))
+        else:
+            annotation = _by_member_annotation(klass, name)
+            if annotation is not _by_proto_missing:
+                members.append(("attr", name, expected(annotation), 0))
+    return members
+
+def _by_class_has_members(a, b, attrs):
+    # whether the class `a` has the members `attrs` of the protocol `b`, of the types they are
+    # where each says what that is
+    if not all(
+        getattr(a, name, None) is not None
+        or _by_member_annotation(a, name) is not _by_proto_missing
+        for name in attrs
+    ):
+        return False
+    # a class of a stub has no annotations to compare, and what none says is left to the member
+    # being there
+    import typing
+    def annotated(member):
+        found = getattr(a, member[1], None)
+        try:
+            return callable(found) and bool(typing.get_type_hints(found)) if member[0] == "method" \
+                else _by_member_annotation(a, member[1]) is not _by_proto_missing
+        except Exception:
+            return False
+    members = [member for member in _by_protocol_members(b, attrs) if annotated(member)]
+    try:
+        return _by_protocol_class_is(a, members, hasattr)
+    except TypeError:
+        return True
+
+def _by_class_is_sub(a, b):
+    # a class relates to another through the bases the checker reads, and to a protocol through
+    # its members. being registered with an abc is something the runtime says and the checker
+    # doesn't, so a class with no `__subclasshook__` of its own only has what derives from it
+    if _by_has_ancestor(a, b):
+        return True
+    attrs = _by_protocol_attrs(b)
+    if attrs is None and (_by_told_row(b) is not None or "__subclasshook__" not in b.__dict__):
+        return False
+    # a protocol has the members it declares, and not whatever every object has
+    declared = _by_protocol_attrs(a)
+    if declared is not None:
+        return attrs is not None and attrs <= declared
+    if attrs is None:
+        try:
+            return issubclass(a, b)
+        except TypeError:
+            return False
+    try:
+        if not issubclass(a, b):
+            return False
+    except TypeError:
+        # a protocol that isn't runtime checkable, or one with data members
+        pass
+    return _by_class_has_members(a, b, attrs)
 
 def _by_tuple_parts(args):
     # a tuple's elements as what comes before its unbounded run, the run, and what comes after
@@ -1301,15 +1686,9 @@ def _by_tuple_parts(args):
         args = ()
     if len(args) == 2 and args[1] is Ellipsis:
         return (), args[0], ()
-    import typing
-    unpack = getattr(typing, "Unpack", _by_absent)
     before, run, after = [], None, []
     for element in args:
-        unpacked = None
-        if getattr(element, "__unpacked__", False):
-            unpacked = element
-        elif getattr(element, "__origin__", None) is unpack:
-            unpacked = element.__args__[0]
+        unpacked = _by_unpacked(element)
         if getattr(unpacked, "__origin__", None) is tuple:
             head, middle, tail = _by_tuple_parts(unpacked.__args__)
         else:
@@ -1341,18 +1720,10 @@ def _by_tuple_args(a):
     args = _by_specialize(a, tuple)
     return args, args is not None
 
-def _by_tuple_is_sub(a, b, seen, gradual=True):
-    origin = getattr(a, "__origin__", a)
-    if not (isinstance(origin, type) and issubclass(origin, tuple)):
-        return False
-    a_args, known = _by_tuple_args(a)
-    if not known:
-        return False
-    if a_args is None:
-        return gradual and origin is tuple
-    head, run, tail = _by_tuple_parts(a_args)
-    b_head, b_run, b_tail = _by_tuple_parts(b.__args__)
-    is_sub = lambda x, y: _by_is_sub(x, y, seen)
+def _by_elements_ok(actual, expected, is_sub):
+    # whether a list of elements, either of which may hold an unbounded run, fits another
+    head, run, tail = _by_tuple_parts(actual)
+    b_head, b_run, b_tail = _by_tuple_parts(expected)
     if b_run is None:
         return (
             run is None
@@ -1378,6 +1749,17 @@ def _by_tuple_is_sub(a, b, seen, gradual=True):
         and all(is_sub(element, b_run) for element in middle)
     )
 
+def _by_tuple_is_sub(a, b, seen, gradual=True):
+    origin = getattr(a, "__origin__", a)
+    if not (isinstance(origin, type) and issubclass(origin, tuple)):
+        return False
+    a_args, known = _by_tuple_args(a)
+    if not known:
+        return False
+    if a_args is None:
+        return gradual and origin is tuple
+    return _by_elements_ok(a_args, b.__args__, lambda x, y: _by_is_sub(x, y, seen))
+
 def _by_callable_is_sub(a, b, seen):
     from collections.abc import Callable
     if getattr(a, "__origin__", a) is not Callable:
@@ -1394,6 +1776,46 @@ def _by_callable_is_sub(a, b, seen):
     return len(a_params) == len(b_params) and all(
         _by_is_sub(y, x, seen) for x, y in zip(a_params, b_params)
     )
+
+def _by_class_call_is_sub(a, b, seen):
+    # what calling a class is, is its constructor, which the checker tells the runtime where a
+    # `type[C]` is read. `type` and `type[object]` could be any class, and the checker reads
+    # calling one as it would calling something it knows nothing of
+    args = getattr(a, "__args__", ())
+    target = _by_type_normal(args[0]) if args else object
+    if target is object:
+        return True
+    arms = _by_union_args(target)
+    if arms is not None:
+        return all(_by_class_call_is_sub(type[arm], b, seen) for arm in arms)
+    klass = getattr(target, "__origin__", target)
+    row = _by_told_row(klass) if isinstance(klass, type) else None
+    if row is None:
+        return False
+    told_args = getattr(target, "__args__", ())
+    return any(_by_constructor_is_sub(constructor, told_args, b, seen) for constructor in row[4])
+
+def _by_constructor_is_sub(constructor, args, b, seen):
+    required, params, rest, returned = constructor
+    b_params, b_return = b.__args__[:-1], b.__args__[-1]
+    try:
+        if not _by_is_sub(_by_told_type(returned, args), b_return, seen):
+            return False
+        if b_params == (Ellipsis,):
+            return True
+        if len(b_params) < required or (rest is None and len(b_params) > len(params)):
+            return False
+        return all(
+            _by_is_sub(
+                param,
+                _by_told_type(params[index] if index < len(params) else rest, args),
+                seen,
+            )
+            for index, param in enumerate(b_params)
+        )
+    except IndexError:
+        # a parameter of a class written with no arguments
+        return False
 
 def _by_is_sub(a, b, seen=()):
     # whether `a` is a subtype of `b`. this has the checker's answer wherever the runtime holds
@@ -1416,9 +1838,17 @@ def _by_is_sub(a, b, seen=()):
     arms = _by_union_args(a)
     if arms is not None:
         return all(_by_is_sub(arm, b, seen) for arm in arms)
+    conjuncts = _by_intersection_args(b)
+    if conjuncts is not None:
+        return all(_by_is_sub(a, conjunct, seen) for conjunct in conjuncts)
     values = _by_literal_args(a)
     if values is not None:
         return all(_by_value_is_sub(value, b, seen) for value in values)
+    conjuncts = _by_intersection_args(a)
+    if conjuncts is not None:
+        return any(_by_is_sub(conjunct, b, seen) for conjunct in conjuncts)
+    if a is getattr(typing, "LiteralString", _by_absent):
+        return _by_is_sub(str, b, seen)
     arms = _by_union_args(b)
     if arms is not None and any(_by_is_sub(a, arm, seen) for arm in arms):
         return True
@@ -1438,19 +1868,56 @@ def _by_is_sub(a, b, seen=()):
     if b_origin is tuple:
         return _by_tuple_is_sub(a, b, seen)
     if b_origin is Callable:
+        if a_origin is type:
+            return _by_class_call_is_sub(a, b, seen)
         return _by_callable_is_sub(a, b, seen)
     if b_origin is type:
-        # `type` is covariant for the language rather than for any parameter it declares
+        # `type` is covariant for the language rather than for any parameter it declares, and
+        # says nothing of its own when it is written with no argument
         if a_origin is not type:
             return False
-        return not hasattr(a, "__args__") or _by_is_sub(a.__args__[0], b.__args__[0], seen)
+        a_class = a.__args__[0] if hasattr(a, "__args__") else object
+        return _by_is_sub(a_class, b.__args__[0], seen)
     mapped = _by_specialize(a, b_origin)
-    if mapped is None:
-        return _by_is_bare_generic(a, a_origin) and _by_class_is_sub(a_origin, b_origin)
     args = b.__args__
-    return len(mapped) == len(args) and all(
-        _by_variance_ok(x, y, code, seen)
-        for x, y, code in zip(mapped, args, _by_told_variance(b_origin, len(args)))
+    if mapped is None:
+        if _by_is_bare_generic(a, a_origin) and _by_class_is_sub(a_origin, b_origin):
+            return True
+        # a protocol the program wrote says what each of its members is, which one a stub declares
+        # doesn't say at runtime
+        attrs = None if _by_told_row(b_origin) is not None else _by_protocol_attrs(b_origin)
+        return attrs is not None and _by_class_has_members(a_origin, b, attrs)
+    return _by_arguments_ok(b_origin, mapped, args, _by_told_variance(b_origin, len(args)), seen)
+
+def _by_arguments_ok(origin, actual, expected, codes, seen=()):
+    # whether the type arguments `actual` fit `expected`, as the parameters of `origin` vary, a
+    # code each for `expected`. a `*Ts` takes the run the other parameters leave, and either
+    # side may leave that open
+    params = _by_type_params(origin)
+    if not any(_by_unpacked(argument) is not None for argument in (*actual, *expected)):
+        return len(actual) == len(expected) == len(codes) and all(
+            _by_variance_ok(x, y, code, seen) for x, y, code in zip(actual, expected, codes)
+        )
+    import typing
+    variadic = getattr(typing, "TypeVarTuple", ())
+    index = next((i for i, param in enumerate(params) if isinstance(param, variadic)), None)
+    if index is None:
+        return False
+    declared = _by_told_variance(origin, len(params))
+    after = len(params) - index - 1
+    if min(len(actual), len(expected)) < index + after:
+        return False
+    ends = (
+        all(_by_variance_ok(x, y, code, seen) for x, y, code in zip(actual[:index], expected[:index], declared))
+        and all(
+            _by_variance_ok(x, y, code, seen)
+            for x, y, code in zip(actual[len(actual) - after:], expected[len(expected) - after:], declared[index + 1:])
+        )
+    )
+    return ends and _by_elements_ok(
+        actual[index:len(actual) - after],
+        expected[index:len(expected) - after],
+        lambda x, y: _by_variance_ok(x, y, declared[index], seen),
     )
 
 def _by_is_bare_generic(a, origin):
@@ -1584,7 +2051,9 @@ def _by_method_matches(klass, name, params, ret):
 # annotations are read with `typing.get_type_hints` (resolving string
 # annotations and inherited members), falling back to a raw `__mro__` walk
 def _by_protocol_is(value, members):
-    klass = type(value)
+    return _by_protocol_class_is(type(value), members, lambda _, name: hasattr(value, name))
+
+def _by_protocol_class_is(klass, members, has):
     for member in members:
         kind = member[0]
         if kind == "attr":
@@ -1596,7 +2065,7 @@ def _by_protocol_is(value, members):
                 # written inside `__init__`. answering `False` would contradict
                 # the checker, which accepts that class as satisfying the
                 # protocol, so refuse to answer rather than answer wrongly
-                if hasattr(value, name):
+                if has(klass, name):
                     raise TypeError(
                         "cannot check `" + klass.__qualname__ + "." + name
                         + "` against a parameterized protocol: its type is declared "
@@ -1682,19 +2151,21 @@ _by_absent = object()
 # its arguments fixed rather than a subclass the program wrote
 #
 # each specialization composes what it binds with what its bases already bound
-# and resolves the chain, so `class B[U](A[U])` specialized as `B[int]` answers
-# `T` with `int` and not with `U`. `__orig_class__` is carried as a class
-# attribute, which is where the alias would have put it, so every reader of a
-# runtime specialization — `_parametric_is` included — sees the same thing it
-# saw before
+# and substitutes through them, so `class B[U](A[list[U]])` specialized as `B[int]`
+# answers `T` with `list[int]` and not with `list[U]`. what is bound is keyed by the
+# parameter itself, since a subclass's parameter may share the name of the one it
+# fills in. `__orig_class__` is carried as a class attribute, which is where the alias
+# would have put it, so every reader of a runtime specialization — `_parametric_is`
+# included — sees the same thing it saw before
 #
 # `_type_argument` answers one read. it takes the receiver rather than the
-# class so a `classmethod` can pass `cls` and everything else `self`, and it
-# raises rather than returning the `TypeVar` object the parameter would
-# otherwise still name — whether because nothing specialized the class or
-# because a base's argument was never filled in
+# class so a `classmethod` can pass `cls` and everything else `self`, and the
+# class the read is written in, whose parameter it names. it raises rather than
+# returning something the parameter would otherwise still name — whether because
+# nothing specialized the class or because a base's argument was never filled in
 def generic_class(cls):
     cls.__class_getitem__ = classmethod(_specialize)
+    cls.__by_reified_class__ = True
     return cls
 
 
@@ -1702,7 +2173,7 @@ def _specialize(cls, item):
     from types import GenericAlias
     from typing import TypeVar, TypeVarTuple
 
-    args = tuple(_by_literal_type(arg) for arg in (item if isinstance(item, tuple) else (item,)))
+    args = item if isinstance(item, tuple) else (item,)
     if "__by_type_arguments__" in cls.__dict__:
         raise TypeError(f"{cls.__name__} is already specialized")
     cache = cls.__dict__.get("__by_specializations__")
@@ -1719,30 +2190,27 @@ def _specialize(cls, item):
     if made is not None:
         return made
     params = cls.__type_params__
-    bound = {}
-    for base in reversed(cls.__mro__):
-        bound.update(base.__dict__.get("__by_type_arguments__") or {})
-    bound.update(_bind_type_params(params, args, {}, cls.__name__))
+    named = _bind_type_params(params, args, {}, cls.__name__)
+    own = {}
     for param in params:
-        if param.__name__ not in bound:
+        if param.__name__ not in named:
             raise TypeError(
                 f"too few type arguments for {cls.__name__}: "
                 f"no argument for {param.__name__!r}"
             )
-    for name, value in bound.items():
-        seen = {name}
-        while isinstance(value, (TypeVar, TypeVarTuple)) and value.__name__ in bound:
-            if value.__name__ in seen:
-                break
-            seen.add(value.__name__)
-            value = bound[value.__name__]
-        bound[name] = value
+        own[param] = named[param.__name__]
+    bound = {}
+    for base in reversed(cls.__mro__):
+        bound.update(base.__dict__.get("__by_type_arguments__") or {})
+    bound = {param: _by_bound_through(value, own) for param, value in bound.items()}
+    bound.update(own)
     namespace = {
         "__by_type_arguments__": bound,
         "__orig_class__": GenericAlias(cls, args),
         # the specialization declares nothing of its own, so a slotted class
         # stays slotted instead of gaining a `__dict__` here
         "__slots__": (),
+        "__reduce_ex__": _by_reduce_specialized,
     }
     # a specialization is the same class with its arguments fixed, not a
     # subclass the program wrote, so the hook that greets a subclass must not
@@ -1769,20 +2237,124 @@ def _specialize(cls, item):
     return made
 
 
-def _type_argument(owner, name):
-    from typing import TypeVar, TypeVarTuple
+def _by_bound_through(value, own):
+    # a pack is a tuple of type arguments rather than a type, and a keyword-variadic one a mapping
+    if isinstance(value, tuple):
+        return tuple(_by_subst(element, own) for element in value)
+    if isinstance(value, dict):
+        return {name: _by_subst(element, own) for name, element in value.items()}
+    return _by_subst(value, own)
 
+
+def _by_names_a_parameter(value):
+    from typing import TypeVar, TypeVarTuple
+    if isinstance(value, (tuple, list)):
+        return any(map(_by_names_a_parameter, value))
+    # a class holds the parameters it declares rather than any it is left with
+    if isinstance(value, type):
+        return False
+    return isinstance(value, (TypeVar, TypeVarTuple)) or bool(getattr(value, "__parameters__", ()))
+
+
+def _type_argument(owner, name, declaring=None):
     cls = owner if isinstance(owner, type) else type(owner)
-    bound = getattr(cls, "__by_type_arguments__", None)
-    value = _by_absent if bound is None else bound.get(name, _by_absent)
-    # a value still standing as a type parameter is a base's argument that
-    # nothing filled in, which means the instance came from the bare class
-    if value is _by_absent or isinstance(value, (TypeVar, TypeVarTuple)):
+    bound = getattr(cls, "__by_type_arguments__", None) or {}
+    value = _by_absent
+    # a read from outside a class names the nearest parameter of that name
+    for klass in ((declaring,) if declaring is not None else ()) + cls.__mro__:
+        param = next(
+            (param for param in getattr(klass, "__type_params__", ()) if param.__name__ == name),
+            None,
+        )
+        if param is not None:
+            value = bound.get(param, param)
+            break
+    # a bare class stands for the defaults of the parameters it leaves open
+    has_default = getattr(value, "has_default", None)
+    if has_default is not None and has_default():
+        value = value.__default__
+    # a value still naming a type parameter is a base's argument that nothing
+    # filled in, which means the instance came from the bare class
+    if value is _by_absent or _by_names_a_parameter(value):
         raise TypeError(
             f"{cls.__name__} has no type argument for {name!r}: it was not "
             f"constructed from a specialization"
         )
     return value
+
+
+# `pickle` looks a class up by name, and no name holds a specialization: `A[int]` calls itself `A`,
+# and `A` is another class. so what is pickled has `_ByPickledClass` where it has a specialization,
+# which is read back as the subscript it was made by. nothing can say how a class itself pickles
+# without a metaclass, and a metaclass of its own would conflict with whatever a subclass of the
+# specialization derives from as well
+class _ByPickledClass:
+    def __init__(self, target):
+        self.__by_class__ = target
+
+    # standing where a `__reduce__` puts the class's call, and `copy` calls that without pickling
+    def __call__(self, *args, **kwargs):
+        return self.__by_class__(*args, **kwargs)
+
+    def __reduce__(self):
+        target = self.__by_class__
+        if isinstance(target, type):
+            alias = target.__dict__["__orig_class__"]
+            return (_by_rebuild_pickled, (alias.__origin__, tuple(map(_by_pickled, alias.__args__))))
+        arms = _by_union_args(target)
+        if arms is not None:
+            return (_by_rebuild_pickled, (None, tuple(map(_by_pickled, arms))))
+        return (_by_rebuild_pickled, (target.__origin__, tuple(map(_by_pickled, target.__args__))))
+
+
+def _by_rebuild_pickled(origin, args):
+    if origin is None:
+        import typing
+        return typing.Union[args]
+    return origin[args]
+
+
+def _by_holds_specialization(t):
+    if isinstance(t, type):
+        return "__by_type_arguments__" in t.__dict__
+    if _by_literal_args(t) is not None:
+        return False
+    return any(map(_by_holds_specialization, getattr(t, "__args__", ())))
+
+
+def _by_pickled(t):
+    return _ByPickledClass(t) if _by_holds_specialization(t) else t
+
+
+def _by_newobj(cls, *args):
+    # `copyreg.__newobj__`, which `pickle` won't take with anything but the class for its first
+    # argument. `copy` calls this with what `pickle` would have read back from it
+    cls = getattr(cls, "__by_class__", cls)
+    return cls.__new__(cls, *args)
+
+
+def _by_newobj_ex(cls, args, kwargs):
+    cls = getattr(cls, "__by_class__", cls)
+    return cls.__new__(cls, *args, **kwargs)
+
+
+def _by_reduce_specialized(self, protocol):
+    import copyreg
+    reduce = next(
+        klass.__dict__["__reduce_ex__"]
+        for klass in type(self).__mro__
+        if "__reduce_ex__" in klass.__dict__
+        and klass.__dict__["__reduce_ex__"] is not _by_reduce_specialized
+    )
+    reduced = reduce(self, protocol)
+    if not isinstance(reduced, tuple):
+        return reduced
+    call, args = reduced[0], reduced[1]
+    if call is copyreg.__newobj__:
+        call = _by_newobj
+    elif call is copyreg.__newobj_ex__:
+        call = _by_newobj_ex
+    return (_by_pickled(call), tuple(map(_by_pickled, args)), *reduced[2:])
 
 
 # --- lazy imports ----------------------------------------------------------
@@ -1962,6 +2534,15 @@ def _lazy_from(lazy, mod, names, package=None):
 
 class _TyExtMarker:
     def __class_getitem__(cls, k): return cls
+
+
+# `A & B` is a type a test can be asked about, so what it is made of is kept
+class _ByIntersection:
+    __by_intersection__ = True
+
+    def __class_getitem__(cls, k):
+        from types import GenericAlias
+        return GenericAlias(cls, k)
 
 
 # `Character` is a concrete `str` subclass, so the grapheme accessors build real

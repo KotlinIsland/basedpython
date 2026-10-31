@@ -88,6 +88,8 @@ pub(crate) struct LazyImport<'src> {
     /// True when at least one `from ty_extensions import X` was rewritten to
     /// a `_TyExtMarker` assignment; the preamble must define the marker
     pub(crate) needs_ty_ext_marker: bool,
+    /// an `Intersection` assignment; the preamble must define what it is assigned
+    pub(crate) needs_intersection: bool,
     /// True when `Character` was imported from `ty_extensions`. unlike the
     /// other type-only names, `Character` is a *concrete* runtime class
     /// (`class Character(str)`) that the grapheme accessors construct, so the
@@ -123,6 +125,7 @@ impl<'src> LazyImport<'src> {
             holder,
             deferred: Vec::new(),
             needs_ty_ext_marker: false,
+            needs_intersection: false,
             needs_character_class: false,
         }
     }
@@ -380,6 +383,11 @@ impl<'src> LazyImport<'src> {
                 match name {
                     "JustFloat" => lines.push(format!("{bind} = {}", self.builtin_float)),
                     "JustComplex" => lines.push(format!("{bind} = {}", self.builtin_complex)),
+                    // a test can be asked about one of these, so it keeps what it is made of
+                    "Intersection" => {
+                        self.needs_intersection = true;
+                        lines.push(format!("{bind} = _ByIntersection"));
+                    }
                     _ => {
                         self.needs_ty_ext_marker = true;
                         lines.push(format!("{bind} = _TyExtMarker"));
@@ -775,6 +783,7 @@ pub(crate) fn polyfill_helpers(
     needs_module: bool,
     needs_from: bool,
     needs_ty_ext: bool,
+    needs_intersection: bool,
     needs_character_class: bool,
 ) -> Vec<crate::runtime::Helper> {
     let mut helpers = Vec::new();
@@ -789,6 +798,9 @@ pub(crate) fn polyfill_helpers(
     }
     if needs_ty_ext {
         helpers.push(crate::runtime::TY_EXT_MARKER);
+    }
+    if needs_intersection {
+        helpers.push(crate::runtime::INTERSECTION);
     }
     if needs_character_class {
         helpers.push(crate::runtime::CHARACTER);

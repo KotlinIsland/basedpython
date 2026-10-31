@@ -25,7 +25,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ruff_python_ast::visitor::transformer::Transformer;
 use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
@@ -1282,7 +1282,8 @@ pub(crate) fn run_against_source<'a>(
     project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
     let spelling_helpers = RefCell::new(BTreeSet::new());
-    let written = written.writing_spellings(&spelling_helpers, config.min_version);
+    let told_classes = RefCell::new(BTreeMap::new());
+    let written = written.writing_spellings(&spelling_helpers, &told_classes, config.min_version);
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -1507,7 +1508,10 @@ pub(crate) fn run_against_source<'a>(
     );
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
-    let auto_quote_pass = auto_quote::AutoQuote { quotes };
+    let auto_quote_pass = auto_quote::AutoQuote {
+        quotes,
+        told_forward: config.class_variance,
+    };
     let init_method_pass = init_method::InitMethod::new(
         source_ref,
         written,
@@ -1581,6 +1585,7 @@ pub(crate) fn run_against_source<'a>(
         written,
         source: source_ref,
         class_variance: config.class_variance,
+        told_classes: &told_classes,
         min_version: config.min_version,
     };
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
@@ -2097,6 +2102,10 @@ pub(crate) fn run_against_source<'a>(
         ctx.runtime.insert(crate::runtime::TEMPLATE_TEXT);
     }
     ctx.runtime.extend(spelling_helpers.take());
+    let told_classes = told_classes.take();
+    if config.class_variance && !told_classes.is_empty() {
+        ctx.runtime.insert(crate::runtime::TOLD);
+    }
     if !ctx.runtime.is_empty() {
         let helpers = ctx.runtime.iter().copied();
         match config.runtime_module.as_deref() {
@@ -2112,6 +2121,11 @@ pub(crate) fn run_against_source<'a>(
         }
     }
     ctx.required_imports.extend(definitions);
+    if config.class_variance && !told_classes.is_empty() {
+        let rows = told_classes.into_values().collect::<Vec<_>>().join(", ");
+        ctx.required_imports
+            .push(format!("{}(__name__, {rows})", crate::runtime::TOLD.name()));
+    }
     // who rewrote each statement, read before the list is put in order
     let rewritten_by = authorship.rewriters(&ctx.changed);
     ctx.changed.sort_unstable();
@@ -3162,7 +3176,7 @@ mod subsumed_lowerings {
                 "ParametricIsPass",
                 &[Lowering::TupleLiteralType],
                 "class A[T]: ...\ndef f(x: object):\n    return x is A[(1, \"a\")]\n",
-                &["_parametric_is(x, A[tuple[_by_lit(1), _by_lit(text=(97,))]], (3,))"],
+                &["_parametric_is(x, A[tuple[_by_lit(1), _by_lit(text=(97,))]], (1,))"],
                 &[],
             ),
             case(

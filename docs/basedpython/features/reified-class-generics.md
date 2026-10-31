@@ -78,7 +78,8 @@ class Box[T]:
 ```
 
 a `classmethod` is fine: it is handed the class, and a specialization *is* a
-class
+class. on the bare class there is no argument to read
+(`unspecialized-reified-generic`), unless a base or a default supplies it
 
 ```by
 class Box[T]:
@@ -86,7 +87,28 @@ class Box[T]:
     def kind(cls) -> object:
         return T
 
-Box[int].kind()   # int
+class Ints(Box[int]): pass
+
+class Defaulted[T = int]:
+    @classmethod
+    def kind(cls) -> object:
+        return T
+
+Box[int].kind()     # int
+Ints.kind()         # int
+Defaulted.kind()    # int
+Box.kind()          # error
+```
+
+`x is T` works in a method too, read through the instance's type argument:
+
+```by
+class Box[T]:
+    def holds(self, x: object) -> bool:
+        return x is T
+
+assert Box[int]().holds(1)
+assert not Box[int]().holds("a")
 ```
 
 ## declaring it
@@ -187,6 +209,21 @@ IntBox().kind()        # int
 Wrapper[str]().kind()  # str
 ```
 
+the argument may be built from the subclass's own parameters, and is substituted
+through however many bases it takes, even where a subclass calls its parameter what
+the base calls its own:
+
+```by
+class Listed[U](Box[list[U]]):
+    pass
+
+class Named[T](Box[(T, T)]):
+    pass
+
+Listed[int]().kind()   # list[int]
+Named[int]().kind()    # tuple[int, int]
+```
+
 a class that forwards its own parameter into a reified base is as reified as the
 base is: `U` is invariant too, and its constructions are solved and checked the
 same way
@@ -217,7 +254,7 @@ a: A[int] = A()
 @generic_class
 class A[T]:
     def f(self):
-        T = _type_argument(self, "T")
+        T = _type_argument(self, "T", __class__)
         print(T)
 
 a: A[int] = A[int]()
@@ -253,8 +290,9 @@ cost of the feature:
 
 - `typing.get_origin(A[int])` is `None` and `get_args` is empty — those read
     alias objects, and this is not one
-- `pickle` cannot find `A[int]` by name, so instances of a specialization do not
-    pickle
+- `pickle` cannot find `A[int]` by name. an instance of it pickles, and is read back
+    through the subscript, but the class itself does not, and nor does anything that
+    holds it where `typing` writes the pickle, such as an `Out[A[int]]()`
 - a `@dataclass`'s generated `__eq__` compares `type`, so an `A[int]` and an
     `A[str]` with equal fields are no longer equal
 - `A[int]` and `A[str]` are distinct classes, so anything keyed on `type(x)` sees

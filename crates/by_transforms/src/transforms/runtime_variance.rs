@@ -25,12 +25,20 @@
 //! class is left out, since what a base says is read through its arguments, and a static reader
 //! of the emitted python needs to be able to read a base
 //!
+//! what the checker read of a class of a stub is in no object the runtime holds either, the
+//! bases `class str(Sequence[str])` gives it above all. a module says so once, ahead of everything
+//! else, for each class it reads as a type: `_by_told(__name__, ("builtins:str", ...))`
+//!
 //! a use-site projection is a fact about one type argument rather than about the class. it
 //! stays in the argument, where the keyword is blanked out of everything else:
 //! `Box[out object]` is `Box[_by_out(object)]`. an annotation keeps the plain form for whoever
 //! reads it, and nothing evaluates a type parameter's bound in a way a test could see
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
+use ruff_python_ast::name::UnqualifiedName;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -46,6 +54,7 @@ pub(crate) struct RuntimeVariancePass<'src> {
     pub(crate) written: WrittenNames<'src>,
     pub(crate) source: &'src str,
     pub(crate) class_variance: bool,
+    pub(crate) told_classes: &'src RefCell<BTreeMap<String, String>>,
     pub(crate) min_version: PythonVersion,
 }
 
@@ -53,6 +62,11 @@ struct Telling<'a> {
     written: WrittenNames<'a>,
     source: &'a str,
     class_variance: bool,
+    told_classes: &'a RefCell<BTreeMap<String, String>>,
+    /// what `Self` is read as where the visitor is, in a method
+    receiver: Option<String>,
+    /// whether the statement being visited is directly in a class's body
+    in_class_body: bool,
     min_version: PythonVersion,
     types: &'a dyn TypeInfo,
     decorators: Vec<(TextRange, String)>,
@@ -87,9 +101,42 @@ fn is_written_whole(expr: &Expr) -> bool {
 
 impl Telling<'_> {
     fn visit_type(&mut self, expr: &Expr) {
+        self.tell(expr);
         let in_type = std::mem::replace(&mut self.in_type, true);
         self.visit_expr(expr);
         self.in_type = in_type;
+    }
+
+    fn tell(&self, expr: &Expr) {
+        if self.class_variance {
+            self.told_classes
+                .borrow_mut()
+                .extend(self.types.told_classes(expr));
+        }
+    }
+
+    /// what `Self` is read as in the body of the method `function`: its receiver's class, which is
+    /// the receiver itself in a `classmethod`. python has no value for `Self` to hold, and a test
+    /// can only ask about what is called through
+    fn receiver_of(function: &ast::StmtFunctionDef) -> Option<String> {
+        let decorated_as = |name: &str| {
+            function.decorator_list.iter().any(|decorator| {
+                UnqualifiedName::from_expr(&decorator.expression)
+                    .is_some_and(|qualified| qualified.segments().last() == Some(&name))
+            })
+        };
+        if decorated_as("staticmethod") {
+            return None;
+        }
+        let first = function.parameters.iter_non_variadic_params().next()?;
+        let name = first.parameter.name.as_str();
+        Some(
+            if decorated_as("classmethod") || function.name.as_str() == "__new__" {
+                name.to_owned()
+            } else {
+                format!("type({name})")
+            },
+        )
     }
 
     fn wrap(&mut self, range: TextRange, opening: String) {
@@ -140,11 +187,37 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
             self.visit_type(value);
             return;
         }
+        if let Stmt::FunctionDef(function) = stmt {
+            let receiver = if self.in_class_body {
+                Self::receiver_of(function)
+            } else {
+                self.receiver.clone()
+            };
+            let in_class_body = std::mem::replace(&mut self.in_class_body, false);
+            for decorator in &function.decorator_list {
+                self.visit_decorator(decorator);
+            }
+            self.visit_parameters(&function.parameters);
+            let outer = std::mem::replace(&mut self.receiver, receiver);
+            self.visit_body(&function.body);
+            self.receiver = outer;
+            self.in_class_body = in_class_body;
+            return;
+        }
         let Stmt::ClassDef(class) = stmt else {
             walk_stmt(self, stmt);
             return;
         };
         self.class(class);
+        if let Some(arguments) = &class.arguments {
+            if self.class_variance {
+                for base in &arguments.args {
+                    self.told_classes
+                        .borrow_mut()
+                        .extend(self.types.told_classes_of_base(base));
+                }
+            }
+        }
         for decorator in &class.decorator_list {
             self.visit_decorator(decorator);
         }
@@ -153,11 +226,24 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
                 self.visit_expr(&keyword.value);
             }
         }
+        let in_class_body = std::mem::replace(&mut self.in_class_body, true);
+        let receiver = self.receiver.take();
         self.visit_body(&class.body);
+        self.receiver = receiver;
+        self.in_class_body = in_class_body;
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if self.in_type && is_written_whole(expr) {
+            return;
+        }
+        if self.in_type
+            && matches!(expr, Expr::Name(_) | Expr::Attribute(_))
+            && let Some(receiver) = &self.receiver
+            && self.types.reads_typing_self(expr)
+        {
+            self.wrappers
+                .push((expr.range(), vec![Fragment::Lit(receiver.clone())]));
             return;
         }
         if let Some((variance, inner)) = use_site_variance_marker(expr) {
@@ -256,6 +342,9 @@ impl TypeAwarePass for RuntimeVariancePass<'_> {
             written: self.written,
             source: self.source,
             class_variance: self.class_variance,
+            told_classes: self.told_classes,
+            receiver: None,
+            in_class_body: false,
             min_version: self.min_version,
             types,
             decorators: Vec::new(),

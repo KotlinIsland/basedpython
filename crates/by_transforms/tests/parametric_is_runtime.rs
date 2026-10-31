@@ -1050,13 +1050,6 @@ def v(value: object) -> object:
 def cell[T](value: object) -> bool:
     return value is T
 
-def raises_type_error(call) -> bool:
-    try:
-        call()
-    except TypeError:
-        return True
-    return False
-
 class Proto(Protocol):
     def method(self) -> int: ...
 class Conforms:
@@ -1071,15 +1064,23 @@ class Checkable(Protocol):
 class WrongSignature:
     def method(self) -> str:
         return ""
+class Empty: pass
 
-# a protocol no `issubclass` can read: nothing shows the relation but a declared base
-assert not v(Out[Conforms]()) is Out[Proto]
+# a protocol is related to by the members of the class, of the types its annotations say
+assert v(Out[Conforms]()) is Out[Proto]
 assert v(Out[Declares]()) is Out[Proto]
-# a runtime checkable one answers as `isinstance` does, by the members being there
+assert not v(Out[WrongSignature]()) is Out[Proto]
+assert not v(Out[Empty]()) is Out[Proto]
 assert v(Out[Conforms]()) is Out[Checkable]
-assert v(Out[WrongSignature]()) is Out[Checkable]
-# in the cell itself, `isinstance` refuses it
-assert raises_type_error(lambda: cell[Proto](Conforms()))
+assert not v(Out[WrongSignature]()) is Out[Checkable]
+# in the cell itself it answers as the target written in place does, which for a runtime checkable
+# protocol is `isinstance`, by the members being there
+assert cell[Proto](Conforms())
+assert cell[Proto](Declares())
+assert not cell[Proto](WrongSignature())
+assert not cell[Proto](Empty())
+assert cell[Checkable](Conforms())
+assert cell[Checkable](WrongSignature())
 
 class Movie(TypedDict):
     name: str
@@ -1090,7 +1091,7 @@ assert v(Out[Movie]()) is Out[Movie]
 assert not v(Out[Movie]()) is Out[Sequel]
 assert not v(Out[Movie]()) is Out[dict]
 assert not v(Out[Movie]()) is Out[dict[str, object]]
-assert raises_type_error(lambda: cell[Movie]({"name": "a"}))
+assert not cell[Movie]({"name": "a"})
 
 # a callable type relates to another by its signature, and to nothing else
 assert v(Out[(object) -> bool]()) is Out[(int) -> int]
@@ -1112,16 +1113,13 @@ Id = NewType("Id", int)
 assert v(Out[Id]()) is Out[int]
 assert not v(Out[int]()) is Out[Id]
 
-# a class of the standard library whose stub fixes its arguments, which the runtime can't see
-assert not v(Out[str]()) is Out[Iterable[str]]
-# or that only has the methods of an abstract class, which says nothing about its arguments
+# a class that only has the methods of an abstract class, which says nothing about its arguments
 assert not v(Out[enumerate[int]]()) is Out[Iterator[int]]
 assert not v(Out[enumerate[int]]()) is Out[Iterator[tuple[int, int]]]
 print("ok")
 "#;
 
-/// what the runtime has no way of reading says no, or refuses as `isinstance` does, rather than
-/// a `True` the checker wouldn't give
+/// what the runtime has no way of reading says no, rather than a `True` the checker wouldn't give
 #[test]
 fn what_the_runtime_cannot_decide_never_answers_a_true_the_checker_would_not() {
     let Some(python) = common::python(PythonVersion::PY312) else {
@@ -1206,8 +1204,8 @@ assert not cell[Color.RED](Color.BLUE)
 assert cell[Literal[1]](1)
 assert cell[Literal[1, 2]](2)
 assert not cell[Literal[1]](2)
-assert build[1]() == 1
-assert Builds[1]().make() == 1
+assert build[1]() is None
+assert Builds[1]().make() is None
 assert id(pickle.loads(pickle.dumps(read[1]()))) == id(read[1]())
 
 # nested, and on a method, and held on to
@@ -1430,4 +1428,542 @@ fn a_target_another_lowering_rewrites_checks_correctly_at_runtime() {
         return;
     };
     run_program(&python, LOWERED_TARGETS_PROGRAM);
+}
+
+const A_LITERAL_IS_NOT_A_CLASS_PROGRAM: &str = r#"
+from enum import Enum
+import copy
+import pickle
+from typing import Literal
+
+class E(Enum):
+    A = 1
+    B = 2
+
+def read[T]() -> object:
+    return T
+
+def inferred[T](t: T) -> object:
+    return T
+
+def is_class[T]() -> bool:
+    return isinstance(T, type)
+
+def constructed[T: int](x: T) -> object:
+    if isinstance(T, type):
+        return T(x + 1)
+    return "not a class"
+
+def members[T: E]() -> object:
+    if isinstance(T, type):
+        return [member for member in T]
+    return "not a class"
+
+def is_str[T](x: T) -> bool:
+    return isinstance(T, type) and issubclass(T, str)
+
+def made[T: int]() -> object:
+    if isinstance(T, type):
+        return T.__new__(T)
+    return "not a class"
+
+def cell[T](x: object) -> bool:
+    return x is T
+
+class Box[T]:
+    def read(self) -> object:
+        return T
+
+# a literal is a type argument and not a class, so it fails the guard wherever it came from
+assert not is_class[1]()
+assert not is_class["a"]()
+assert not is_class[E.A]()
+assert not is_class[1 | 2]()
+assert is_class[int]()
+assert constructed(1) == "not a class"
+assert constructed[int](1) == 2
+assert members[E.A]() == "not a class"
+assert members[E]() == [E.A, E.B]
+assert not is_str("a")
+assert is_str[str]("a")
+assert made[1]() == "not a class"
+
+# what it is, is what `typing` calls it
+assert read[1]() == Literal[1]
+assert repr(read[1]()) == "typing.Literal[1]"
+assert repr(Box[1]().read()) == "typing.Literal[1]"
+assert id(read[1]()) == id(inferred(1))
+assert id(read["a"]()) == id(inferred("a"))
+assert read[1 | 2]() == Literal[1] | Literal[2]
+assert read[True]() != read[1]()
+
+# and `x is T` still asks whether `x` is that value
+assert cell[1](1)
+assert not cell[1](True)
+assert not cell[1](2)
+assert cell[E.A](E.A)
+assert not cell[E.A](E.B)
+assert cell[b"x"](b"x")
+
+# nothing about it is left on an instance
+class F[T]:
+    pass
+assert "__by_values__" not in vars(F[1]())
+assert id(pickle.loads(pickle.dumps(read[1]()))) == id(read[1]()) or pickle.loads(pickle.dumps(read[1]())) == read[1]()
+assert copy.deepcopy(read[1]()) == read[1]()
+print("ok")
+"#;
+
+#[test]
+fn a_literal_type_argument_is_not_a_class() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, A_LITERAL_IS_NOT_A_CLASS_PROGRAM);
+}
+
+const SUBSTITUTED_THROUGH_BASES_PROGRAM: &str = r#"
+from typing import get_args
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class A[T]:
+    def t(self) -> object:
+        return T
+    @classmethod
+    def ct(cls) -> object:
+        return T
+    def holds(self, x: object) -> bool:
+        return chk[T](x)
+
+class C[U](A[list[U]]): pass
+class D(C[str]): pass
+class F[U](A[(U, U)]): pass
+class G[U](A[Out[U]]): pass
+class H[U](A[U | None]): pass
+class I[U](A[(U) -> int]): pass
+class J[U, V](A[dict[U, list[V]]]): pass
+class K[U](C[Out[U]]): pass
+
+assert C[int]().t() == list[int]
+assert C[int].ct() == list[int]
+assert D().t() == list[str]
+assert F[int]().t() == tuple[int, int]
+assert G[bool]().holds(Out[bool]())
+assert G[bool]().holds(Out[int]()) is False
+assert H[int]().t() == (int | None)
+assert get_args(I[str]().t()) == ([str], int)
+assert J[str, int]().t() == dict[str, list[int]]
+assert K[int]().t() == list[Out[int]]
+
+# a class that answers a subscript for itself is asked nothing while one is rebuilt
+class Own[out V]:
+    def __class_getitem__(cls, item: object) -> object:
+        return ("mine", item)
+class W[U](A[Own[U]]): pass
+assert id(W[int]().t().__origin__) == id(Own)
+assert W[int]().t().__args__ == (int,)
+
+# a parameter of the subclass may share its name with the one it fills in
+class Same[T](A[list[T]]):
+    def own(self) -> object:
+        return T
+assert Same[int]().t() == list[int]
+assert Same[int]().own() == int
+
+# a deeper chain that reuses the name as well
+class Deeper[T](Same[Out[T]]):
+    def deepest(self) -> object:
+        return T
+assert Deeper[int]().t() == list[Out[int]]
+assert Deeper[int]().own() == Out[int]
+assert Deeper[int]().deepest() == int
+print("ok")
+"#;
+
+/// a reified base's argument may be built from the parameters of the class that derives it
+#[test]
+fn a_type_argument_is_substituted_through_reified_bases() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, SUBSTITUTED_THROUGH_BASES_PROGRAM);
+}
+
+const FORWARD_REFERENCE_ARGUMENT_PROGRAM: &str = r#"
+class Out[out T]: pass
+def chk[T](x: object) -> bool:
+    return x is T
+
+class Other: pass
+x = Out[Later]()
+class S(Out[Later]): pass
+y = list[Later]
+class L(y): pass
+z = Out[list[Later]]()
+class Unrelated: pass
+class Later(Other): pass
+
+assert chk[Out[Later]](x)
+assert chk[Out[Other]](x)
+assert not chk[Out[Unrelated]](x)
+assert not chk[Out[int]](x)
+assert chk[Out[Later]](S())
+assert chk[Out[Other]](S())
+assert not chk[Out[Unrelated]](S())
+assert chk[list[Later]](L())
+assert not chk[list[Other]](L())
+assert chk[Out[list[Later]]](z)
+assert x is Out[Later]
+assert x is Out[Other]
+assert not x is Out[Unrelated]
+print("ok")
+"#;
+
+/// a type argument python evaluates before the class it names exists is read once it does
+#[test]
+fn a_forward_reference_type_argument_relates_as_the_class_it_names() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, FORWARD_REFERENCE_ARGUMENT_PROGRAM);
+}
+
+const STUB_RELATION_PROGRAM: &str = r#"
+from collections.abc import Callable, Collection, Iterable, Mapping, MutableSequence, Sequence, Set
+from typing import Hashable, LiteralString, NamedTuple, Sized, SupportsInt, TypedDict
+import numbers
+
+class Out[out T]: pass
+class In[in T]: pass
+class A: pass
+class C: pass
+class D(A, C): pass
+class TD(TypedDict):
+    a: int
+class NT(NamedTuple):
+    a: int
+class IntS(Sequence[int]): pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# a class of the standard library has the bases its stub gives it
+okay: Out[Sequence[str]] = Out[str]()
+assert chk[Out[Sequence[str]]](Out[str]())
+assert chk[Out[Sequence[object]]](Out[str]())
+assert chk[Out[Iterable[object]]](Out[str]())
+assert not chk[Out[Sequence[int]]](Out[str]())
+assert chk[Out[Sequence[str]]](Out["a"]())
+assert chk[Out[Sequence[int]]](Out[bytes]())
+assert chk[Out[Collection[int]]](Out[bytearray]())
+assert chk[Out[Iterable[int]]](Out[memoryview]())
+assert not chk[Out[Sequence[str]]](Out[bytes]())
+assert chk[Out[Iterable[object]]](Out[dict[str, int]]())
+assert chk[Out[Iterable[str]]](Out[dict[str, int]]())
+assert not chk[Out[Iterable[int]]](Out[dict[str, int]]())
+assert chk[Out[Iterable[object]]](Out[Mapping[str, int]]())
+assert chk[Out[MutableSequence[int]]](Out[list[int]]())
+assert not chk[Out[MutableSequence[int]]](Out[list[bool]]())
+assert chk[Out[Sequence[int]]](Out[list[bool]]())
+assert chk[Out[Sequence[int]]](Out[IntS]())
+assert chk[Out[Iterable[int]]](Out[IntS]())
+assert not chk[Out[Iterable[str]]](Out[IntS]())
+assert chk[In[str]](In[Sequence[str]]())
+
+# the element type of a tuple is what its base is specialized with
+assert chk[Out[Sequence[object]]](Out[(int, str)]())
+assert chk[Out[Sequence[int | str]]](Out[(int, str)]())
+assert not chk[Out[Sequence[int]]](Out[(int, str)]())
+assert chk[Out[Sequence[int]]](Out[tuple[int, ...]]())
+assert chk[Out[Collection[int]]](Out[tuple[bool, ...]]())
+assert chk[Out[Sequence[int]]](Out[NT]())
+assert not chk[Out[Sequence[str]]](Out[NT]())
+
+# a `TypedDict` is a `Mapping[str, object]`, and no `dict`
+assert chk[Out[Mapping[str, object]]](Out[TD]())
+assert chk[Out[Iterable[object]]](Out[TD]())
+assert chk[Out[Sized]](Out[TD]())
+assert not chk[Out[Mapping[str, int]]](Out[TD]())
+assert not chk[Out[dict[str, object]]](Out[TD]())
+
+# what the stub doesn't say the runtime's registrations don't say either
+assert not chk[Out[numbers.Number]](Out[int]())
+assert not chk[Out[numbers.Number]](Out[1]())
+assert not chk[Out[numbers.Number]](Out[float]())
+
+# a protocol has the members it declares, and nothing an object happens to have
+assert not chk[Out[Hashable]](Out[Iterable[int]]())
+assert not chk[Out[Hashable]](Out[Sized]())
+assert not chk[Out[Hashable]](Out[SupportsInt]())
+assert chk[Out[Sized]](Out[Collection[int]]())
+assert chk[Out[Hashable]](Out[int]())
+assert not chk[Out[Hashable]](Out[list[int]]())
+
+# a class's type parameter is covariant in `type`, and `type` itself is `type[object]`
+assert not chk[Out[type[int]]](Out[type]())
+assert chk[Out[type[object]]](Out[type]())
+assert chk[Out[type]](Out[type[int]]())
+assert chk[Out[type[int]]](Out[type[bool]]())
+
+# an intersection holds what all of its members hold
+assert chk[Out[A & C]](Out[D]())
+assert chk[Out[A]](Out[A & C]())
+assert chk[Out[C]](Out[A & C]())
+assert not chk[Out[A & C]](Out[A]())
+assert not chk[Out[D]](Out[A & C]())
+assert chk[A & C](D())
+assert not chk[A & C](A())
+
+# a class is called as its constructor says
+assert chk[Out[(bool) -> object]](Out[type[int]]())
+assert chk[Out[() -> int]](Out[type[int]]())
+assert chk[Out[(...) -> int]](Out[type[bool]]())
+assert chk[Out[() -> bool]](Out[type[bool]]())
+assert not chk[Out[() -> bool]](Out[type[int]]())
+assert not chk[Out[(object) -> int]](Out[type[int]]())
+assert chk[Out[(int) -> str]](Out[type]())
+assert chk[Out[(int) -> str]](Out[type[object]]())
+print("ok")
+"#;
+
+/// the bases a stub gives a class are in no runtime object, so the checker says what they are
+#[test]
+fn a_stub_class_relates_as_its_stub_says() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, STUB_RELATION_PROGRAM);
+}
+
+const TYPE_CELL_PROGRAM: &str = r#"
+from enum import Enum
+
+class A: pass
+class B(A): pass
+class Color(Enum):
+    RED = 1
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+def a(x: object) -> bool:
+    return x is type[A]
+def b(x: object) -> bool:
+    return x is type[object]
+def i(x: object) -> bool:
+    return x is type[int]
+def u(x: object) -> bool:
+    return x is type[int | str]
+
+values: list[object] = [A, B, int, bool, str, type, Color, A(), 1, None, list[int]]
+for value in values:
+    assert a(value) == chk[type[A]](value), value
+    assert b(value) == chk[type[object]](value), value
+    assert i(value) == chk[type[int]](value), value
+    assert u(value) == chk[type[int | str]](value), value
+
+assert chk[type[A]](B)
+assert chk[type[A]](A)
+assert not chk[type[B]](A)
+assert not chk[type[A]](A())
+assert chk[type[int]](int)
+assert chk[type[int]](bool)
+assert chk[type[int | str]](str)
+assert chk[type[object]](type)
+assert chk[type[Color]](Color)
+print("ok")
+"#;
+
+/// the docs promise `x is T` answers what the same target written in place does
+#[test]
+fn a_cell_holding_a_type_of_a_class_answers_as_the_target_in_place_does() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, TYPE_CELL_PROGRAM);
+}
+
+const UNUSED_PARAMETER_PROGRAM: &str = r#"
+class P[T]: pass
+class Private[T]:
+    private x: T
+    def __init__(self, x: T):
+        self.x = x
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# the checker takes a parameter no member mentions for a covariant one
+assert chk[P[object]](P[bool]())
+assert not chk[P[bool]](P[object]())
+assert P[bool]() is P[object]
+assert not P[object]() is P[bool]
+# and one only a private member mentions for a bivariant one
+assert chk[Private[object]](Private[bool](True))
+assert chk[Private[bool]](Private[object](True))
+print("ok")
+"#;
+
+#[test]
+fn an_unused_type_parameter_relates_as_the_checker_says() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, UNUSED_PARAMETER_PROGRAM);
+}
+
+const PACKS_AND_SPECIAL_FORMS_PROGRAM: &str = r#"
+from collections.abc import Sequence
+from typing import LiteralString, Self
+
+class V[*Ts]: pass
+class M[A, *Ts, B]: pass
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# a tuple records no arguments, but its elements are there to ask
+assert chk[()](())
+assert not chk[()]((1,))
+assert chk[(int, str)]((1, "a"))
+assert not chk[(int, str)](("a", 1))
+assert not chk[(int, str)]((1,))
+assert chk[tuple[int, ...]](())
+assert chk[tuple[int, ...]]((1, True))
+assert not chk[tuple[int, ...]]((1, "a"))
+assert chk[(int, *tuple[str, ...], bool)]((1, "a", "b", True))
+assert not chk[(int, *tuple[str, ...], bool)]((1, "a", 2, True))
+assert chk[(1, "a")]((1, "a"))
+assert not chk[(1, "a")]((2, "a"))
+assert chk[Sequence[bool]]((True,))
+assert chk[Sequence[bool]](())
+assert not chk[Sequence[bool]]((1,))
+
+assert chk[V[()]](V[()]())
+assert not chk[V[()]](V[int]())
+assert not chk[V[int]](V[()]())
+assert chk[V[int, str]](V[int, str]())
+assert chk[V[*tuple[int, ...]]](V[int, int]())
+assert chk[V[*tuple[int, ...]]](V[()]())
+assert chk[V[*tuple[int, ...]]](V[bool, int]())
+assert not chk[V[*tuple[int, ...]]](V[int, str]())
+assert not chk[V[int, int]](V[*tuple[int, ...]]())
+assert chk[V[object, *tuple[int, ...]]](V[str, int, bool]())
+assert chk[M[int, str, bool]](M[int, str, bool]())
+assert chk[M[int, *tuple[str, ...], bool]](M[int, str, str, bool]())
+assert not chk[M[int, *tuple[str, ...], bool]](M[int, str, int, bool]())
+
+assert chk[Out[str]](Out[LiteralString]())
+assert chk[Out[LiteralString]](Out["a"]())
+assert chk[Out[LiteralString]](Out[LiteralString]())
+assert chk[Out[object]](Out[LiteralString]())
+assert not chk[Out[LiteralString]](Out[str]())
+assert not chk[Out[LiteralString]](Out[1]())
+assert not chk[Out[int]](Out[LiteralString]())
+
+class K:
+    def m(self) -> bool:
+        return chk[Out[K]](Out[Self]())
+    def other(self) -> bool:
+        return chk[Out[Sub]](Out[Self]())
+    @classmethod
+    def c(cls) -> bool:
+        return chk[Out[K]](Out[Self]())
+    def nested(self) -> bool:
+        def inner() -> bool:
+            return chk[Out[K]](Out[Self]())
+        return inner()
+class Sub(K): pass
+class Unrelated: pass
+assert K().m()
+assert Sub().m()
+assert not K().other()
+assert Sub().other()
+assert K.c()
+assert K().nested()
+print("ok")
+"#;
+
+#[test]
+fn a_pack_a_literal_string_and_self_relate_as_the_checker_says() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, PACKS_AND_SPECIAL_FORMS_PROGRAM);
+}
+
+const PICKLED_REIFIED_PROGRAM: &str = r#"
+import copy
+import pickle
+
+class R[T]:
+    def __init__(self, n: int = 0):
+        self.n = n
+    def t(self) -> object:
+        return T
+class S[T]:
+    __slots__ = ("n",)
+    def __init__(self):
+        self.n = 1
+    def t(self) -> object:
+        return T
+class D(R[str]): pass
+class Reduces[T]:
+    def __init__(self, n: int):
+        self.n = n
+    def __reduce__(self):
+        return (type(self), (self.n,))
+    def t(self) -> object:
+        return T
+
+def f[T]() -> object:
+    return T
+class H:
+    def m[T](self) -> object:
+        return T
+
+def round_trip[V](value: V) -> V:
+    return pickle.loads(pickle.dumps(value))
+
+for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+    made = pickle.loads(pickle.dumps(R[int](3), protocol))
+    assert made.t() == int
+    assert made.n == 3
+    assert id(type(made)) == id(R[int])
+    if protocol >= 2:
+        assert pickle.loads(pickle.dumps(S[int](), protocol)).n == 1
+    assert id(pickle.loads(pickle.dumps(f, protocol))) == id(f)
+    assert pickle.loads(pickle.dumps(f[int], protocol))() == int
+
+assert round_trip(D(4)).t() == str
+assert round_trip(D(4)).n == 4
+assert repr(round_trip(R[1]()).t()) == "typing.Literal[1]"
+assert round_trip(R[list[int]]()).t() == list[int]
+assert id(round_trip(R[R[int]]()).t()) == id(R[int])
+assert round_trip(R[list[R[int]]]()).t() == list[R[int]]
+assert round_trip(Reduces[int](2)).n == 2
+assert round_trip(Reduces[int](2)).t() == int
+assert round_trip(H().m[int])() == int
+
+# `copy` still works
+assert copy.copy(R[int](5)).t() == int
+assert copy.copy(R[int](5)).n == 5
+assert copy.deepcopy(R[int](5)).t() == int
+assert copy.copy(Reduces[int](5)).t() == int
+assert copy.deepcopy(Reduces[int](5)).t() == int
+print("ok")
+"#;
+
+/// `pickle` looks a class up by name, and no name holds a specialization
+#[test]
+fn a_specialized_instance_and_a_reified_function_can_be_pickled() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, PICKLED_REIFIED_PROGRAM);
 }
