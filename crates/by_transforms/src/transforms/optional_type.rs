@@ -209,7 +209,7 @@ impl<'src> OptionalTypePass<'src> {
 /// lowered when that constructor renders its nested types. The runtime
 /// `Optional[...]` import for nested `T??` is handled by [`OptionalTypePass`],
 /// which independently walks every type position.
-fn collect_edits(
+pub(crate) fn collect_edits(
     source: &str,
     written: WrittenNames,
     expr: &Expr,

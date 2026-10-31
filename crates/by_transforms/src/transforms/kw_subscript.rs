@@ -58,8 +58,14 @@ impl<'src> KwSubscript<'src> {
     /// every expression independently
     fn value_src(&mut self, expr: &Expr) -> String {
         if let (Some(reading), Some(types)) = (self.type_arguments, self.types)
-            && let Some((lowered, needs_import)) =
-                lower_literals(self.source, self.written, types, expr, reading)
+            && let Some((lowered, needs_import)) = lower_literals(
+                self.source,
+                self.written,
+                types,
+                expr,
+                reading,
+                self.min_version,
+            )
         {
             self.needs_literal_import |= needs_import;
             return lowered;

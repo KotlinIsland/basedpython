@@ -7,7 +7,6 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::Config;
 use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::transforms::callable::CallableSyntax;
-use crate::transforms::optional_type;
 use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
@@ -348,19 +347,8 @@ impl<'src> TupleLiteralType<'src> {
                     self.unpack(&value_src, Some(&s.value))
                 }
             }
-            // a plain element type — also lower a nested `?` (`(int, str?)`),
-            // which `transform_annotation` doesn't handle. element-scoped, so the
-            // tuple's whole-expression edit subsumes the optional pass's edit
             _ => self
                 .transform_annotation(elt)
-                .or_else(|| {
-                    optional_type::rewrite_type_expr(
-                        self.source,
-                        self.written,
-                        elt,
-                        self.min_version,
-                    )
-                })
                 .unwrap_or_else(|| self.fallback_src(elt)),
         }
     }
