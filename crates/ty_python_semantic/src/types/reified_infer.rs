@@ -47,9 +47,9 @@ use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
 use crate::types::literal::{LiteralValueType, LiteralValueTypeKind};
 use crate::types::protocol_class::ReifiedMember;
-use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
-use crate::types::told_classes::{told_classes_of_class, told_classes_of_type};
+use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling, SpellingHelper};
 use crate::types::signatures::Signature;
+use crate::types::told_classes::{told_classes_of_class, told_classes_of_type};
 use crate::types::tuple::Tuple;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
@@ -347,6 +347,15 @@ pub(crate) enum TypeParamCells<'a, 'db> {
         file: ProgramFile<'db>,
         scope: FileScopeId,
     },
+    /// those the source reifies, in a spelling of a type written in place of a name in the code
+    /// of `scope`, which the program runs for `min_version`. a class is read by what names it
+    /// there, rather than by a name of the module's own ([`spell_class_name`]), and a subscript
+    /// the runtime may refuse goes through the helper that asks it
+    WrittenIn {
+        file: ProgramFile<'db>,
+        scope: FileScopeId,
+        min_version: PythonVersion,
+    },
 }
 
 impl<'a, 'db> TypeParamCells<'a, 'db> {
@@ -377,6 +386,10 @@ impl<'a, 'db> TypeParamCells<'a, 'db> {
             Self::Visible { cells, file, scope } => {
                 !type_param_hidden_at(db, bound_typevar, file, scope)
                     && cells.has_cell(db, bound_typevar)
+            }
+            Self::WrittenIn { file, scope, .. } => {
+                !type_param_hidden_at(db, bound_typevar, file, scope)
+                    && is_reified_function_typevar(db, bound_typevar)
             }
         }
     }
@@ -927,15 +940,18 @@ fn spell_type<'db>(
         Type::Restricted(restricted) if restricted.modifier(db) == TypeModifier::Final => {
             spell_type(db, env, file, restricted.type_argument(db), cells)
         }
-        Type::LiteralValue(literal) => match literal_value_spelling(db, env, file, literal) {
-            LiteralValueSpelling::Value(value) => Some(
-                RuntimeSpelling::literal(&value).telling(told_classes_of_type(db, env, file, ty)),
-            ),
-            LiteralValueSpelling::Unknown => None,
-            LiteralValueSpelling::NotRecordable => {
-                spell_type(db, env, file, literal.fallback_instance(db, env), cells)
+        Type::LiteralValue(literal) => {
+            match literal_value_spelling(db, env, file, literal, cells) {
+                LiteralValueSpelling::Value(value) => Some(
+                    RuntimeSpelling::literal(&value)
+                        .telling(told_classes_of_type(db, env, file, ty)),
+                ),
+                LiteralValueSpelling::Unknown => None,
+                LiteralValueSpelling::NotRecordable => {
+                    spell_type(db, env, file, literal.fallback_instance(db, env), cells)
+                }
             }
-        },
+        }
         Type::Union(union) => Some(RuntimeSpelling::join(
             union
                 .elements(db)
@@ -965,6 +981,7 @@ fn literal_value_spelling<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     literal: LiteralValueType<'db>,
+    cells: TypeParamCells<'_, 'db>,
 ) -> LiteralValueSpelling {
     LiteralValueSpelling::Value(match literal.kind() {
         LiteralValueTypeKind::Bool(value) => {
@@ -974,7 +991,8 @@ fn literal_value_spelling<'db>(
         LiteralValueTypeKind::String(value) => RuntimeSpelling::string(value.value(db)),
         LiteralValueTypeKind::Bytes(value) => RuntimeSpelling::bytes(value.value(db)),
         LiteralValueTypeKind::Enum(member) => {
-            let Some(mut class) = spell_class_literal(db, env, file, member.enum_class(db)) else {
+            let Some(mut class) = spell_class_name(db, env, file, member.enum_class(db), cells)
+            else {
                 return LiteralValueSpelling::Unknown;
             };
             class.push_str(&format!(".{}", member.name(db)));
@@ -1004,116 +1022,241 @@ fn spell_class_with<'db>(
     cells: TypeParamCells<'_, 'db>,
 ) -> Option<RuntimeSpelling> {
     match class {
-        ClassType::NonGeneric(literal) => spell_class_literal(db, env, file, literal),
+        ClassType::NonGeneric(literal) => spell_class_name(db, env, file, literal, cells),
         ClassType::Generic(alias) => {
             let origin = ClassLiteral::Static(alias.origin(db));
-            let mut spelling = spell_class_literal(db, env, file, origin)?;
-            if let Some(variances) = variances_told_at_a_subscript(db, origin) {
-                spelling = RuntimeSpelling::telling_variance(&spelling, &variances);
-            }
-            let arguments = spell_specialization_arguments(
-                db,
-                env,
-                file,
-                origin,
-                alias.specialization(db),
-                cells,
-            )
-            .ok()?;
-            if crate::types::subscript::subscript_calls_the_class(
-                db,
-                env,
-                Type::ClassLiteral(origin),
-            ) {
-                return Some(RuntimeSpelling::own_subscript(&spelling, &arguments));
-            }
-            spelling.push_str("[");
-            spelling.push(&arguments);
-            spelling.push_str("]");
-            Some(spelling)
+            let name = spell_class_name(db, env, file, origin, cells)?;
+            spell_specialization_of(db, env, file, name, alias, cells)
         }
     }
 }
 
-/// what a name or attribute standing as a type argument at `site` is read as when what it
-/// evaluates to says less. a generic class whose parameters its defaults solve is the
+/// the specialization `alias` of the class the expression `name` evaluates to
+fn spell_specialization_of<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    mut name: RuntimeSpelling,
+    alias: GenericAlias<'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Option<RuntimeSpelling> {
+    let origin = ClassLiteral::Static(alias.origin(db));
+    if let Some(variances) = variances_told_at_a_subscript(db, origin) {
+        name = RuntimeSpelling::telling_variance(&name, &variances);
+    }
+    let arguments =
+        spell_specialization_arguments(db, env, file, origin, alias.specialization(db), cells)
+            .ok()?;
+    let class = Type::ClassLiteral(origin);
+    if crate::types::subscript::subscript_calls_the_class(db, env, class) {
+        return Some(RuntimeSpelling::helper_subscript(
+            SpellingHelper::Specialization,
+            &name,
+            &arguments,
+        ));
+    }
+    if let TypeParamCells::WrittenIn { min_version, .. } = cells
+        && class_subscript_is_unattested(db, env, class, min_version)
+    {
+        return Some(RuntimeSpelling::helper_subscript(
+            SpellingHelper::Subscript,
+            &name,
+            &arguments,
+        ));
+    }
+    name.push_str("[");
+    name.push(&arguments);
+    name.push_str("]");
+    Some(name)
+}
+
+/// the expression that evaluates to `literal` where `cells` says the spelling is written
+fn spell_class_name<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    literal: ClassLiteral<'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Option<RuntimeSpelling> {
+    let TypeParamCells::WrittenIn {
+        file: written_in,
+        scope,
+        ..
+    } = cells
+    else {
+        return spell_class_literal(db, env, file, literal);
+    };
+    let name = literal.name(db);
+    match name_bound_at(db, written_in, scope, name) {
+        Some(bound) => {
+            if bound.ty.as_class_literal() == Some(literal) {
+                return Some(if bound.in_global_scope {
+                    RuntimeSpelling::global(db, file, name)
+                } else {
+                    RuntimeSpelling::text(name.as_str())
+                });
+            }
+        }
+        None => {
+            if builtins_symbol(db, env, name)
+                .place
+                .ignore_possibly_undefined()
+                .and_then(Type::as_class_literal)
+                == Some(literal)
+            {
+                return Some(RuntimeSpelling::text(name.as_str()));
+            }
+        }
+    }
+    spell_class_path(db, env, written_in, literal)
+}
+
+/// what the nearest scope around `scope` that binds `name` binds it to, every binding of it there
+/// counted: where a scope ends says nothing of a function that ends by returning
+struct NameBoundAt<'db> {
+    ty: Type<'db>,
+    in_global_scope: bool,
+}
+
+fn name_bound_at<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+    name: &str,
+) -> Option<NameBoundAt<'db>> {
+    let index = semantic_index(db, file);
+    let (found, _) = index.visible_ancestor_scopes(scope).find(|(ancestor, _)| {
+        ty_python_core::place_table(db, ancestor.to_scope_id(db, file))
+            .symbol_by_name(name)
+            .is_some_and(Symbol::is_bound)
+    })?;
+    let scope = found.to_scope_id(db, file);
+    Some(NameBoundAt {
+        ty: crate::place::symbol(
+            db,
+            scope,
+            name,
+            crate::place::ConsideredDefinitions::AllReachable,
+        )
+        .place
+        .ignore_possibly_undefined()?,
+        in_global_scope: found == FileScopeId::global(),
+    })
+}
+
+/// `literal` as reached from the top of the file it is in, or through the module it is in when
+/// that is another file, which the program has already imported if it holds a type made of it.
+/// a class local to a function has no such path, and a `private` one of another module is emitted
+/// under a name that module decides. what a stub declares may be in no module at runtime
+fn spell_class_path<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    written_in: ProgramFile<'db>,
+    literal: ClassLiteral<'db>,
+) -> Option<RuntimeSpelling> {
+    let qualified = literal.qualified_name(db);
+    let mut path = qualified.components_within_file();
+    if !path
+        .iter()
+        .all(|component| ruff_python_stdlib::identifiers::is_identifier(component))
+    {
+        return None;
+    }
+    path.push(literal.name(db).to_string());
+    let class_file = literal.file(db);
+    if class_file == written_in.file(db) {
+        let (root, rest) = path.split_first()?;
+        let mut spelling = RuntimeSpelling::global(db, class_file, &Name::new(root));
+        spelling.push_str(&format!(".{}", rest.join(".")));
+        return (!rest.is_empty()).then_some(spelling);
+    }
+    if class_file.source_type(db).is_stub()
+        || crate::types::visibility::private_symbols(db, class_file).contains(path[0].as_str())
+    {
+        return None;
+    }
+    let module = crate::types::display::importable_module_of(db, env, literal)?;
+    Some(RuntimeSpelling::in_module(&module, &path.join(".")))
+}
+
+/// what a name or attribute standing as a type argument in the code of `scope` is read as when
+/// what it evaluates to says less. a generic class whose parameters its defaults solve is the
 /// specialization the checker reads, while the class itself is every specialization of it, so
 /// the runtime has to be told the arguments. the name may be another for the class, or for a
-/// larger type holding it, and `read` is what it reads as. a `type` statement's alias is written
-/// with the arguments in its value, and evaluates to them
+/// larger type holding it, and `read` is what it reads as. `written_class` is the class the
+/// written expression evaluates to, if it evaluates to one, with that expression, which then
+/// spells it whatever else names it there. a `type` statement's alias is written with the
+/// arguments in its value, and evaluates to them
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate fact about the site"
+)]
 pub(crate) fn bare_type_argument_spelling<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     read: Type<'db>,
-    through_module: Option<(ClassLiteral<'db>, RuntimeSpelling)>,
+    written_class: Option<(ClassLiteral<'db>, RuntimeSpelling)>,
     site: RuntimeSite<'db>,
+    written_in: (ProgramFile<'db>, FileScopeId),
     min_version: PythonVersion,
 ) -> Option<RuntimeSpelling> {
-    /// whether `read` holds a class its defaults solve. `None` when it holds a generic class
-    /// the runtime can't be asked to subscript at `min_version`, and the name then stays bare
     fn solved_by_defaults<'db>(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         read: Type<'db>,
-        min_version: PythonVersion,
-    ) -> Option<bool> {
-        let any = |types: &[Type<'db>]| {
-            let mut found = false;
-            for ty in types {
-                found |= solved_by_defaults(db, env, *ty, min_version)?;
-            }
-            Some(found)
-        };
+    ) -> bool {
         match read {
-            Type::Union(union) => any(union.elements(db)),
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .any(|element| solved_by_defaults(db, env, *element)),
             Type::NominalInstance(instance) => {
                 let ClassType::Generic(alias) = instance.class(db, env) else {
-                    return Some(false);
+                    return false;
                 };
-                let origin = ClassLiteral::Static(alias.origin(db));
-                if class_subscript_is_unattested(db, env, Type::ClassLiteral(origin), min_version) {
-                    return None;
-                }
-                let found = any(alias.specialization(db).types(db))?;
-                Some(found || origin.default_specialization(db) == ClassType::Generic(alias))
+                ClassLiteral::Static(alias.origin(db)).default_specialization(db)
+                    == ClassType::Generic(alias)
+                    || alias
+                        .specialization(db)
+                        .types(db)
+                        .iter()
+                        .any(|argument| solved_by_defaults(db, env, *argument))
             }
-            _ => Some(false),
+            _ => false,
         }
     }
 
-    if !solved_by_defaults(db, env, read, min_version)? {
+    if !solved_by_defaults(db, env, read) {
         return None;
     }
-    // a class reached through a module has no name of its own here, and the written one has it
-    if let Some((origin, dotted)) = through_module
+    let cells = TypeParamCells::WrittenIn {
+        file: written_in.0,
+        scope: written_in.1,
+        min_version,
+    };
+    if let Some((class, written)) = written_class
         && let Type::NominalInstance(instance) = read
         && let ClassType::Generic(alias) = instance.class(db, env)
-        && ClassLiteral::Static(alias.origin(db)) == origin
+        && ClassLiteral::Static(alias.origin(db)) == class
     {
-        let arguments = spell_specialization_arguments(
-            db,
-            env,
-            file,
-            origin,
-            alias.specialization(db),
-            TypeParamCells::Written,
-        )
-        .ok()?;
-        if crate::types::subscript::subscript_calls_the_class(db, env, Type::ClassLiteral(origin)) {
-            return Some(RuntimeSpelling::own_subscript(&dotted, &arguments));
-        }
-        let mut spelling = dotted;
-        spelling.push_str("[");
-        spelling.push(&arguments);
-        spelling.push_str("]");
-        return Some(spelling);
+        return spell_specialization_of(db, env, file, written, alias, cells);
     }
-    let spelling = runtime_spelling(db, env, file, read)?;
+    let spelling = spell_type(db, env, file, read, cells)?;
     spelling
         .unbound_read(db, env, site)
         .is_none()
         .then_some(spelling)
+}
+
+/// what `name`, read in the code of `scope`, evaluates to, if it is a class
+pub(crate) fn class_named_at<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope: FileScopeId,
+    name: &str,
+) -> Option<ClassLiteral<'db>> {
+    name_bound_at(db, file, scope, name)?.ty.as_class_literal()
 }
 
 /// what is known about whether `origin[…]` *evaluates* at runtime rather than
@@ -1344,8 +1487,11 @@ fn spell_specialization_arguments<'db>(
 ) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
     // the caller may be about to *invent* an `origin[…]` the source never wrote,
     // so it fires only on positive evidence. a wrong yes kills the program at
-    // import; a wrong no costs the specialization nothing else can observe
-    if runtime_subscript(db, env, origin) != RuntimeSubscript::Supported {
+    // import; a wrong no costs the specialization nothing else can observe. a spelling
+    // written in place of a name asks the runtime through the helper instead
+    if runtime_subscript(db, env, origin) != RuntimeSubscript::Supported
+        && !matches!(cells, TypeParamCells::WrittenIn { .. })
+    {
         return Err(ReifiedInferenceError::NoBinding);
     }
     if origin.is_known(db, KnownClass::Tuple) {
@@ -2982,7 +3128,7 @@ fn protocol_member_spelling<'db>(
 ) -> Option<RuntimeSpelling> {
     if let Type::LiteralValue(literal) = ty
         && !matches!(
-            literal_value_spelling(db, env, file, literal),
+            literal_value_spelling(db, env, file, literal, TypeParamCells::Written),
             LiteralValueSpelling::Value(_)
         )
     {

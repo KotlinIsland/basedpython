@@ -47,7 +47,6 @@ use ty_python_semantic::ArgVariance;
 use super::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start};
-use super::type_expr_walker::is_cast_name;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct RuntimeVariancePass<'src> {
@@ -263,7 +262,7 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
             // what a `cast` target and a typing construct's type arguments spell is only read
             // by what reads the construct. a checked cast's probe spells its own target
             let mut type_arguments = self.types.call_type_expression_arguments(call);
-            if is_cast_name(&call.func) {
+            if call.cast_kind.is_some() || self.types.is_typing_cast(&call.func) {
                 type_arguments.extend(call.arguments.args.first());
             }
             if !type_arguments.is_empty() {

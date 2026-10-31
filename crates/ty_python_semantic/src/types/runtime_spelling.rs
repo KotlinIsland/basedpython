@@ -90,13 +90,16 @@ enum SpellingPart {
     /// what the runtime is to be told of the classes the spelling names, which a module says
     /// once rather than where it writes the spelling. it writes nothing here
     Told(Box<ToldClasses>),
-    /// what opens the specialization of a class that answers a subscript for itself, the
-    /// class up to [`Self::OwnSubscriptArguments`] and its arguments up to
-    /// [`Self::OwnSubscriptClose`]. a matter for the program that runs: the source reads it as
-    /// the subscript it is
-    OwnSubscriptOpen,
-    OwnSubscriptArguments,
-    OwnSubscriptClose,
+    /// what opens a subscript the program that runs writes through a helper, because the class
+    /// would answer it for itself or has none to answer it with: the class up to
+    /// [`Self::HelperSubscriptArguments`] and its arguments up to
+    /// [`Self::HelperSubscriptClose`]. the source reads it as the subscript it is
+    HelperSubscriptOpen(SpellingHelper),
+    HelperSubscriptArguments,
+    HelperSubscriptClose,
+    /// the name the module reads an imported module by, for [`RuntimeSpelling::spelled`] to write as the
+    /// transpiled module binds it
+    Module(String),
 }
 
 /// a runtime helper a spelling writes a call to, which a module has only if asked for
@@ -112,6 +115,8 @@ pub enum SpellingHelper {
     In,
     /// `_by_specialization`, the specialization of a class that answers a subscript for itself
     Specialization,
+    /// `_by_subscript`, the subscript of a class the runtime may refuse to subscript
+    Subscript,
 }
 
 impl RuntimeSpelling {
@@ -172,17 +177,38 @@ impl RuntimeSpelling {
         spelling
     }
 
-    /// `origin[arguments]`, for a class that answers a subscript for itself, which the program
-    /// that runs builds without asking it
-    pub(crate) fn own_subscript(origin: &Self, arguments: &Self) -> Self {
+    /// `origin[arguments]`, which the program that runs writes through `helper`
+    pub(crate) fn helper_subscript(
+        helper: SpellingHelper,
+        origin: &Self,
+        arguments: &Self,
+    ) -> Self {
         let mut spelling = Self {
-            parts: vec![SpellingPart::OwnSubscriptOpen],
+            parts: vec![SpellingPart::HelperSubscriptOpen(helper)],
         };
         spelling.push(origin);
-        spelling.parts.push(SpellingPart::OwnSubscriptArguments);
+        spelling.parts.push(SpellingPart::HelperSubscriptArguments);
         spelling.push(arguments);
-        spelling.parts.push(SpellingPart::OwnSubscriptClose);
+        spelling.parts.push(SpellingPart::HelperSubscriptClose);
         spelling
+    }
+
+    /// `path`, a class or the classes around it, as reached through the imported `module`
+    pub(crate) fn in_module(module: &str, path: &str) -> Self {
+        let mut spelling = Self {
+            parts: vec![SpellingPart::Module(module.to_owned())],
+        };
+        spelling.push_str(".");
+        spelling.push_str(path);
+        spelling
+    }
+
+    /// each module the spelling reads, which a module has only if it imports it
+    pub fn modules(&self) -> impl Iterator<Item = &str> {
+        self.parts.iter().filter_map(|part| match part {
+            SpellingPart::Module(module) => Some(module.as_str()),
+            _ => None,
+        })
     }
 
     /// this spelling, with what the runtime is to be told of what it names
@@ -208,15 +234,16 @@ impl RuntimeSpelling {
             SpellingPart::TellVariance(_) => Some(SpellingHelper::Variance),
             SpellingPart::Project(UseSiteVariance::Out) => Some(SpellingHelper::Out),
             SpellingPart::Project(UseSiteVariance::In) => Some(SpellingHelper::In),
-            SpellingPart::OwnSubscriptOpen => Some(SpellingHelper::Specialization),
+            SpellingPart::HelperSubscriptOpen(helper) => Some(*helper),
             SpellingPart::Project(UseSiteVariance::InOut)
             | SpellingPart::Text(_)
             | SpellingPart::Global(_)
             | SpellingPart::ModulePrivate(_)
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
-            | SpellingPart::OwnSubscriptArguments
-            | SpellingPart::OwnSubscriptClose
+            | SpellingPart::HelperSubscriptArguments
+            | SpellingPart::HelperSubscriptClose
+            | SpellingPart::Module(_)
             | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
@@ -249,9 +276,10 @@ impl RuntimeSpelling {
             | SpellingPart::Bytes(_)
             | SpellingPart::TellVariance(_)
             | SpellingPart::Project(_)
-            | SpellingPart::OwnSubscriptOpen
-            | SpellingPart::OwnSubscriptArguments
-            | SpellingPart::OwnSubscriptClose
+            | SpellingPart::HelperSubscriptOpen(_)
+            | SpellingPart::HelperSubscriptArguments
+            | SpellingPart::HelperSubscriptClose
+            | SpellingPart::Module(_)
             | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
@@ -273,9 +301,10 @@ impl RuntimeSpelling {
             | SpellingPart::Bytes(_)
             | SpellingPart::TellVariance(_)
             | SpellingPart::Project(_)
-            | SpellingPart::OwnSubscriptOpen
-            | SpellingPart::OwnSubscriptArguments
-            | SpellingPart::OwnSubscriptClose
+            | SpellingPart::HelperSubscriptOpen(_)
+            | SpellingPart::HelperSubscriptArguments
+            | SpellingPart::HelperSubscriptClose
+            | SpellingPart::Module(_)
             | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
@@ -314,9 +343,10 @@ impl RuntimeSpelling {
                 | SpellingPart::Bytes(_)
                 | SpellingPart::TellVariance(_)
                 | SpellingPart::Project(_)
-                | SpellingPart::OwnSubscriptOpen
-                | SpellingPart::OwnSubscriptArguments
-                | SpellingPart::OwnSubscriptClose
+                | SpellingPart::HelperSubscriptOpen(_)
+                | SpellingPart::HelperSubscriptArguments
+                | SpellingPart::HelperSubscriptClose
+                | SpellingPart::Module(_)
                 | SpellingPart::Told(_)
                 | SpellingPart::Close => {
                     self.parts.push(part.clone());
@@ -348,8 +378,9 @@ impl RuntimeSpelling {
         &self,
         module_private: impl Fn(&str) -> String,
         helper: impl Fn(SpellingHelper) -> String,
+        module: impl Fn(&str) -> String,
     ) -> String {
-        self.written(module_private, helper, true, true)
+        self.written(module_private, helper, module, true, true)
     }
 
     /// [`Self::spelled`], writing a `str` or `bytes` value of a literal type as its code points.
@@ -359,8 +390,9 @@ impl RuntimeSpelling {
         &self,
         module_private: impl Fn(&str) -> String,
         helper: impl Fn(SpellingHelper) -> String,
+        module: impl Fn(&str) -> String,
     ) -> String {
-        self.written(module_private, helper, false, true)
+        self.written(module_private, helper, module, false, true)
     }
 
     /// what `running` adds to a spelling of what the source reads is for the program as it
@@ -369,6 +401,7 @@ impl RuntimeSpelling {
         &self,
         module_private: impl Fn(&str) -> String,
         helper: impl Fn(SpellingHelper) -> String,
+        module: impl Fn(&str) -> String,
         quotes: bool,
         running: bool,
     ) -> String {
@@ -417,17 +450,20 @@ impl RuntimeSpelling {
                 SpellingPart::Project(UseSiteVariance::Out) => spelled.push_str("out "),
                 SpellingPart::Project(UseSiteVariance::In) => spelled.push_str("in "),
                 SpellingPart::Close if running => spelled.push(')'),
-                SpellingPart::OwnSubscriptOpen if running => {
-                    spelled.push_str(&helper(SpellingHelper::Specialization));
+                SpellingPart::HelperSubscriptOpen(subscript) if running => {
+                    spelled.push_str(&helper(*subscript));
                     spelled.push('(');
                 }
-                SpellingPart::OwnSubscriptArguments => {
+                SpellingPart::HelperSubscriptArguments => {
                     spelled.push_str(if running { ", " } else { "[" });
                 }
-                SpellingPart::OwnSubscriptClose => spelled.push(if running { ')' } else { ']' }),
+                SpellingPart::HelperSubscriptClose => {
+                    spelled.push(if running { ')' } else { ']' });
+                }
+                SpellingPart::Module(imported) => spelled.push_str(&module(imported)),
                 SpellingPart::TellVariance(_)
                 | SpellingPart::Project(UseSiteVariance::InOut)
-                | SpellingPart::OwnSubscriptOpen
+                | SpellingPart::HelperSubscriptOpen(_)
                 | SpellingPart::Told(_)
                 | SpellingPart::Close => {}
             }
@@ -438,7 +474,13 @@ impl RuntimeSpelling {
     /// the expression as the source reads it, each symbol by the name the source declares
     /// it under — for a diagnostic, and for source a later transpile phase renames itself
     pub fn source(&self) -> String {
-        self.written(ToOwned::to_owned, |_| String::new(), true, false)
+        self.written(
+            ToOwned::to_owned,
+            |_| String::new(),
+            ToOwned::to_owned,
+            true,
+            false,
+        )
     }
 }
 
