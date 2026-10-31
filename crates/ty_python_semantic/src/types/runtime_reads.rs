@@ -46,7 +46,8 @@ use crate::types::overrides::{OverrideStep, overridden_declarations};
 use crate::types::reified_infer::{
     BareGenericCall, ParametricIsPlan, ReifiedOverrideError, TypeParamCells, WrittenTarget,
     constructor_specialization, forwarded_override_error, inferred_call_type_arguments,
-    solved_type_arguments, type_test_plan, untestable_type_argument, written_unbound_read,
+    solved_type_arguments, type_test_plan, untestable_solved_type_argument,
+    untestable_type_argument, written_unbound_read,
 };
 use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::{CastCheck, cast_check_plan, cast_is_redundant};
@@ -537,11 +538,18 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                 } else {
                     Err(None)
                 };
-                if let Err(failure) = inference
-                    && let Some(context) = self.context(&call.func)
-                {
-                    report_unspecialized_reified_call(context, call.range(), callee, failure);
+                if let Err(failure) = inference {
+                    if let Some(context) = self.context(&call.func) {
+                        report_unspecialized_reified_call(context, call.range(), callee, failure);
+                    }
+                    return;
                 }
+                self.report_untestable_solved_arguments(
+                    call,
+                    function_body_scope(db, function),
+                    callee,
+                    solved_type_arguments(db, env, file, &bare_call, TypeParamCells::Lowered(None)),
+                );
             }
             ReifiedGeneric::Class(class) => {
                 let (Some(callee), Some(constructed)) =
@@ -564,15 +572,53 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                     )
                 };
                 if let Err(failure) = specialization(None).and_then(|_| specialization(Some(site)))
-                    && let Some(context) = self.context(&call.func)
                 {
-                    report_unspecialized_reified_construction(
-                        context,
-                        call.range(),
+                    if let Some(context) = self.context(&call.func) {
+                        report_unspecialized_reified_construction(
+                            context,
+                            call.range(),
+                            class,
+                            failure,
+                        );
+                    }
+                    return;
+                }
+                if let Some(static_class) = class_literal.as_static() {
+                    self.report_untestable_solved_arguments(
+                        call,
+                        static_class.body_scope(db),
                         class,
-                        failure,
+                        constructed_type_arguments(db, env, file, constructed),
                     );
                 }
+            }
+        }
+    }
+
+    /// reports a type argument the checker solved for a bare call, where the body of `generic`
+    /// goes on to test a value against that type parameter, as it reports one written there
+    fn report_untestable_solved_arguments(
+        &mut self,
+        call: &ast::ExprCall,
+        body: ScopeId<'db>,
+        generic: &str,
+        arguments: Vec<(Name, Type<'db>)>,
+    ) {
+        let (db, env, file) = (self.db, self.env, self.file);
+        let tested = tested_type_params(db, body);
+        for (parameter, argument) in arguments {
+            if tested.contains(&parameter)
+                && let Some(reason) = untestable_solved_type_argument(db, env, file, argument)
+                && let Some(context) = self.context(&call.func)
+            {
+                report_untestable_type_argument(
+                    context,
+                    call.range(),
+                    &argument.display(db, env).to_string(),
+                    reason,
+                    generic,
+                    &parameter,
+                );
             }
         }
     }

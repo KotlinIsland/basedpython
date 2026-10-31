@@ -6565,6 +6565,124 @@ fn reified_generic_infers_specialization_from_arguments() {
     );
 }
 
+/// a literal the runtime can't compare is written as its class, and a test reads that class
+#[test]
+fn bare_call_tests_the_class_a_float_literal_is_written_as() {
+    let Some(python) = python_at_least_312() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def tests[T](v: T, x: object) -> bool:
+    return x is T
+
+class Field[T]:
+    def __init__(self, v: T) -> None: ...
+    def has(self, x: object) -> bool:
+        return x is T
+
+print(tests(1.5, 2.5))
+print(tests(1.5, \"a\"))
+print(tests(\"a\".upper(), \"A\"))
+print(Field(1.5).has(2.5))
+print(Field(1.5).has(\"a\"))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["True", "False", "True", "True", "False"]
+    );
+}
+
+/// a bare call holds what the subscript the call could have written holds
+#[test]
+fn new_type_default_runs_as_the_specialization_written_out() {
+    let Some(python) = python_at_least(13, "a type-parameter default needs") else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+from typing import NewType
+
+U = NewType(\"U\", int)
+
+def g[T = U]():
+    return T
+
+def nested[T = list[U]]():
+    return T
+
+def solved[T](x: T):
+    return T
+
+class C[T = U]:
+    def read(self) -> object:
+        return T
+
+print(g())
+print(g[U]())
+print(nested())
+print(nested[list[U]]())
+print(solved(U(1)))
+print(C().read())
+print(C[U]().read())
+print(C[int]().read())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "__main__.U",
+            "__main__.U",
+            "list[__main__.U]",
+            "list[__main__.U]",
+            "__main__.U",
+            "__main__.U",
+            "__main__.U",
+            "<class 'int'>"
+        ]
+    );
+}
+
 #[test]
 #[expect(
     clippy::print_stderr,
@@ -10621,6 +10739,9 @@ def locate():
 /// forwarded type argument, and is then a plain function that can't be subscripted
 #[test]
 fn a_forwarding_function_of_another_file_is_called_through_the_helper() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("lib.by"),
@@ -10751,12 +10872,8 @@ fn run_keeps_the_by_line_a_class_records_for_inspect() {
         .expect("failed to spawn by");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     assert!(output.status.success(), "by run failed:\n{stderr}");
-    let python = python_version_of_run();
-    if python < (3, 13) {
-        return;
-    }
     assert!(
         stdout.contains("6 class Plain:\n"),
         "a class under the runtime's import should name its own line:\n{stdout}"
@@ -10771,24 +10888,13 @@ fn run_keeps_the_by_line_a_class_records_for_inspect() {
     );
 }
 
-/// the version of the interpreter `by run` picks
-fn python_version_of_run() -> (u32, u32) {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let output = Command::new(python)
-        .args(["-c", "import sys; print(*sys.version_info[:2])"])
-        .output()
-        .expect("failed to spawn python");
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut parts = text
-        .split_whitespace()
-        .map(|part| part.parse().unwrap_or(0));
-    (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
-}
-
 /// a subscript reached through a module is as ordinary as any, and what a module exports is
 /// read for what it is
 #[test]
 fn run_reads_a_subscript_of_another_module_as_what_it_is() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("dep.by"),
@@ -10845,6 +10951,9 @@ fn run_reads_a_subscript_of_another_module_as_what_it_is() {
 /// the helper is imported under a name of its own where the program uses the helper's
 #[test]
 fn run_keeps_the_name_of_a_helper_the_program_binds_its_own() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
@@ -10878,6 +10987,9 @@ fn run_keeps_the_name_of_a_helper_the_program_binds_its_own() {
 /// and that module's name need not be anything this one spells
 #[test]
 fn run_reads_a_type_argument_holding_a_class_of_another_module_for_what_its_defaults_solve() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("third.by"),
@@ -10963,6 +11075,9 @@ fn run_reads_a_type_argument_holding_a_class_of_another_module_for_what_its_defa
 /// reach the class through, reads neither of those for it
 #[test]
 fn run_reads_a_class_of_another_module_past_the_names_this_one_binds() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("dep.by"),
@@ -11007,6 +11122,9 @@ fn run_reads_a_class_of_another_module_past_the_names_this_one_binds() {
 /// what the defaults of a class in it solve, whichever way the name reaches the class
 #[test]
 fn run_tests_in_place_as_a_type_argument_tests_what_another_module_holds() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let class = |name: &str, indent: &str, modifier: &str| {
         format!(
@@ -11244,6 +11362,9 @@ fn a_module_holding_its_own_helpers_holds_what_the_program_reads_if_it_tests() {
 /// nothing a stub's module does can reach a test of something else
 #[test]
 fn a_module_a_stub_describes_can_not_upset_a_test() {
+    if python_at_least_312().is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("lazy_dep.pyi"),

@@ -22,11 +22,7 @@ fn prints(program: &str, printed: &[&str]) {
     };
     let transpiled = transpile(program, &config)
         .unwrap_or_else(|error| panic!("{program}\nshould transpile: {error}"));
-    let output = Command::new(&interpreter.command)
-        .arg("-c")
-        .arg(&transpiled)
-        .output()
-        .expect("failed to spawn python");
+    let output = common::run_source(&mut Command::new(&interpreter.command), &transpiled);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
