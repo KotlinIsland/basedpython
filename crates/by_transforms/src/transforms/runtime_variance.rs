@@ -35,15 +35,14 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
-use ruff_python_ast::name::UnqualifiedName;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::ArgVariance;
+use ty_python_semantic::{ArgVariance, MethodReceiver};
 
 use super::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
-use super::source_util::{line_indent, line_start};
+use super::source_util::{PrologueStatement, body_prologue, line_indent, line_start};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct RuntimeVariancePass<'src> {
@@ -53,13 +52,43 @@ pub(crate) struct RuntimeVariancePass<'src> {
     pub(crate) told_classes: &'src RefCell<BTreeMap<String, String>>,
 }
 
+/// what the comment on a method's opening binding of its receiver's class starts with: what the
+/// reverse direction reads the source's `Self` back from
+pub(crate) const SELF_MARKER: &str = "# basedpython: self is ";
+
+/// the binding of the class of a method's receiver, which is what its body reads for `Self`
+struct SelfBinding {
+    name: String,
+    read: String,
+    /// how the source writes `Self`
+    written: String,
+}
+
+impl PrologueStatement for SelfBinding {
+    fn push(&self, frags: &mut Vec<Fragment>, _indent: &str) {
+        let Self {
+            name,
+            read,
+            written,
+        } = self;
+        frags.push(Fragment::Lit(format!(
+            "{name} = {read}  {SELF_MARKER}{written}"
+        )));
+    }
+}
+
 struct Telling<'a> {
     written: WrittenNames<'a>,
     source: &'a str,
     class_variance: bool,
     told_classes: &'a RefCell<BTreeMap<String, String>>,
-    /// what `Self` is read as where the visitor is, in a method
+    /// what the source's `Self` is read as where the visitor is, in a method: the name a method's
+    /// opening binds its receiver's class to, which nothing the body binds can get in the way of
     receiver: Option<String>,
+    /// the first `Self` the method being visited reads, as the source writes it
+    self_read: Option<String>,
+    /// the opening of each method that reads `Self`
+    prologues: Vec<(TextSize, Vec<Fragment>)>,
     /// whether the statement being visited is directly in a class's body
     in_class_body: bool,
     types: &'a dyn TypeInfo,
@@ -109,28 +138,49 @@ impl Telling<'_> {
         }
     }
 
-    /// what `Self` is read as in the body of the method `function`: its receiver's class, which is
-    /// the receiver itself in a `classmethod`. python has no value for `Self` to hold, and a test
-    /// can only ask about what is called through
-    fn receiver_of(function: &ast::StmtFunctionDef) -> Option<String> {
-        let decorated_as = |name: &str| {
-            function.decorator_list.iter().any(|decorator| {
-                UnqualifiedName::from_expr(&decorator.expression)
-                    .is_some_and(|qualified| qualified.segments().last() == Some(&name))
-            })
+    /// what the method `function` opens by reading `Self` as: its receiver's class, which is the
+    /// receiver itself in a `classmethod`. python has no value for `Self` to hold, and a test can
+    /// only ask about what is called through. the builtin `type` is written as the module reads
+    /// it, a parameter of that name included
+    fn receiver_of(&self, function: &ast::StmtFunctionDef) -> Option<String> {
+        let receiver = self.types.method_receiver(function)?;
+        // `def m(*args)` takes its receiver as the first of them
+        let name = match function.parameters.iter_non_variadic_params().next() {
+            Some(first) => first.parameter.name.to_string(),
+            None => format!("{}[0]", function.parameters.vararg.as_ref()?.name),
         };
-        if decorated_as("staticmethod") {
-            return None;
+        Some(match receiver {
+            MethodReceiver::Class => name,
+            MethodReceiver::Instance => format!("{}({name})", self.written.builtin("type")),
+        })
+    }
+
+    /// visit the body of `function`, directly in a class, and have it open by reading the class
+    /// of its receiver if anything in it reads `Self`
+    fn visit_method_body(&mut self, function: &'_ ast::StmtFunctionDef) {
+        let receiver = self.receiver_of(function);
+        let outer = std::mem::replace(
+            &mut self.receiver,
+            receiver.is_some().then(|| self.written.fresh("_by_self")),
+        );
+        let outer_read = self.self_read.take();
+        self.visit_body(&function.body);
+        if let (Some(written), Some(read), Some(name)) =
+            (self.self_read.take(), receiver, self.receiver.take())
+            && let Some(opening) = body_prologue(
+                self.source,
+                function,
+                &[SelfBinding {
+                    name,
+                    read,
+                    written,
+                }],
+            )
+        {
+            self.prologues.extend(opening);
         }
-        let first = function.parameters.iter_non_variadic_params().next()?;
-        let name = first.parameter.name.as_str();
-        Some(
-            if decorated_as("classmethod") || function.name.as_str() == "__new__" {
-                name.to_owned()
-            } else {
-                format!("type({name})")
-            },
-        )
+        self.receiver = outer;
+        self.self_read = outer_read;
     }
 
     fn wrap(&mut self, range: TextRange, opening: String) {
@@ -148,7 +198,29 @@ impl Telling<'_> {
         if !self.class_variance || class.is_extension() {
             return;
         }
-        let Some(variances) = self.types.class_variances(class) else {
+        // the runtime takes a parameter it was told nothing about for an invariant one. the python
+        // written for `class C[in out T]` shows that no more than a covariant one's does, and it is
+        // the decorator that is read back as the parameter's variance
+        let declared_invariant = || {
+            let parameters = class.type_params.as_deref()?;
+            parameters
+                .iter()
+                .any(|parameter| {
+                    matches!(
+                        parameter,
+                        ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
+                            variance: Some(ast::Variance::Invariant),
+                            ..
+                        })
+                    )
+                })
+                .then(|| parameters.iter().map(|_| ArgVariance::Invariant).collect())
+        };
+        let Some(variances) = self
+            .types
+            .class_variances(class)
+            .or_else(declared_invariant)
+        else {
             return;
         };
         let top = class
@@ -182,19 +254,16 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
             return;
         }
         if let Stmt::FunctionDef(function) = stmt {
-            let receiver = if self.in_class_body {
-                Self::receiver_of(function)
-            } else {
-                self.receiver.clone()
-            };
             let in_class_body = std::mem::replace(&mut self.in_class_body, false);
             for decorator in &function.decorator_list {
                 self.visit_decorator(decorator);
             }
             self.visit_parameters(&function.parameters);
-            let outer = std::mem::replace(&mut self.receiver, receiver);
-            self.visit_body(&function.body);
-            self.receiver = outer;
+            if in_class_body {
+                self.visit_method_body(function);
+            } else {
+                self.visit_body(&function.body);
+            }
             self.in_class_body = in_class_body;
             return;
         }
@@ -238,6 +307,8 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
         {
             self.wrappers
                 .push((expr.range(), vec![Fragment::Lit(receiver.clone())]));
+            self.self_read
+                .get_or_insert_with(|| self.source[expr.range()].to_owned());
             return;
         }
         if let Some((variance, inner)) = use_site_variance_marker(expr) {
@@ -326,6 +397,8 @@ impl TypeAwarePass for RuntimeVariancePass<'_> {
             class_variance: self.class_variance,
             told_classes: self.told_classes,
             receiver: None,
+            self_read: None,
+            prologues: Vec::new(),
             in_class_body: false,
             types,
             decorators: Vec::new(),
@@ -337,6 +410,7 @@ impl TypeAwarePass for RuntimeVariancePass<'_> {
         ctx.runtime.extend(telling.runtime);
         ctx.text_edits.extend(telling.decorators);
         ctx.template_edits.extend(telling.wrappers);
+        ctx.statement_inserts.extend(telling.prologues);
     }
 }
 
@@ -564,9 +638,9 @@ mod tests {
     }
 
     /// a lowering that writes a type whole has what is told written inside it or left out, and
-    /// never in conflict with it
-    #[test]
-    fn every_place_a_type_is_written_transpiles() {
+    /// never in conflict with it: each of these transpiles `written` after a shared fixture, on a
+    /// target with native generics and on one without, and finds `expected` in what it writes
+    fn transpiles_keeping_what_it_tells(cases: &[(&str, &str)]) {
         const FIXTURE: &str = indoc! {"
             from collections.abc import Sequence
             from typing import NamedTuple, TypedDict, NewType, cast
@@ -583,61 +657,7 @@ mod tests {
                 return x
 
         "};
-        for (written, expected) in [
-            ("type X = Box[out object]\n", "Box[_by_out(object)]"),
-            (
-                "from typing import TypeAlias\nX: TypeAlias = (Box[out int], Sequence[int])\n",
-                "tuple[",
-            ),
-            ("type X = Out[Sequence[object]]\n", "Sequence[object]"),
-            ("type X[A] = Box[out A]\n", "Box[_by_out("),
-            (
-                "type X = (Box[out int]) -> Sequence[int]\n",
-                "Box[_by_out(int)]",
-            ),
-            ("X = Box[out object] | None\n", "Box[_by_out(object)]"),
-            (
-                "a = list[(Box[out int], Sequence[int])]()\n",
-                "_by_out(int)",
-            ),
-            ("a = list[(x: Box[out int], y: Sequence[int])]()\n", ""),
-            ("a = list[Box[out int]?]()\n", "_by_out(int)"),
-            ("a = list[Sequence[int]?]()\n", "Sequence[int]"),
-            ("a = list[protocol(a: Sequence[int])]()\n", ""),
-            ("a = list[{\"a\": Sequence[int]}]()\n", ""),
-            (
-                "class K(list[Sequence[int]]): ...\n",
-                "class K(list[Sequence[int]])",
-            ),
-            ("class K[A: Sequence[int]]: ...\n", "Sequence[int]"),
-            ("def g(a=list[Sequence[int]]()): ...\n", "Sequence[int]"),
-            ("a = cast(Sequence[int], [])\n", "cast(Sequence[int], [])"),
-            (
-                "I = NewType(\"I\", Sequence[int])\n",
-                "NewType(\"I\", Sequence[int])",
-            ),
-            ("a = v(1) cast! Out[Sequence[object]]\n", "Sequence[object]"),
-            ("a = v(1) cast? Box[out object]\n", "Box[_by_out(object)]"),
-            ("a = v(1) is (Box[out int], str)\n", ""),
-            ("a = v(1) is Out[(Sequence[int], str)]\n", ""),
-            (
-                "a = v(1) is Out[Box[out int]] | Sequence[int]\n",
-                "_by_out(int)",
-            ),
-            ("a = f\"{Sequence[int]}\"\n", "Sequence[int]"),
-            ("a = f\"{Box[out int]}\"\n", "_by_out(int)"),
-            ("a = [Sequence[int] for _ in [1]]\n", "Sequence[int]"),
-            ("a = lambda: Box[out int]\n", "_by_out(int)"),
-            ("a = holds[Box[out int]?](1)\n", "_by_out(int)"),
-            ("a = holds[(Sequence[int], str)](1)\n", ""),
-            ("a = holds[(int) -> Sequence[int]](1)\n", "Sequence[int]"),
-            (
-                "a = list[1 | \"a\" | None]()\n",
-                "list[_by_lit(1) | _by_lit(",
-            ),
-            ("a = holds[(1, \"a\")](1)\n", ""),
-            ("a = list[(1, \"a\")]()\n", ""),
-        ] {
+        for &(written, expected) in cases {
             for min_version in [PythonVersion::PY311, PythonVersion::PY313] {
                 // a reified function needs its own syntax
                 if min_version < PythonVersion::PY312 && written.contains("holds") {
@@ -662,6 +682,101 @@ mod tests {
                 assert!(out.contains(expected), "{written} at {min_version}: {out}");
             }
         }
+    }
+
+    #[test]
+    fn a_type_alias_keeps_what_it_tells() {
+        transpiles_keeping_what_it_tells(&[
+            ("type X = Box[out object]\n", "Box[_by_out(object)]"),
+            (
+                "from typing import TypeAlias\nX: TypeAlias = (Box[out int], Sequence[int])\n",
+                "tuple[",
+            ),
+            ("type X = Out[Sequence[object]]\n", "Sequence[object]"),
+            ("type X[A] = Box[out A]\n", "Box[_by_out("),
+            (
+                "type X = (Box[out int]) -> Sequence[int]\n",
+                "Box[_by_out(int)]",
+            ),
+            ("X = Box[out object] | None\n", "Box[_by_out(object)]"),
+        ]);
+    }
+
+    #[test]
+    fn a_type_argument_of_a_value_subscript_keeps_what_it_tells() {
+        transpiles_keeping_what_it_tells(&[
+            (
+                "a = list[(Box[out int], Sequence[int])]()\n",
+                "_by_out(int)",
+            ),
+            ("a = list[(x: Box[out int], y: Sequence[int])]()\n", ""),
+            ("a = list[Box[out int]?]()\n", "_by_out(int)"),
+            ("a = list[Sequence[int]?]()\n", "Sequence[int]"),
+            ("a = list[protocol(a: Sequence[int])]()\n", ""),
+            ("a = list[{\"a\": Sequence[int]}]()\n", ""),
+            (
+                "a = list[1 | \"a\" | None]()\n",
+                "list[_by_lit(1) | _by_lit(",
+            ),
+            ("a = list[(1, \"a\")]()\n", ""),
+        ]);
+    }
+
+    #[test]
+    fn a_class_header_and_a_default_keep_what_they_tell() {
+        transpiles_keeping_what_it_tells(&[
+            (
+                "class K(list[Sequence[int]]): ...\n",
+                "class K(list[Sequence[int]])",
+            ),
+            ("class K[A: Sequence[int]]: ...\n", "Sequence[int]"),
+            ("def g(a=list[Sequence[int]]()): ...\n", "Sequence[int]"),
+        ]);
+    }
+
+    #[test]
+    fn a_cast_and_a_new_type_keep_what_they_tell() {
+        transpiles_keeping_what_it_tells(&[
+            ("a = cast(Sequence[int], [])\n", "cast(Sequence[int], [])"),
+            (
+                "I = NewType(\"I\", Sequence[int])\n",
+                "NewType(\"I\", Sequence[int])",
+            ),
+            ("a = v(1) cast! Out[Sequence[object]]\n", "Sequence[object]"),
+            ("a = v(1) cast? Box[out object]\n", "Box[_by_out(object)]"),
+        ]);
+    }
+
+    #[test]
+    fn a_type_tested_with_is_keeps_what_it_tells() {
+        transpiles_keeping_what_it_tells(&[
+            ("a = v(1) is (Box[out int], str)\n", ""),
+            ("a = v(1) is Out[(Sequence[int], str)]\n", ""),
+            (
+                "a = v(1) is Out[Box[out int]] | Sequence[int]\n",
+                "_by_out(int)",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_type_read_as_a_value_keeps_what_it_tells() {
+        transpiles_keeping_what_it_tells(&[
+            ("a = f\"{Sequence[int]}\"\n", "Sequence[int]"),
+            ("a = f\"{Box[out int]}\"\n", "_by_out(int)"),
+            ("a = [Sequence[int] for _ in [1]]\n", "Sequence[int]"),
+            ("a = lambda: Box[out int]\n", "_by_out(int)"),
+        ]);
+    }
+
+    #[test]
+    fn a_reified_type_argument_keeps_what_it_tells() {
+        transpiles_keeping_what_it_tells(&[
+            ("a = holds[Box[out int]?](1)\n", "_by_out(int)"),
+            ("a = holds[(Sequence[int], str)](1)\n", ""),
+            ("a = holds[(int) -> Sequence[int]](1)\n", "Sequence[int]"),
+            ("a = holds[(1, \"a\")](1)\n", ""),
+        ]);
     }
 
     #[test]

@@ -29,9 +29,9 @@ use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
-    HasDefinition, HasType, ImplicitReceiverReference, LoweringModel, MemberDefinition, NameKind,
-    PreludeDunderReceiver, SemanticModel, basedpython_augmented_assignment_type,
-    basedpython_class_type,
+    HasDefinition, HasType, ImplicitReceiverReference, LoweringModel, MemberDefinition,
+    MethodReceiver, NameKind, PreludeDunderReceiver, SemanticModel,
+    basedpython_augmented_assignment_type, basedpython_class_type, star_imported_names,
 };
 use std::hash::BuildHasherDefault;
 pub use suppression::UNUSED_IGNORE_COMMENT;

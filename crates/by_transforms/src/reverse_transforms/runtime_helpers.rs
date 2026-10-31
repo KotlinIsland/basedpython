@@ -7,7 +7,8 @@
 //!   `_by_cell_is(x, T)` → `x is T` (`crate::transforms::parametric_is`)
 //!   `Box[_by_out(int)]` → `Box[out int]` (the spelling of a use-site projection)
 //!   `_by_variance(1)(Sequence)` → `Sequence`, and `@_by_variance(1)` is dropped
-//!   (`crate::transforms::runtime_variance`): the checker can read the variance off the class
+//!   (`crate::transforms::runtime_variance`), leaving a parameter written `in`, `out` or `in out`
+//!   where the checker wouldn't read the same variance off the class
 //!
 //! the name alone says nothing, since an author may call their own function any of these. a
 //! call counts only when the one thing binding the name at module level is the runtime: an
@@ -40,6 +41,7 @@ use ty_python_semantic::{python_bytes_literal, python_str_literal};
 use super::literal_types::is_literal_value;
 use crate::runtime::{self, Helper};
 use crate::transforms::source_util::{line_past_end, line_start};
+use crate::type_info::TypeInfo;
 
 const REVERSED: [Helper; 11] = [
     runtime::TOLD,
@@ -87,6 +89,7 @@ impl Enclosing {
 pub(crate) struct RuntimeHelpersReverse<'src> {
     source: &'src str,
     tokens: &'src Tokens,
+    types: &'src dyn TypeInfo,
     /// the helpers whose names in this module are the runtime's, each with the name the module
     /// reads it by
     provided: Vec<(Helper, String)>,
@@ -100,10 +103,16 @@ pub(crate) struct RuntimeHelpersReverse<'src> {
 }
 
 impl<'src> RuntimeHelpersReverse<'src> {
-    pub(crate) fn new(source: &'src str, tokens: &'src Tokens, suite: &[Stmt]) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        tokens: &'src Tokens,
+        suite: &[Stmt],
+        types: &'src dyn TypeInfo,
+    ) -> Self {
         let mut reverse = Self {
             source,
             tokens,
+            types,
             provided: Vec::new(),
             pasted: Vec::new(),
             enclosing: Enclosing::Free,
@@ -448,6 +457,41 @@ impl<'src> RuntimeHelpersReverse<'src> {
         ))
     }
 
+    /// write the variance `told`, a decorator telling the runtime what `class` varies by, onto
+    /// each parameter the checker wouldn't read it off the class's body for
+    fn declare_variances(&mut self, class: &ruff_python_ast::StmtClassDef, told: &Expr) {
+        let (Expr::Call(call), Some(type_params)) = (told, &class.type_params) else {
+            return;
+        };
+        let inferred = self.types.declared_class_variances(class);
+        for (index, (parameter, code)) in type_params
+            .type_params
+            .iter()
+            .zip(&call.arguments.args)
+            .enumerate()
+        {
+            let Expr::NumberLiteral(code) = code else {
+                continue;
+            };
+            let code = code.value.as_int().and_then(ruff_python_ast::Int::as_u8);
+            let read = inferred
+                .as_ref()
+                .and_then(|inferred| inferred.get(index))
+                .map_or(0, |variance| variance.code());
+            let keyword = match code {
+                Some(code) if code == read => continue,
+                Some(1) => "out ",
+                Some(2) => "in ",
+                Some(0) => "in out ",
+                _ => continue,
+            };
+            self.edits.push(Fix::safe_edit(Edit::insertion(
+                keyword.to_owned(),
+                parameter.start(),
+            )));
+        }
+    }
+
     /// `_by_variance(1)(class)` → `class`
     fn telling_variance(&mut self, call: &ExprCall, enclosing: Enclosing) -> bool {
         let spans = self.argument_spans(call);
@@ -571,6 +615,7 @@ impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
                             line_start(self.source, decorator.start()),
                             line_past_end(self.source, decorator.end()),
                         ))));
+                    self.declare_variances(class, &decorator.expression);
                 }
             }
         }
@@ -674,7 +719,7 @@ mod tests {
             ..config()
         };
         let lowered = transpile(
-            "class Out[out T]: ...\nclass Later: ...\na = Out[str]()\nb = Later\n",
+            "class Out[T]\nclass Later: ...\na = Out[str]()\nb = Later\n",
             &config,
         )
         .unwrap();
@@ -686,8 +731,7 @@ mod tests {
 
     #[test]
     fn a_forward_reference_that_says_whose_it_is_is_written_as_a_name() {
-        let (lowered, reversed) =
-            round_trip("class Out[out T]: ...\na = Out[Later]()\nclass Later: ...\n");
+        let (lowered, reversed) = round_trip("class Out[T]\na = Out[Later]()\nclass Later: ...\n");
         assert!(
             lowered.contains("a = _by_forward(Out[\"Later\"], __name__)()"),
             "{lowered}"
@@ -939,8 +983,10 @@ mod tests {
             "@dataclass\nclass Out[T]:\n    x = 1\n"
         );
         assert_eq!(
-            rev("def f():\n    @_by_variance(0, 1)\n    class Out[A, B]:\n        x = 1\n"),
-            "def f():\n    class Out[A, B]:\n        x = 1\n"
+            rev(
+                "def f():\n    @_by_variance(0, 1)\n    class Out[A, B]:\n        a: A\n        def b(self) -> B: ...\n"
+            ),
+            "def f():\n    class Out[A, B]:\n        a: A\n        def b(self) -> B: ...\n"
         );
     }
 
@@ -1272,5 +1318,42 @@ mod tests {
             reverse_transpile(source, &Config::test_default()).unwrap(),
             source
         );
+    }
+
+    /// the checker reads a variance from the body, and one the body doesn't show has to be said
+    #[test]
+    fn a_declared_variance_the_body_does_not_show_round_trips() {
+        for source in [
+            "class In[in T]\n",
+            "class Inv[in out T]\n",
+            "class Both[A, in B]\n",
+            "class Mixed[A, in B]:\n    a: A\n",
+        ] {
+            let (lowered, reversed) = round_trip(source);
+            assert!(lowered.contains("@_by_variance("), "{lowered}");
+            assert_eq!(reversed, source);
+        }
+    }
+
+    /// what the checker reads from the body stays the checker's to read
+    #[test]
+    fn a_variance_the_body_shows_is_left_to_the_checker() {
+        let source = "class Out[T]:\n    def get(self) -> T: ...\n";
+        let (lowered, reversed) = round_trip(source);
+        assert!(lowered.contains("@_by_variance(1)"), "{lowered}");
+        assert_eq!(reversed, source);
+    }
+
+    #[test]
+    fn self_read_from_the_receiver_round_trips() {
+        for source in [
+            "from typing import Self\nclass Out[T]\ndef chk[T](x: object) -> bool:\n    return x is T\nclass A:\n    def m(self, v: object) -> bool:\n        return chk[Out[Self]](v)\n",
+            "from typing import Self\nclass Out[T]\ndef chk[T](x: object) -> bool:\n    return x is T\nclass A:\n    class def m(cls, v: object) -> bool:\n        return chk[Out[Self]](v)\n",
+            "import typing\nclass Out[T]\ndef chk[T](x: object) -> bool:\n    return x is T\nclass A:\n    def m(self, v: object) -> bool:\n        \"\"\"doc\"\"\"\n        return chk[Out[typing.Self]](v)\n",
+        ] {
+            let (lowered, reversed) = round_trip(source);
+            assert!(!lowered.contains("Out[Self]"), "{lowered}");
+            assert_eq!(reversed, source);
+        }
     }
 }

@@ -90,7 +90,9 @@ impl<'src> ReifiedGenericReverse<'src> {
     /// a marked class loses the decorator and every type-argument binding its
     /// methods open with — the basedpython source reads the parameter directly
     fn unwrap_class(&mut self, class: &StmtClassDef) {
-        if !self.unwrap_decorator(&class.decorator_list, "generic_class") {
+        let unwrapped = self.unwrap_decorator(&class.decorator_list, "generic_class")
+            | self.unwrap_decorator(&class.decorator_list, "generic_class_with_keywords");
+        if !unwrapped {
             return;
         }
         for stmt in &class.body {
@@ -138,7 +140,6 @@ fn is_type_argument_binding(stmt: &Stmt) -> bool {
     matches!(
         &call.arguments.args[..],
         [Expr::Name(_), Expr::StringLiteral(asked)]
-            | [Expr::Name(_), Expr::StringLiteral(asked), Expr::Name(_)]
             if asked.value.to_str() == target.id.as_str()
     )
 }
@@ -225,7 +226,7 @@ mod tests {
     fn marked_generic_class_is_unwrapped() {
         let src = lowered("class A[T]:\n    def f(self):\n        print(T)\n");
         assert!(
-            src.contains("        T = _type_argument(self, \"T\", __class__)\n"),
+            src.contains("        T = _type_argument(self, \"T\")\n"),
             "the fixture should be the lowering it is testing: {src}"
         );
         let out = rev(&src);
@@ -262,7 +263,7 @@ mod tests {
                 "# a class that keeps its type argument\n",
                 "class A[T]:\n",
                 "    def f(self):\n",
-                "        T = _type_argument(self, \"T\", __class__)\n",
+                "        T = _type_argument(self, \"T\")\n",
                 "        print(T)\n",
             )
         );
@@ -291,7 +292,7 @@ mod tests {
             "forward should re-wrap the bare reified class: {forward}"
         );
         assert!(
-            forward.contains("        T = _type_argument(self, \"T\", __class__)"),
+            forward.contains("        T = _type_argument(self, \"T\")"),
             "forward should re-bind the read: {forward}"
         );
     }
@@ -304,7 +305,7 @@ mod tests {
             "@generic_class\n",
             "class A[T]:\n",
             "    def f(self):\n",
-            "        U = _type_argument(self, \"T\", __class__)\n",
+            "        U = _type_argument(self, \"T\")\n",
             "        return U\n",
         );
         let out = rev(src);

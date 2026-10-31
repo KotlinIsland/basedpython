@@ -255,7 +255,7 @@ a: A[int] = A()
 @generic_class
 class A[T]:
     def f(self):
-        T = _type_argument(self, "T", __class__)
+        T = _type_argument(self, "T")
         print(T)
 
 a: A[int] = A[int]()

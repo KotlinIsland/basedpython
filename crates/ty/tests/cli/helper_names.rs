@@ -107,3 +107,52 @@ fn a_name_the_lowering_writes_around_is_left_alone() -> Result<()> {
     assert!(!printed.contains("transpile-refused"), "{printed}");
     Ok(())
 }
+
+/// `from typing import *` binds `Optional`, which `Some(...)` writes
+#[test]
+fn a_star_import_the_lowering_needs_is_reported() -> Result<()> {
+    let printed = check("from typing import *\n\nx = Some(3)\nprint(x!)\n")?;
+    assert!(
+        printed.contains("main.by:1:1: error[transpile-refused]") && printed.contains("`Optional`"),
+        "{printed}"
+    );
+    Ok(())
+}
+
+/// and one that binds nothing the lowering needs is left alone
+#[test]
+fn a_star_import_the_lowering_does_not_need_is_left_alone() -> Result<()> {
+    let printed = check("from typing import *\n\nx: Sequence[int] = [3]\nprint(x)\n")?;
+    assert!(!printed.contains("transpile-refused"), "{printed}");
+    Ok(())
+}
+
+/// what a module of the project exports is what it binds
+#[test]
+fn a_star_import_of_a_module_of_the_project_is_reported() -> Result<()> {
+    for dep in [
+        "def generic(x: int) -> int:\n    return x\n",
+        "__all__ = [\"generic\"]\ndef generic(x: int) -> int:\n    return x\n",
+    ] {
+        let case = CliTest::with_files([
+            ("dep.by", dep),
+            (
+                "main.by",
+                "from dep import *\ndef g[T]() -> object:\n    return T\nprint(g[int]())\n",
+            ),
+        ])?;
+        let output = case
+            .command()
+            .arg("main.by")
+            .arg("--output-format")
+            .arg("concise")
+            .output()?;
+        let printed = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            printed.contains("main.by:1:1: error[transpile-refused]")
+                && printed.contains("`generic`"),
+            "{printed}"
+        );
+    }
+    Ok(())
+}

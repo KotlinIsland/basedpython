@@ -97,6 +97,33 @@ mod tests {
     }
 
     #[test]
+    fn method_call_stripped() {
+        check(
+            indoc! {"
+                class K:
+                    def m[T](self, x: T) -> T:
+                        return x
+                    class def c[T](cls, x: T) -> T:
+                        return x
+                a = K().m[int](1)
+                b = K.c[int](1)
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\")
+                class K:
+                    def m(self, x: _T) -> _T:
+                        return x
+                    @classmethod
+                    def c(cls, x: _T) -> _T:
+                        return x
+                a = K().m(1)
+                b = K.c(1)
+            "},
+        );
+    }
+
+    #[test]
     fn generic_call_stripped() {
         check(
             indoc! {"

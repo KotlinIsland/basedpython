@@ -166,7 +166,9 @@ cannot collide with the module's own:
     when it does. a module that binds it only by importing the very same thing —
     `from typing import Literal` beside a lowered `1 | 2` — reads the lowering's
     already. a star import binds names unseen, so a module with one gets a fresh
-    name for every typing name
+    name for every typing name. a runtime helper keeps its name, so a star import
+    of one the output is given is reported as `transpile-refused`, as any other
+    binding of it is
 - a builtin (`builtin`) is the same: `isinstance`, `staticmethod`, `type` keep
     their names unless the module binds them anywhere — a parameter named `type`
     counts — and are then imported from `builtins` under a fresh name, which the

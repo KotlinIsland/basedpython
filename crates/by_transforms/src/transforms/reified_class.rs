@@ -71,9 +71,20 @@ impl PrologueStatement for TypeArgumentBinding {
     fn push(&self, frags: &mut Vec<Fragment>, _indent: &str) {
         let Self { name, receiver } = self;
         frags.push(Fragment::Lit(format!(
-            "{name} = _type_argument({receiver}, \"{name}\", __class__)"
+            "{name} = _type_argument({receiver}, \"{name}\")"
         )));
     }
+}
+
+/// whether `class` is written with keywords a metaclass of it is handed, which a specialization
+/// can't be handed again
+fn takes_keywords(class: &StmtClassDef) -> bool {
+    class.arguments.as_deref().is_some_and(|arguments| {
+        arguments
+            .keywords
+            .iter()
+            .any(|keyword| keyword.arg.as_ref().is_none_or(|name| name != "metaclass"))
+    })
 }
 
 struct ReifiedClass<'src> {
@@ -84,6 +95,8 @@ struct ReifiedClass<'src> {
     prologues: Vec<(TextSize, Vec<Fragment>)>,
     /// at least one class reified — emit the polyfill and its imports
     used: bool,
+    /// the decorator of a class written with keywords for its metaclass, if one is
+    keywords_decorator: Option<crate::runtime::Helper>,
     /// a reified class was found but the target is below 3.12
     below_312: Vec<String>,
     /// a reified class has a pep 696 default but the target is below 3.13
@@ -106,6 +119,7 @@ impl<'src> ReifiedClass<'src> {
             edits: Vec::new(),
             prologues: Vec::new(),
             used: false,
+            keywords_decorator: None,
             below_312: Vec::new(),
             defaulted_below_313: Vec::new(),
             unanswerable: Vec::new(),
@@ -170,9 +184,15 @@ impl<'src> ReifiedClass<'src> {
         let name_start = class.name.range().start();
         let indent = line_indent(self.source, name_start);
         let anchor = line_start(self.source, name_start) + TextSize::of(indent);
+        let decorator = if takes_keywords(class) {
+            self.keywords_decorator = Some(crate::runtime::GENERIC_CLASS_WITH_KEYWORDS);
+            crate::runtime::GENERIC_CLASS_WITH_KEYWORDS
+        } else {
+            crate::runtime::GENERIC_CLASS
+        };
         self.edits.push((
             TextRange::empty(anchor),
-            format!("@generic_class{REIFIED_MARKER}\n{indent}"),
+            format!("@{}{REIFIED_MARKER}\n{indent}", decorator.name()),
         ));
         self.used = true;
     }
@@ -265,6 +285,7 @@ impl TypeAwarePass for ReifiedClassPass<'_> {
         if inner.used {
             ctx.runtime.insert(crate::runtime::GENERIC_CLASS);
             ctx.runtime.insert(crate::runtime::TYPE_ARGUMENT);
+            ctx.runtime.extend(inner.keywords_decorator);
         }
         ctx.text_edits.extend(inner.edits);
         ctx.statement_inserts.extend(inner.prologues);
@@ -317,7 +338,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "    def f(self):\n        T = _type_argument(self, \"T\", __class__)\n        print(T)"
+                "    def f(self):\n        T = _type_argument(self, \"T\")\n        print(T)"
             ),
             "the read should be bound from the receiver: {out}"
         );
@@ -331,7 +352,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "    def f(self): \n        T = _type_argument(self, \"T\", __class__)\n        return T"
+                "    def f(self): \n        T = _type_argument(self, \"T\")\n        return T"
             ),
             "the body should move below the binding: {out}"
         );
@@ -347,7 +368,7 @@ mod tests {
         "#});
         assert!(
             out.contains(
-                "        \"what f does\"\n        T = _type_argument(self, \"T\", __class__)\n        return T"
+                "        \"what f does\"\n        T = _type_argument(self, \"T\")\n        return T"
             ),
             "the binding should follow the docstring: {out}"
         );
@@ -362,7 +383,7 @@ mod tests {
                     return T
         "});
         assert!(
-            out.contains("T = _type_argument(cls, \"T\", __class__)"),
+            out.contains("T = _type_argument(cls, \"T\")"),
             "a classmethod reads through its class: {out}"
         );
     }
@@ -376,7 +397,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "        T = _type_argument(self, \"T\", __class__)\n        U = _type_argument(self, \"U\", __class__)\n"
+                "        T = _type_argument(self, \"T\")\n        U = _type_argument(self, \"U\")\n"
             ),
             "both parameters bind, in declaration order: {out}"
         );
@@ -395,7 +416,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "    def f(self):\n        T = _type_argument(self, \"T\", __class__)\n        def inner():"
+                "    def f(self):\n        T = _type_argument(self, \"T\")\n        def inner():"
             ),
             "the binding goes in the method, not the nested function: {out}"
         );
@@ -481,7 +502,7 @@ mod tests {
                         return T
         "});
         assert!(
-            out.contains("            T = _type_argument(self, \"T\", __class__)"),
+            out.contains("            T = _type_argument(self, \"T\")"),
             "a guarded method binds like any other: {out}"
         );
     }

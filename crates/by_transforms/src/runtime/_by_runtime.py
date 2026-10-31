@@ -32,6 +32,21 @@ def _by_sealed_member(_cls):
 # a loop element, an annotated assignment, a return, an argument
 
 
+# what a value the checker reads as a class may hold: a class, or a specialization of one, for
+# which python has no class. `list[int]` is a `types.GenericAlias`, and `Sequence[int]` a
+# `typing._GenericAlias`
+class _ByClassValue(type):
+    def __instancecheck__(cls, value):
+        return isinstance(value, type) or isinstance(getattr(value, "__origin__", None), type)
+
+
+class _by_class_value(metaclass=_ByClassValue):
+    pass
+
+
+_by_class_value.__name__ = "type"
+
+
 def _soundness_check(_v, _t):
     if not isinstance(_v, _t):
         raise TypeError(
@@ -1530,7 +1545,12 @@ def _by_project(variance, inner):
     # memoized as `_by_lit` is, so the same projection is the same type argument and `typing`
     # hands back the same alias for it
     key = (variance, inner, getattr(inner, "__by_module__", None))
-    projection = _ByProjection.types.get(key)
+    try:
+        projection = _ByProjection.types.get(key)
+    except TypeError:
+        # what a metadata wrapper holds need not hash, and the type it wraps is what is projected
+        key = (variance, _by_type_normal(inner), getattr(inner, "__by_module__", None))
+        projection = _ByProjection.types.get(key)
     if projection is None:
         written = inner.__qualname__ if isinstance(inner, type) else repr(inner)
         keyword = {1: "out", 2: "in"}[variance]
@@ -2376,6 +2396,14 @@ def generic_class(cls):
     return cls
 
 
+# a class written with keywords for its metaclass, which nothing records and a specialization
+# can't be given again. the specialization is the same class with its arguments fixed, so it
+# is built past the metaclass's own `__new__` and `__init__`
+def generic_class_with_keywords(cls):
+    cls.__by_class_keywords__ = True
+    return generic_class(cls)
+
+
 def _specialize(cls, item):
     from types import GenericAlias
     from typing import TypeVar, TypeVarTuple
@@ -2390,10 +2418,8 @@ def _specialize(cls, item):
     try:
         made = cache.get(args)
     except TypeError:
-        raise TypeError(
-            f"a type argument to {cls.__name__} is not hashable, so the "
-            f"specialization it names cannot be built"
-        ) from None
+        # `Annotated[int, []]` cannot be hashed, and compares all the same
+        made = next((made for key, made in cache.get(_by_absent, ()) if key == args), None)
     if made is not None:
         return made
     params = cls.__type_params__
@@ -2426,13 +2452,12 @@ def _specialize(cls, item):
     saved = cls.__dict__.get("__init_subclass__", _by_absent)
     cls.__init_subclass__ = classmethod(lambda cls, **kwargs: None)
     try:
-        made = type(cls)(cls.__name__, (cls,), namespace)
-    except TypeError as exc:
-        # a metaclass that takes class-creation keywords cannot be given them
-        # again: nothing records what the definition was written with
-        raise TypeError(
-            f"cannot build a specialization of {cls.__name__}: {exc}"
-        ) from exc
+        if getattr(cls, "__by_class_keywords__", False):
+            from abc import ABCMeta
+            maker = ABCMeta if issubclass(type(cls), ABCMeta) else type
+            made = maker.__new__(type(cls), cls.__name__, (cls,), namespace)
+        else:
+            made = type(cls)(cls.__name__, (cls,), namespace)
     finally:
         if saved is _by_absent:
             del cls.__init_subclass__
@@ -2440,8 +2465,12 @@ def _specialize(cls, item):
             cls.__init_subclass__ = saved
     made.__module__ = cls.__module__
     made.__qualname__ = cls.__qualname__
-    # two threads may both have made it, and only one of them can be the class
-    return cache.setdefault(args, made)
+    try:
+        # two threads may both have made it, and only one of them can be the class
+        return cache.setdefault(args, made)
+    except TypeError:
+        cache.setdefault(_by_absent, []).append((args, made))
+        return made
 
 
 def _by_bound_through(value, own):
@@ -2463,11 +2492,21 @@ def _by_names_a_parameter(value):
     return isinstance(value, (TypeVar, TypeVarTuple)) or bool(getattr(value, "__parameters__", ()))
 
 
-def _type_argument(owner, name, declaring=None):
+def _type_argument(owner, name):
+    import sys
     cls = owner if isinstance(owner, type) else type(owner)
     value = _by_absent
-    # a read from outside a class names the nearest parameter of that name
-    for klass in ((declaring,) if declaring is not None else ()) + cls.__mro__:
+    # the read is written in the method calling this, which says whose parameter it names. the
+    # class is not asked for by `__class__`: that needs a cell a metaclass has to carry through
+    # to `type.__new__`, and `NamedTuple` is one that doesn't
+    frame = sys._getframe(1)
+    written_in, _, _ = frame.f_code.co_qualname.rpartition(".")
+    module = frame.f_globals.get("__name__")
+    declaring = tuple(
+        klass for klass in cls.__mro__
+        if klass.__qualname__ == written_in and klass.__module__ == module
+    )
+    for klass in declaring + cls.__mro__:
         param = next(
             (param for param in getattr(klass, "__type_params__", ()) if param.__name__ == name),
             None,
@@ -2486,6 +2525,10 @@ def _type_argument(owner, name, declaring=None):
     has_default = getattr(value, "has_default", None)
     if has_default is not None and has_default():
         value = value.__default__
+    # `__init_subclass__` runs as a subclass is defined, where what it gives the parameter is all
+    # there is to say of it, even if that is a parameter of its own: `class C[U](Box[U])`
+    if value is not _by_absent and frame.f_code.co_name == "__init_subclass__":
+        return value
     # a value still naming a type parameter is a base's argument that nothing
     # filled in, which means the instance came from the bare class
     if value is _by_absent or _by_names_a_parameter(value):

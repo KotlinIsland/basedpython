@@ -50,6 +50,21 @@ def make[T: Base]() -> object:
     return None
 ```
 
+the bound is all a call is checked against, as it is for a parameter typed `type[Base]`. a class
+that asks for more than the bound does raises `TypeError` when it is called:
+
+```by
+class Needs:
+    def __init__(self, x: int): ...
+
+def make[T]() -> object:
+    if isinstance(T, type):
+        return T()     # ok: `object` takes no arguments
+    return None
+
+make[Needs]()          # TypeError: missing `x`
+```
+
 the read promises no attributes at all, not even `object`'s, since a type argument
 need not be an object with the ones a class has. `getattr(T, name)` with no default
 is refused for the same reason (`unresolved-attribute`). either ask first, or give it
@@ -71,6 +86,10 @@ type forms too, and narrow the same way
 a `.py` file has no way to write a specialization, so it can't subscript a function
 (`not-subscriptable`). the exception is a `.by` function that takes type arguments,
 which it calls as `f[int](1)`
+
+a `.by` file subscripts a generic method as it does a function, `obj.m[int](1)`, whether
+the method's body reads the parameter or not. what the receiver gives `Self` is not one
+of the arguments
 
 ## declaring it
 
