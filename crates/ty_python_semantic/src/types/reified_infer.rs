@@ -1171,7 +1171,7 @@ fn spell_class_path<'db>(
         return (!rest.is_empty()).then_some(spelling);
     }
     if class_file.source_type(db).is_stub()
-        || crate::types::visibility::private_symbols(db, class_file).contains(path[0].as_str())
+        || is_private_to_another_file(db, written_in.file(db), literal)
     {
         return None;
     }
@@ -1977,8 +1977,9 @@ pub enum ErasedTargetReason {
     Protocol,
     /// the target class cannot be subscripted at runtime (`memoryview[int]`),
     /// so the runtime residue — which writes the target as spelled — has no
-    /// expression to evaluate
-    NotSubscriptable,
+    /// expression to evaluate. a parameter with a default makes the class ask for a specialization
+    /// even written bare, so a bare test is no way out of it: this names the class for one that does
+    NotSubscriptable { asks_even_bare: Option<Name> },
 }
 
 /// a type whose arms are specializations of one *erased* origin, differing in
@@ -2296,7 +2297,14 @@ pub(crate) fn classify_parametric_is<'db>(
         ParametricIsPlan::Probe { .. } | ParametricIsPlan::TokenEq(_)
     ) && runtime_subscript(db, env, target_origin) == RuntimeSubscript::Unsupported
     {
-        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotSubscriptable);
+        // what a bare test reads the class as decides whether it is a test of the class alone,
+        // which `class_target_plan` answers with `isinstance`
+        let bare = target_origin.default_specialization(db);
+        let asks_even_bare = !matches!(bare, ClassType::Generic(alias)
+            if alias.specialization(db).types(db).iter().all(Type::is_dynamic));
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotSubscriptable {
+            asks_even_bare: asks_even_bare.then(|| target_origin.name(db).clone()),
+        });
     }
     plan
 }
@@ -2358,12 +2366,14 @@ pub(crate) fn untestable_type_argument<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
+    written: &ast::Expr,
 ) -> Option<ErasedTargetReason> {
     fn walk<'db>(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         file: File,
         ty: Type<'db>,
+        spelled: bool,
         open: &mut Vec<Type<'db>>,
     ) -> Option<ErasedTargetReason> {
         match ty {
@@ -2372,16 +2382,26 @@ pub(crate) fn untestable_type_argument<'db>(
                     return None;
                 }
                 open.push(ty);
-                let reason = walk(db, env, file, alias.value_type(db), open);
+                let reason = walk(db, env, file, alias.value_type(db), spelled, open);
                 open.pop();
                 reason
             }
-            Type::Restricted(restricted) => walk(db, env, file, restricted.value_type(db), open),
+            Type::Restricted(restricted) => {
+                walk(db, env, file, restricted.value_type(db), spelled, open)
+            }
             Type::Union(union) => union
                 .elements(db)
                 .iter()
-                .find_map(|element| walk(db, env, file, *element, open)),
+                .find_map(|element| walk(db, env, file, *element, spelled, open)),
             Type::TypeVar(bound_typevar) if holds_type_argument(db, bound_typevar) => None,
+            // the type parameter holds a value the other module made, under a name it decides,
+            // and a test in place has no way to name the class either
+            _ if !spelled
+                && class_tested_against(db, env, ty)
+                    .is_some_and(|class| is_private_to_another_file(db, file, class)) =>
+            {
+                Some(ErasedTargetReason::Unspellable)
+            }
             _ => {
                 let plan = type_test_plan(
                     db,
@@ -2398,7 +2418,42 @@ pub(crate) fn untestable_type_argument<'db>(
             }
         }
     }
-    walk(db, env, file, ty, &mut Vec::new())
+    // a name that evaluates to the class itself spells it, in place as much as in a cell, whatever
+    // the module that defines it calls it. a name for a union has no such word for its arms
+    let spelled =
+        class_tested_against(db, env, ty).is_some() && evaluates_to_its_target(written, false);
+    walk(db, env, file, ty, spelled, &mut Vec::new())
+}
+
+/// the class a test against `ty` is about, whatever form it asks about it in
+fn class_tested_against<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<ClassLiteral<'db>> {
+    match ty {
+        Type::SubclassOf(subclass) => subclass
+            .subclass_of()
+            .into_class(db, env)
+            .map(|class| class.class_literal(db)),
+        Type::LiteralValue(literal) => literal.as_enum().map(|member| member.enum_class(db)),
+        _ => target_class(db, env, ty).map(|class| class.class_literal(db)),
+    }
+}
+
+/// whether `literal` is, or is nested in, a `private` symbol of a file other than `file`, which
+/// that file emits under a name of its own
+fn is_private_to_another_file<'db>(
+    db: &'db dyn Db,
+    file: File,
+    literal: ClassLiteral<'db>,
+) -> bool {
+    let class_file = literal.file(db);
+    let within = literal.qualified_name(db).components_within_file();
+    let name = within
+        .first()
+        .map_or(literal.name(db).as_str(), String::as_str);
+    class_file != file && crate::types::visibility::private_symbols(db, class_file).contains(name)
 }
 
 /// whether the code around `bound_typevar` has its type argument at runtime: a function holds one

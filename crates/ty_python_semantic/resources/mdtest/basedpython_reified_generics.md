@@ -539,6 +539,124 @@ assert place(Has())
 assert not place(Other())
 ```
 
+## a `private` class of another module held by an alias
+
+another module decides the name a `private` class of its own is emitted under, so nothing here can
+say which specialization of it a test asks about. the test is refused in place and through a type
+parameter
+
+`dep.by`:
+
+```by
+private class Defaulted[T = int]: ...
+
+private class Plain: ...
+
+class Public[T = int]: ...
+
+B = Defaulted | None
+C = Plain | None
+D = Public | None
+E = Defaulted
+```
+
+`main.by`:
+
+```by
+import dep
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+def forwards[U](x: object) -> bool:
+    return chk[U](x)
+
+def shows[T]() -> object:
+    return T
+
+def tests[T](x: T, y: object) -> bool:
+    return y is T
+
+def hands_on[U](x: U) -> bool:
+    return tests(x, 1)
+
+def in_place(x: object) -> bool:
+    # error: [erased-type-check] "`is dep.B` cannot be checked at runtime: `dep.B` has no runtime form"
+    return x is dep.B
+
+# error: [erased-type-check] "`is dep.B` cannot be checked at runtime: `dep.B` has no runtime form"
+chk[dep.B](1)
+chk[dep.C](1)  # error: [erased-type-check]
+forwards[dep.B](1)  # error: [erased-type-check]
+chk[dep.D](1)  # no diagnostic
+shows[dep.B]()  # no diagnostic
+
+# a name that evaluates to the class itself spells it, in place and through a type parameter
+def spelled(x: object) -> bool:
+    return x is dep.E  # no diagnostic
+
+chk[dep.E](1)  # no diagnostic
+
+def given(value: dep.B) -> None:
+    tests(value, 1)  # error: [unspecialized-reified-generic]
+    hands_on(value)  # error: [unspecialized-reified-generic]
+```
+
+## a class whose default asks for a subscript the runtime doesn't have
+
+`memoryview` has a type parameter with a default, so even bare it asks for a specialization, and it
+can't be subscripted before python 3.14. dropping the type arguments doesn't help, `isinstance` does
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+def chk[T](x: object) -> bool:
+    return x is T
+
+chk[memoryview](1)  # snapshot: erased-type-check
+
+def in_place(x: object) -> bool:
+    return x is memoryview  # snapshot: erased-type-check
+
+def written(x: object) -> bool:
+    return x is memoryview[bytes]  # snapshot: erased-type-check
+
+def plain(x: object) -> bool:
+    return isinstance(x, memoryview)  # no diagnostic
+```
+
+```snapshot
+error[erased-type-check]: `is memoryview` cannot be checked at runtime: the target class cannot be subscripted
+ --> src/mdtest_snippet.by:4:5
+  |
+4 | chk[memoryview](1)  # snapshot: erased-type-check
+  |     ^^^^^^^^^^
+info: `memoryview` has no `__class_getitem__` on this python version, and a type parameter with a default makes it ask for a specialization even written bare
+info: test with `isinstance(value, memoryview)`, which asks only about the class
+info: `chk` tests a value against its type parameter `T`
+
+
+error[erased-type-check]: `is memoryview` cannot be checked at runtime: the target class cannot be subscripted
+ --> src/mdtest_snippet.by:7:12
+  |
+7 |     return x is memoryview  # snapshot: erased-type-check
+  |            ^^^^^^^^^^^^^^^
+info: `memoryview` has no `__class_getitem__` on this python version, and a type parameter with a default makes it ask for a specialization even written bare
+info: test with `isinstance(value, memoryview)`, which asks only about the class
+
+
+error[erased-type-check]: `is memoryview[bytes]` cannot be checked at runtime: the target class cannot be subscripted
+  --> src/mdtest_snippet.by:10:12
+   |
+10 |     return x is memoryview[bytes]  # snapshot: erased-type-check
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+info: `memoryview` has no `__class_getitem__` on this python version, and a type parameter with a default makes it ask for a specialization even written bare
+info: test with `isinstance(value, memoryview)`, which asks only about the class
+```
+
 ## a type argument forwarded to a test
 
 the refusal follows the type parameter to whatever tests it

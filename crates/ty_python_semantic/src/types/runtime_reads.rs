@@ -292,7 +292,8 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
         {
             let parameter = typevar.name(db);
             if tested.contains(parameter)
-                && let Some(reason) = untestable_type_argument(db, self.env, self.file, argument)
+                && let Some(reason) =
+                    untestable_type_argument(db, self.env, self.file, argument, node)
             {
                 let source = source_text(db, self.file);
                 let Some(context) = self.context(&subscript.value) else {
