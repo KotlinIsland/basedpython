@@ -241,6 +241,36 @@ class Box[T]:
     kind = T
 ```
 
+## a `NewType` fills a class's type parameter
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+class Reads[T = UserId]:
+    def read(self) -> object:
+        return T
+
+Reads()  # no diagnostic
+Reads[UserId]()  # no diagnostic
+
+class ReadsNested[T = list[UserId]]:
+    def read(self) -> object:
+        return T
+
+ReadsNested()  # no diagnostic
+
+class Holds[T]:
+    def __init__(self, value: T):
+        self.value = value
+
+    def read(self) -> object:
+        return T
+
+Holds(UserId(1))  # no diagnostic
+```
+
 ## a parameter default is evaluated in the class body
 
 ```by
@@ -468,7 +498,7 @@ class Defaults[T = UserId]:
     def has(self, x: object) -> bool:
         return x is T
 
-Defaults()  # error: [unspecialized-reified-generic]
+Defaults()  # error: [erased-type-check]
 Defaults[int]()  # no diagnostic
 ```
 

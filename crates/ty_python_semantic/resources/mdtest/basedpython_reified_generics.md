@@ -750,7 +750,8 @@ assert try_casts[str](1) is None
 ## a type argument forwarded to a test the checker solved
 
 a parameter handed on through a call the checker solves is tested as much as one handed on in
-writing, and a type the runtime can't test has no spelling, so a call has to name it
+writing. a type with no spelling has to be named by the call, and a type with a spelling that the
+runtime can't test is refused at the call as it would be if the call named it
 
 ```by
 from typing import NewType, Protocol
@@ -767,7 +768,7 @@ def hands_on[U](x: U) -> bool:
     return tests(x, 1)
 
 hands_on[UserId](UserId(1))  # error: [erased-type-check]
-tests(UserId(1), 1)  # error: [unspecialized-reified-generic]
+tests(UserId(1), 1)  # error: [erased-type-check]
 
 def given(value: P) -> None:
     tests(value, 1)  # error: [unspecialized-reified-generic]
@@ -775,8 +776,87 @@ def given(value: P) -> None:
 def defaults[T = UserId](y: object) -> bool:
     return y is T
 
-defaults(1)  # error: [unspecialized-reified-generic]
+defaults(1)  # error: [erased-type-check]
 defaults[int](1)  # no diagnostic
+```
+
+## a solved type argument is tested as the type the call writes
+
+a literal the runtime can't compare is written as its class, so a test of the type parameter tests
+the class. the bare call means what the subscript it lowers to means
+
+```by
+from typing import LiteralString
+
+def tests[T](v: T, x: object) -> bool:
+    return x is T
+
+tests(1.5, 1.5)  # no diagnostic
+tests(1.5 * 2, 3.0)  # no diagnostic
+tests(1j, 1j)  # no diagnostic
+tests("a".upper(), "A")  # no diagnostic
+
+def named(flag: bool, text: LiteralString):
+    a = 1.5
+    tests(a, 1.5)  # no diagnostic
+    b: float = 1.5
+    tests(b, 1.5)  # no diagnostic
+    c = 1.5 if flag else "a"
+    tests(c, "a")  # no diagnostic
+    tests(text, "a")  # no diagnostic
+    tests(f"a{text}", "a")  # no diagnostic
+
+def forwards[V](v: V) -> bool:
+    return tests(v, 1)
+
+forwards(1.5)  # no diagnostic
+
+class Method:
+    def m[S](self, v: S, x: object) -> bool:
+        return x is S
+
+Method().m(1.5, 2.5)  # no diagnostic
+
+class Field[T]:
+    def __init__(self, v: T) -> None: ...
+
+    def has(self, x: object) -> bool:
+        return x is T
+
+Field(1.5).has(1.5)  # no diagnostic
+Field("a".upper()).has("A")  # no diagnostic
+```
+
+## a solved type argument the runtime can't test is refused
+
+the same goes for one that is written as itself, on its own or as an arm
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+def tests[T](v: T, x: object) -> bool:
+    return x is T
+
+tests(UserId(1), 1)  # error: [erased-type-check]
+
+def arm(flag: bool):
+    c = UserId(1) if flag else 1.5
+    tests(c, 1)  # error: [erased-type-check]
+
+def forwards[V](v: V) -> bool:
+    return tests(v, 1)
+
+forwards(UserId(1))  # error: [erased-type-check]
+
+class Field[T]:
+    def __init__(self, v: T) -> None: ...
+
+    def has(self, x: object) -> bool:
+        return x is T
+
+Field(UserId(1))  # error: [erased-type-check]
 ```
 
 ## a type argument that is only printed or handed on is not tested
@@ -1227,6 +1307,99 @@ def f[T = int]():
 
 f()       # ok — default supplies the reified value
 f[str]()  # ok
+```
+
+## a `NewType` fills the reified slot
+
+a `NewType` has a spelling, the name that holds it, so it fills the slot as a class does, alone or
+inside a larger type, whether a default or the arguments solve it
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+def alone[T = UserId]():
+    return T
+
+def nested[T = list[UserId]]():
+    return T
+
+def optional[T = UserId | None]():
+    return T
+
+def solved[T](x: T):
+    return T
+
+alone()  # no diagnostic
+alone[UserId]()  # no diagnostic
+nested()  # no diagnostic
+optional()  # no diagnostic
+solved(UserId(1))  # no diagnostic
+solved([UserId(1)])  # no diagnostic
+
+Derived = NewType("Derived", UserId)
+
+def derived[T = Derived]():
+    return T
+
+derived()  # no diagnostic
+```
+
+## a `NewType` has to be held by a name where the call runs
+
+the name has to hold the `NewType` where the call runs, and it has to be a name of the module that
+makes the call
+
+```by
+from typing import NewType
+
+def too_early[T = Later]():
+    return T
+
+too_early()  # error: [unspecialized-reified-generic]
+
+Later = NewType("Later", int)
+
+def local():
+    Local = NewType("Local", int)
+
+    def inner[T = Local]():
+        return T
+
+    inner()  # error: [unspecialized-reified-generic]
+    inner[Local]()  # no diagnostic
+```
+
+## a `NewType` of another module has to be imported
+
+the module that makes the call has to have a name for it, as it has to for a class
+
+`defines.by`:
+
+```by
+from typing import NewType
+
+Elsewhere = NewType("Elsewhere", int)
+
+def default_elsewhere[T = Elsewhere]():
+    return T
+```
+
+`imports_it.by`:
+
+```by
+from defines import Elsewhere, default_elsewhere
+
+default_elsewhere()  # no diagnostic
+```
+
+`imports_the_function_only.by`:
+
+```by
+from defines import default_elsewhere
+
+default_elsewhere()  # error: [unspecialized-reified-generic]
 ```
 
 ## a missing default is still required when another defaults

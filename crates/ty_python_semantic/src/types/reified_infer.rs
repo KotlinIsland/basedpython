@@ -45,7 +45,9 @@ use crate::types::exceptions::CallSolution;
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
+use crate::types::known_instance::KnownInstanceType;
 use crate::types::literal::{LiteralValueType, LiteralValueTypeKind};
+use crate::types::newtype::NewType;
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling, SpellingHelper};
 use crate::types::signatures::Signature;
@@ -960,8 +962,49 @@ fn spell_type<'db>(
                 .collect::<Option<Vec<_>>>()?,
             " | ",
         )),
+        Type::NewTypeInstance(newtype) => Some(
+            spell_new_type_name(db, file, newtype, cells)?
+                .telling(told_classes_of_type(db, env, ty)),
+        ),
         _ => None,
     }
+}
+
+/// the name that holds the object `NewType(...)` made where `cells` says the spelling is written,
+/// a `NewType` having no module path a class would be found by
+fn spell_new_type_name<'db>(
+    db: &'db dyn Db,
+    file: File,
+    newtype: NewType<'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Option<RuntimeSpelling> {
+    let name = newtype.name(db);
+    let holds_it = |ty: Type<'db>| {
+        matches!(
+            ty,
+            Type::KnownInstance(KnownInstanceType::NewType(held))
+                if held.definition(db) == newtype.definition(db)
+        )
+    };
+    if let TypeParamCells::WrittenIn {
+        file: written_in,
+        scope,
+        ..
+    } = cells
+    {
+        let bound = name_bound_at(db, written_in, scope, name)?;
+        return holds_it(bound.ty).then(|| {
+            if bound.in_global_scope {
+                RuntimeSpelling::global(db, file, name)
+            } else {
+                RuntimeSpelling::text(name.as_str())
+            }
+        });
+    }
+    let global = global_symbol(db, db.program_file(file), name)
+        .place
+        .ignore_possibly_undefined()?;
+    holds_it(global).then(|| RuntimeSpelling::global(db, file, name))
 }
 
 /// what the runtime can say about the value a literal type holds
@@ -2437,9 +2480,6 @@ pub(crate) fn type_test_plan<'db>(
 /// `ty` out of the parameter rather than spelling it. a union is tested arm by arm, and a type
 /// parameter of the code around it holds its own argument, which is that parameter's to answer for
 ///
-/// a type argument the checker solves is spelled first, which every type this refuses fails, so
-/// only one the source wrote gets here
-///
 /// this reads what a body forwards, so it is asked once the file is inferred
 pub(crate) fn untestable_type_argument<'db>(
     db: &'db dyn Db,
@@ -2448,61 +2488,106 @@ pub(crate) fn untestable_type_argument<'db>(
     ty: Type<'db>,
     written: &ast::Expr,
 ) -> Option<ErasedTargetReason> {
-    fn walk<'db>(
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-        file: File,
-        ty: Type<'db>,
-        spelled: bool,
-        open: &mut Vec<Type<'db>>,
-    ) -> Option<ErasedTargetReason> {
-        match ty {
-            Type::TypeAlias(alias) => {
-                if open.contains(&ty) {
-                    return None;
-                }
-                open.push(ty);
-                let reason = walk(db, env, file, alias.value_type(db), spelled, open);
-                open.pop();
-                reason
-            }
-            Type::Restricted(restricted) => {
-                walk(db, env, file, restricted.value_type(db), spelled, open)
-            }
-            Type::Union(union) => union
-                .elements(db)
-                .iter()
-                .find_map(|element| walk(db, env, file, *element, spelled, open)),
-            Type::TypeVar(bound_typevar) if holds_type_argument(db, bound_typevar) => None,
-            // the type parameter holds a value the other module made, under a name it decides,
-            // and a test in place has no way to name the class either
-            _ if !spelled
-                && class_tested_against(db, env, ty)
-                    .is_some_and(|class| is_private_to_another_file(db, file, class)) =>
-            {
-                Some(ErasedTargetReason::Unspellable)
-            }
-            _ => {
-                let plan = type_test_plan(
-                    db,
-                    env,
-                    file,
-                    Type::object(),
-                    ty,
-                    Some(WrittenTarget::held()),
-                );
-                match plan {
-                    ParametricIsPlan::ErasedTarget(reason) => Some(reason),
-                    _ => None,
-                }
-            }
-        }
-    }
     // a name that evaluates to the class itself spells it, in place as much as in a cell, whatever
     // the module that defines it calls it. a name for a union has no such word for its arms
     let spelled =
         class_tested_against(db, env, ty).is_some() && evaluates_to_its_target(written, false);
-    walk(db, env, file, ty, spelled, &mut Vec::new())
+    untestable_type(db, env, file, ty, spelled, &mut Vec::new())
+}
+
+/// [`untestable_type_argument`] for a type argument the checker solved rather than one the source
+/// wrote. it has a spelling, or the call has been refused for that, and the question is about what
+/// that spelling holds: a `1.5` is written as `float`, which a value can be tested against, while
+/// a `NewType` is written as itself, which no value can
+pub(crate) fn untestable_solved_type_argument<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<ErasedTargetReason> {
+    untestable_type(
+        db,
+        env,
+        file,
+        type_argument_as_written(db, env, file, ty),
+        false,
+        &mut Vec::new(),
+    )
+}
+
+/// the type [`spell_type`] writes for `ty`, which is `ty` but for a literal the runtime has no way
+/// of recording
+fn type_argument_as_written<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Type<'db> {
+    match ty {
+        Type::LiteralValue(literal)
+            if matches!(
+                literal_value_spelling(db, env, file, literal, TypeParamCells::Written),
+                LiteralValueSpelling::NotRecordable
+            ) =>
+        {
+            literal.fallback_instance(db, env)
+        }
+        Type::Union(union) => union.map(db, env, |element| {
+            type_argument_as_written(db, env, file, *element)
+        }),
+        _ => ty,
+    }
+}
+
+fn untestable_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+    spelled: bool,
+    open: &mut Vec<Type<'db>>,
+) -> Option<ErasedTargetReason> {
+    match ty {
+        Type::TypeAlias(alias) => {
+            if open.contains(&ty) {
+                return None;
+            }
+            open.push(ty);
+            let reason = untestable_type(db, env, file, alias.value_type(db), spelled, open);
+            open.pop();
+            reason
+        }
+        Type::Restricted(restricted) => {
+            untestable_type(db, env, file, restricted.value_type(db), spelled, open)
+        }
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .find_map(|element| untestable_type(db, env, file, *element, spelled, open)),
+        Type::TypeVar(bound_typevar) if holds_type_argument(db, bound_typevar) => None,
+        // the type parameter holds a value the other module made, under a name it decides,
+        // and a test in place has no way to name the class either
+        _ if !spelled
+            && class_tested_against(db, env, ty)
+                .is_some_and(|class| is_private_to_another_file(db, file, class)) =>
+        {
+            Some(ErasedTargetReason::Unspellable)
+        }
+        _ => {
+            let plan = type_test_plan(
+                db,
+                env,
+                file,
+                Type::object(),
+                ty,
+                Some(WrittenTarget::held()),
+            );
+            match plan {
+                ParametricIsPlan::ErasedTarget(reason) => Some(reason),
+                _ => None,
+            }
+        }
+    }
 }
 
 /// the class a test against `ty` is about, whatever form it asks about it in
