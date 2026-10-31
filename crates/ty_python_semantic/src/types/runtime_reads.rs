@@ -209,7 +209,7 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
     }
 
     fn site(&self, node: &ast::Expr) -> RuntimeSite<'db> {
-        RuntimeSite::at(node, self.in_check_order)
+        RuntimeSite::at(self.db, node, self.in_check_order)
     }
 
     fn check(&mut self, site: &RuntimeReadSite, reports: bool) {
@@ -395,7 +395,7 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                 RuntimeBinding::NotTheCheckers => format!(
                     "the `{name}` bound where this runs need not be the class the checker resolved"
                 ),
-                RuntimeBinding::Bound | RuntimeBinding::Unbound => {
+                RuntimeBinding::Bound | RuntimeBinding::Unbound | RuntimeBinding::Hidden => {
                     format!("Name `{name}` is not bound where this runs")
                 }
             });
@@ -506,7 +506,7 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
     /// solved one holds where the call runs
     fn reified(&mut self, call: &'a ast::ExprCall, generic: &ReifiedGeneric) {
         let (db, env, file, model) = (self.db, self.env, self.file, self.model);
-        let site = RuntimeSite::at(call, self.in_check_order);
+        let site = RuntimeSite::at(db, &ast::ExprRef::from(call), self.in_check_order);
         match generic {
             ReifiedGeneric::Function(callee) => {
                 let Some(bare_call) = BareGenericCall::of(db, model, call) else {

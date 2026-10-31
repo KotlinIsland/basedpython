@@ -14,9 +14,13 @@
 //! transpiled program reads it — an import read only by a lowering is still used
 
 use ruff_db::files::File;
+use ruff_python_ast as ast;
 use ruff_python_ast::helpers::UseSiteVariance;
 use ruff_python_ast::name::Name;
 use ruff_text_size::{Ranged, TextRange};
+
+use ty_python_core::scope::{FileScopeId, NodeWithScopeRef};
+use ty_python_core::{HasTrackedScope, place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
@@ -32,14 +36,35 @@ use crate::types::visibility::private_symbols;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeSite<'db> {
     range: TextRange,
+    /// the scope the code runs in, which decides what binding a name there reads
+    scope: Option<FileScopeId>,
     inferred: InferredInCheckOrder<'db>,
 }
 
 impl<'db> RuntimeSite<'db> {
     /// the code `node` is written as, in the file `inferred` is for
-    pub(crate) fn at(node: &impl Ranged, inferred: InferredInCheckOrder<'db>) -> Self {
+    pub(crate) fn at<N: Ranged + HasTrackedScope>(
+        db: &'db dyn Db,
+        node: &N,
+        inferred: InferredInCheckOrder<'db>,
+    ) -> Self {
         Self {
             range: node.range(),
+            scope: semantic_index(db, inferred.file()).try_expression_scope_id(node),
+            inferred,
+        }
+    }
+
+    /// where the body of `function` begins, in the file `inferred` is for
+    pub(crate) fn body_of(
+        db: &'db dyn Db,
+        function: &ast::StmtFunctionDef,
+        inferred: InferredInCheckOrder<'db>,
+    ) -> Self {
+        Self {
+            range: function.range(),
+            scope: semantic_index(db, inferred.file())
+                .try_node_scope(NodeWithScopeRef::Function(function)),
             inferred,
         }
     }
@@ -71,6 +96,8 @@ enum SpellingPart {
     Text(String),
     /// a binding of the module's global scope, written under its own name
     Global(Name),
+    /// a name of the builtins module, which the module leaves unbound
+    Builtin(Name),
     /// a module-level `private` symbol, by the name the source declares it under
     ModulePrivate(Name),
     /// the runtime helper that builds a literal type, which a module has only if asked for
@@ -235,6 +262,7 @@ impl RuntimeSpelling {
             SpellingPart::Project(UseSiteVariance::InOut)
             | SpellingPart::Text(_)
             | SpellingPart::Global(_)
+            | SpellingPart::Builtin(_)
             | SpellingPart::ModulePrivate(_)
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
@@ -244,6 +272,13 @@ impl RuntimeSpelling {
             | SpellingPart::Told(_)
             | SpellingPart::Close => None,
         })
+    }
+
+    /// `name` as read from the builtins module, which the caller has resolved it to
+    pub(crate) fn builtin(name: &Name) -> Self {
+        Self {
+            parts: vec![SpellingPart::Builtin(name.clone())],
+        }
     }
 
     /// `name` as read through `file`'s global scope, kept apart when it is one of the
@@ -279,6 +314,7 @@ impl RuntimeSpelling {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
             SpellingPart::Text(_)
+            | SpellingPart::Builtin(_)
             | SpellingPart::LiteralHelper
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
@@ -304,6 +340,7 @@ impl RuntimeSpelling {
                 },
             )),
             SpellingPart::Text(_)
+            | SpellingPart::Builtin(_)
             | SpellingPart::LiteralHelper
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
@@ -326,7 +363,34 @@ impl RuntimeSpelling {
         env: &ProgramEnvironment<'db>,
         site: RuntimeSite<'db>,
     ) -> Option<(Name, RuntimeBinding)> {
-        first_unbound_read(db, env, self.global_reads(), site)
+        self.hidden_read(db, site)
+            .map(|name| (name, RuntimeBinding::Hidden))
+            .or_else(|| first_unbound_read(db, env, self.global_reads(), site))
+    }
+
+    /// the first name the spelling writes as it is that a binding nearer than the module's global
+    /// scope hides where `site` runs. the spelling's `private` symbols are emitted under a name of
+    /// the transpiler's, which the source can't bind
+    pub(crate) fn hidden_read<'db>(&self, db: &'db dyn Db, site: RuntimeSite<'db>) -> Option<Name> {
+        let scope = site.scope?;
+        let file = site.inferred.file();
+        let index = semantic_index(db, file);
+        let hidden = |name: &Name| {
+            index
+                .visible_ancestor_scopes(scope)
+                .filter(|(ancestor, _)| *ancestor != FileScopeId::global())
+                .any(|(ancestor, _)| {
+                    place_table(db, ancestor.to_scope_id(db, file))
+                        .symbol_by_name(name)
+                        .is_some_and(|symbol| symbol.is_bound() && !symbol.is_global())
+                })
+        };
+        self.parts.iter().find_map(|part| match part {
+            SpellingPart::Global(name) | SpellingPart::Builtin(name) if hidden(name) => {
+                Some(name.clone())
+            }
+            _ => None,
+        })
     }
 
     pub(crate) fn push_str(&mut self, text: &str) {
@@ -345,6 +409,7 @@ impl RuntimeSpelling {
             match part {
                 SpellingPart::Text(text) => self.push_str(text),
                 SpellingPart::Global(_)
+                | SpellingPart::Builtin(_)
                 | SpellingPart::ModulePrivate(_)
                 | SpellingPart::LiteralHelper
                 | SpellingPart::Str(_)
@@ -421,7 +486,9 @@ impl RuntimeSpelling {
         for part in &self.parts {
             match part {
                 SpellingPart::Text(text) => spelled.push_str(text),
-                SpellingPart::Global(name) => spelled.push_str(name),
+                SpellingPart::Global(name) | SpellingPart::Builtin(name) => {
+                    spelled.push_str(name);
+                }
                 SpellingPart::ModulePrivate(name) => spelled.push_str(&module_private(name)),
                 SpellingPart::LiteralHelper => {
                     spelled.push_str(&helper(SpellingHelper::Literal));

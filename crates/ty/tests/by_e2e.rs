@@ -6565,6 +6565,51 @@ fn reified_generic_infers_specialization_from_arguments() {
     );
 }
 
+/// a binding the rewritten call can't see leaves it reading what the checker solved
+#[test]
+fn bare_call_reads_the_module_binding_past_one_it_cannot_see() {
+    let Some(python) = python_at_least_312() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class K: ...
+
+def solved[T](x: T):
+    return T
+
+class Attribute:
+    K = 5
+
+    def m(self):
+        return solved(K())
+
+print(Attribute().m())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "<class '__main__.K'>"
+    );
+}
+
 /// a literal the runtime can't compare is written as its class, and a test reads that class
 #[test]
 fn bare_call_tests_the_class_a_float_literal_is_written_as() {

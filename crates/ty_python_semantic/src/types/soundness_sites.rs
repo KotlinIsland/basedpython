@@ -311,6 +311,9 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
         let db = self.db();
         let file = self.model.file();
         let program_file = db.program_file(file);
+        if plan.spelling().hidden_read(db, site).is_some() {
+            return None;
+        }
         let mut once_bound = Vec::new();
         for (name, read) in plan.spelling().global_read_spellings() {
             match runtime_binding(
@@ -328,7 +331,9 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
                 {
                     once_bound.push(read);
                 }
-                RuntimeBinding::Unbound | RuntimeBinding::NotTheCheckers => return None,
+                RuntimeBinding::Unbound
+                | RuntimeBinding::NotTheCheckers
+                | RuntimeBinding::Hidden => return None,
             }
         }
         Some(SiteCheck { plan, once_bound })
@@ -349,7 +354,7 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
     fn check_value(&mut self, expr: &'ast Expr, plan: CheckKind) {
         let Some(check) = self.site_check(
             plan,
-            RuntimeSite::at(expr, self.inferred),
+            RuntimeSite::at(self.db(), expr, self.inferred),
             self.runs_later(expr),
         ) else {
             return;
@@ -369,7 +374,7 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
         };
         let Some(check) = self.site_check(
             plan,
-            RuntimeSite::at(iterable, self.inferred),
+            RuntimeSite::at(self.db(), iterable, self.inferred),
             self.runs_later(iterable),
         ) else {
             return;
@@ -449,8 +454,11 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             let parameter = &pwd.parameter;
             // the guards run where the function's body begins, when it is called
             if let Some(plan) = self.parameter_plan(parameter)
-                && let Some(check) =
-                    self.site_check(plan, RuntimeSite::at(func, self.inferred), true)
+                && let Some(check) = self.site_check(
+                    plan,
+                    RuntimeSite::body_of(self.db(), func, self.inferred),
+                    true,
+                )
             {
                 guards.push((parameter, check));
             }

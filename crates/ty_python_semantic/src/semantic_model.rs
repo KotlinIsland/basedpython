@@ -2583,7 +2583,7 @@ impl<'db> LoweringModel<'db> {
             expr.inferred_type(self)?,
             written_class,
             expr,
-            RuntimeSite::at(expr, self.inferred_in_check_order()),
+            RuntimeSite::at(self.db, expr, self.inferred_in_check_order()),
             (file, scope),
             min_version,
         )
@@ -2604,7 +2604,11 @@ impl<'db> LoweringModel<'db> {
             &self.program_environment(),
             self.file(),
             &bare_call,
-            Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+            Some(RuntimeSite::at(
+                self.db,
+                &ruff_python_ast::ExprRef::from(call),
+                self.inferred_in_check_order(),
+            )),
             min_version,
         )
     }
@@ -2666,7 +2670,11 @@ impl<'db> LoweringModel<'db> {
             &self.program_environment(),
             self.file(),
             type_expr.inferred_type(self)?,
-            Some(RuntimeSite::at(type_expr, self.inferred_in_check_order())),
+            Some(RuntimeSite::at(
+                self.db,
+                type_expr,
+                self.inferred_in_check_order(),
+            )),
         )
     }
 
@@ -2691,7 +2699,11 @@ impl<'db> LoweringModel<'db> {
             self.file(),
             class_literal,
             constructed,
-            Some(RuntimeSite::at(call, self.inferred_in_check_order())),
+            Some(RuntimeSite::at(
+                self.db,
+                &ruff_python_ast::ExprRef::from(call),
+                self.inferred_in_check_order(),
+            )),
             min_version,
         )
     }
