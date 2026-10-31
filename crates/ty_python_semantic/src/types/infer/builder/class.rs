@@ -744,6 +744,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             {
                 continue;
             }
+            let previously_reading_base_name = self
+                .context
+                .inference_flags
+                .replace(InferenceFlags::READING_CLASS_BASE_NAME, base.is_name_expr());
             if defer_bases {
                 self.infer_expression_with_state(
                     base,
@@ -753,6 +757,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             } else {
                 self.infer_expression(base, TypeContext::default());
             }
+            self.context.inference_flags.set(
+                InferenceFlags::READING_CLASS_BASE_NAME,
+                previously_reading_base_name,
+            );
         }
         self.context.inference_flags.set(
             InferenceFlags::IN_TYPE_EXPRESSION,

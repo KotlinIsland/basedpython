@@ -53,7 +53,9 @@ use crate::types::tuple::Tuple;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
 use crate::types::visitor::any_over_type;
-use crate::types::{CallableType, KnownClass, MemberLookupPolicy, Type, TypeModifier};
+use crate::types::{
+    CallableType, KnownClass, MemberLookupPolicy, Type, TypeModifier, binding_type,
+};
 
 /// why a bare call of a reified generic cannot be accepted
 pub(crate) enum ReifiedInferenceError<'db> {
@@ -82,9 +84,6 @@ pub(crate) fn inferred_call_type_arguments<'db>(
     site: Option<RuntimeSite<'db>>,
     cells: TypeParamCells<'_, 'db>,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
-    let BareGenericCall {
-        callee, function, ..
-    } = *call;
     let written_in = cells;
     let cells = match call.scope {
         Some((file, scope)) => TypeParamCells::Visible {
@@ -94,51 +93,30 @@ pub(crate) fn inferred_call_type_arguments<'db>(
         },
         None => written_in,
     };
-    let arguments = call
-        .arguments
-        .as_ref()
-        .ok_or(ReifiedInferenceError::NoBinding)?;
-    // what inference solved the call to, the expected type included, is what the rest of the
-    // program takes the value to be: `y: Box[object] = make(1)` is a `make[object]`. inference
-    // leaves out a solution that substitutes nothing, so only the arguments can say more
-    let specialization = match call.solution {
-        Some(CallSolution::Solved(specialization)) => Some(specialization),
-        Some(CallSolution::Unbound) => return Err(ReifiedInferenceError::NoBinding),
-        None => callee
-            .try_call(db, env, arguments)
-            .map_err(|_| ReifiedInferenceError::NoBinding)?
-            .single_element()
-            .and_then(|callable| callable.matching_overloads().exactly_one().ok())
-            .ok_or(ReifiedInferenceError::NoBinding)?
-            .1
-            .merged_specialization(db, env),
+    let (resolved, last_solved) = call.resolved_parameters(db, env, cells)?;
+    rendered_type_arguments(db, env, file, &resolved, last_solved, site, cells)
+}
+
+/// what each plain type parameter of a bare call holds at runtime, as far as anything is solved:
+/// a default included, and promoted as [`inferred_call_type_arguments`] writes it
+pub(crate) fn solved_type_arguments<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    call: &BareGenericCall<'_, 'db>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Vec<(Name, Type<'db>)> {
+    let Ok((resolved, _)) = call.resolved_parameters(db, env, cells) else {
+        return Vec::new();
     };
-    // a recursive call handing on a value of the function's own type parameter has `T` on
-    // both sides of the constraint, which leaves the solver nothing to record. the answer
-    // is still `T`, as the call's return type already says
-    let handed_on = |bound_typevar: BoundTypeVarInstance<'db>| {
-        arguments.iter().any(|argument| {
-            argument.source_types().get_default().is_some_and(|ty| {
-                any_over_type(
-                    db,
-                    env,
-                    ty,
-                    false,
-                    |ty| matches!(ty, Type::TypeVar(typevar) if typevar == bound_typevar),
-                )
-            })
+    resolved
+        .into_iter()
+        .filter(|parameter| parameter.kind == ParameterKind::Single)
+        .filter_map(|parameter| {
+            let ty = parameter.value?.promote_keeping_literals_in(db, env, file);
+            Some((parameter.name.clone(), ty))
         })
-    };
-    rendered_type_arguments(
-        db,
-        env,
-        file,
-        function,
-        specialization,
-        site,
-        cells,
-        &handed_on,
-    )
+        .collect()
 }
 
 /// [`inferred_call_type_arguments`] for callers outside the `types` module:
@@ -259,6 +237,53 @@ impl<'a, 'db> BareGenericCall<'a, 'db> {
                 .try_expression_scope_id(&*call.func)
                 .map(|scope| (model.program_file(), scope)),
         })
+    }
+
+    fn resolved_parameters(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        cells: TypeParamCells<'_, 'db>,
+    ) -> Result<(Vec<ResolvedParameter<'db, 'db>>, Option<usize>), ReifiedInferenceError<'db>> {
+        let BareGenericCall {
+            callee, function, ..
+        } = *self;
+        let arguments = self
+            .arguments
+            .as_ref()
+            .ok_or(ReifiedInferenceError::NoBinding)?;
+        // what inference solved the call to, the expected type included, is what the rest of the
+        // program takes the value to be: `y: Box[object] = make(1)` is a `make[object]`. inference
+        // leaves out a solution that substitutes nothing, so only the arguments can say more
+        let specialization = match self.solution {
+            Some(CallSolution::Solved(specialization)) => Some(specialization),
+            Some(CallSolution::Unbound) => return Err(ReifiedInferenceError::NoBinding),
+            None => callee
+                .try_call(db, env, arguments)
+                .map_err(|_| ReifiedInferenceError::NoBinding)?
+                .single_element()
+                .and_then(|callable| callable.matching_overloads().exactly_one().ok())
+                .ok_or(ReifiedInferenceError::NoBinding)?
+                .1
+                .merged_specialization(db, env),
+        };
+        // a recursive call handing on a value of the function's own type parameter has `T` on
+        // both sides of the constraint, which leaves the solver nothing to record. the answer
+        // is still `T`, as the call's return type already says
+        let handed_on = |bound_typevar: BoundTypeVarInstance<'db>| {
+            arguments.iter().any(|argument| {
+                argument.source_types().get_default().is_some_and(|ty| {
+                    any_over_type(
+                        db,
+                        env,
+                        ty,
+                        false,
+                        |ty| matches!(ty, Type::TypeVar(typevar) if typevar == bound_typevar),
+                    )
+                })
+            })
+        };
+        resolved_parameters(db, env, function, specialization, cells, &handed_on)
     }
 
     fn arguments(
@@ -615,25 +640,16 @@ impl<'ast> Visitor<'ast> for ForwardedCalls<'_, '_> {
     }
 }
 
-/// The rendered runtime spellings to inject, in declaration order, from the
-/// call's solved `specialization`.
-///
-/// Only the prefix up to the *last argument-solved* type parameter is
-/// rendered: trailing parameters that fall back to their pep 696 default
-/// need no injection — the wrapper reads defaults off `__type_params__` at
-/// runtime — so their defaults never need a spelling. An empty result means
-/// the bare call is legal exactly as written (everything defaults).
-#[expect(clippy::too_many_arguments)]
-fn rendered_type_arguments<'db>(
+/// each type parameter of `function` with the value the call's solved `specialization` gives it,
+/// and the position of the last one the arguments solved
+fn resolved_parameters<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    file: File,
     function: FunctionType<'db>,
     specialization: Option<Specialization<'db>>,
-    site: Option<RuntimeSite<'db>>,
     cells: TypeParamCells<'_, 'db>,
     handed_on: &dyn Fn(BoundTypeVarInstance<'db>) -> bool,
-) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
+) -> Result<(Vec<ResolvedParameter<'db, 'db>>, Option<usize>), ReifiedInferenceError<'db>> {
     let signature = function.signature(db);
     let generic_context = signature
         .overloads
@@ -649,7 +665,8 @@ fn rendered_type_arguments<'db>(
     };
 
     let mut last_solved = None;
-    let mut resolved: Vec<ResolvedParameter<'db, '_>> = Vec::with_capacity(generic_context.len(db));
+    let mut resolved: Vec<ResolvedParameter<'db, 'db>> =
+        Vec::with_capacity(generic_context.len(db));
     for (index, bound_typevar) in generic_context.variables(db).enumerate() {
         let typevar = bound_typevar.typevar(db);
         let kind = ParameterKind::of(typevar.kind(db));
@@ -686,6 +703,26 @@ fn rendered_type_arguments<'db>(
             return Err(ReifiedInferenceError::Unsolved(parameter.name.clone()));
         }
     }
+    Ok((resolved, last_solved))
+}
+
+/// The rendered runtime spellings to inject, in declaration order, from what the
+/// call solved its parameters to.
+///
+/// Only the prefix up to the *last argument-solved* type parameter is
+/// rendered: trailing parameters that fall back to their pep 696 default
+/// need no injection — the wrapper reads defaults off `__type_params__` at
+/// runtime — so their defaults never need a spelling. An empty result means
+/// the bare call is legal exactly as written (everything defaults).
+fn rendered_type_arguments<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    resolved: &[ResolvedParameter<'db, 'db>],
+    last_solved: Option<usize>,
+    site: Option<RuntimeSite<'db>>,
+    cells: TypeParamCells<'_, 'db>,
+) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let Some(last_solved) = last_solved else {
         return Ok(Vec::new());
     };
@@ -1576,6 +1613,15 @@ impl ParametricIsPlan {
         }
     }
 
+    /// whether the plan reads a type parameter's cell as the thing to test against, in any arm
+    pub(crate) fn tests_cell(&self) -> bool {
+        match self {
+            Self::Cell(_) => true,
+            Self::Union(arms) => arms.iter().any(Self::tests_cell),
+            _ => false,
+        }
+    }
+
     /// every module whose conformance this plan answers from, in any arm
     pub(crate) fn conformance_modules(&self) -> Vec<File> {
         match self {
@@ -1687,6 +1733,10 @@ pub enum ErasedTargetReason {
     /// so the runtime residue — which writes the target as spelled — has no
     /// expression to evaluate
     NotSubscriptable,
+    /// a type parameter holds a protocol that is not `@runtime_checkable`. a test written in
+    /// place checks one member by member, which takes knowing the protocol where the test is
+    /// written. a test through the parameter asks `isinstance`, which refuses it
+    HeldProtocol,
 }
 
 /// a type whose arms are specializations of one *erased* origin, differing in
@@ -1958,7 +2008,7 @@ pub(crate) fn classify_parametric_is<'db>(
     written: Option<WrittenTarget<'_, 'db>>,
 ) -> ParametricIsPlan {
     let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
-    let target_args_ast: Vec<&ast::Expr> = match written.map(WrittenTarget::node) {
+    let target_args_ast: Vec<&ast::Expr> = match written.and_then(WrittenTarget::node) {
         Some(ast::Expr::Subscript(subscript)) => match subscript.slice.as_ref() {
             ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
             single => vec![single],
@@ -2050,6 +2100,85 @@ pub(crate) fn type_test_plan<'db>(
         return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotAtRuntime(name, binding));
     }
     plan
+}
+
+/// why a value cannot be tested against `ty` through a type parameter holding it, if it cannot:
+/// the answer [`type_test_plan`] gives for `value is ty` written in place, for a test that reads
+/// `ty` out of the parameter rather than spelling it. a union is tested arm by arm, and a type
+/// parameter of the code around it holds its own argument, which is that parameter's to answer for
+///
+/// a type argument the checker solves is spelled first, which every type this refuses fails, so
+/// only one the source wrote gets here
+///
+/// this reads what a body forwards, so it is asked once the file is inferred
+pub(crate) fn untestable_type_argument<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<ErasedTargetReason> {
+    fn walk<'db>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: File,
+        ty: Type<'db>,
+        open: &mut Vec<Type<'db>>,
+    ) -> Option<ErasedTargetReason> {
+        match ty {
+            Type::TypeAlias(alias) => {
+                if open.contains(&ty) {
+                    return None;
+                }
+                open.push(ty);
+                let reason = walk(db, env, file, alias.value_type(db), open);
+                open.pop();
+                reason
+            }
+            Type::Restricted(restricted) => walk(db, env, file, restricted.value_type(db), open),
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .find_map(|element| walk(db, env, file, *element, open)),
+            Type::TypeVar(bound_typevar) if holds_type_argument(db, bound_typevar) => None,
+            _ => {
+                let plan = type_test_plan(
+                    db,
+                    env,
+                    file,
+                    Type::object(),
+                    ty,
+                    Some(WrittenTarget::held()),
+                );
+                match plan {
+                    ParametricIsPlan::ErasedTarget(reason) => Some(reason),
+                    ParametricIsPlan::ProtocolStructural(_)
+                        if !target_class(db, env, ty)
+                            .and_then(|class| class.into_protocol_class(db))
+                            .is_some_and(|protocol| protocol.is_runtime_checkable(db)) =>
+                    {
+                        Some(ErasedTargetReason::HeldProtocol)
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+    walk(db, env, file, ty, &mut Vec::new())
+}
+
+/// whether the code around `bound_typevar` has its type argument at runtime: a function holds one
+/// it reifies or forwards, and a class one that it or a base reads
+fn holds_type_argument<'db>(db: &'db dyn Db, bound_typevar: BoundTypeVarInstance<'db>) -> bool {
+    if TypeParamCells::Lowered(None).has_cell(db, bound_typevar) {
+        return true;
+    }
+    let BindingContext::Definition(definition) = bound_typevar.binding_context(db) else {
+        return false;
+    };
+    binding_type(db, definition)
+        .as_class_literal()
+        .and_then(ClassLiteral::as_static)
+        .is_some_and(|class| class.inherits_reification(db))
 }
 
 /// [`type_test_plan`] carrying the aliases already opened on the way here.
@@ -2165,6 +2294,9 @@ fn runtime_test_plan<'db>(
             // subscript rather than `C` — the spelling has to be rebuilt
             Some(class) => match spell_class(db, env, file, class) {
                 Some(spelling) => ParametricIsPlan::Subclass(TargetSpelling::Rebuilt(spelling)),
+                None if written.is_some_and(WrittenTarget::is_held) => {
+                    ParametricIsPlan::Subclass(TargetSpelling::Written)
+                }
                 None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
             },
             // `type[Any]`, or `type[<protocol>]` — the value must be a class,
@@ -2177,8 +2309,13 @@ fn runtime_test_plan<'db>(
         }
 
         // the value's type is carried by a reified type parameter on the
-        // *target* side — `x is T` where `T` is reified spells `T` itself
-        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
+        // *target* side — `x is T` where `T` is reified spells `T` itself. a function's holds it
+        // in its closure and a class's is read through the method's receiver, which the lowering
+        // of a reified class's read binds under the parameter's name
+        Type::TypeVar(bound_typevar)
+            if is_reified_function_typevar(db, bound_typevar)
+                || bound_typevar.is_reified_class_typevar(db) =>
+        {
             ParametricIsPlan::Cell(RuntimeSpelling::text(bound_typevar.name(db).as_str()))
         }
 
@@ -2218,9 +2355,9 @@ fn literal_target_plan<'db>(
     let unspellable = ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
     // the guard names a builtin, and the value is the source's own literal where it wrote
     // one
-    let literal_written = written.is_some_and(|written| {
-        written.node.is_literal_expr() || matches!(written.node, ast::Expr::UnaryOp(_))
-    });
+    let literal_written = written
+        .and_then(WrittenTarget::node)
+        .is_some_and(|node| node.is_literal_expr() || matches!(node, ast::Expr::UnaryOp(_)));
     let equality = |class: &str, value: String| ParametricIsPlan::Equality {
         class: class.to_owned(),
         value: if literal_written {
@@ -2273,7 +2410,8 @@ fn literal_target_plan<'db>(
 /// hold where the test runs is asked
 #[derive(Clone, Copy)]
 pub(crate) struct WrittenTarget<'a, 'db> {
-    node: &'a ast::Expr,
+    /// `None` when nothing writes the target, because the runtime already holds it as a value
+    node: Option<&'a ast::Expr>,
     /// present once the scopes around the test are inferred, which the question needs
     inferred: Option<InferredInCheckOrder<'db>>,
 }
@@ -2283,26 +2421,38 @@ impl<'a, 'db> WrittenTarget<'a, 'db> {
     /// where it runs is asked once the file is inferred ([`crate::types::runtime_reads`])
     pub(crate) fn unchecked(node: &'a ast::Expr) -> Self {
         Self {
-            node,
+            node: Some(node),
             inferred: None,
         }
+    }
+
+    /// a target a type parameter holds: the test reads the value out of the parameter, so no
+    /// name has to spell it where the test is written
+    fn held() -> Self {
+        Self {
+            node: None,
+            inferred: None,
+        }
+    }
+
+    fn is_held(self) -> bool {
+        self.node.is_none()
     }
 
     /// a target whose names must hold, where the test runs, the bindings the checker resolved
     pub(crate) fn checked(node: &'a ast::Expr, inferred: InferredInCheckOrder<'db>) -> Self {
         Self {
-            node,
+            node: Some(node),
             inferred: Some(inferred),
         }
     }
 
-    fn node(self) -> &'a ast::Expr {
+    fn node(self) -> Option<&'a ast::Expr> {
         self.node
     }
 
     fn site(self) -> Option<RuntimeSite<'db>> {
-        self.inferred
-            .map(|inferred| RuntimeSite::at(self.node, inferred))
+        Some(RuntimeSite::at(self.node?, self.inferred?))
     }
 }
 
@@ -2340,8 +2490,11 @@ fn written_or_spelled<'db>(
             Some(read) => unbound = Some(read),
         }
     }
+    if written.is_some_and(WrittenTarget::is_held) {
+        return Ok(TargetSpelling::Written);
+    }
     let Some(node) = written
-        .map(WrittenTarget::node)
+        .and_then(WrittenTarget::node)
         .filter(|node| evaluates_to_its_target(node, subscript_evaluates))
     else {
         return Err(
@@ -2791,7 +2944,7 @@ fn classify_value<'db>(
             target_origin,
             rhs_alias,
             target_args_ast,
-            written.map(WrittenTarget::node),
+            written.and_then(WrittenTarget::node),
         )
     {
         return plan;
@@ -3103,6 +3256,9 @@ pub(crate) enum ReifiedOverrideError<'db> {
     /// a specialization through the base fills the override's type parameters by position,
     /// and the override's are in another order than the base's
     Reordered,
+    /// the override tests a value against type parameters the base doesn't, so a type argument
+    /// the runtime has no test for is one a specialization through the base may give it
+    TestsUntested(Box<[Name]>),
 }
 
 /// Compatibility of an override's reified type-parameter list with its base

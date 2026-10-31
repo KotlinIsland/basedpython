@@ -46,6 +46,19 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let env = self.program_environment();
         let db = self.db();
 
+        // what a type form holds has no attribute the checker can promise, to read or to write
+        if object_ty.holds_type_form(db) {
+            if emit_diagnostics
+                && let Some(builder) = self.context.report_lint(&UNRESOLVED_ATTRIBUTE, target)
+            {
+                builder.into_diagnostic(format_args!(
+                    "Object of type `{}` has no attribute `{attribute}`",
+                    object_ty.display(db, env),
+                ));
+            }
+            return false;
+        }
+
         // basedpython: a visibility keyword draws the same boundary around a
         // write as around a read
         if emit_diagnostics {

@@ -336,6 +336,171 @@ class Outer[T]:
             return T
 ```
 
+## a classmethod on the bare class has no argument to read
+
+a bare class has no type argument, so a classmethod reading one through it is refused as `A()` is,
+and so is one reaching the same read through `cls`
+
+```by
+class A[T]:
+    @classmethod
+    def t(cls) -> object:
+        return T
+
+    @classmethod
+    def via(cls) -> object:
+        return cls.t()
+
+    @classmethod
+    def make(cls) -> object:
+        return cls()
+
+    @classmethod
+    def name(cls) -> str:
+        return "a"
+
+class B[U](A[U]): ...
+
+# error: [unspecialized-reified-generic] "Cannot call classmethod `t` on reified generic class `A` without a specialization"
+A.t()
+B.t()  # error: [unspecialized-reified-generic]
+A.via()  # error: [unspecialized-reified-generic]
+A.make()  # error: [unspecialized-reified-generic]
+
+held = A.t
+held()  # error: [unspecialized-reified-generic]
+
+A.name()  # no diagnostic
+```
+
+a specialization, a subclass that fixes the argument and a default all give it something to read
+
+```by
+class A[T]:
+    @classmethod
+    def t(cls) -> object:
+        return T
+
+    @classmethod
+    def own(cls) -> object:
+        return cls.t()
+
+class Fixed(A[int]): ...
+class Extra[V](A[int]): ...
+class Forwards[U](A[U]): ...
+
+assert A[int].t() === int
+assert A[int].own() === int
+assert Fixed.t() === int
+assert Extra.t() === int
+assert Forwards[str].t() === str
+
+class Defaulted[T = int]:
+    @classmethod
+    def t(cls) -> object:
+        return T
+
+class Inherits[U = str](A[U]): ...
+
+assert Defaulted.t() === int
+assert Defaulted[str].t() === str
+assert Inherits.t() === str
+```
+
+## a method tests against the argument its instance holds
+
+```by
+class A[T]:
+    def has(self, x: object) -> bool:
+        return x is T
+
+    def lacks(self, x: object) -> bool:
+        return x is not T
+
+    def has_list(self, x: object) -> bool:
+        return x is list[T]
+
+    @classmethod
+    def own(cls, x: object) -> bool:
+        return x is T
+
+assert A[int]().has(1)
+assert not A[str]().has(1)
+assert A[int | None]().has(None)
+assert A[str]().lacks(1)
+assert A[int].own(1)
+```
+
+## a type argument the test of a class's parameter cannot ask about
+
+a class hands its type argument to every method, so one that tests it refuses a type argument with
+no runtime test wherever the specialization is written
+
+```by
+from typing import NewType, TypedDict
+
+UserId = NewType("UserId", int)
+
+class TD(TypedDict):
+    a: int
+
+class Tests[T]:
+    def has(self, x: object) -> bool:
+        return x is T
+
+class Forwards[U](Tests[U]): ...
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class Hands[T]:
+    def has(self, x: object) -> bool:
+        return chk[T](x)
+
+# error: [erased-type-check] "`is UserId` cannot be checked at runtime: `UserId` has no runtime form"
+Tests[UserId]()
+Tests[TD]()  # error: [erased-type-check]
+Forwards[UserId]()  # error: [erased-type-check]
+Hands[UserId]()  # error: [erased-type-check]
+class Fixes(Tests[UserId]): ...  # error: [erased-type-check]
+
+class Defaults[T = UserId]:
+    def has(self, x: object) -> bool:
+        return x is T
+
+Defaults()  # error: [unspecialized-reified-generic]
+Defaults[int]()  # no diagnostic
+```
+
+## a type argument that is only read or named takes anything
+
+a class that only reads its argument isn't testing it, and a test against a class names the class
+without building it
+
+```by
+from typing import NewType
+
+UserId = NewType("UserId", int)
+
+class Reads[T]:
+    def kind(self) -> object:
+        return T
+
+def names_it[T](x: object) -> bool:
+    return x is Reads[T]
+
+class Tests[T]:
+    def has(self, x: object) -> bool:
+        return x is T
+
+def names_a_test[T](x: object) -> bool:
+    return x is Tests[T]
+
+print(Reads[UserId]().kind())  # no diagnostic
+print(names_it[UserId](1))  # no diagnostic
+print(names_a_test[UserId](1))  # no diagnostic
+```
+
 ## reading it in a `.py` file still names the `TypeVar`
 
 Reification is basedpython's; the same class in python is the erased generic it has always been:

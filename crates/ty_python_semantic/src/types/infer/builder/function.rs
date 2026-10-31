@@ -18,8 +18,8 @@ use crate::{
             INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
             InvalidDecoratorDef, REDUNDANT_CAST, REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD,
             STATIC_ASSERT_ERROR, TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE,
-            TYPE_ASSERTION_FAILURE, UNKNOWN_FIXTURE, UNSOUND_RETURN_STATEMENT,
-            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            TYPE_ASSERTION_FAILURE, UNKNOWN_FIXTURE, UNRESOLVED_ATTRIBUTE,
+            UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_bad_argument_to_get_protocol_members,
             report_bad_argument_to_protocol_interface, report_bool_as_int,
             report_implicit_return_type, report_invalid_decorator_def,
@@ -1550,7 +1550,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         if function.type_params.is_some() && self.scope().node(self.db()).as_class().is_some() {
-            self.context.record_runtime_read_check(
+            self.record_runtime_read(
                 crate::types::runtime_reads::RuntimeReadSite::GenericMethod {
                     function: function.node_index.load(),
                 },
@@ -2862,6 +2862,33 @@ impl KnownFunction {
         let parameter_types = overload.parameter_types();
 
         match self {
+            // `getattr` reads what the attribute expression reads, and the default it may be
+            // given is what makes it safe to read off a value that may not have the attribute
+            KnownFunction::GetAttr => {
+                if let [object, name] = &*call_expression.arguments.args
+                    && call_expression.arguments.keywords.is_empty()
+                    && !object.is_starred_expr()
+                    && !name.is_starred_expr()
+                    && let Some(object_ty) = builder.try_expression_type(object)
+                    && object_ty.holds_type_form(db)
+                    && let Some(diagnostic) = builder
+                        .context
+                        .report_lint(&UNRESOLVED_ATTRIBUTE, call_expression)
+                {
+                    let env = builder.program_environment();
+                    let attribute = builder
+                        .try_expression_type(name)
+                        .and_then(Type::as_string_literal)
+                        .map_or_else(
+                            || "the one named".to_owned(),
+                            |name| format!("`{}`", name.value(db)),
+                        );
+                    diagnostic.into_diagnostic(format_args!(
+                        "Object of type `{}` has no attribute {attribute}",
+                        object_ty.display(db, env),
+                    ));
+                }
+            }
             KnownFunction::RevealType => {
                 let env = builder.program_environment();
                 let revealed_type = overload

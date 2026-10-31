@@ -2933,6 +2933,11 @@ bitflags::bitflags! {
         /// to ask for here.
         const IN_TYPE_TEST_TARGET = 1 << 19;
 
+        /// basedpython: set while inferring a base list entry that is a bare name, which reads
+        /// the value the name holds: a type parameter's is its type argument. a base list is
+        /// otherwise read with `IN_TYPE_EXPRESSION` set, for `dynamic`'s sake
+        const READING_CLASS_BASE_NAME = 1 << 21;
+
         /// Whether the current method's explicit receiver annotation is incompatible with `Self`.
         const HAS_INCOMPATIBLE_SELF_RECEIVER = 1 << 14;
 

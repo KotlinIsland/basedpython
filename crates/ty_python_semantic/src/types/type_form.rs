@@ -27,6 +27,20 @@ impl<'db> TypeFormType<'db> {
 }
 
 impl<'db> Type<'db> {
+    /// whether a value of this type may be a type form rather than a class: it is a `TypeForm`, or
+    /// a union with an arm that is one. nothing about such a value promises an attribute, since
+    /// it may be a class, `None` or a union, and its `object` members differ on each
+    pub(crate) fn holds_type_form(self, db: &'db dyn Db) -> bool {
+        match self.resolve_type_alias(db) {
+            Type::TypeForm(_) => true,
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .any(|element| matches!(element.resolve_type_alias(db), Type::TypeForm(_))),
+            _ => false,
+        }
+    }
+
     /// Projects type-form values to the static types that they represent.
     ///
     /// This projects `TypeForm[T]` to `T` and runtime class forms to their instance types. It also

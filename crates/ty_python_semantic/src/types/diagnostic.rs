@@ -4354,22 +4354,70 @@ pub(crate) fn report_unspecialized_reified_construction<'db>(
     }
 }
 
+/// reports a call of the classmethod `method` on the reified generic class `class` itself, which
+/// reads a type argument the bare class has none of
+pub(crate) fn report_unspecialized_reified_classmethod(
+    context: &InferContext<'_, '_>,
+    call: TextRange,
+    method: &str,
+    class: &str,
+    parameter: &str,
+) {
+    let Some(builder) = context.report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Cannot call classmethod `{method}` on reified generic class `{class}` without a \
+         specialization"
+    ));
+    diagnostic.info(format_args!(
+        "`{method}` reads the type argument of `{parameter}`, which the bare class has none of — \
+         call it on a specialization, as in `{class}[int].{method}()`"
+    ));
+}
+
 pub(crate) fn report_erased_type_check(
     context: &InferContext<'_, '_>,
     primary: TextRange,
     target: &str,
     reason: ErasedTargetReason,
 ) {
-    let Some(builder) = context.report_lint(&ERASED_TYPE_CHECK, primary) else {
-        return;
-    };
-    match reason {
+    erased_type_check_diagnostic(context, primary, target, reason);
+}
+
+/// reports a type argument given to a type parameter that the generic `generic` goes on to test
+/// a value against, which the runtime can't do with this one. the reason is the one `value is
+/// target` written in place gets, or would get if a type parameter didn't hold the target
+pub(crate) fn report_untestable_type_argument(
+    context: &InferContext<'_, '_>,
+    primary: TextRange,
+    target: &str,
+    reason: ErasedTargetReason,
+    generic: &str,
+    parameter: &str,
+) {
+    if let Some(mut diagnostic) = erased_type_check_diagnostic(context, primary, target, reason) {
+        diagnostic.info(format_args!(
+            "`{generic}` tests a value against its type parameter `{parameter}`"
+        ));
+    }
+}
+
+fn erased_type_check_diagnostic<'ctx, 'db>(
+    context: &'ctx InferContext<'db, '_>,
+    primary: TextRange,
+    target: &str,
+    reason: ErasedTargetReason,
+) -> Option<LintDiagnosticGuard<'ctx, 'db>> {
+    let builder = context.report_lint(&ERASED_TYPE_CHECK, primary)?;
+    Some(match reason {
         ErasedTargetReason::NotAtRuntime(name, binding) => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
                 "`is {target}` cannot be checked at runtime: {}",
                 binding.why_not_checkable(&name)
             ));
             diagnostic.info(binding.describe(&name));
+            diagnostic
         }
         ErasedTargetReason::Protocol => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4384,6 +4432,7 @@ pub(crate) fn report_erased_type_check(
                 "reify the type parameter (`def f[T](x: T)`), or test against a concrete class \
                  that records the specialization on its instances or across its mro"
             ));
+            diagnostic
         }
         ErasedTargetReason::NotSubscriptable => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4398,6 +4447,7 @@ pub(crate) fn report_erased_type_check(
                 "drop the type arguments and test against the bare class, which is all the \
                  runtime records anyway"
             ));
+            diagnostic
         }
         ErasedTargetReason::BuiltinCollection => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4408,6 +4458,7 @@ pub(crate) fn report_erased_type_check(
                 "test against a subclass that fixes the arguments (`class B(list[int])`), \
                  whose `__orig_bases__` the probe can unwind"
             ));
+            diagnostic
         }
         ErasedTargetReason::Dynamic => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4418,6 +4469,7 @@ pub(crate) fn report_erased_type_check(
                 "a test that can only answer `True` narrows nothing; drop it, or name the \
                  type the value is expected to have"
             ));
+            diagnostic
         }
         ErasedTargetReason::Callable => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4432,6 +4484,7 @@ pub(crate) fn report_erased_type_check(
                 "test against a bare `Callable`, which asks only what the runtime records, \
                  or take the value's type from the call site"
             ));
+            diagnostic
         }
         ErasedTargetReason::TypedDict => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4445,6 +4498,7 @@ pub(crate) fn report_erased_type_check(
             diagnostic.info(format_args!(
                 "`isinstance` refuses a `TypedDict` for the same reason"
             ));
+            diagnostic
         }
         ErasedTargetReason::NonRuntimeCheckableProtocol => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4459,6 +4513,7 @@ pub(crate) fn report_erased_type_check(
                 "decorate `{target}` with `@typing.runtime_checkable` for the check python \
                  itself performs, which asks only that the members are present"
             ));
+            diagnostic
         }
         ErasedTargetReason::Intersection => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4468,6 +4523,7 @@ pub(crate) fn report_erased_type_check(
             diagnostic.info(format_args!(
                 "test each part separately and join the tests with `and`"
             ));
+            diagnostic
         }
         ErasedTargetReason::Subclass => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4478,6 +4534,7 @@ pub(crate) fn report_erased_type_check(
                 "the test can see that the value is a class and nothing more; name the class \
                  it must be a subclass of"
             ));
+            diagnostic
         }
         ErasedTargetReason::UncomparableLiteral => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4489,6 +4546,7 @@ pub(crate) fn report_erased_type_check(
                  type the runtime cannot be asked about; `LiteralString` is a property of how \
                  a value was written rather than of the value"
             ));
+            diagnostic
         }
         ErasedTargetReason::Unspellable => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -4497,8 +4555,20 @@ pub(crate) fn report_erased_type_check(
             diagnostic.info(format_args!(
                 "the emitted python has no expression to evaluate for this target"
             ));
+            diagnostic
         }
-    }
+        ErasedTargetReason::HeldProtocol => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`is {target}` cannot be checked through a type parameter: `isinstance` refuses \
+                 a protocol that isn't `@runtime_checkable`"
+            ));
+            diagnostic.info(format_args!(
+                "decorate `{target}` with `@typing.runtime_checkable`, or test against it where \
+                 it can be named"
+            ));
+            diagnostic
+        }
+    })
 }
 
 pub(crate) fn report_mismatched_type_name<'db>(
@@ -8827,6 +8897,13 @@ pub(crate) fn report_invalid_reified_override<'db>(
             diagnostic.info(format_args!(
                 "a specialization through `{overridden_method}` fills the override's type \
                  parameters by position, and the override declares them in another order"
+            ));
+        }
+        ReifiedOverrideError::TestsUntested(names) => {
+            let names = names.iter().map(|name| format!("`{name}`")).join(", ");
+            diagnostic.info(format_args!(
+                "the override tests a value against {names}, and a specialization through \
+                 `{overridden_method}` may give it a type argument the runtime has no test for"
             ));
         }
     }
