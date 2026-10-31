@@ -1346,6 +1346,151 @@ def derived[T = Derived]():
 derived()  # no diagnostic
 ```
 
+## a nearer binding hides the name a bare call would write
+
+a bare call is written with the type arguments the checker solved, each read by a name where the
+call runs. a nearer binding of that name would hand the callee something else, so the call has to
+name them itself, whatever the kind of the type and of the binding
+
+```by
+from enum import Enum
+from typing import Literal, NewType
+
+U = NewType("U", int)
+
+class K: ...
+
+class Color(Enum):
+    RED = 1
+
+def of_class[T = K]():
+    return T
+
+def of_new_type[T = U]():
+    return T
+
+def of_nested[T = list[K]]():
+    return T
+
+def solved[T](x: T):
+    return T
+
+class Default[T = K]:
+    def read(self) -> object:
+        return T
+
+class Held[T]:
+    def __init__(self, x: T): ...
+
+    def read(self) -> object:
+        return T
+
+u = U(1)
+k = K()
+
+def local_assignment():
+    K = 5
+    U = 5
+    of_class()  # error: [unspecialized-reified-generic]
+    of_new_type()  # error: [unspecialized-reified-generic]
+    of_nested()  # error: [unspecialized-reified-generic]
+    Default()  # error: [unspecialized-reified-generic]
+    solved(k)  # error: [unspecialized-reified-generic]
+    solved(u)  # error: [unspecialized-reified-generic]
+    Held(k)  # error: [unspecialized-reified-generic]
+    Held(u)  # error: [unspecialized-reified-generic]
+
+def local_of_another_kind():
+    K = str
+    U = NewType("U", str)
+    of_class()  # error: [unspecialized-reified-generic]
+    of_new_type()  # error: [unspecialized-reified-generic]
+
+def parameter(K: int, U: int):
+    of_class()  # error: [unspecialized-reified-generic]
+    of_new_type()  # error: [unspecialized-reified-generic]
+
+def enclosing():
+    K = 5
+
+    def inner():
+        return of_class()  # error: [unspecialized-reified-generic]
+
+    return inner()
+
+def enum_member(member: Literal[Color.RED]):
+    Color = 5
+    solved(member)  # error: [unspecialized-reified-generic]
+
+class ClassBody:
+    K = 5
+    default = of_class()  # error: [unspecialized-reified-generic]
+
+[of_class() for K in [1]]  # error: [unspecialized-reified-generic]
+
+(lambda K=1: of_class())()  # error: [unspecialized-reified-generic]
+
+def type_parameter[K](x: K):
+    of_class()  # error: [unspecialized-reified-generic]
+    solved(k)  # error: [unspecialized-reified-generic]
+
+class TypeParameter[U]:
+    def m(self):
+        return solved(u)  # error: [unspecialized-reified-generic]
+
+def builtin(v: int, w: list[int]):
+    int = 5
+    solved(v)  # error: [unspecialized-reified-generic]
+
+def builtin_outer(v: int):
+    list = 5
+    solved([v])  # error: [unspecialized-reified-generic]
+```
+
+## a binding a bare call can't see hides nothing
+
+```by
+from typing import NewType
+
+U = NewType("U", int)
+
+class K: ...
+
+def of_class[T = K]():
+    return T
+
+def of_new_type[T = U]():
+    return T
+
+def solved[T](x: T):
+    return T
+
+class Attribute:
+    K = 5
+    U = 5
+
+    def m(self):
+        of_new_type()  # no diagnostic
+        return of_class()  # no diagnostic
+
+def another_function():
+    K = 5
+    U = 5
+
+def uses_globals(v: U):
+    global K
+    of_class()  # no diagnostic
+    of_new_type()  # no diagnostic
+    solved(v)  # no diagnostic
+
+def comprehension_elsewhere():
+    x = [K for K in [1]]
+    of_class()  # no diagnostic
+
+def builtin(v: int):
+    return solved(v)  # no diagnostic
+```
+
 ## a `NewType` has to be held by a name where the call runs
 
 the name has to hold the `NewType` where the call runs, and it has to be a name of the module that

@@ -559,6 +559,9 @@ pub enum RuntimeBinding {
     /// the program binds the name, but a binding the checker resolves never runs — it is made
     /// under `if TYPE_CHECKING:` — so the value read need not be what the checker resolved
     NotTheCheckers,
+    /// a name a lowering writes for a module-level binding or a builtin, which a nearer binding
+    /// hides where the lowering would write it
+    Hidden,
 }
 
 impl RuntimeBinding {
@@ -570,6 +573,7 @@ impl RuntimeBinding {
             RuntimeBinding::NotTheCheckers => format!(
                 "the `{name}` bound when it runs need not be the class the checker resolved"
             ),
+            RuntimeBinding::Hidden => format!("`{name}` is hidden by a nearer binding of it"),
         }
     }
 
@@ -585,6 +589,10 @@ impl RuntimeBinding {
                 "the `{name}` bound when this runs need not be the class the checker resolved: \
                  the checker reads a binding of `{name}` made under `if TYPE_CHECKING:`, which \
                  never runs"
+            ),
+            RuntimeBinding::Hidden => format!(
+                "`{name}` here would read a nearer binding of it rather than the one the checker \
+                 resolved"
             ),
         }
     }

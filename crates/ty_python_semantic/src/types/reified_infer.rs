@@ -1147,7 +1147,7 @@ fn spell_class_name<'db>(
                 .and_then(Type::as_class_literal)
                 == Some(literal)
             {
-                return Some(RuntimeSpelling::text(name.as_str()));
+                return Some(RuntimeSpelling::builtin(name));
             }
         }
     }
@@ -1790,7 +1790,7 @@ fn spell_class_literal<'db>(
         .place
         .ignore_possibly_undefined()?;
     (builtin.as_class_literal()? == literal)
-        .then(|| RuntimeSpelling::text(name.as_str()).telling(told_classes_of_class(db, literal)))
+        .then(|| RuntimeSpelling::builtin(name).telling(told_classes_of_class(db, literal)))
 }
 
 /// How a parametric type test (`x is C[args]`, keyword form) resolves.
@@ -2464,7 +2464,7 @@ pub(crate) fn type_test_plan<'db>(
     let plan = type_test_plan_seen(db, env, file, value_ty, target, written, &mut Vec::new());
     // each spelling the plan rebuilds is written where the test is: one for a union's arm
     // has no node of its own to have been asked about
-    if let Some(site) = written.and_then(WrittenTarget::site)
+    if let Some(site) = written.and_then(|written| written.site(db))
         && let Some((name, binding)) = plan
             .spellings()
             .into_iter()
@@ -2942,8 +2942,8 @@ impl<'a, 'db> WrittenTarget<'a, 'db> {
         Some((program_file, scope))
     }
 
-    fn site(self) -> Option<RuntimeSite<'db>> {
-        Some(RuntimeSite::at(self.node?, self.inferred?))
+    fn site(self, db: &'db dyn Db) -> Option<RuntimeSite<'db>> {
+        Some(RuntimeSite::at(db, self.node?, self.inferred?))
     }
 }
 
@@ -2973,7 +2973,7 @@ fn written_or_spelled<'db>(
     subscript_evaluates: bool,
     spell: impl FnOnce() -> Option<RuntimeSpelling>,
 ) -> Result<TargetSpelling, ErasedTargetReason> {
-    let site = written.and_then(WrittenTarget::site);
+    let site = written.and_then(|written| written.site(db));
     let mut unbound = None;
     if let Some(spelling) = spell() {
         match site.and_then(|site| spelling.unbound_read(db, env, site)) {

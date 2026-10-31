@@ -399,6 +399,12 @@ def local():
 
 args = (1,)
 g(*args)          # error — the injection cannot pass through unpacking
+
+class K: ...
+
+def shadowed(v: K):
+    K = 5
+    g(v)          # error — the nearer `K` hides the class the call would name
 ```
 
 a type parameter with a default ([PEP 696]) fills its reified slot when
