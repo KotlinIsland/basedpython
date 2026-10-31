@@ -1008,14 +1008,27 @@ mod tests {
         );
     }
 
+    /// a literal nobody wrote as a type widens, as the annotation of a body's return does
+    #[test]
+    fn a_literal_the_body_returns_widens_in_the_return_type() {
+        let out = transpile(
+            "decorator def d(fn: (...) -> object):\n    return 1\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def d(fn: Callable[..., object]) -> int: ..."),
+            "got:\n{out}"
+        );
+    }
+
     /// a type with no spelling the emitted file could resolve is not written: `object`
     /// stands, which says less than the truth rather than something else
     #[test]
     fn a_return_type_the_output_could_not_resolve_stays_object() {
-        // ty's answer here is `Literal[1]`, and `Literal` is not one of the names
-        // basedpython binds implicitly, so there is no import to write for it
+        // ty's answer here is an intersection, which python has no spelling for
         let out = transpile(
-            "decorator def d(fn: (...) -> object):\n    return 1\n",
+            "decorator def d(fn: (...) -> object):\n    assert isinstance(fn, int)\n    return fn\n",
             &Config::test_default(),
         )
         .unwrap();

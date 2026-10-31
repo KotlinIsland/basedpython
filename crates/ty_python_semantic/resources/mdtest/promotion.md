@@ -82,6 +82,94 @@ reveal_type(f)  # revealed: def f(_: int) -> int
 reveal_type(promote(f))  # revealed: list[(_: int) -> int]
 ```
 
+## a literal returned by a function with no return annotation is promotable
+
+nobody wrote the return type of such a function, so a literal in it is as promotable as the returned
+expression. the call still reveals the literal, and a generic call widens it where it widens any
+other inferred literal
+
+```py
+from typing import Callable, Literal
+
+def promote[T](x: T) -> list[T]:
+    return [x]
+
+def promote_result[T](x: Callable[[], T]) -> list[T]:
+    return [x()]
+
+def inferred():
+    return "a"
+
+reveal_type(inferred())  # revealed: Literal["a"]
+reveal_type(promote(inferred()))  # revealed: list[str]
+reveal_type(promote_result(inferred))  # revealed: list[str]
+
+def inferred_branches(flag: bool):
+    if flag:
+        return 1
+    return 2
+
+reveal_type(promote(inferred_branches(True)))  # revealed: list[int]
+```
+
+the same goes for a literal that reaches the `return` through a call
+
+```py
+def same[T](x: T) -> T:
+    return x
+
+def through_a_call():
+    return same("a")
+
+def through_two_calls():
+    return same(same("a"))
+
+def through_a_condition(flag: bool):
+    return same("a") if flag else "b"
+
+def through_another_function():
+    return through_a_call()
+
+reveal_type(through_a_call())  # revealed: Literal["a"]
+reveal_type(promote(same("a")))  # revealed: list[str]
+reveal_type(promote(through_a_call()))  # revealed: list[str]
+reveal_type(promote(through_two_calls()))  # revealed: list[str]
+reveal_type(promote(through_a_condition(True)))  # revealed: list[str]
+reveal_type(promote(through_another_function()))  # revealed: list[str]
+reveal_type(promote_result(through_a_call))  # revealed: list[str]
+```
+
+a written return type still fixes the literal, on the function itself and on one that takes its
+return type from the method it overrides
+
+```py
+def annotated() -> Literal["a"]:
+    return "a"
+
+reveal_type(promote(annotated()))  # revealed: list[Literal["a"]]
+reveal_type(promote_result(annotated))  # revealed: list[Literal["a"]]
+
+def annotated_through_a_call() -> Literal["a"]:
+    return same("a")
+
+def annotated_local():
+    x: Literal["a"] = same("a")
+    return x
+
+reveal_type(promote(annotated_through_a_call()))  # revealed: list[Literal["a"]]
+reveal_type(promote(annotated_local()))  # revealed: list[Literal["a"]]
+
+class Base:
+    def m(self) -> Literal["a"]:
+        return "a"
+
+class Child(Base):
+    def m(self):
+        return "a"
+
+reveal_type(promote(Child().m()))  # revealed: list[Literal["a"]]
+```
+
 ## Invariant collection literals are promoted
 
 The elements of invariant collection literals, i.e. lists, dictionaries, and sets, are promoted:

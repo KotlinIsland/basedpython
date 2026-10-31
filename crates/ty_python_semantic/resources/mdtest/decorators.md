@@ -191,6 +191,121 @@ reveal_type(C().m(1))  # revealed: str
 C().m("wrong")  # error: [invalid-argument-type]
 ```
 
+### `functools.singledispatch`
+
+the return type of a dispatching function is the invariant type argument of what `singledispatch`
+returns. a literal that an unannotated function happens to return does not fix it, so
+implementations returning other values of that type can be registered, in either form of `register`
+
+```py
+from functools import singledispatch
+
+@singledispatch
+def inferred(x):
+    return "default"
+
+reveal_type(inferred)  # revealed: _SingleDispatchCallable[str]
+
+@inferred.register
+def _(x: int):
+    return "int"
+
+@inferred.register(str)
+def _(x):
+    return "str"
+
+inferred.register(bytes, lambda x: "bytes")
+
+reveal_type(inferred(1))  # revealed: str
+```
+
+the same goes for a literal the function returns through a call
+
+```py
+from functools import singledispatch
+from typing import TypeVar
+
+T = TypeVar("T")
+
+def same(x: T) -> T:
+    return x
+
+@singledispatch
+def through_a_call(x):
+    return same("default")
+
+reveal_type(through_a_call)  # revealed: _SingleDispatchCallable[str]
+
+@through_a_call.register
+def _(x: int):
+    return same("int")
+
+@through_a_call.register(str)
+def _(x):
+    return "str"
+```
+
+a declared return type gives the same answer, however the implementations spell theirs
+
+```py
+from functools import singledispatch
+
+@singledispatch
+def declared(x) -> str:
+    return "default"
+
+@declared.register
+def _(x: int) -> str:
+    return "int"
+
+@declared.register(str)
+def _(x):
+    return "str"
+
+reveal_type(declared(1))  # revealed: str
+```
+
+an implementation returning something else is rejected
+
+```py
+from functools import singledispatch
+
+@singledispatch
+def rejects(x):
+    return "default"
+
+# error: [no-matching-overload]
+@rejects.register
+def _(x: int):
+    return 1
+
+# error: [invalid-argument-type]
+@rejects.register(str)
+def _(x):
+    return 1
+
+# error: [no-matching-overload]
+rejects.register(bytes, lambda x: 1)
+```
+
+a written literal return type is kept, so it rejects other values of the type as well
+
+```py
+from functools import singledispatch
+from typing import Literal
+
+@singledispatch
+def literal(x) -> Literal["default"]:
+    return "default"
+
+reveal_type(literal)  # revealed: _SingleDispatchCallable[Literal["default"]]
+
+# error: [no-matching-overload]
+@literal.register
+def _(x: int):
+    return "int"
+```
+
 ### `functools.cached_property`
 
 ```py
