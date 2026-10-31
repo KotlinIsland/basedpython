@@ -10,6 +10,7 @@
 //! them to a terminal and a language server hands them to an editor, and a
 //! pipeline that wrote to stderr could only ever serve the first.
 
+use std::collections::HashSet;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,10 +21,13 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
+use ruff_db::files::File;
 use ruff_db::panic::PanicActivity;
+use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
-use ty_project::ProjectDatabase;
 use ty_project::parallel::ParallelIteratorExt;
+use ty_project::{Db as _, ProjectDatabase};
+use ty_python_semantic::Db as _;
 
 use crate::project::Rebuilder;
 use crate::runtime::{RuntimeLayout, RuntimePackage};
@@ -359,13 +363,102 @@ pub fn is_unusable_source(d: &Diagnostic) -> bool {
 /// The id is the failure's own kind, because the three read differently to whoever gets
 /// them: a refusal is about the module and says what to rename, while `invalid-syntax` and
 /// `internal-error` are about the transpiler and the next step is to report them.
+/// what the project asks a transpile of one of its modules to be: lowered for the python version
+/// it targets
+pub fn project_config(db: &ProjectDatabase) -> Config {
+    Config {
+        min_version: db
+            .project()
+            .program(db)
+            .python_version(db)
+            .to_string()
+            .parse()
+            .unwrap_or_else(|_| Config::default().min_version),
+        float_literals: match db
+            .project()
+            .metadata(db)
+            .options()
+            .lowering
+            .as_ref()
+            .and_then(|lowering| lowering.float_literals.as_deref())
+        {
+            Some(ty_project::metadata::options::FloatLiteralLowering::Literal) => {
+                by_transforms::FloatLiteralLowering::Literal
+            }
+            Some(ty_project::metadata::options::FloatLiteralLowering::Nominal) | None => {
+                by_transforms::FloatLiteralLowering::Nominal
+            }
+        },
+        ..Config::default()
+    }
+}
+
+/// `checked`, what checking the project found, with each binding that takes over the name of a
+/// runtime helper its module's lowering writes, which `by build` and `by run` would refuse
+///
+/// whether the lowering writes the helper is what lowering the module finds out, and only the
+/// transpiler's own check can't drift from what it refuses, so a module that binds such a name
+/// is lowered to ask. few do, and a module the check found an error in is not asked: its transpile
+/// fails as often as not on what the check reported
+pub fn with_helper_name_clashes(
+    db: &ProjectDatabase,
+    mut checked: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
+    let has_error: HashSet<File> = checked
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() >= Severity::Error)
+        .filter_map(|diagnostic| Some(diagnostic.primary_span()?.expect_ty_file()))
+        .collect();
+    let config = Config {
+        stamps_undetermined: true,
+        ..project_config(db)
+    };
+    let clashes: Vec<Diagnostic> = db
+        .project()
+        .files(db)
+        .into_iter()
+        .filter(|file| file.source_type(db).is_basedpython() && !has_error.contains(file))
+        .filter(|file| {
+            let python_file = db.program_file(*file).python_file(db);
+            by_transforms::binds_a_helper_name(parsed_module(db, python_file).load(db).suite())
+        })
+        .filter_map(|file| {
+            let transpiled = ty_project::catch_panic(
+                db,
+                file,
+                PanicActivity::Transpiling,
+                AssertUnwindSafe(|| by_transforms::transpile_typed(db, file, &config, None)),
+            );
+            // any other failure, and a panic, is for the command that would have been stopped by
+            // it to report, as it always has been
+            match transpiled {
+                Ok(Err(error))
+                    if error.kind == by_transforms::TranspileErrorKind::HelperNameClash =>
+                {
+                    Some(transpile_failure_diagnostic(file, &error))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if !clashes.is_empty() {
+        checked.extend(clashes);
+        checked.sort_by(|left, right| {
+            left.rendering_sort_key(db)
+                .cmp(&right.rendering_sort_key(db))
+        });
+    }
+    checked
+}
+
 pub fn transpile_failure_diagnostic(
     file: ruff_db::files::File,
     err: &by_transforms::TranspileError,
 ) -> Diagnostic {
     let id = match err.kind {
         by_transforms::TranspileErrorKind::InvalidSyntax => DiagnosticId::InvalidSyntax,
-        by_transforms::TranspileErrorKind::Refused => DiagnosticId::TranspileRefused,
+        by_transforms::TranspileErrorKind::Refused
+        | by_transforms::TranspileErrorKind::HelperNameClash => DiagnosticId::TranspileRefused,
         by_transforms::TranspileErrorKind::Bug => DiagnosticId::InternalError,
     };
     let mut diag = Diagnostic::new(id, Severity::Error, err.message.clone());

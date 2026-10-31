@@ -139,6 +139,59 @@ class WithMetaGetItem(metaclass=Meta):
 reveal_type(WithMetaGetItem[0])  # revealed: str
 ```
 
+## A generic class that answers its own subscript
+
+A subscript of a generic class is a specialization, whatever the class's own `__class_getitem__` or
+its metaclass's `__getitem__` returns. pydantic's `BaseModel` answers its subscript for itself in
+this way.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+class Own[T]:
+    def __class_getitem__(cls, item: object) -> object:
+        return cls
+
+reveal_type(Own[int])  # revealed: <class 'Own[int]'>
+
+class Meta(type):
+    def __getitem__(cls, key: object) -> str:
+        return "mine"
+
+class ByMeta[T](metaclass=Meta): ...
+
+reveal_type(ByMeta[int])  # revealed: <class 'ByMeta[int]'>
+```
+
+## A `.by` specialization of a class that answers its own subscript
+
+Its type arguments are read as those of any other specialization written as a value, so they may
+name a class bound further on
+
+```by
+class Own[T]:
+    def __class_getitem__(cls, item: object) -> object:
+        return cls
+
+Own[Later]  # no diagnostic
+
+class Later: ...
+```
+
+and the class is handed them as the transpiler lowers them
+
+```by
+class Echo[T]:
+    def __class_getitem__(cls, item: object) -> object:
+        assert item == int | None
+        return cls
+
+Echo[int?]()
+```
+
 ## Intersection of nominal-instance types
 
 If a subscript operation could succeed for *any* positive element of an intersection, no diagnostic

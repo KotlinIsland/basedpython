@@ -4,7 +4,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::panic::AssertUnwindSafe;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use by_stage::emit::transpile_failure_diagnostic;
+use by_stage::emit::{project_config, transpile_failure_diagnostic};
 use lsp_types::{Code, PublishDiagnosticsNotification};
 use lsp_types::{
     CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DiagnosticTag,
@@ -29,7 +29,6 @@ use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{DocumentVersion, FileRangeExt, ToRangeExt};
 use crate::server::api::requests::api_lock::api_lock_document_diagnostics;
 use crate::server::api::requests::detached_transpile::transpile_detached;
-use crate::server::api::requests::transpile::project_config;
 use crate::server::main_loop::Action;
 use crate::server::schedule::{BackgroundSchedule, Task};
 use crate::session::client::Client;

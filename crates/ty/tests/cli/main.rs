@@ -5,6 +5,7 @@ mod django;
 mod exit_code;
 mod file_selection;
 mod fixes;
+mod helper_names;
 mod project_server;
 mod python_environment;
 mod rule;

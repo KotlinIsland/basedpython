@@ -227,6 +227,42 @@ fn answers_what_a_cold_check_would_have() -> Result<()> {
     Ok(())
 }
 
+/// A binding a module's lowering would read in place of a runtime helper is reported from what
+/// the transpiler refuses, which has to work on the thread a server answers on: a transpile that
+/// builds a database of its own panics under one already attached.
+#[test]
+fn answers_with_a_helper_name_its_lowering_would_read() -> Result<()> {
+    let directory = TempDir::new()?;
+    let server = server(
+        &directory,
+        &[(
+            SystemPath::new("src/main.by"),
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "_soundness_check = 3\n",
+                "print(pick(xs, 0))\n",
+            ),
+        )],
+    )?;
+
+    let db = cold(&server.file_path(SystemPath::new("src")))?;
+    let Some(Response::Check(response)) = check(&directory, &db)? else {
+        panic!("the server did not answer");
+    };
+
+    assert!(
+        response.rendered.contains("transpile-refused")
+            && response.rendered.contains("`_soundness_check`"),
+        "{}",
+        response.rendered
+    );
+
+    Ok(())
+}
+
 /// A caller waits on this channel instead of running the check itself, so it has to be able to
 /// tell a server that is working from one that is never going to answer. Accepting a connection
 /// cannot tell it — that happens on a thread of its own, and would happen just the same with the

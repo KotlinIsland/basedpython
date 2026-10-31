@@ -80,7 +80,7 @@ fn answer(db: &ProjectDatabase, request: &CheckRequest) -> Response {
     let diagnostics = match salsa::Cancelled::catch(|| {
         let mut reporter = CollectReporter::default();
         db.check_with_reporter(&mut reporter);
-        reporter.into_sorted(db)
+        by_stage::emit::with_helper_name_clashes(db, reporter.into_sorted(db))
     }) {
         Ok(diagnostics) => diagnostics,
         Err(cancelled) => {
