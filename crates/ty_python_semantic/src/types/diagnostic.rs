@@ -4434,19 +4434,33 @@ fn erased_type_check_diagnostic<'ctx, 'db>(
             ));
             diagnostic
         }
-        ErasedTargetReason::NotSubscriptable => {
+        ErasedTargetReason::NotSubscriptable { asks_even_bare } => {
             let mut diagnostic = builder.into_diagnostic(format_args!(
                 "`is {target}` cannot be checked at runtime: the target class cannot be \
                  subscripted"
             ));
-            diagnostic.info(format_args!(
-                "the class has no `__class_getitem__` on this python version, so the test's \
-                 runtime check would raise `TypeError` evaluating `{target}`"
-            ));
-            diagnostic.info(format_args!(
-                "drop the type arguments and test against the bare class, which is all the \
-                 runtime records anyway"
-            ));
+            match asks_even_bare {
+                Some(class) => {
+                    diagnostic.info(format_args!(
+                        "`{class}` has no `__class_getitem__` on this python version, and a type \
+                         parameter with a default makes it ask for a specialization even written \
+                         bare"
+                    ));
+                    diagnostic.info(format_args!(
+                        "test with `isinstance(value, {class})`, which asks only about the class"
+                    ));
+                }
+                None => {
+                    diagnostic.info(format_args!(
+                        "the class has no `__class_getitem__` on this python version, so the \
+                         test's runtime check would raise `TypeError` evaluating `{target}`"
+                    ));
+                    diagnostic.info(format_args!(
+                        "drop the type arguments and test against the bare class, which is all \
+                         the runtime records anyway"
+                    ));
+                }
+            }
             diagnostic
         }
         ErasedTargetReason::BuiltinCollection => {
