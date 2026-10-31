@@ -15,8 +15,9 @@
 //! the first of them and ty to the last
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
+use crate::runtime::Helper;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::transformer::{Transformer, walk_expr, walk_stmt};
 use ruff_python_ast::visitor::{
@@ -25,11 +26,11 @@ use ruff_python_ast::visitor::{
 use ruff_python_ast::{Expr, ModModule, Parameter, Parameters, PythonVersion, Stmt};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange};
-use ty_python_semantic::RuntimeSpelling;
 use ty_python_semantic::types::repeated_underscore::{
     self as decision, UnderscoreLowering, UnderscoreRefusal, callable_parameter_slots,
     lower_repeated_underscores, lowered_parameter_names, parameter_slots,
 };
+use ty_python_semantic::{RuntimeSpelling, SpellingHelper};
 
 pub(crate) use ty_python_semantic::types::repeated_underscore::{
     ParameterSlot, protocol_method_receiver,
@@ -192,10 +193,10 @@ pub struct WrittenNames<'src> {
     private: Option<&'src PrivateNames>,
     /// the names of the classes the module's lowerings synthesize for a shape
     synthesized: Option<&'src SynthesizedClasses>,
-    /// set once a spelling written out for the module needs the helper that builds a
-    /// literal type. whether one does is known only from the types it spells, which reach
-    /// many lowerings, so the one place they are all written out answers for them
-    literal_helper: Option<&'src Cell<bool>>,
+    /// each runtime helper a spelling written out for the module calls. whether one does is
+    /// known only from the types it spells, which reach many lowerings, so the one place they
+    /// are all written out answers for them
+    spelling_helpers: Option<&'src RefCell<BTreeSet<Helper>>>,
     /// a `str` or `bytes` value of a literal type is written without quotes, for a target
     /// whose f-strings can't hold them
     values_without_quotes: bool,
@@ -546,7 +547,7 @@ impl<'src> WrittenNames<'src> {
             code: None,
             private: None,
             synthesized: None,
-            literal_helper: None,
+            spelling_helpers: None,
             values_without_quotes: false,
         }
     }
@@ -577,23 +578,23 @@ impl<'src> WrittenNames<'src> {
             code: Some(code),
             private: self.private,
             synthesized: self.synthesized,
-            literal_helper: self.literal_helper,
+            spelling_helpers: self.spelling_helpers,
             values_without_quotes: self.values_without_quotes,
         }
     }
 
-    /// these names, as written for `min_version`, with `literal_helper` set once a spelling they
-    /// write needs the helper that builds a literal type
-    pub(crate) fn writing_literals<'a>(
+    /// these names, as written for `min_version`, with `spelling_helpers` given each runtime
+    /// helper a spelling they write calls
+    pub(crate) fn writing_spellings<'a>(
         self,
-        literal_helper: &'a Cell<bool>,
+        spelling_helpers: &'a RefCell<BTreeSet<Helper>>,
         min_version: PythonVersion,
     ) -> WrittenNames<'a>
     where
         'src: 'a,
     {
         WrittenNames {
-            literal_helper: Some(literal_helper),
+            spelling_helpers: Some(spelling_helpers),
             values_without_quotes: min_version < PythonVersion::PY312,
             ..self
         }
@@ -610,7 +611,7 @@ impl<'src> WrittenNames<'src> {
             code: self.code,
             private: Some(private),
             synthesized: self.synthesized,
-            literal_helper: self.literal_helper,
+            spelling_helpers: self.spelling_helpers,
             values_without_quotes: self.values_without_quotes,
         }
     }
@@ -627,7 +628,7 @@ impl<'src> WrittenNames<'src> {
             code: self.code,
             private: self.private,
             synthesized: self.synthesized,
-            literal_helper: self.literal_helper,
+            spelling_helpers: self.spelling_helpers,
             values_without_quotes: self.values_without_quotes,
         }
     }
@@ -695,10 +696,15 @@ impl<'src> WrittenNames<'src> {
     /// `spelling`, which the checker spelled for this module, as the module is emitted: each
     /// module-level `private` symbol it reads under the name the symbol is emitted under
     pub(crate) fn spelled(self, spelling: &RuntimeSpelling) -> String {
-        if spelling.reads_literal_helper()
-            && let Some(literal_helper) = self.literal_helper
-        {
-            literal_helper.set(true);
+        if let Some(spelling_helpers) = self.spelling_helpers {
+            spelling_helpers
+                .borrow_mut()
+                .extend(spelling.helpers().map(|helper| match helper {
+                    SpellingHelper::Literal => crate::runtime::LITERAL,
+                    SpellingHelper::Variance => crate::runtime::VARIANCE,
+                    SpellingHelper::Out => crate::runtime::OUT,
+                    SpellingHelper::In => crate::runtime::IN,
+                }));
         }
         let module_private = |symbol: &str| self.module_private(symbol);
         if self.values_without_quotes {

@@ -24,7 +24,7 @@
 //! is intentionally not invoked for any construct an AST pass handles.
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::transformer::Transformer;
@@ -47,11 +47,11 @@ use super::{
     literal_string, literal_types, local_once, main_function, match_type, modifiers, module_api,
     mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
     properties, protocol_type, raises_clause, reified_class, reified_generic, repeated_underscore,
-    return_value_use, runtime_union, sentinel, some_ctor, soundness, statement_expression,
-    static_resource, string_tag, super_keyword, symbolic_type_op, synthesized_types,
-    template_expression, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
-    unpack, use_site_variance, visibility_rename,
+    return_value_use, runtime_union, runtime_variance, sentinel, some_ctor, soundness,
+    statement_expression, static_resource, string_tag, super_keyword, symbolic_type_op,
+    synthesized_types, template_expression, template_type, top_star, trailing_lambda, tuple_index,
+    type_fn, type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
+    unique_loop_bindings, unpack, use_site_variance, visibility_rename,
 };
 use crate::Config;
 use crate::columns::Columns;
@@ -278,6 +278,8 @@ pub(crate) enum Lowering {
     LiteralString,
     LiteralType,
     LocalOnce,
+    /// what the runtime is told about variance, see [`runtime_variance`]
+    RuntimeVariance,
     MatchType,
     Modifiers,
     NoneChain,
@@ -1279,8 +1281,8 @@ pub(crate) fn run_against_source<'a>(
     config: &Config,
     project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
-    let literal_helper = Cell::new(false);
-    let written = written.writing_literals(&literal_helper, config.min_version);
+    let spelling_helpers = RefCell::new(BTreeSet::new());
+    let written = written.writing_spellings(&spelling_helpers, config.min_version);
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -1574,6 +1576,11 @@ pub(crate) fn run_against_source<'a>(
     let class_subscript_pass = class_subscript::ClassSubscriptPass {
         min_version: config.min_version,
     };
+    let runtime_variance_pass = runtime_variance::RuntimeVariancePass {
+        source: source_ref,
+        class_variance: config.class_variance,
+        min_version: config.min_version,
+    };
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
         inferred_annotation::InferredAnnotationPass::new(written, config.min_version);
@@ -1840,6 +1847,9 @@ pub(crate) fn run_against_source<'a>(
         // token equality / witness probe / unchecked runtime probe)
         &parametric_is_pass,
         &class_subscript_pass,
+        // what the runtime needs to answer a test the checker left it: a decorator above a
+        // class that varies, and what a value position spells of a type argument
+        &runtime_variance_pass,
         &implicit_typing_pass,
         // synthesize declared types for bare class-body assignments
         // (`class A: a = 1` → `a: int = 1`); a zero-width insertion at the
@@ -2084,9 +2094,7 @@ pub(crate) fn run_against_source<'a>(
     {
         ctx.runtime.insert(crate::runtime::TEMPLATE_TEXT);
     }
-    if literal_helper.get() {
-        ctx.runtime.insert(crate::runtime::LITERAL);
-    }
+    ctx.runtime.extend(spelling_helpers.take());
     if !ctx.runtime.is_empty() {
         let helpers = ctx.runtime.iter().copied();
         match config.runtime_module.as_deref() {
@@ -2754,6 +2762,16 @@ mod subsumed_lowerings {
             "a_class_subscript_inside_a_type_the_callable_lowering_writes_goes_through_the_helper",
         ),
         (
+            "CallableSyntaxPass",
+            Lowering::RuntimeVariance,
+            "a_type_written_in_a_callable_keeps_what_it_tells",
+        ),
+        (
+            "GenericPolyfillPass",
+            Lowering::RuntimeVariance,
+            "every_place_a_type_is_written_transpiles",
+        ),
+        (
             "GenericPolyfillPass",
             Lowering::MatchType,
             "polyfilled_match_type_lowers_to_object",
@@ -3126,11 +3144,39 @@ mod subsumed_lowerings {
                 &["_by_subscript(zip"],
             ),
             case(
+                "KwSubscriptPass",
+                &[Lowering::LiteralType],
+                "class A[X, Y]: ...\na = A[1, Y=2]\n",
+                &["a = A[_by_lit(1), _by_lit(2)]"],
+                &[],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::TupleLiteralType],
+                "class A[T]: ...\ndef f(x: object):\n    return x is A[(1, \"a\")]\n",
+                &["_parametric_is(x, A[tuple[_by_lit(1), _by_lit(text=(97,))]], (3,))"],
+                &[],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::RuntimeVariance],
+                "from collections.abc import Sequence\nclass A[T]:\n    t: T\ndef f(x: object):\n    return x is A[Sequence[int]]\n",
+                &["_parametric_is(x, A[_by_variance(1)(Sequence)[int]], (0,))"],
+                &[],
+            ),
+            case(
                 "GenericCallStripPass",
                 &[Lowering::ClassSubscript],
                 "def f[T](t: T) -> T:\n    return t\nf[map[int]](map(int, []))\n",
                 &["f(map(int, []))"],
                 &["_by_subscript(map"],
+            ),
+            case(
+                "GenericCallStripPass",
+                &[Lowering::RuntimeVariance],
+                "from collections.abc import Sequence\ndef f[T](t: T) -> T:\n    return t\nf[Sequence[int]]([1])\n",
+                &["f([1])"],
+                &["_by_variance(1)(Sequence)"],
             ),
             case(
                 "GenericPolyfillPass",

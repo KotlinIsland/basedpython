@@ -41,6 +41,8 @@ struct ClassSubscripts<'a> {
     types: &'a dyn TypeInfo,
     min_version: PythonVersion,
     edits: Vec<(TextRange, String)>,
+    /// whether a subscript tells the runtime the variance of its class
+    tells: bool,
 }
 
 impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
@@ -54,13 +56,28 @@ impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
                 .class_subscript_is_unattested(&subscript.value, self.min_version)
         {
             let (value, slice) = (subscript.value.range(), subscript.slice.range());
+            // the variance of a class no transpiled module defines is told where it is
+            // subscripted, and this is the subscript
+            let told = self
+                .types
+                .variances_told_at_a_subscript(&subscript.value)
+                .map(|variances| {
+                    let codes = variances
+                        .iter()
+                        .map(|variance| variance.code().to_string())
+                        .collect::<Vec<_>>();
+                    format!("_by_variance({})(", codes.join(", "))
+                });
+            self.tells |= told.is_some();
             // these take any parentheses around the value with them, on both of its sides
             self.edits.push((
                 TextRange::new(subscript.start(), value.start()),
-                "_by_subscript(".to_owned(),
+                format!("_by_subscript({}", told.as_deref().unwrap_or_default()),
             ));
-            self.edits
-                .push((TextRange::new(value.end(), slice.start()), ", ".to_owned()));
+            self.edits.push((
+                TextRange::new(value.end(), slice.start()),
+                if told.is_some() { "), " } else { ", " }.to_owned(),
+            ));
             self.edits
                 .push((TextRange::new(slice.end(), subscript.end()), ")".to_owned()));
         }
@@ -83,8 +100,12 @@ impl TypeAwarePass for ClassSubscriptPass {
             types,
             min_version: self.min_version,
             edits: Vec::new(),
+            tells: false,
         };
         subscripts.visit_body(stmts);
+        if subscripts.tells {
+            ctx.runtime.insert(crate::runtime::VARIANCE);
+        }
         if !subscripts.edits.is_empty() {
             ctx.runtime.insert(crate::runtime::SUBSCRIPT);
             ctx.text_edits.extend(subscripts.edits);
@@ -216,7 +237,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("c = _by_subscript(zip, tuple[int, str])\n"),
+            out.contains("c = _by_subscript(_by_variance(1)(zip), tuple[int, str])\n"),
             "{out}"
         );
         assert!(
@@ -258,7 +279,9 @@ mod tests {
     fn a_probe_evaluates_its_target_through_the_helper() {
         let out = out("def f(x: object):\n    return x is zip[int]\n");
         assert!(
-            out.contains("return _parametric_is(x, _by_subscript(zip, int), (1,))"),
+            out.contains(
+                "return _parametric_is(x, _by_subscript(_by_variance(1)(zip), int), (1,))"
+            ),
             "{out}"
         );
     }

@@ -228,6 +228,107 @@ def g(c: C[*]) -> bool:
     return c is C[out int]
 ```
 
+## a type argument relates as the class it is an argument of says
+
+A probe answers what the checker would for every argument it reads, however deep. Each generic
+argument goes through the variance of its own class, so an `In` nested in an `Out` flips, and a
+target argument may be a union, or an abstract class the value's argument only registers with:
+
+```by
+from collections.abc import Sequence
+
+class Out[out T]: pass
+class In[in T]: pass
+class Box[T]:
+    value: T
+
+def v(value: object) -> object:
+    return value
+
+assert v(Out[Out[int]]()) is Out[Out[object]]
+assert v(Out[In[object]]()) is Out[In[int]]
+assert v(Out[int]()) is Out[int | str]
+assert v(Out[None]()) is Out[int | None]
+assert v(Out[list[int]]()) is Out[Sequence[int]]
+assert v(Out[tuple[int]]()) is Out[tuple[object]]
+assert not v(Out[object]()) is Out[int]
+assert not v(Box[int]()) is Box[object]
+```
+
+A projection belongs to the one argument it is written on, wherever that argument is:
+
+```by
+class Out[out T]: pass
+class Box[T]:
+    value: T
+
+def v(value: object) -> object:
+    return value
+
+assert v(Box[int]()) is Box[out object]
+assert v(Out[Box[int]]()) is Out[Box[out object]]
+assert not v(Out[Box[int]]()) is Out[Box[object]]
+```
+
+The variance is what the checker read, whether the class declares it, infers it or inherits it from
+a class of the standard library:
+
+```by
+from collections.abc import Sequence
+from typing import override
+
+class Inf[T]:
+    def get(self) -> T:
+        raise NotImplementedError
+
+class Seq[T](Sequence[T]):
+    @override
+    def __len__(self) -> int:
+        return 0
+
+    @override
+    def __getitem__(self, index):
+        return self
+
+def v(value: object) -> object:
+    return value
+
+assert v(Inf[int]()) is Inf[object]
+assert not v(Inf[object]()) is Inf[int]
+assert v(Seq[int]()) is Sequence[object]
+assert not v(Seq[object]()) is Sequence[int]
+```
+
+## a reified target answers as a written one does
+
+A reified `T` holds what the call supplied, which the test reads the way it reads a target written
+in place. An argument written where the call is spelled the same as one the call's arguments solve:
+
+```by
+from collections.abc import Sequence
+
+class Out[out T]: pass
+class Box[T]:
+    value: T
+
+def holds[T](value: object) -> bool:
+    return value is T
+
+assert holds[Out[object]](Out[int]())
+assert holds[Out[Out[object]]](Out[Out[int]]())
+assert holds[Out[int | str]](Out[int]())
+assert holds[Out[Sequence[int]]](Out[list[int]]())
+assert holds[Box[out object]](Box[int]())
+assert not holds[Out[int]](Out[object]())
+assert not holds[Box[object]](Box[int]())
+
+assert holds[1](1)
+assert not holds[1](2)
+assert holds["a"]("a")
+assert holds[Out[1]](Out[1]())
+assert holds[Out[int]](Out[1]())
+```
+
 ## a user-generic union is discriminated by the probe
 
 `A`'s instances carry `__orig_class__`, so each arm is distinguishable at runtime (an invariant

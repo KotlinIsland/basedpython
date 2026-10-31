@@ -790,6 +790,8 @@ def make(t):
 assert f"{build('x').t}" == "x"
 assert f'{B("y").t}' == "y"
 assert f"{B('x') is B['x']}" == "True"
+assert f"{B['x']('x').t}" == "x"
+assert f"{list['x, y']}" == "list[typing.Literal['x, y']]"
 assert f"{B(b'x') is B[b'x']}" == "True"
 print("ok")
 "#;
@@ -806,6 +808,528 @@ fn a_string_literal_type_argument_is_written_for_an_f_string_below_3_12() {
         STRING_LITERAL_IN_AN_F_STRING_PROGRAM,
         PythonVersion::PY311,
     );
+}
+
+const VARIANCE_FIXTURE: &str = r#"
+from collections.abc import Sequence
+from typing import Any, Never
+
+class Out[out T]: pass
+class In[in T]: pass
+class Box[T]:
+    value: T
+class Child[T](Out[T]): pass
+class Inf[T]:
+    def get(self) -> T:
+        raise NotImplementedError
+class Takes[T]:
+    def put(self, value: T) -> None:
+        pass
+class Seq[T](Sequence[T]):
+    def __len__(self) -> int:
+        return 0
+    def __getitem__(self, index):
+        return self
+
+def v(value: object) -> object:
+    return value
+"#;
+
+/// every target of [`VARIANCE_FIXTURE`] written where the test is, which any target can run
+const DIRECT_VARIANCE_PROGRAM: &str = r#"
+assert v(Out[int]()) is Out[object]
+assert v(In[object]()) is In[int]
+assert v(Out[Out[int]]()) is Out[Out[object]]
+assert v(Out[In[object]]()) is Out[In[int]]
+assert v(Out[int]()) is Out[int | str]
+assert v(Out[list[int]]()) is Out[Sequence[int]]
+assert v(Out[list[bool]]()) is Out[Sequence[int]]
+assert v(Out[int]()) is Out[Any]
+assert v(Box[int]()) is Box[out object]
+assert v(Child[int]()) is Out[object]
+assert v(Out[tuple[int]]()) is Out[tuple[object]]
+assert v(Out[None]()) is Out[int | None]
+assert not v(Out[object]()) is Out[int]
+assert not v(Box[int]()) is Box[object]
+
+# variance the checker inferred, and the variance of a class of the standard library
+assert v(Inf[int]()) is Inf[object]
+assert not v(Inf[object]()) is Inf[int]
+assert v(Takes[object]()) is Takes[int]
+assert not v(Takes[int]()) is Takes[object]
+assert v(Seq[int]()) is Sequence[object]
+assert not v(Seq[object]()) is Sequence[int]
+assert v(Out[Seq[int]]()) is Out[Sequence[object]]
+assert not v(Out[Seq[object]]()) is Out[Sequence[int]]
+
+# the same position read the other way round flips it
+assert v(In[Out[object]]()) is In[Out[int]]
+assert not v(In[Out[int]]()) is In[Out[object]]
+assert v(In[Sequence[object]]()) is In[list[int]]
+
+# a projection belongs to its argument, wherever that argument is
+assert v(Out[Box[int]]()) is Out[Box[out object]]
+assert not v(Out[Box[int]]()) is Out[Box[object]]
+assert v(Box[object]()) is Box[in int]
+assert not v(Box[int]()) is Box[in object]
+assert v(Box[Box[int]]()) is Box[out Box[out object]]
+assert not v(Box[Box[object]]()) is Box[out Box[out int]]
+
+# an invariant argument has to be the same type, not the same object
+assert v(Box[int | str]()) is Box[str | int]
+assert v(Box[bool | int]()) is Box[int]
+assert not v(Box[bool | str]()) is Box[int | str]
+
+# a union on the source side has to fit whole
+assert v(Out[int | bool]()) is Out[int]
+assert not v(Out[int | str]()) is Out[int]
+assert v(Out[int | str]()) is Out[object]
+
+# a type argument nothing is known about is compatible with any
+assert v(Box[Any]()) is Box[int]
+assert v(Out[Any]()) is Out[int]
+assert v(Out[list[Any]]()) is Out[list[int]]
+
+# literals
+assert v(Out[1]()) is Out[int]
+assert v(Out[1]()) is Out[1 | 2]
+assert not v(Out[1]()) is Out[2]
+assert not v(Out[int]()) is Out[1]
+assert not v(Out[True]()) is Out[1]
+assert v(Box[bool]()) is Box[True | False]
+
+# `None` is its own type
+assert v(Out[None]()) is Out[None]
+assert not v(Out[None]()) is Out[int]
+assert not v(Out[int]()) is Out[None]
+
+# tuples are covariant in their elements, and have their shape to match
+assert v(Out[tuple[int, str]]()) is Out[tuple[object, object]]
+assert not v(Out[tuple[int, str]]()) is Out[tuple[object]]
+assert v(Out[tuple[int, int]]()) is Out[tuple[int, ...]]
+assert v(Out[tuple[bool, ...]]()) is Out[tuple[int, ...]]
+assert not v(Out[tuple[int, ...]]()) is Out[tuple[int, int]]
+assert not v(Out[tuple[int, str]]()) is Out[tuple[int, ...]]
+assert v(Out[tuple[int, str]]()) is Out[tuple]
+assert v(Out[tuple[()]]()) is Out[tuple[int, ...]]
+assert not v(Out[tuple[()]]()) is Out[tuple[int]]
+
+# a class of the program's maps to the target's arguments through its bases
+class Fixed(Out[int]): pass
+class Swap[A, B](dict[B, A]): pass
+assert v(Out[Fixed]()) is Out[Out[int]]
+assert v(Out[Fixed]()) is Out[Out[object]]
+assert not v(Out[Fixed]()) is Out[Out[str]]
+assert v(Out[Swap[int, str]]()) is Out[dict[str, int]]
+assert not v(Out[Swap[int, str]]()) is Out[dict[int, str]]
+
+# `object` takes anything, and a plain class is compared as a class
+class Base: pass
+class Sub(Base): pass
+assert v(Out[Sub]()) is Out[Base]
+assert not v(Out[Base]()) is Out[Sub]
+assert v(Out[list[int]]()) is Out[object]
+print("ok")
+"#;
+
+/// [`DIRECT_VARIANCE_PROGRAM`]'s targets through a reified cell, which holds what the call
+/// spelled: only what the alias carries can answer
+const CELL_VARIANCE_PROGRAM: &str = r#"
+def cell[T](value: object) -> bool:
+    return value is T
+
+assert cell[Out[object]](Out[int]())
+assert cell[In[int]](In[object]())
+assert cell[Out[Out[object]]](Out[Out[int]]())
+assert cell[Out[In[int]]](Out[In[object]]())
+assert cell[Out[int | str]](Out[int]())
+assert cell[Out[Sequence[int]]](Out[list[int]]())
+assert cell[Out[Sequence[int]]](Out[list[bool]]())
+assert cell[Out[Any]](Out[int]())
+assert cell[Box[out object]](Box[int]())
+assert cell[Out[object]](Child[int]())
+assert cell[Out[tuple[object]]](Out[tuple[int]]())
+assert cell[Out[int | None]](Out[None]())
+assert not cell[Out[int]](Out[object]())
+assert not cell[Box[object]](Box[int]())
+
+# variance the checker inferred, and the variance of a class of the standard library
+assert cell[Inf[object]](Inf[int]())
+assert not cell[Inf[int]](Inf[object]())
+assert cell[Takes[int]](Takes[object]())
+assert not cell[Takes[object]](Takes[int]())
+assert cell[Sequence[object]](Seq[int]())
+assert not cell[Sequence[int]](Seq[object]())
+assert cell[Out[Sequence[object]]](Out[Seq[int]]())
+
+# a cell is told nothing the class doesn't say: the same arguments spelled in a union, an alias
+# or another module's name
+X = Out[object]
+assert cell[X](Out[int]())
+type Y = Out[object]
+assert cell[Y](Out[int]())
+type Z[A] = Out[A]
+assert cell[Z[object]](Out[int]())
+assert cell[Out[object] | str](Out[int]())
+assert cell[Out[object] | str]("s")
+assert not cell[Out[int] | str](Out[object]())
+Projected = Box[out object]
+assert cell[Projected](Box[int]())
+assert not cell[Box[object]](Box[int]())
+
+# a projected and a plain argument are two types, and each is still its own alias
+assert Box[out object] == Box[out object]
+assert not Box[out object] == Box[object]
+assert str(Box[out object]).endswith("Box[out object]")
+def holds[T]() -> object:
+    return T
+assert id(holds[X]()) == id(X)
+assert holds[Box[out object]]() == Box[out object]
+
+# a forwarded cell contributes what it holds
+def forwarded[T](value: object) -> bool:
+    return cell[Out[T]](value)
+assert forwarded[object](Out[int]())
+assert not forwarded[int](Out[object]())
+def built[T](t: T) -> object:
+    return Out(t)
+class HasInit[out T]:
+    def __init__(self, t: T):
+        self.t = t
+def made[T](t: T) -> object:
+    return HasInit(t)
+assert cell[HasInit[object]](made(1))
+assert cell[HasInit[int]](made(1))
+assert not cell[HasInit[str]](made(1))
+
+# `None`, `Any`, a union and a literal in the cell itself
+assert cell[None](None)
+assert not cell[None](1)
+assert cell[Any](1)
+assert cell[int | None](None)
+assert not cell[int | str](None)
+assert cell[1](1)
+assert not cell[Never](1)
+print("ok")
+"#;
+
+/// transpile [`VARIANCE_FIXTURE`] with `program` for `target`, and run it
+fn run_variance_program(python: &Interpreter, program: &str, target: PythonVersion) {
+    run_program_for(python, &format!("{VARIANCE_FIXTURE}{program}"), target);
+}
+
+#[test]
+fn a_type_argument_relates_as_the_checker_says_written_where_the_test_is() {
+    let Some(python) = common::python(PythonVersion::PY310) else {
+        return;
+    };
+    run_variance_program(&python, DIRECT_VARIANCE_PROGRAM, python.version);
+    // below 3.12 the class is the polyfill's, and says what it varies by all the same
+    if python.version >= PythonVersion::PY312 {
+        run_variance_program(&python, DIRECT_VARIANCE_PROGRAM, PythonVersion::PY311);
+    }
+}
+
+#[test]
+fn a_type_argument_relates_as_the_checker_says_through_a_reified_cell() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_variance_program(&python, CELL_VARIANCE_PROGRAM, python.version);
+}
+
+const UNDECIDABLE_PROGRAM: &str = r#"
+from collections.abc import Callable, Iterable, Iterator
+from typing import NamedTuple, NewType, Protocol, TypedDict, runtime_checkable
+
+class Out[out T]: pass
+
+def v(value: object) -> object:
+    return value
+
+def cell[T](value: object) -> bool:
+    return value is T
+
+def raises_type_error(call) -> bool:
+    try:
+        call()
+    except TypeError:
+        return True
+    return False
+
+class Proto(Protocol):
+    def method(self) -> int: ...
+class Conforms:
+    def method(self) -> int:
+        return 1
+class Declares(Proto):
+    def method(self) -> int:
+        return 1
+@runtime_checkable
+class Checkable(Protocol):
+    def method(self) -> int: ...
+class WrongSignature:
+    def method(self) -> str:
+        return ""
+
+# a protocol no `issubclass` can read: nothing shows the relation but a declared base
+assert not v(Out[Conforms]()) is Out[Proto]
+assert v(Out[Declares]()) is Out[Proto]
+# a runtime checkable one answers as `isinstance` does, by the members being there
+assert v(Out[Conforms]()) is Out[Checkable]
+assert v(Out[WrongSignature]()) is Out[Checkable]
+# in the cell itself, `isinstance` refuses it
+assert raises_type_error(lambda: cell[Proto](Conforms()))
+
+class Movie(TypedDict):
+    name: str
+class Sequel(Movie):
+    number: int
+assert v(Out[Sequel]()) is Out[Movie]
+assert v(Out[Movie]()) is Out[Movie]
+assert not v(Out[Movie]()) is Out[Sequel]
+assert not v(Out[Movie]()) is Out[dict]
+assert not v(Out[Movie]()) is Out[dict[str, object]]
+assert raises_type_error(lambda: cell[Movie]({"name": "a"}))
+
+# a callable type relates to another by its signature, and to nothing else
+assert v(Out[(object) -> bool]()) is Out[(int) -> int]
+assert not v(Out[(int) -> int]()) is Out[(object) -> bool]
+assert not v(Out[Conforms]()) is Out[(int) -> int]
+assert v(Out[(int) -> int]()) is Out[Callable]
+# a value records no signature
+assert not cell[(int) -> int](lambda x: x)
+assert cell[Callable](lambda x: x)
+
+class Point(NamedTuple):
+    x: int
+    y: str
+assert v(Out[Point]()) is Out[tuple[int, str]]
+assert v(Out[Point]()) is Out[tuple[object, ...]]
+assert not v(Out[Point]()) is Out[tuple[str, str]]
+
+Id = NewType("Id", int)
+assert v(Out[Id]()) is Out[int]
+assert not v(Out[int]()) is Out[Id]
+
+# a class of the standard library whose stub fixes its arguments, which the runtime can't see
+assert not v(Out[str]()) is Out[Iterable[str]]
+# or that only has the methods of an abstract class, which says nothing about its arguments
+assert not v(Out[enumerate[int]]()) is Out[Iterator[int]]
+assert not v(Out[enumerate[int]]()) is Out[Iterator[tuple[int, int]]]
+print("ok")
+"#;
+
+/// what the runtime has no way of reading says no, or refuses as `isinstance` does, rather than
+/// a `True` the checker wouldn't give
+#[test]
+fn what_the_runtime_cannot_decide_never_answers_a_true_the_checker_would_not() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, UNDECIDABLE_PROGRAM);
+}
+
+const EXPLICIT_LITERAL_PROGRAM: &str = r#"
+from enum import Enum
+from typing import Literal
+import pickle
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+class B[T]:
+    def __init__(self, t: T):
+        self.t = t
+
+class Reads[T]:
+    def read(self) -> object:
+        return T
+
+class Builds[T]:
+    def make(self) -> object:
+        if isinstance(T, type):
+            return T()
+        return None
+
+class Method:
+    def test[T](self, x: object) -> bool:
+        return x is T
+
+def cell[T](x: object) -> bool:
+    return x is T
+
+def read[T]() -> object:
+    return T
+
+def inferred[T](t: T) -> object:
+    return T
+
+def build[T]() -> object:
+    if isinstance(T, type):
+        return T()
+    return None
+
+def same(explicit: object, solved: object) -> bool:
+    return explicit == solved and id(type(explicit)) == id(type(solved))
+
+# what an explicit argument records is what the same argument solved from a call records
+assert same(read[1](), inferred(1))
+assert same(read["a"](), inferred("a"))
+assert same(read[True](), inferred(True))
+assert same(read[-1](), inferred(-1))
+assert same(read[b"x"](), inferred(b"x"))
+assert same(read[None](), inferred(None))
+assert same(read[Color.RED](), inferred(Color.RED))
+assert same(read[1.5](), inferred(1.5))
+assert same(Reads[1]().read(), inferred(1))
+assert same(Reads["a"]().read(), inferred("a"))
+assert same(Reads[Literal[1]]().read(), inferred(1))
+assert same(read[Literal[1]](), inferred(1))
+
+# which reads as a type wherever a body reads it
+assert cell[1](1)
+assert not cell[1](2)
+assert not cell[1](True)
+assert cell["a"]("a")
+assert cell[True](True)
+assert not cell[True](1)
+assert cell[-1](-1)
+assert cell[b"x"](b"x")
+assert cell[1 | 2](2)
+assert not cell[1 | 2](3)
+assert cell["a" | None](None)
+assert cell["a" | "b"]("b")
+assert cell[Color.RED](Color.RED)
+assert not cell[Color.RED](Color.BLUE)
+assert cell[Literal[1]](1)
+assert cell[Literal[1, 2]](2)
+assert not cell[Literal[1]](2)
+assert build[1]() == 1
+assert Builds[1]().make() == 1
+assert id(pickle.loads(pickle.dumps(read[1]()))) == id(read[1]())
+
+# nested, and on a method, and held on to
+assert cell[B[1]](B[1](1))
+assert not cell[B[2]](B[1](1))
+assert not cell[B[int]](B[1](1))
+assert same(read[B[1]](), read[B[1]]())
+assert same(Reads[B[1]]().read(), read[B[1]]())
+assert cell[list[1]] is not None
+assert Method().test[1](1)
+assert not Method().test[1](2)
+specialized = cell[1]
+assert specialized(1)
+assert not specialized(2)
+Alias = Reads[1]
+assert same(Alias().read(), inferred(1))
+
+# written by name
+class Named[X, Y]:
+    def read(self) -> object:
+        return (X, Y)
+assert Named[1, Y="a"]().read() == (read[1](), read["a"]())
+def pack[**Fields]() -> object:
+    return Fields
+assert pack[a=1]() == {"a": read[1]()}
+
+# as the target of a test, and read in a replacement field
+def target(x: object) -> tuple[bool, bool, bool]:
+    return (x is Reads[1], x is B[1], x is Reads[B[1]])
+assert target(Reads[1]()) == (True, False, False)
+assert target(B[1](1)) == (False, True, False)
+assert target(Reads[B[1]]()) == (False, False, True)
+assert f"{cell[1](1)} {cell['a']('a')}" == "True True"
+print("ok")
+"#;
+
+#[test]
+fn an_explicit_literal_type_argument_records_what_an_inferred_one_does() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, EXPLICIT_LITERAL_PROGRAM);
+}
+
+const UNTRANSPILED_CALLER_MODULE: &str = r#"
+from collections.abc import Sequence
+
+class Out[out T]: pass
+class Inf[T]:
+    def get(self) -> T:
+        raise NotImplementedError
+class Box[T]:
+    value: T
+
+def cell[T](value: object) -> bool:
+    return value is T
+
+TOLD = Sequence[object]
+"#;
+
+const UNTRANSPILED_CALLER: &str = r#"
+from collections.abc import Iterable, Sequence
+from typing import Generic, TypeVar
+from transpiled import Box, Inf, Out, TOLD, cell
+
+# a class a transpiled module defines told the runtime when it was defined, whoever asks
+assert cell[Out[object]](Out[int]())
+assert cell[Inf[object]](Inf[int]())
+assert not cell[Out[int]](Out[object]())
+assert not cell[Box[object]](Box[int]())
+
+T_co = TypeVar("T_co", covariant=True)
+class Legacy(Generic[T_co]): pass
+class Native[T]:
+    def get(self) -> T:
+        raise NotImplementedError
+
+# a class no transpiled module defines was told nothing unless one of them subscripted it. what
+# it declares is what there is to read, and a pep 695 parameter declares no variance
+assert cell[Legacy[object]](Legacy[int]())
+assert not cell[Legacy[int]](Legacy[object]())
+assert not cell[Native[object]](Native[int]())
+assert cell[Native[int]](Native[int]())
+
+class Seq(Sequence[int]):
+    def __len__(self): return 0
+    def __getitem__(self, index): return self
+class Iter(Iterable[int]):
+    def __iter__(self): return iter(())
+assert cell[TOLD](Seq())
+assert not cell[Iterable[object]](Iter())
+assert cell[Iterable[int]](Iter())
+print("ok")
+"#;
+
+/// a module nothing transpiled still calls into what was transpiled
+#[test]
+fn an_untranspiled_caller_gets_what_the_runtime_was_told() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    let config = Config {
+        min_version: python.version,
+        ..Config::default()
+    };
+    let transpiled =
+        transpile(UNTRANSPILED_CALLER_MODULE, &config).expect("transpile should succeed");
+    let directory = tempfile::tempdir().expect("failed to create a directory");
+    std::fs::write(directory.path().join("transpiled.py"), transpiled)
+        .expect("failed to write the transpiled module");
+    let output = Command::new(&python.command)
+        .current_dir(directory.path())
+        .arg("-c")
+        .arg(UNTRANSPILED_CALLER)
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        output.status.success(),
+        "--- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
 }
 
 /// transpile `program` for `min_version` and run its module-level `assert`s on `python`

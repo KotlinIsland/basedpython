@@ -39,7 +39,7 @@ use crate::types::ide_support::{
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::reified_infer::{
-    BareGenericCall, CallSpecialization, ForwardedTypeParams, WrittenTarget,
+    ArgVariance, BareGenericCall, CallSpecialization, ForwardedTypeParams, WrittenTarget,
 };
 use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::CastCheck;
@@ -96,6 +96,29 @@ impl<'db> SemanticModel<'db> {
             semantic_index(self.db, file).try_expression_scope_id(&ExprRef::from(call))?;
         infer_complete_scope_types(self.db, file_scope.to_scope_id(self.db, file))
             .call_solution(call)
+    }
+
+    /// basedpython: the variance of each type parameter of the class `class` defines, when one
+    /// of them varies, which only the checker can say: python records none for a pep 695
+    /// parameter
+    pub fn class_variances(&self, class: &ast::StmtClassDef) -> Option<Box<[ArgVariance]>> {
+        let literal = basedpython_class_type(self, class)?.as_class_literal()?;
+        crate::types::reified_infer::class_variances(self.db, literal)
+    }
+
+    /// basedpython: the variance of each type parameter of the class `value` is, when subscripting
+    /// it has to tell the runtime that, because no transpiled definition of the class can
+    pub fn variances_told_at_a_subscript(&self, value: &ast::Expr) -> Option<Box<[ArgVariance]>> {
+        let literal = value.inferred_type(self)?.as_class_literal()?;
+        crate::types::reified_infer::variances_told_at_a_subscript(self.db, literal)
+    }
+
+    /// basedpython: whether subscripting `value` gives a function type arguments it keeps as
+    /// runtime values
+    pub fn subscript_specializes_reified_function(&self, value: &ast::Expr) -> bool {
+        value.inferred_type(self).is_some_and(|ty| {
+            crate::types::subscript::specializes_reified_function_on_subscript(self.db, ty)
+        })
     }
 
     /// basedpython: whether `value` is a generic class that nothing in view attests the runtime

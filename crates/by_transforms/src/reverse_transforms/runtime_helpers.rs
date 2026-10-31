@@ -4,6 +4,9 @@
 //!   `B[_by_lit(1)]` → `B[1]` (the spelling of a literal type argument)
 //!   `_by_specialized(c.m, int)` → `c.m[int]` (`crate::transforms::reified_generic`)
 //!   `_by_cell_is(x, T)` → `x is T` (`crate::transforms::parametric_is`)
+//!   `Box[_by_out(int)]` → `Box[out int]` (the spelling of a use-site projection)
+//!   `_by_variance(1)(Sequence)` → `Sequence`, and `@_by_variance(1)` is dropped
+//!   (`crate::transforms::runtime_variance`): the checker can read the variance off the class
 //!
 //! the name alone says nothing, since an author may call their own function any of these. a
 //! call counts only when the one thing binding the name at module level is the runtime: an
@@ -15,9 +18,11 @@
 //! same thing as the bare call
 //!
 //! `_by_lit` builds a class, so it only reverses where a type is read: a type argument, or the
-//! right side of a type test. written as a value, the literal it would leave isn't that class
+//! right side of a type test. written as a value, the literal it would leave isn't that class. a
+//! projection is the same
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::token::{Tokens, parentheses_iterator, parenthesized_range};
 use ruff_python_ast::visitor::{Visitor, walk_comprehension, walk_expr, walk_f_string, walk_stmt};
@@ -30,13 +35,17 @@ use ty_python_semantic::{python_bytes_literal, python_str_literal};
 
 use super::literal_types::is_literal_value;
 use crate::runtime::{self, Helper};
+use crate::transforms::source_util::{line_past_end, line_start};
 
-const REVERSED: [Helper; 5] = [
+const REVERSED: [Helper; 8] = [
     runtime::SUBSCRIPT,
     runtime::RAISE,
     runtime::LITERAL,
     runtime::SPECIALIZED,
     runtime::CELL_IS,
+    runtime::VARIANCE,
+    runtime::OUT,
+    runtime::IN,
 ];
 
 /// what an expression's replacement has to bind tighter than, to stay the same expression
@@ -289,7 +298,10 @@ impl<'src> RuntimeHelpersReverse<'src> {
     /// `_by_lit(value)`, and the code points of a string or bytes written where quotes can't go
     fn literal(&mut self, call: &ExprCall) -> bool {
         match (&*call.arguments.args, &*call.arguments.keywords) {
-            ([value], []) if is_literal_value(value) => {
+            ([value], [])
+                if is_literal_value(value)
+                    || (value.is_attribute_expr() && is_dotted_name(value)) =>
+            {
                 let spans = self.argument_spans(call);
                 self.respell(call, &spans, &[String::new(), String::new()])
             }
@@ -386,9 +398,53 @@ impl<'src> RuntimeHelpersReverse<'src> {
         true
     }
 
+    /// `_by_out(inner)` → `out inner`
+    fn projection(&mut self, call: &ExprCall, keyword: &str) -> bool {
+        let spans = self.argument_spans(call);
+        let [inner] = &*call.arguments.args else {
+            return false;
+        };
+        if !call.arguments.keywords.is_empty()
+            || !self.respell(call, &spans, &[format!("{keyword} "), String::new()])
+        {
+            return false;
+        }
+        self.visit_type(inner, Enclosing::Operand(OperatorPrecedence::None));
+        true
+    }
+
+    /// whether `expr` calls the runtime's `_by_variance`, which is what telling a class's
+    /// variance is written as both ways
+    fn is_variance_call(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Call(call) if matches!(
+            call.func.as_ref(),
+            Expr::Name(name)
+                if name.id.as_str() == runtime::VARIANCE.name()
+                    && self.provided.contains(&runtime::VARIANCE)
+        ))
+    }
+
+    /// `_by_variance(1)(class)` → `class`
+    fn telling_variance(&mut self, call: &ExprCall, enclosing: Enclosing) -> bool {
+        let spans = self.argument_spans(call);
+        let [class] = &*call.arguments.args else {
+            return false;
+        };
+        if !call.arguments.keywords.is_empty()
+            || !self.respell(call, &spans, &[String::new(), String::new()])
+        {
+            return false;
+        }
+        self.visit_operand(class, enclosing);
+        true
+    }
+
     /// rewrite `call` if it is a call of one of the helpers in a shape the forward transforms
     /// write, along with what is inside it
     fn reverse_call(&mut self, call: &ExprCall, enclosing: Enclosing, in_type: bool) -> bool {
+        if self.is_variance_call(&call.func) {
+            return self.telling_variance(call, enclosing);
+        }
         let Expr::Name(name) = call.func.as_ref() else {
             return false;
         };
@@ -404,6 +460,8 @@ impl<'src> RuntimeHelpersReverse<'src> {
             runtime::RAISE => self.raise(call, enclosing),
             runtime::LITERAL => in_type && self.literal(call),
             runtime::CELL_IS => self.cell_is(call, enclosing),
+            runtime::OUT => in_type && self.projection(call, "out"),
+            runtime::IN => in_type && self.projection(call, "in"),
             _ => false,
         }
     }
@@ -440,6 +498,17 @@ impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
             _ => Enclosing::Operand(OperatorPrecedence::None),
         };
         self.in_type = false;
+        if let Stmt::ClassDef(class) = stmt {
+            for decorator in &class.decorator_list {
+                if self.is_variance_call(&decorator.expression) {
+                    self.edits
+                        .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                            line_start(self.source, decorator.start()),
+                            line_past_end(self.source, decorator.end()),
+                        ))));
+                }
+            }
+        }
         walk_stmt(self, stmt);
         self.enclosing = enclosing;
         self.in_type = in_type;
@@ -500,8 +569,7 @@ mod tests {
     use indoc::indoc;
     use ruff_python_ast::PythonVersion;
 
-    const IMPORT: &str =
-        "from _by_runtime import _by_cell_is, _by_lit, _by_raise, _by_specialized, _by_subscript\n";
+    const IMPORT: &str = "from _by_runtime import _by_cell_is, _by_in, _by_lit, _by_out, _by_raise, _by_specialized, _by_subscript, _by_variance\n";
 
     /// the reverse of `source` in a module that imports every helper from the runtime
     fn rev(source: &str) -> String {
@@ -523,6 +591,7 @@ mod tests {
         let config = Config {
             runtime_module: Some("_by_runtime".to_owned()),
             prune_unused_imports_after_reverse: true,
+            class_variance: true,
             ..config()
         };
         let lowered = transpile(source, &config).unwrap();
@@ -605,7 +674,7 @@ mod tests {
         let out = reverse_transpile(&lowered, &config()).unwrap();
         assert!(out.contains("print(t is T)"), "{out}");
         assert!(
-            out.contains("any(_by_cell_is(value, arm) for arm in args)"),
+            out.contains("any(_by_cell_is(value, arm) for arm in _by_union_args(cell))"),
             "the runtime's own recursion stays a call: {out}"
         );
     }
@@ -665,6 +734,7 @@ mod tests {
         assert_eq!(rev("B[_by_lit(1)](1)\n"), "B[1](1)\n");
         assert_eq!(rev("B[_by_lit(\"x\")](\"x\")\n"), "B[\"x\"](\"x\")\n");
         assert_eq!(rev("B[_by_lit(-1)]\n"), "B[-1]\n");
+        assert_eq!(rev("B[_by_lit(Color.RED)]\n"), "B[Color.RED]\n");
         assert_eq!(rev("B[_by_lit(True), _by_lit(None)]\n"), "B[True, None]\n");
         assert_eq!(rev("B[list[_by_lit(1)] | str]\n"), "B[list[1] | str]\n");
     }
@@ -728,7 +798,6 @@ mod tests {
     #[test]
     fn a_literal_without_a_bare_spelling_is_left_alone() {
         for source in [
-            "B[_by_lit(Color.RED)]\n",
             "B[_by_lit(1, 2)]\n",
             "B[_by_lit(text=(1114112,))]\n",
             "B[_by_lit(data=(256,))]\n",
@@ -736,6 +805,103 @@ mod tests {
         ] {
             assert_eq!(rev(source), source);
         }
+    }
+
+    #[test]
+    fn a_projection_is_written_with_its_keyword() {
+        assert_eq!(rev("Box[_by_out(int)]\n"), "Box[out int]\n");
+        assert_eq!(rev("Box[_by_in(int)]\n"), "Box[in int]\n");
+        assert_eq!(
+            rev("Box[_by_out(list[_by_lit(1)])]\n"),
+            "Box[out list[1]]\n"
+        );
+        assert_eq!(
+            rev("_by_cell_is(x, Box[_by_out(int)])\n"),
+            "x is Box[out int]\n"
+        );
+    }
+
+    #[test]
+    fn a_projection_read_as_a_value_is_left_alone() {
+        for source in ["x = _by_out(int)\n", "B[f(_by_in(int))]\n"] {
+            assert_eq!(rev(source), source);
+        }
+    }
+
+    #[test]
+    fn telling_a_class_its_variance_is_dropped() {
+        assert_eq!(
+            rev("x = _by_variance(1)(Sequence)[int]\n"),
+            "x = Sequence[int]\n"
+        );
+        assert_eq!(
+            rev("x = _by_subscript(_by_variance(1)(map), int)\n"),
+            "x = map[int]\n"
+        );
+        assert_eq!(
+            rev("@dataclass\n@_by_variance(1)\nclass Out[T]:\n    x = 1\n"),
+            "@dataclass\nclass Out[T]:\n    x = 1\n"
+        );
+        assert_eq!(
+            rev("def f():\n    @_by_variance(0, 1)\n    class Out[A, B]:\n        x = 1\n"),
+            "def f():\n    class Out[A, B]:\n        x = 1\n"
+        );
+    }
+
+    #[test]
+    fn a_decorator_of_their_own_called_the_same_stays() {
+        let source = "def _by_variance(*codes):\n    return lambda c: c\n@_by_variance(1)\nclass Out[T]:\n    x = 1\n";
+        assert_eq!(reverse_transpile(source, &config()).unwrap(), source);
+    }
+
+    #[test]
+    fn a_projection_round_trips() {
+        let (out, back) = round_trip(indoc! {"
+            class Box[T]:
+                value: T
+            def f[T](x: object) -> bool:
+                return x is T
+            f[Box[out object]](1)
+            f[Box[in object]](1)
+        "});
+        assert!(out.contains("f[Box[_by_out(object)]](1)"), "{out}");
+        assert!(back.contains("f[Box[out object]](1)"), "{back}");
+        assert!(back.contains("f[Box[in object]](1)"), "{back}");
+    }
+
+    #[test]
+    fn a_class_that_varies_round_trips() {
+        let (out, back) = round_trip(indoc! {"
+            from collections.abc import Sequence
+
+            class Inf[T]:
+                def get(self) -> T:
+                    raise NotImplementedError
+            def f[T](x: object) -> bool:
+                return x is T
+            f[Sequence[object]](1)
+        "});
+        assert!(out.contains("@_by_variance(1)\nclass Inf[T]:"), "{out}");
+        assert!(
+            out.contains("f[_by_variance(1)(Sequence)[object]](1)"),
+            "{out}"
+        );
+        assert!(!back.contains("_by_variance"), "{back}");
+        assert!(back.contains("class Inf[T]:"), "{back}");
+        assert!(back.contains("f[Sequence[object]](1)"), "{back}");
+    }
+
+    #[test]
+    fn an_explicit_literal_type_argument_round_trips() {
+        let (out, back) = round_trip(indoc! {"
+            def f[T](x: object) -> bool:
+                return x is T
+            f[1](1)
+            f[\"a\"](1)
+        "});
+        assert!(out.contains("f[_by_lit(1)](1)"), "{out}");
+        assert!(back.contains("f[1](1)"), "{back}");
+        assert!(back.contains("f[\"a\"](1)"), "{back}");
     }
 
     #[test]

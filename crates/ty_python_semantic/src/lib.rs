@@ -74,7 +74,7 @@ pub use types::reified_infer::{
     ParametricIsPlan, ProtocolMemberCheck, TargetSpelling, python_bytes_literal,
     python_str_literal,
 };
-pub use types::runtime_spelling::RuntimeSpelling;
+pub use types::runtime_spelling::{RuntimeSpelling, SpellingHelper};
 pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};
 pub use types::template::finite_string_set;
 pub use types::unused_imports::UnreadImport;

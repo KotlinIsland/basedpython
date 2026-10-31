@@ -64,14 +64,6 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
-/// probes a value's `__orig_class__` against a target alias — the runtime
-/// residue when a parametric test against a user-defined generic can't be
-/// resolved statically. `variances` gives the target's per-parameter
-/// variance (0 invariant, 1 covariant, 2 contravariant, 3 bivariant), so the
-/// match respects `out T` / `in T`: `A[int]` is an `A[object]` when `T` is
-/// covariant. `_sub` is a deliberately conservative one-level subtype check —
-/// exact, the `object` top type, or an unparameterized supertype origin — so
-/// it never reports a subtype that does not hold
 /// render a variance-code list as the python tuple literal `_parametric_is`
 /// takes as its `variances` argument (`(0,)`, `(0, 1)`)
 pub(crate) fn variance_tuple(variances: &[u8]) -> String {
@@ -90,12 +82,7 @@ pub(crate) fn variance_tuple(variances: &[u8]) -> String {
 
 /// the runtime variance code `_by_variance_ok` expects
 fn variance_code(variance: ArgVariance) -> u8 {
-    match variance {
-        ArgVariance::Invariant => 0,
-        ArgVariance::Covariant => 1,
-        ArgVariance::Contravariant => 2,
-        ArgVariance::Bivariant => 3,
-    }
+    variance.code()
 }
 
 /// render a protocol member list as the python list literal `_by_protocol_is`
@@ -777,6 +764,8 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             super::ast_driver::Lowering::JustFloat,
             super::ast_driver::Lowering::LiteralType,
             super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::RuntimeVariance,
+            super::ast_driver::Lowering::TupleLiteralType,
             super::ast_driver::Lowering::Typeof,
             super::ast_driver::Lowering::VisibilityRename,
         ]
@@ -887,8 +876,7 @@ mod tests {
     #[test]
     fn use_site_covariant_target_probes_covariantly() {
         // `A[out int]` projects an invariant `T` covariantly for this one
-        // test, so the probe matches with code 1 — and the target renders as
-        // plain `A[int]`, the keyword having no runtime spelling
+        // test, so the probe matches with code 1
         let out = out(indoc! {"
             class A[in out T]:
                 def __init__(self): ...
@@ -896,7 +884,7 @@ mod tests {
                 return a is A[out int]
         "});
         assert!(
-            out.contains("return _parametric_is(a, A[int], (1,))"),
+            out.contains("return _parametric_is(a, A[_by_out(int)], (1,))"),
             "use-site `out` probes covariantly: {out}"
         );
     }
@@ -910,7 +898,7 @@ mod tests {
                 return s is S[in bool]
         "});
         assert!(
-            out.contains("return _parametric_is(s, S[bool], (2,))"),
+            out.contains("return _parametric_is(s, S[_by_in(bool)], (2,))"),
             "use-site `in` probes contravariantly: {out}"
         );
     }
@@ -957,7 +945,7 @@ mod tests {
                 return a is A[out object]
         "});
         assert!(
-            out.contains("return _parametric_is(a, A[object], (1,))"),
+            out.contains("return _parametric_is(a, A[_by_out(object)], (1,))"),
             "declared variance wins: {out}"
         );
     }

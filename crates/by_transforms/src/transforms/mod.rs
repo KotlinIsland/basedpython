@@ -74,6 +74,7 @@ pub(crate) mod repeated_underscore;
 pub(crate) mod rerender;
 pub(crate) mod return_value_use;
 pub(crate) mod runtime_union;
+pub(crate) mod runtime_variance;
 pub(crate) mod sentinel;
 pub(crate) mod some_ctor;
 pub(crate) mod soundness;

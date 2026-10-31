@@ -266,10 +266,16 @@ is injected only when the bare name resolves — in the module's globals or
 builtins — to that same class, so the emitted expression evaluates to the
 intended type object
 
-when `T` holds a subscripted class, `x is T` compares its type arguments exactly
-unless the class's own parameters declare a variance the runtime can read, which
-`class B[out T]` doesn't, as it lowers to a parameter whose variance isn't visible
-at runtime
+`x is T` answers what the same target written in place would. a subscripted class
+is compared argument by argument, by the variance the checker read for the class,
+whether it was declared, inferred or inherited, through nested generics, unions,
+literals, tuples and `None`, and a use-site `out` or `in` written in the type
+argument is kept with it
+
+a class no `.by` module defines is known to the runtime once a `.by` module has
+subscripted it, and until then is treated as invariant unless its own `TypeVar`
+declares otherwise. what the runtime can't see, such as the arguments of a value
+that records none, answers `False`
 
 when no injectable solution exists, the bare call is an error
 (`unspecialized-reified-generic`):

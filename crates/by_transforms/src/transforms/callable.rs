@@ -24,12 +24,13 @@ use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
-    ReturnGuardForm, any_over_expr, callable_parameter_label, is_classvar_marker_id,
-    is_final_marker_id, is_let_marker_id, predicate_guard, type_modifier_marker,
-    use_site_variance_marker,
+    ReturnGuardForm, UseSiteVariance, any_over_expr, callable_parameter_label,
+    is_classvar_marker_id, is_final_marker_id, is_let_marker_id, predicate_guard,
+    type_modifier_marker, use_site_variance_marker,
 };
 use ruff_python_ast::{Expr, ExprCallableType, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
+use ty_python_semantic::RuntimeSpelling;
 
 use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
@@ -119,6 +120,10 @@ pub(crate) struct CallableSyntax<'src> {
     /// set while a leaf holding a use-site variance keyword or a type modifier is written out,
     /// so each one is written as the type it marks. see [`Self::lower_leaf`]
     writing_markers: bool,
+    /// whether the type is written where it writes what the runtime is told about variance,
+    /// which [`RuntimeVariancePass`](super::runtime_variance::RuntimeVariancePass) would have
+    /// written were this lowerer not writing it instead
+    telling_variance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -164,6 +169,7 @@ impl<'src> CallableSyntax<'src> {
             extra_imports: Vec::new(),
             substitutions: Vec::new(),
             writing_markers: false,
+            telling_variance: false,
         }
     }
 
@@ -185,8 +191,22 @@ impl<'src> CallableSyntax<'src> {
     /// say whether the runtime evaluates the type expressions lowered from here on
     /// where they stand, which decides whether a union written with the operator has
     /// to be spelled out
-    pub(crate) fn set_evaluated(&mut self, evaluated: bool) {
-        self.evaluated = evaluated;
+    pub(crate) fn set_root(&mut self, root: RootKind) {
+        self.evaluated = root.is_evaluated();
+        self.telling_variance = matches!(root, RootKind::AliasValue | RootKind::Application);
+    }
+
+    /// `value`, the class of a subscript, telling the runtime its variance when the subscript
+    /// is where it has to be told
+    fn value_telling_variance(&self, value: &Expr) -> Option<String> {
+        if !self.telling_variance {
+            return None;
+        }
+        let variances = self.types?.variances_told_at_a_subscript(value)?;
+        Some(self.written.spelled(&RuntimeSpelling::telling_variance(
+            &RuntimeSpelling::text(self.src(value.range())),
+            &variances,
+        )))
     }
 
     /// a union of the rendered `arms`, which is `Union[A, B]` below 3.10, since
@@ -857,6 +877,18 @@ impl<'src> CallableSyntax<'src> {
                 ))
             }
 
+            Expr::Subscript(_)
+                if self.telling_variance
+                    && let Some((variance, inner)) = use_site_variance_marker(expr)
+                    && variance != UseSiteVariance::InOut =>
+            {
+                let inner = self.rewrite_or_leaf(inner);
+                Some(self.written.spelled(&RuntimeSpelling::projected(
+                    RuntimeSpelling::text(inner),
+                    variance,
+                )))
+            }
+
             // see `lower_leaf`
             Expr::Subscript(_)
                 if self.writing_markers
@@ -906,10 +938,14 @@ impl<'src> CallableSyntax<'src> {
                 {
                     self.needs_class_subscript_runtime = true;
                     let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
-                    return Some(format!(
-                        "_by_subscript({}, {slice})",
-                        self.src(s.value.range())
-                    ));
+                    let value = self
+                        .value_telling_variance(&s.value)
+                        .unwrap_or_else(|| self.src(s.value.range()).to_owned());
+                    return Some(format!("_by_subscript({value}, {slice})"));
+                }
+                if let Some(value) = self.value_telling_variance(&s.value) {
+                    let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
+                    return Some(format!("{value}[{slice}]"));
                 }
                 slice_rewrite.map(|s_text| format!("{}[{s_text}]", self.src(s.value.range())))
             }
@@ -1037,7 +1073,7 @@ pub(crate) fn lower_type_expr_full(
     root: RootKind,
 ) -> Option<String> {
     let mut inner = CallableSyntax::new(source, written, quotes, config).with_types(types);
-    inner.set_evaluated(root == RootKind::Evaluated);
+    inner.set_root(root);
     for (range, name) in substitutions {
         inner.add_substitution(*range, name.clone());
     }
@@ -1163,7 +1199,7 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
     }
 
     fn enter_root(&mut self, kind: RootKind) {
-        self.set_evaluated(kind == RootKind::Evaluated);
+        self.set_root(kind);
     }
 }
 
@@ -1249,6 +1285,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::SymbolicTypeOp,
             Lowering::LiteralString,
             Lowering::ClassSubscript,
+            Lowering::RuntimeVariance,
         ]
     }
 
@@ -1276,7 +1313,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // edits over type-position callables dedup in the splice
         {
             // a callable type standing as a value is evaluated there
-            inner.set_evaluated(true);
+            inner.set_root(RootKind::Application);
             let mut walker = ValueCallableWalker { inner: &mut inner };
             for stmt in stmts {
                 ruff_python_ast::visitor::Visitor::visit_stmt(&mut walker, stmt);

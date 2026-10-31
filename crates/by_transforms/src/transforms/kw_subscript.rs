@@ -12,22 +12,27 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::literal_types::{LiteralReading, lower_literals};
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
-pub(crate) struct KwSubscript<'src, T: TypeInfo + ?Sized> {
+pub(crate) struct KwSubscript<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
-    types: Option<&'src T>,
+    types: Option<&'src dyn TypeInfo>,
     min_version: PythonVersion,
     edits: Vec<Fix>,
+    /// how the slice being written reads a literal, when its elements are type arguments
+    type_arguments: Option<LiteralReading>,
+    in_annotation: bool,
+    needs_literal_import: bool,
 }
 
-impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
+impl<'src> KwSubscript<'src> {
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
-        types: Option<&'src T>,
+        types: Option<&'src dyn TypeInfo>,
         min_version: PythonVersion,
     ) -> Self {
         Self {
@@ -36,6 +41,9 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             types,
             min_version,
             edits: Vec::new(),
+            type_arguments: None,
+            in_annotation: false,
+            needs_literal_import: false,
         }
     }
 
@@ -48,7 +56,14 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     /// narrow edits, so we lower the optional here; the runtime `Optional[...]`
     /// import for nested `??` is still raised by `OptionalTypePass`, which walks
     /// every expression independently
-    fn value_src(&self, expr: &Expr) -> String {
+    fn value_src(&mut self, expr: &Expr) -> String {
+        if let (Some(reading), Some(types)) = (self.type_arguments, self.types)
+            && let Some((lowered, needs_import)) =
+                lower_literals(self.source, self.written, types, expr, reading)
+        {
+            self.needs_literal_import |= needs_import;
+            return lowered;
+        }
         crate::transforms::optional_type::rewrite_type_expr(
             self.source,
             self.written,
@@ -133,7 +148,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     }
 
     /// the subscript's arguments, keyword fields rendered as `name=value`
-    fn subscript_parts(&self, sub: &ruff_python_ast::ExprSubscript) -> Vec<String> {
+    fn subscript_parts(&mut self, sub: &ruff_python_ast::ExprSubscript) -> Vec<String> {
         Self::subscript_elements(sub)
             .into_iter()
             .map(|element| {
@@ -152,6 +167,14 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     }
 
     fn rewrite_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
+        self.type_arguments = self
+            .types
+            .is_some_and(|types| types.subscript_specializes(&sub.value))
+            .then_some(if self.in_annotation {
+                LiteralReading::Annotation
+            } else {
+                LiteralReading::Application
+            });
         // subscripting a function is a *type* specialization, not a runtime
         // keyword subscript: an erased generic has its whole `[…]` stripped by
         // `generic_call`, and a reified one routes the fields through the
@@ -341,16 +364,23 @@ impl<'src> KwSubscriptPass<'src> {
 }
 
 impl TypeAwarePass for KwSubscriptPass<'_> {
-    /// the value of a keyword subscript it rewrites is printed with its `T?` lowered
+    /// the value of a keyword subscript it rewrites is printed with its `T?` and its literal
+    /// types lowered
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[super::ast_driver::Lowering::OptionalType]
+        &[
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+        ]
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner: KwSubscript<'_, dyn TypeInfo> =
-            KwSubscript::new(self.source, self.written, Some(types), self.min_version);
+        let mut inner = KwSubscript::new(self.source, self.written, Some(types), self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);
+        }
+        if inner.needs_literal_import {
+            ctx.required_imports
+                .push(self.written.import_from("typing", &["Literal"]));
         }
         for fix in inner.edits {
             for edit in fix.edits() {
@@ -362,7 +392,13 @@ impl TypeAwarePass for KwSubscriptPass<'_> {
     }
 }
 
-impl<'ast, T: TypeInfo + ?Sized> Visitor<'ast> for KwSubscript<'_, T> {
+impl<'ast> Visitor<'ast> for KwSubscript<'_> {
+    fn visit_annotation(&mut self, expr: &'ast Expr) {
+        let in_annotation = std::mem::replace(&mut self.in_annotation, true);
+        self.visit_expr(expr);
+        self.in_annotation = in_annotation;
+    }
+
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Subscript(s) = expr {
             self.rewrite_subscript(s);
