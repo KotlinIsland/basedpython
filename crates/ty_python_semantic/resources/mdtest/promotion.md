@@ -1144,6 +1144,85 @@ def _(x1: X | None, x2: X):
     reveal_type([x1 or x2])  # revealed: list[Literal[b"bar"]]
 ```
 
+## a bare literal annotation is the same type as `Literal[...]`
+
+in basedpython a literal written in a type expression is that literal type, so `1` and `Literal[1]`
+are two spellings of one type, and neither is promoted
+
+```by
+from enum import Enum
+from typing import Literal
+
+def ident[T](x: T) -> list[T]:
+    return [x]
+
+class Color(Enum):
+    RED = 1
+
+def each(
+    i: 1,
+    negative: -1,
+    s: "a",
+    b: b"a",
+    t: True,
+    f: 1.5,
+    c: 1j,
+    e: Color.RED,
+    u: 1 | "a",
+    o: 1?,
+    computed: 1 + 2,
+    inverted: ~0,
+    folded: "ab".startswith("a"),
+    spelled: Literal[1],
+):
+    reveal_type(ident(i))  # revealed: list[1]
+    reveal_type(ident(negative))  # revealed: list[-1]
+    reveal_type(ident(s))  # revealed: list["a"]
+    reveal_type(ident(b))  # revealed: list[b"a"]
+    reveal_type(ident(t))  # revealed: list[True]
+    reveal_type(ident(f))  # revealed: list[1.5]
+    reveal_type(ident(c))  # revealed: list[1j]
+    reveal_type(ident(e))  # revealed: list[Color.RED]
+    reveal_type(ident(u))  # revealed: list[1 | "a"]
+    reveal_type(ident(o))  # revealed: list[1 | None]
+    reveal_type(ident(computed))  # revealed: list[3]
+    reveal_type(ident(inverted))  # revealed: list[-1]
+    reveal_type(ident(folded))  # revealed: list[True]
+    reveal_type(ident(spelled))  # revealed: list[1]
+
+x: 1 = 1
+reveal_type(ident(x))  # revealed: list[1]
+
+def returned() -> "a":
+    return "a"
+
+reveal_type(ident(returned()))  # revealed: list["a"]
+
+class Attribute:
+    a: 1 = 1
+
+reveal_type(ident(Attribute().a))  # revealed: list[1]
+
+type Alias = 1 | 2
+
+def aliased(a: Alias):
+    reveal_type(ident(a))  # revealed: list[1 | 2]
+```
+
+`typeof` writes no literal: it reads the type of a value, whose literal is promoted as the value's
+is
+
+```by
+def ident[T](x: T) -> list[T]:
+    return [x]
+
+marker = 1
+
+def read(m: typeof marker):
+    reveal_type(m)  # revealed: 1
+    reveal_type(ident(m))  # revealed: list[int]
+```
+
 ## Negative intersection elements are removed
 
 Truthiness narrowing should not leak into invariant literal container inference:

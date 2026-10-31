@@ -165,8 +165,15 @@ impl<'db> DeferredType<'db> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         operation: &DeferredOperation,
-        operands: Box<[Type<'db>]>,
+        mut operands: Box<[Type<'db>]>,
     ) -> Type<'db> {
+        // an operation stands for its operands' values, and whether a literal may be promoted
+        // is not part of its value: a body's `s.startswith("foo")` is the call its annotation writes
+        for operand in &mut operands {
+            if let Type::LiteralValue(literal) = operand {
+                *literal = literal.to_unpromotable();
+            }
+        }
         if operation
             .deferring_operands(&operands)
             .iter()
