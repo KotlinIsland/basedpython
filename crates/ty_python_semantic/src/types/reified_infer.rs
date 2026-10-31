@@ -1979,10 +1979,6 @@ pub enum ErasedTargetReason {
     /// so the runtime residue — which writes the target as spelled — has no
     /// expression to evaluate
     NotSubscriptable,
-    /// a type parameter holds a protocol that is not `@runtime_checkable`. a test written in
-    /// place checks one member by member, which takes knowing the protocol where the test is
-    /// written. a test through the parameter asks `isinstance`, which refuses it
-    HeldProtocol,
 }
 
 /// a type whose arms are specializations of one *erased* origin, differing in
@@ -2397,13 +2393,6 @@ pub(crate) fn untestable_type_argument<'db>(
                 );
                 match plan {
                     ParametricIsPlan::ErasedTarget(reason) => Some(reason),
-                    ParametricIsPlan::ProtocolStructural(_)
-                        if !target_class(db, env, ty)
-                            .and_then(|class| class.into_protocol_class(db))
-                            .is_some_and(|protocol| protocol.is_runtime_checkable(db)) =>
-                    {
-                        Some(ErasedTargetReason::HeldProtocol)
-                    }
                     _ => None,
                 }
             }
