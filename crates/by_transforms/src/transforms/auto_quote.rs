@@ -35,7 +35,8 @@
 //! a type test may read that argument once the class exists, and nothing in a string says whose
 //! name it is, so a specialization written as a value says so where the runtime is told what
 //! tests need to know: `a = _by_forward(list["F"], __name__)()`. a base says whose name it is by
-//! whose base it is, and a name a function binds has no module to be looked up in
+//! whose base it is, and a name a function binds comes with what reads it from there:
+//! `a = _by_forward(list["F"], __name__, F=lambda: F)()`
 //!
 //! a position the checker reads where it is written — a base itself
 //! (`class A(A)`), a reified class's type arguments — reports a name not yet bound
@@ -268,6 +269,40 @@ impl DeferredReads<'_> {
     }
 }
 
+impl DeferredReads<'_> {
+    /// what reads each forward reference in `slice`, where it is a name of a function no module
+    /// has, once the function has bound it: `, F=lambda: F`
+    fn readers_of_forward_references(&self, slice: &Expr) -> String {
+        struct Names<'a> {
+            types: &'a dyn TypeInfo,
+            names: std::collections::BTreeSet<String>,
+        }
+        impl<'ast> Visitor<'ast> for Names<'_> {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if let Expr::Name(name) = expr
+                    && self.types.is_forward_reference(name) == Some(true)
+                {
+                    self.names.insert(name.id.to_string());
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut names = Names {
+            types: self.types,
+            names: std::collections::BTreeSet::new(),
+        };
+        names.visit_expr(slice);
+        let mut readers = String::new();
+        for name in &names.names {
+            readers.push_str(", ");
+            readers.push_str(name);
+            readers.push_str("=lambda: ");
+            readers.push_str(name);
+        }
+        readers
+    }
+}
+
 impl<'a> Visitor<'a> for DeferredReads<'_> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
@@ -317,17 +352,18 @@ impl<'a> Visitor<'a> for DeferredReads<'_> {
             Expr::Subscript(subscript) if self.types.is_read_deferred(&subscript.slice) => {
                 let quoted = self.edits.len();
                 self.quote_forward_references(expr, true);
-                if self.told_forward
-                    && !self.in_function
-                    && !self.in_base
-                    && self.edits.len() > quoted
-                {
+                if self.told_forward && !self.in_base && self.edits.len() > quoted {
+                    let readers = if self.in_function {
+                        self.readers_of_forward_references(&subscript.slice)
+                    } else {
+                        String::new()
+                    };
                     self.told.push((
                         expr.range(),
                         vec![
                             Fragment::Lit(format!("{}(", crate::runtime::FORWARD.name())),
                             Fragment::Src(expr.range()),
-                            Fragment::Lit(", __name__)".to_owned()),
+                            Fragment::Lit(format!(", __name__{readers})")),
                         ],
                     ));
                 }

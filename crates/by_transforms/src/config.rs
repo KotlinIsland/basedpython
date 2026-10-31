@@ -101,6 +101,9 @@ pub struct Config {
     /// whether a class that varies tells the runtime so where it is defined, which is how a
     /// type test the checker leaves to the runtime answers by the variance the checker read
     pub class_variance: bool,
+    /// whether the module tells the runtime about the classes it reads itself, whatever holds its
+    /// helpers: it is being reloaded into a program whose file of helpers has already run
+    pub told_in_module: bool,
 }
 
 /// What a float or complex literal type becomes in the emitted python.
@@ -145,6 +148,7 @@ impl Default for Config {
             stamps_undetermined: false,
             session: false,
             class_variance: true,
+            told_in_module: false,
         }
     }
 }
@@ -163,6 +167,7 @@ impl Config {
             prune_unused_imports_after_reverse: false,
             soundness: SoundnessPositions::none(),
             class_variance: false,
+            told_in_module: false,
             ..Self::default()
         }
     }

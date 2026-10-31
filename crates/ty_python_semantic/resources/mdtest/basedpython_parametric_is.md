@@ -1492,3 +1492,44 @@ assert G[bool]().holds(Out[bool]())
 assert Same[int]().t() == list[int]
 assert Same[int]().own() == int
 ```
+
+### what a type isn't
+
+nothing at runtime can say what a type isn't, in the target or anywhere in its arguments
+
+```by
+from ty_extensions import Not
+
+class A: pass
+class Out[out T]: pass
+
+def f(x: object) -> bool:
+    # error: [erased-type-check]
+    return x is Out[Not[A]]
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+chk[Out[Not[A]]](Out[Not[A]]())  # error: [erased-type-check]
+```
+
+### what is left when a test fails
+
+a value that records no arguments isn't one of `Box[int]` as far as a test can tell, so failing the
+test doesn't rule it out, in the cell as in place
+
+```by
+class Box[T]: pass
+
+def in_place(x: Box[int] | str) -> None:
+    if x is Box[int]:
+        reveal_type(x)  # revealed: Box[int]
+    else:
+        reveal_type(x)  # revealed: Box[int] | str
+
+def through_a_cell[T](x: T | str) -> None:
+    if x is T:
+        reveal_type(x)  # revealed: T
+    else:
+        reveal_type(x)  # revealed: T | str
+```

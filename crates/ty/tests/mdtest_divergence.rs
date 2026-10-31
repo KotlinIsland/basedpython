@@ -409,6 +409,85 @@ const REQUIRES: &[(&str, Option<&str>, u8, &str)] = &[
         12,
         "a reified class keeps its native pep 695 type-parameter list",
     ),
+    (
+        "basedpython_deferred_type_ops.md",
+        Some("an unprovable body can be cast"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("`type[A]` through a cell"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a class is called as its constructor says"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a class of a stub has the bases its stub gives it"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a forward reference relates as the class it names"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a pack, `LiteralString` and `Self`"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a parameter no member mentions"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a reified target answers as a written one does"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a type argument substituted through a base"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("an intersection is what all of its members are"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("what is left when a test fails"),
+        12,
+        "a reified generic keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_type_checking_imports.md",
+        Some("A written type argument the program does not bind"),
+        12,
+        "a reified class keeps its native pep 695 type-parameter list",
+    ),
+    (
+        "basedpython_parametric_is.md",
+        Some("a value built inside a generic function records its specialization"),
+        12,
+        "a function that forwards its type argument takes it through its native pep 695 \
+         type-parameter list",
+    ),
 ];
 
 /// the sections whose checker-clean blocks diverge on a target older than a python version,

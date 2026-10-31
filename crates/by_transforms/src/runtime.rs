@@ -133,6 +133,41 @@ helpers! {
     DATACLASS_SLOTS = "_by_dataclass_slots",
 }
 
+/// whether `helpers` read what the runtime is told of a stub's classes, which is to say whether
+/// the module they are for tests something
+pub(crate) fn reads_what_is_told(helpers: impl IntoIterator<Item = Helper>) -> bool {
+    let reader = index().get("_by_told_row");
+    closure(helpers)
+        .into_iter()
+        .any(|definition| reader.is_some_and(|reader| std::ptr::eq(reader, definition)))
+}
+
+/// the statement telling the runtime `rows`, on one line, which a build counts on
+pub fn told_statement<'a>(rows: impl Iterator<Item = &'a String>) -> String {
+    let rows = rows.map(String::as_str).collect::<Vec<_>>().join(", ");
+    format!("{}({rows})", TOLD.name())
+}
+
+/// `python`, a module holding its own helpers, with what it tells the runtime replaced by `rows`,
+/// everything the program it is a part of reads, on the line it was on
+pub fn with_told_rows<'a>(python: &str, rows: impl Iterator<Item = &'a String>) -> Option<String> {
+    let opening = format!("{}(", TOLD.name());
+    let start = if python.starts_with(&opening) {
+        0
+    } else {
+        python.find(&format!("\n{opening}"))? + 1
+    };
+    let end = python[start..]
+        .find('\n')
+        .map_or(python.len(), |end| start + end);
+    Some(format!(
+        "{}{}{}",
+        &python[..start],
+        told_statement(rows),
+        &python[end..]
+    ))
+}
+
 /// the helpers a module whose own code uses their names reads under names of their own
 /// ([`WrittenNames::helper`](crate::transforms::repeated_underscore::WrittenNames::helper)):
 /// the ones a checker's spelling of a type writes

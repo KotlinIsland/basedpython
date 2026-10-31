@@ -390,17 +390,6 @@ mod tests {
     }
 
     #[test]
-    fn generic_builtin_the_runtime_does_subscript_reifies() {
-        // `enumerate` is the same shape as `zip` to the checker, but cpython
-        // does give it a `__class_getitem__`, which typeshed writes down
-        let out = out("labelled = enumerate([\"a\"])\n");
-        assert!(
-            out.contains("labelled = enumerate[str]([\"a\"])"),
-            "a subscriptable builtin reifies: {out}"
-        );
-    }
-
-    #[test]
     fn class_not_subscriptable_at_runtime_stays_bare() {
         // `array.array` is generic to the type checker on every version, but the
         // runtime only grew a `__class_getitem__` in 3.12 — below that,
@@ -412,19 +401,6 @@ mod tests {
         assert!(
             out.contains("xs = array.array(\"i\", [1, 2])"),
             "an unsubscriptable class stays bare: {out}"
-        );
-    }
-
-    #[test]
-    fn class_subscriptable_at_runtime_reifies() {
-        // the same class on the version that gave it a `__class_getitem__`
-        let out = out_checked_at(
-            "import array\nxs = array.array(\"i\", [1, 2])\n",
-            PythonVersion::PY312,
-        );
-        assert!(
-            out.contains("xs = array.array[int](\"i\", [1, 2])"),
-            "a subscriptable class reifies: {out}"
         );
     }
 
@@ -467,35 +443,18 @@ mod tests {
     }
 
     #[test]
-    fn a_builtin_that_accepts_a_subscript_is_reified() {
-        // `enumerate` declares its own `__class_getitem__`, and `deque`
-        // inherits one; both accept the subscript at runtime
-        let out = out_at("xs = enumerate([\"a\"])\n", PythonVersion::PY312);
-        assert!(out.contains("enumerate[str]([\"a\"])"), "got: {out}");
-
-        let out = out_at(
-            indoc! {"
-                from collections import deque
-                xs = deque([1])
-            "},
-            PythonVersion::PY312,
-        );
-        assert!(out.contains("deque[int]([1])"), "got: {out}");
-    }
-
-    #[test]
-    fn a_stub_generic_inheriting_a_generic_base_is_reified() {
-        // `ChainMap` declares no `__class_getitem__`, but it inherits
-        // `MutableMapping[Key, Value]`, which puts `Generic` in its runtime
-        // bases — so the subscript evaluates
-        let out = out_at(
-            indoc! {"
-                from collections import ChainMap
-                m = ChainMap({\"a\": 1})
-            "},
-            PythonVersion::PY312,
-        );
-        assert!(out.contains("ChainMap[str, int]("), "got: {out}");
+    fn a_call_of_a_class_a_stub_describes_reads_as_it_was_written() {
+        // whatever its instances can hold, a program with no generic code of its own says
+        // nothing of type arguments
+        for source in [
+            "xs = enumerate([\"a\"])\n",
+            "from collections import deque\nxs = deque([1])\n",
+            "from collections import ChainMap\nm = ChainMap({\"a\": 1})\n",
+            "import array\nxs = array.array(\"i\", [1, 2])\n",
+            "print(list(\"ab\"))\n",
+        ] {
+            assert_eq!(out_at(source, PythonVersion::PY312), source, "{source}");
+        }
     }
 
     #[test]
@@ -702,20 +661,23 @@ mod tests {
             if ALWAYS:
                 from ipaddress import IPv4Address
 
+            class Bag[T]:
+                value: T
+
             class Ledger:
-                entries: set[Decimal]
-                fractions: set[Fraction]
-                addresses: set[IPv4Address]
+                entries: Bag[Decimal]
+                fractions: Bag[Fraction]
+                addresses: Bag[IPv4Address]
 
                 def __init__(self) -> None:
-                    self.entries = set()
-                    self.fractions = set()
-                    self.addresses = set()
+                    self.entries = Bag()
+                    self.fractions = Bag()
+                    self.addresses = Bag()
         "});
-        assert!(out.contains("self.entries = set()"), "got: {out}");
-        assert!(out.contains("self.fractions = set()"), "got: {out}");
+        assert!(out.contains("self.entries = Bag()"), "got: {out}");
+        assert!(out.contains("self.fractions = Bag()"), "got: {out}");
         assert!(
-            out.contains("self.addresses = set[IPv4Address]()"),
+            out.contains("self.addresses = Bag[IPv4Address]()"),
             "got: {out}"
         );
     }
@@ -750,21 +712,24 @@ mod tests {
         let out = out(indoc! {"
             from decimal import Decimal
 
+            class Bag[T]:
+                value: T
+
             class Ledger:
-                entries: set[Decimal]
-                later: set[Later]
+                entries: Bag[Decimal]
+                later: Bag[Later]
 
                 def __init__(self) -> None:
-                    self.entries = set()
-                    self.later = set()
-                    kept: set[Decimal] = set()
+                    self.entries = Bag()
+                    self.later = Bag()
+                    kept: Bag[Decimal] = Bag()
 
             class Later: ...
         "});
-        assert!(out.contains("self.entries = set[Decimal]()"), "got: {out}");
-        assert!(out.contains("self.later = set()"), "got: {out}");
+        assert!(out.contains("self.entries = Bag[Decimal]()"), "got: {out}");
+        assert!(out.contains("self.later = Bag()"), "got: {out}");
         assert!(
-            out.contains("kept: set[Decimal] = set[Decimal]()"),
+            out.contains("kept: Bag[Decimal] = Bag[Decimal]()"),
             "got: {out}"
         );
     }
@@ -774,15 +739,18 @@ mod tests {
     #[test]
     fn a_class_is_spelled_below_its_declaration_and_not_above() {
         let out = out(indoc! {"
-            early: set[Later] = set()
+            class Bag[T]:
+                value: T
+
+            early: Bag[Later] = Bag()
 
             class Later: ...
 
-            late: set[Later] = set()
+            late: Bag[Later] = Bag()
         "});
-        assert!(out.contains("early: \"set[Later]\" = set()"), "got: {out}");
+        assert!(out.contains("early: \"Bag[Later]\" = Bag()"), "got: {out}");
         assert!(
-            out.contains("late: set[Later] = set[Later]()"),
+            out.contains("late: Bag[Later] = Bag[Later]()"),
             "got: {out}"
         );
     }
@@ -876,18 +844,21 @@ mod tests {
             import sys
             from decimal import Decimal
 
+            class Bag[T]:
+                value: T
+
             class Ledger:
-                entries: set[Decimal]
+                entries: Bag[Decimal]
 
                 def __init__(self) -> None:
-                    self.entries = set()
+                    self.entries = Bag()
 
-            totals: set[Decimal] = set()
+            totals: Bag[Decimal] = Bag()
             sys.exit(0)
         "});
-        assert!(out.contains("self.entries = set[Decimal]()"), "got: {out}");
+        assert!(out.contains("self.entries = Bag[Decimal]()"), "got: {out}");
         assert!(
-            out.contains("totals: set[Decimal] = set[Decimal]()"),
+            out.contains("totals: Bag[Decimal] = Bag[Decimal]()"),
             "got: {out}"
         );
     }

@@ -1280,6 +1280,7 @@ pub(crate) fn run_against_source<'a>(
     quotes: &WrittenQuotes,
     config: &Config,
     project: SemanticSource<'_>,
+    told: &RefCell<BTreeMap<String, String>>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
     let spelling_helpers = RefCell::new(BTreeSet::new());
     let told_classes = RefCell::new(BTreeMap::new());
@@ -1592,7 +1593,6 @@ pub(crate) fn run_against_source<'a>(
         source: source_ref,
         class_variance: config.class_variance,
         told_classes: &told_classes,
-        min_version: config.min_version,
     };
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
@@ -2115,7 +2115,14 @@ pub(crate) fn run_against_source<'a>(
             .map(|module| written.import_module(module)),
     );
     let told_classes = told_classes.take();
-    if config.class_variance && !told_classes.is_empty() {
+    // the module that holds its helpers itself holds what they read, if they read it. one that
+    // imports them leaves that to the file it imports them from
+    let tells_here = config.class_variance
+        && !told_classes.is_empty()
+        && (config.told_in_module
+            || (config.runtime_module.is_none()
+                && crate::runtime::reads_what_is_told(ctx.runtime.iter().copied())));
+    if tells_here {
         ctx.runtime.insert(crate::runtime::TOLD);
     }
     if !ctx.runtime.is_empty() {
@@ -2133,10 +2140,12 @@ pub(crate) fn run_against_source<'a>(
         }
     }
     ctx.required_imports.extend(definitions);
-    if config.class_variance && !told_classes.is_empty() {
-        let rows = told_classes.into_values().collect::<Vec<_>>().join(", ");
+    if tells_here {
         ctx.required_imports
-            .push(format!("{}(__name__, {rows})", crate::runtime::TOLD.name()));
+            .push(crate::runtime::told_statement(told_classes.values()));
+    }
+    if config.class_variance {
+        told.borrow_mut().extend(told_classes);
     }
     // who rewrote each statement, read before the list is put in order
     let rewritten_by = authorship.rewriters(&ctx.changed);
@@ -2688,6 +2697,7 @@ mod driver_tests {
             &WrittenQuotes::default(),
             &Config::test_default(),
             SemanticSource::Fresh(ruff_python_ast::PythonVersion::latest_ty()),
+            &RefCell::new(BTreeMap::new()),
         );
         assert!(!out.contains("??"), "still has ??: {out}");
     }
@@ -3195,7 +3205,7 @@ mod subsumed_lowerings {
                 "ParametricIsPass",
                 &[Lowering::RuntimeVariance],
                 "from collections.abc import Sequence\nclass A[T]:\n    t: T\ndef f(x: object):\n    return x is A[Sequence[int]]\n",
-                &["_parametric_is(x, A[_by_variance(1)(Sequence)[int]], (0,))"],
+                &["_parametric_is(x, A[Sequence[int]], (0,))"],
                 &[],
             ),
             case(

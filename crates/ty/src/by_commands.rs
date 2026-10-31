@@ -281,6 +281,7 @@ pub(crate) fn stage_run(
     // the tree is run and thrown away, so the runtime's helpers run from a copy of their own
     // at its root rather than pasted into a module in no package
     let mut layout = RuntimeLayout::unshipped();
+    let mut requirements = by_transforms::RuntimeRequirements::default();
     let status = render_check_and_transpile(
         &db,
         &handles,
@@ -289,7 +290,7 @@ pub(crate) fn stage_run(
             config: &config,
             gate: CheckGate::AllErrors,
             rebuilder: &rebuilder,
-            requirements: &mut by_transforms::RuntimeRequirements::default(),
+            requirements: &mut requirements,
             runtime: Some(&mut layout),
             roots: &roots,
             root: &root,
@@ -307,7 +308,7 @@ pub(crate) fn stage_run(
     // json file it opens, a template it renders. running out of a directory
     // holding only the transpiled half fails on the first of them
     stage_verbatim(&db, &root, &roots, &mut staging)?;
-    stage_runtime(&mut staging, &layout)?;
+    stage_runtime(&mut staging, &layout, &requirements)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_traceback_runtime(&mut staging, &traceback_entries, &layout)?;
     // what this build *was*, written into the build itself. a tree that is going
@@ -630,9 +631,25 @@ fn staged_packages(staging: &Staging, roots: &[PathBuf], root: &Path) -> Vec<Str
 /// top-level name a second basedpython wheel overwrites on install.
 /// [`by_stage::runtime`] is where that rule lives; this only puts the bytes
 /// where it says.
-fn stage_runtime(staging: &mut Staging, layout: &RuntimeLayout) -> anyhow::Result<()> {
+///
+/// Each copy also holds what the program's modules read of the classes of a stub, so that a module
+/// says nothing of them itself, and whichever copy a test finds has read them.
+fn stage_runtime(
+    staging: &mut Staging,
+    layout: &RuntimeLayout,
+    requirements: &by_transforms::RuntimeRequirements,
+) -> anyhow::Result<()> {
+    let source = if requirements.told().is_empty() {
+        by_transforms::runtime::SOURCE.to_owned()
+    } else {
+        format!(
+            "{}\n{}\n",
+            by_transforms::runtime::SOURCE,
+            by_transforms::runtime::told_statement(requirements.told().values())
+        )
+    };
     for relative in layout.files() {
-        staging.write(&relative, None, by_transforms::runtime::SOURCE)?;
+        staging.write(&relative, None, &source)?;
     }
     Ok(())
 }
@@ -1199,7 +1216,7 @@ pub(crate) fn cmd_build(
     // so they are staged whether or not something was reported — a `build/` a
     // debugger cannot read is worse than one built from a partial check
     stage_verbatim(&db, &root, &roots, &mut staging)?;
-    stage_runtime(&mut staging, &layout)?;
+    stage_runtime(&mut staging, &layout, &requirements)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     // a build is not started through anything of by's: it is imported, or run as python runs
     // any module
@@ -1219,7 +1236,7 @@ pub(crate) fn cmd_build(
         &BuildRecord::new(&root, &roots, None, false, &layout, &config),
     )?;
     if print_manifest {
-        print_build_manifest(&staging, &roots, &root, requirements)?;
+        print_build_manifest(&staging, &roots, &root, &requirements)?;
     }
     staging.finish()?;
 
@@ -1243,7 +1260,7 @@ fn print_build_manifest(
     staging: &Staging,
     roots: &[PathBuf],
     root: &Path,
-    requirements: by_transforms::RuntimeRequirements,
+    requirements: &by_transforms::RuntimeRequirements,
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -1645,7 +1662,7 @@ pub(crate) fn cmd_compile(
         if let Err(error) = stage_verbatim(&db, &root, &roots, &mut staging) {
             break 'compiling Err(error);
         }
-        if let Err(error) = stage_runtime(&mut staging, &layout) {
+        if let Err(error) = stage_runtime(&mut staging, &layout, &requirements) {
             break 'compiling Err(error);
         }
         if let Err(error) = stage_by_typed_markers(&db, &mut staging, &roots, &root) {
@@ -2562,7 +2579,9 @@ class _TeamCity:
         sys.stdout.flush()
 
     def _location(self, path, line=None):
-        path, line = _by_runner.project_location(os.fspath(path), line)
+        return self._url(*_by_runner.project_location(os.fspath(path), line))
+
+    def _url(self, path, line):
         url = "file://" + os.path.abspath(path)
         return url if line is None else f"{url}:{line}"
 
@@ -2620,7 +2639,11 @@ class _TeamCity:
             else:
                 name = suite.name
                 path, line, _ = suite.reportinfo()
-                location = self._location(path, None if line is None else line + 1)
+                line = None if line is None else line + 1
+                if isinstance(suite, pytest.Class):
+                    location = self._url(*_by_runner.class_location(suite.obj, os.fspath(path), line))
+                else:
+                    location = self._location(path, line)
             self._message("testSuiteStarted", name=name, locationHint=location)
             self._open.append((suite.nodeid, name))
         path, line, _ = item.location
@@ -3219,6 +3242,8 @@ def _relined_one(code, filename, by_line, width, by_span):
     # own does, rather than at line 0 when the transpiler wrote that line — an import
     # it needed — on its own. a profile names the module by it, `main.by:1(<module>)`
     first = 1 if code.co_name == "<module>" else by_line(code.co_firstlineno)
+    if code.co_name == "<module>":
+        _RELINED_WHOLE.add(filename)
     bytecode, consts = _class_first_line(code, consts, by_line)
     table = bytearray()
     if sys.version_info >= (3, 11):
@@ -3408,6 +3433,23 @@ def project_location(path, line):
     return (path if carried is None else carried), line
 
 
+def class_location(cls, path, line):
+    """`project_location` for the line python reports the class `cls` at. From 3.13 that is its
+    `__firstlineno__`, which relining a whole module has already moved to the `.by`, so moving
+    it again would read a `.by` line as a line of the staged `.py`. A module another loader
+    compiled ran its top level as python wrote it, see `reline_module`, and keeps the number."""
+    lines = _by_lines(path)
+    if (
+        lines is not None
+        and line is not None
+        and sys.version_info >= (3, 13)
+        and "__firstlineno__" in vars(cls)
+        and lines[0] in _RELINED_WHOLE
+    ):
+        return lines[0], line
+    return project_location(path, line)
+
+
 def reline_module(module):
     """Every function a staged module compiled by another loader defines, moved to the
     `.by` the module was transpiled from, as `_by_code` compiles the modules no other
@@ -3463,6 +3505,9 @@ def reline_module(module):
     for value in list(vars(module).values()):
         visit(value)
 
+
+# the `.by` files whose module code was relined, top level and class bodies included
+_RELINED_WHOLE = set()
 
 # the modules `reline_module` has seen, by `id`: a module stays in `sys.modules`, so
 # its `id` names no other module while the run lasts

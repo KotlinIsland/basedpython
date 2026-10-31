@@ -5,6 +5,9 @@
 //! their interpreter — a third-party package, a specific feature probe — find it
 //! through [`crate::interpreters`] next to the test that needs it.
 
+use std::io::Write;
+use std::process::{Command, Output};
+
 use by_transforms::PythonVersion;
 
 use crate::interpreters::{self, Interpreter, oldest, probe};
@@ -45,4 +48,26 @@ pub(crate) fn python_with(
     };
     interpreters::ran(&interpreter, interpreter.version);
     Some(interpreter)
+}
+
+/// `command`, an interpreter, run on `source` as `python -c` would run it. windows limits a
+/// command line to 32 KiB, which a program holding the runtime helpers can pass, so the source
+/// is read from a file
+#[allow(
+    dead_code,
+    reason = "each test binary compiles this module, and most pass their program on the \
+              command line"
+)]
+pub(crate) fn run_source(command: &mut Command, source: &str) -> Output {
+    let mut file = tempfile::NamedTempFile::new().expect("failed to create the source file");
+    file.write_all(source.as_bytes())
+        .expect("failed to write the source file");
+    command
+        .args([
+            "-c",
+            "import sys; exec(compile(open(sys.argv[1], encoding='utf-8').read(), '<string>', 'exec'))",
+        ])
+        .arg(file.path())
+        .output()
+        .expect("failed to spawn python")
 }

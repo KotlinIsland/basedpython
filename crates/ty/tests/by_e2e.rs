@@ -1157,6 +1157,13 @@ fn run_and_signal(dir: &Path, signal: &str, command: &mut Command) -> (Option<i3
     let mut rest = String::new();
     let _ = std::io::Read::read_to_string(&mut stdout, &mut rest);
     printed.push_str(&rest);
+    // what a test's assertion shows when the program ended some other way
+    let mut errors = String::new();
+    if let Some(mut stderr) = by.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut errors);
+    }
+    printed.push_str("\n--- stderr ---\n");
+    printed.push_str(&errors);
     (status.code(), printed)
 }
 
@@ -10633,7 +10640,9 @@ fn a_forwarding_function_of_another_file_is_called_through_the_helper() {
         .output()
         .expect("failed to spawn by");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // how `wrap` is read depends on the python `by` finds: a python without `lazy` reads it
+    // through the polyfill's namespace
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("_by_lazy.wrap", "wrap");
     assert!(
         stdout.contains("return _by_specialized(wrap, T)(t)"),
         "a hop keeps to the helper:\n{stdout}"
@@ -10705,6 +10714,11 @@ fn a_sealed_class_closes_over_the_source_of_the_project() {
 /// class that varies has a decorator of the transpiler's
 #[test]
 fn run_keeps_the_by_line_a_class_records_for_inspect() {
+    // python below 3.13 finds a class by parsing the file it was compiled from, and a `.by`
+    // holding its own syntax doesn't parse. it has no first line to keep either
+    if python_at_least(13, "a class that records its first line").is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
@@ -11109,4 +11123,231 @@ fn run_refuses_a_test_of_a_name_bound_only_for_a_checker() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "should be refused");
     assert!(stderr.contains("is not bound when it runs"), "{stderr}");
+}
+
+/// what a stub says of a class is in the file that holds the program's helpers, whichever module
+/// read the class, so a module reads as it was written
+#[test]
+fn the_file_of_helpers_holds_what_every_module_reads_of_a_stub() {
+    let dir = Scratch::new("by_told_in_the_shared_runtime");
+    let package = dir.join("pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    fs::write(
+        package.join("plain.by"),
+        "from collections.abc import Sequence\nprint(list(\"ab\"))\nprint(Sequence[int])\nclass A(list[str]): pass\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("values.by"),
+        "class Out[out T]: pass\nVALUE = Out[str]()\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("tests.by"),
+        concat!(
+            "from collections.abc import Sequence\n",
+            "from pkg.values import Out, VALUE\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "print(chk[Out[Sequence[str]]](VALUE))\n",
+        ),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["build", "--out", "out"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let out = dir.join("out").join("pkg");
+    let plain = fs::read_to_string(out.join("plain.py")).unwrap();
+    assert!(plain.contains("print(list(\"ab\"))"), "{plain}");
+    assert!(plain.contains("Sequence[int]"), "{plain}");
+    assert!(plain.contains("class A(list[str]): pass"), "{plain}");
+    for module in ["plain", "values", "tests"] {
+        let python = fs::read_to_string(out.join(module).with_extension("py")).unwrap();
+        assert!(!python.contains("_by_told"), "{module}: {python}");
+        assert!(
+            !python.contains("_by_variance(1)(Sequence)"),
+            "{module}: {python}"
+        );
+    }
+    let runtime = fs::read_to_string(out.join("_by_runtime.py")).unwrap();
+    let told = runtime
+        .lines()
+        .find(|line| line.starts_with("_by_told("))
+        .expect("the file of helpers says what the program read");
+    assert!(told.contains("\"builtins:str\""), "{told}");
+    assert!(told.contains("\"_collections_abc:Sequence\""), "{told}");
+}
+
+/// a module holding its own helpers holds what the whole program reads, since a value can come
+/// from any of it, and one that tests nothing holds none of it
+#[test]
+fn a_module_holding_its_own_helpers_holds_what_the_program_reads_if_it_tests() {
+    let dir = Scratch::new("by_told_pasted");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("values.by"),
+        "class Out[out T]: pass\nVALUE = Out[str]()\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("tester.by"),
+        concat!(
+            "from collections.abc import Iterable\n",
+            "from values import Out, VALUE\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "print(chk[Out[Iterable[object]]](VALUE))\n",
+        ),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["build", "--out", "out"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let values = fs::read_to_string(dir.join("out").join("values.py")).unwrap();
+    assert!(!values.contains("_by_told"), "{values}");
+    let tester = fs::read_to_string(dir.join("out").join("tester.py")).unwrap();
+    let told = tester
+        .lines()
+        .find(|line| line.starts_with("_by_told("))
+        .expect("the module tests something");
+    // read only by the other module
+    assert!(told.contains("\"builtins:str\""), "{told}");
+}
+
+/// nothing a stub's module does can reach a test of something else
+#[test]
+fn a_module_a_stub_describes_can_not_upset_a_test() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("lazy_dep.pyi"),
+        "calls: list[str]\nclass HiddenBase[T]: ...\nclass Weird(HiddenBase[int]): ...\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("lazy_dep.py"),
+        concat!(
+            "calls = []\n",
+            "class Weird: pass\n",
+            "def __getattr__(name):\n",
+            "    calls.append(name)\n",
+            "    raise ImportError(\"lazy thing cannot load \" + name)\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("dict_dep.pyi"),
+        "from collections.abc import Sequence\nclass Weird(Sequence[int]): ...\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("dict_dep.py"), "Weird = {}\n").unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "import lazy_dep\n",
+            "from lazy_dep import Weird\n",
+            "from dict_dep import Weird as Odd\n",
+            "class Out[out T]: pass\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "print(chk[Out[str]](Out[str]()))\n",
+            "print(chk[Out[Weird]](Out[Weird]()))\n",
+            "print(chk[Out[Odd]](Out[int]()))\n",
+            "print(chk[Out[str]](Out[str]()))\n",
+            "print(lazy_dep.calls)\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["True", "True", "False", "True", "[]"]
+    );
+}
+
+#[test]
+fn run_records_the_type_argument_of_a_class_a_stub_outside_the_standard_library_describes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("third.pyi"),
+        "class Rec[T](list[T]):\n    def __init__(self, x: T) -> None: ...\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("third.py"),
+        "class Rec(list):\n    def __init__(self, x):\n        super().__init__([x])\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "from collections import deque\n",
+            "from third import Rec\n",
+            "def test(x: object):\n",
+            "    return x is Rec[int]\n",
+            "print(test(Rec(1)), test(Rec(\"a\")))\n",
+            "print(deque([1]))\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["True False", "deque([1])"]
+    );
+    let transpiled = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["transpile", "main.by"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let transpiled = String::from_utf8_lossy(&transpiled.stdout);
+    assert!(
+        transpiled.contains("deque([1])"),
+        "a call of a class of the standard library reads as written:\n{transpiled}"
+    );
 }

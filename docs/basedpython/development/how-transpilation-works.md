@@ -103,6 +103,14 @@ a transform names the helpers the code it emits calls, through the typed
 constants in `runtime.rs`. what each of those calls in turn is read out of its
 body, so a helper brings the rest of what it needs along
 
+what a stub says of a class is in no object a test can read, so the checker writes it out as data,
+one row per class a module reads as a type (`types/told_classes.rs`), and `_by_told` takes the rows.
+a module's transpile hands its rows back rather than writing them. what writes the helpers for a
+tree writes every module's rows at the end of each copy. a module with its helpers pasted in holds
+the rows itself, the whole tree's when it is transpiled with one, and only if what it pastes reads
+them, which is to say only if it tests something. `by restage` has a running program whose copy has
+already run, so a module that reads a class the copy doesn't hold says so itself
+
 `Config::runtime_module` decides how a module gets them:
 
 - `by build`, `by run` and `by compile` stage a tree of their own. they write

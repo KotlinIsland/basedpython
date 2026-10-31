@@ -19,15 +19,12 @@
 //! class Out[T]: ...
 //! ```
 //!
-//! the decorator goes on top, since a decorator beneath it may replace the class. a class no
-//! transpiled module defines has no definition to wear one, and is told wherever a module reads
-//! it as a type: `Sequence[object]` is `_by_variance(1)(Sequence)[object]`. the base list of a
-//! class is left out, since what a base says is read through its arguments, and a static reader
-//! of the emitted python needs to be able to read a base
+//! the decorator goes on top, since a decorator beneath it may replace the class
 //!
-//! what the checker read of a class of a stub is in no object the runtime holds either, the
-//! bases `class str(Sequence[str])` gives it above all. a module says so once, ahead of everything
-//! else, for each class it reads as a type: `_by_told(__name__, ("builtins:str", ...))`
+//! a class no transpiled module defines has no definition to wear one, and what the checker read
+//! of it is in no object the runtime holds, the bases `class str(Sequence[str])` gives it above
+//! all. so this collects what the runtime is to be told of each class the module reads as a type,
+//! for whatever holds the program's helpers to hold
 //!
 //! a use-site projection is a fact about one type argument rather than about the class. it
 //! stays in the argument, where the keyword is blanked out of everything else:
@@ -40,7 +37,7 @@ use std::collections::BTreeMap;
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::name::UnqualifiedName;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
+use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::ArgVariance;
 
@@ -54,7 +51,6 @@ pub(crate) struct RuntimeVariancePass<'src> {
     pub(crate) source: &'src str,
     pub(crate) class_variance: bool,
     pub(crate) told_classes: &'src RefCell<BTreeMap<String, String>>,
-    pub(crate) min_version: PythonVersion,
 }
 
 struct Telling<'a> {
@@ -66,7 +62,6 @@ struct Telling<'a> {
     receiver: Option<String>,
     /// whether the statement being visited is directly in a class's body
     in_class_body: bool,
-    min_version: PythonVersion,
     types: &'a dyn TypeInfo,
     decorators: Vec<(TextRange, String)>,
     wrappers: Vec<(TextRange, Vec<Fragment>)>,
@@ -295,22 +290,10 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
         {
             return;
         }
-        // a subscript the runtime may refuse has the helper written for it tell
-        if let Expr::Subscript(subscript) = expr
-            && !self
-                .types
-                .class_subscript_is_unattested(&subscript.value, self.min_version)
-            && let Some(variances) = self.types.variances_told_at_a_subscript(&subscript.value)
-        {
-            self.wrap(
-                subscript.value.range(),
-                format!("{}(", variance_call(self.written, &variances)),
-            );
-            self.runtime.push(crate::runtime::VARIANCE);
-        }
         if let Expr::Subscript(subscript) = expr
             && self.types.subscript_specializes(&subscript.value)
         {
+            self.tell(&subscript.value);
             self.visit_expr(&subscript.value);
             match subscript.slice.as_ref() {
                 Expr::Tuple(tuple) if !tuple.parenthesized => {
@@ -344,7 +327,6 @@ impl TypeAwarePass for RuntimeVariancePass<'_> {
             told_classes: self.told_classes,
             receiver: None,
             in_class_body: false,
-            min_version: self.min_version,
             types,
             decorators: Vec::new(),
             wrappers: Vec::new(),
@@ -474,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn a_class_no_transpiled_module_defines_is_told_where_it_is_subscripted() {
+    fn a_class_no_transpiled_module_defines_is_told_by_what_holds_the_helpers() {
         let out = out(indoc! {"
             from collections.abc import Sequence, Mapping
 
@@ -484,15 +466,62 @@ mod tests {
             f[Sequence[object]](1)
             a = Mapping[str, object]
         "});
+        assert!(out.contains("f[Sequence[object]](1)"), "{out}");
+        assert!(out.contains("a = Mapping[str, object]"), "{out}");
+        assert!(!out.contains("_by_variance("), "{out}");
+        // this module tests something and has nowhere else to say so
+        let told = out
+            .lines()
+            .find(|line| line.starts_with("_by_told("))
+            .expect("the module tests something");
         assert!(
-            out.contains("f[_by_variance(1)(Sequence)[object]](1)"),
-            "{out}"
+            told.contains("(\"_collections_abc:Sequence\", (...,), None, "),
+            "{told}"
         );
-        assert!(
-            out.contains("a = _by_variance(1, 1)(Mapping)[str, object]"),
-            "{out}"
+    }
+
+    #[test]
+    fn a_module_that_tests_nothing_says_nothing_of_the_classes_it_reads() {
+        let out = out(
+            "from collections.abc import Sequence\na = Sequence[int]\nclass A(list[str]): ...\n",
         );
-        assert!(out.contains("def _by_variance("), "{out}");
+        assert!(out.contains("a = Sequence[int]\n"), "{out}");
+        assert!(out.contains("class A(list[str]): ..."), "{out}");
+        assert!(!out.contains("_by_told"), "{out}");
+        assert!(!out.contains("_by_variance"), "{out}");
+    }
+
+    #[test]
+    fn a_module_with_a_file_of_helpers_says_nothing_of_the_classes_it_reads() {
+        let out = transpile(
+            indoc! {"
+                from collections.abc import Sequence
+
+                def f[T](x: object) -> bool:
+                    return x is T
+
+                f[Sequence[object]](1)
+            "},
+            &Config {
+                min_version: PythonVersion::PY313,
+                class_variance: true,
+                runtime_module: Some("_by_runtime".to_owned()),
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(!out.contains("_by_told"), "{out}");
+    }
+
+    /// a type that names itself with a type argument that grows has no end to read
+    #[test]
+    fn an_alias_that_grows_each_time_it_is_opened_is_read_once() {
+        for source in [
+            "type G[T] = list[G[list[T]]]\nprint(1)\n",
+            "type A[T] = list[B[T]]\ntype B[T] = list[A[list[T]]]\nprint(1)\n",
+        ] {
+            assert!(out(source).contains("print(1)"), "{source}");
+        }
     }
 
     #[test]
@@ -560,10 +589,7 @@ mod tests {
                 "from typing import TypeAlias\nX: TypeAlias = (Box[out int], Sequence[int])\n",
                 "tuple[",
             ),
-            (
-                "type X = Out[Sequence[object]]\n",
-                "_by_variance(1)(Sequence)[object]",
-            ),
+            ("type X = Out[Sequence[object]]\n", "Sequence[object]"),
             ("type X[A] = Box[out A]\n", "Box[_by_out("),
             (
                 "type X = (Box[out int]) -> Sequence[int]\n",
@@ -576,10 +602,7 @@ mod tests {
             ),
             ("a = list[(x: Box[out int], y: Sequence[int])]()\n", ""),
             ("a = list[Box[out int]?]()\n", "_by_out(int)"),
-            (
-                "a = list[Sequence[int]?]()\n",
-                "_by_variance(1)(Sequence)[int]",
-            ),
+            ("a = list[Sequence[int]?]()\n", "Sequence[int]"),
             ("a = list[protocol(a: Sequence[int])]()\n", ""),
             ("a = list[{\"a\": Sequence[int]}]()\n", ""),
             (
@@ -587,19 +610,13 @@ mod tests {
                 "class K(list[Sequence[int]])",
             ),
             ("class K[A: Sequence[int]]: ...\n", "Sequence[int]"),
-            (
-                "def g(a=list[Sequence[int]]()): ...\n",
-                "_by_variance(1)(Sequence)[int]",
-            ),
+            ("def g(a=list[Sequence[int]]()): ...\n", "Sequence[int]"),
             ("a = cast(Sequence[int], [])\n", "cast(Sequence[int], [])"),
             (
                 "I = NewType(\"I\", Sequence[int])\n",
                 "NewType(\"I\", Sequence[int])",
             ),
-            (
-                "a = v(1) cast! Out[Sequence[object]]\n",
-                "_by_variance(1)(Sequence)[object]",
-            ),
+            ("a = v(1) cast! Out[Sequence[object]]\n", "Sequence[object]"),
             ("a = v(1) cast? Box[out object]\n", "Box[_by_out(object)]"),
             ("a = v(1) is (Box[out int], str)\n", ""),
             ("a = v(1) is Out[(Sequence[int], str)]\n", ""),
@@ -607,22 +624,13 @@ mod tests {
                 "a = v(1) is Out[Box[out int]] | Sequence[int]\n",
                 "_by_out(int)",
             ),
-            (
-                "a = f\"{Sequence[int]}\"\n",
-                "_by_variance(1)(Sequence)[int]",
-            ),
+            ("a = f\"{Sequence[int]}\"\n", "Sequence[int]"),
             ("a = f\"{Box[out int]}\"\n", "_by_out(int)"),
-            (
-                "a = [Sequence[int] for _ in [1]]\n",
-                "_by_variance(1)(Sequence)[int]",
-            ),
+            ("a = [Sequence[int] for _ in [1]]\n", "Sequence[int]"),
             ("a = lambda: Box[out int]\n", "_by_out(int)"),
             ("a = holds[Box[out int]?](1)\n", "_by_out(int)"),
             ("a = holds[(Sequence[int], str)](1)\n", ""),
-            (
-                "a = holds[(int) -> Sequence[int]](1)\n",
-                "_by_variance(1)(Sequence)[int]",
-            ),
+            ("a = holds[(int) -> Sequence[int]](1)\n", "Sequence[int]"),
             (
                 "a = list[1 | \"a\" | None]()\n",
                 "list[_by_lit(1) | _by_lit(",
@@ -670,9 +678,7 @@ mod tests {
             f[(Box[out int], Sequence[int]) -> str](1)
         "});
         assert!(
-            out.contains(
-                "f[Callable[[Box[_by_out(int)], _by_variance(1)(Sequence)[int]], str]](1)"
-            ),
+            out.contains("f[Callable[[Box[_by_out(int)], Sequence[int]], str]](1)"),
             "{out}"
         );
     }

@@ -1267,7 +1267,7 @@ TOLD = Sequence[object]
 "#;
 
 const UNTRANSPILED_CALLER: &str = r#"
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterable, Iterable, Sequence
 from typing import Generic, TypeVar
 from transpiled import Box, Inf, Out, TOLD, cell
 
@@ -1295,9 +1295,14 @@ class Seq(Sequence[int]):
     def __getitem__(self, index): return self
 class Iter(Iterable[int]):
     def __iter__(self): return iter(())
+class Aiter(AsyncIterable[int]):
+    def __aiter__(self): return self
 assert cell[TOLD](Seq())
-assert not cell[Iterable[object]](Iter())
+# told with `Sequence`, which derives from it
+assert cell[Iterable[object]](Iter())
 assert cell[Iterable[int]](Iter())
+assert not cell[AsyncIterable[object]](Aiter())
+assert cell[AsyncIterable[int]](Aiter())
 print("ok")
 "#;
 
@@ -1338,11 +1343,7 @@ fn run_program_for(python: &Interpreter, program: &str, min_version: PythonVersi
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python.command)
-        .arg("-c")
-        .arg(&transpiled)
-        .output()
-        .expect("failed to spawn python");
+    let output = common::run_source(&mut Command::new(&python.command), &transpiled);
 
     assert!(
         output.status.success(),
@@ -1966,4 +1967,315 @@ fn a_specialized_instance_and_a_reified_function_can_be_pickled() {
         return;
     };
     run_program(&python, PICKLED_REIFIED_PROGRAM);
+}
+
+const BASES_SIDE_BY_SIDE_PROGRAM: &str = r#"
+class Mix[T]:
+    def m(self) -> object:
+        return T
+class Other[U]:
+    def o(self) -> object:
+        return U
+class Same[T]:
+    def s(self) -> object:
+        return T
+class Twin[T]:
+    def t(self) -> object:
+        return T
+class B(Mix[int], Other[str]): pass
+class C(Same[int], Twin[str]): pass
+class D(B): pass
+assert B().m() == int
+assert B().o() == str
+assert C().s() == int
+assert C().t() == str
+assert D().o() == str
+print("ok")
+"#;
+
+/// a plain subclass is what each of its specialized bases makes it, not only the first
+#[test]
+fn a_class_deriving_two_specializations_reads_each() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, BASES_SIDE_BY_SIDE_PROGRAM);
+}
+
+const TYPING_ALIASES_PROGRAM: &str = r#"
+import typing
+from typing import AbstractSet, Container, FrozenSet, Iterable, Mapping, Reversible, Sequence
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+assert chk[Out[Sequence[object]]](Out[Sequence[int]]())
+assert not chk[Out[Sequence[int]]](Out[Sequence[object]]())
+assert chk[Out[Iterable[object]]](Out[Iterable[int]]())
+assert chk[Out[Mapping[str, object]]](Out[Mapping[str, int]]())
+assert chk[Out[FrozenSet[object]]](Out[FrozenSet[int]]())
+assert chk[Out[AbstractSet[object]]](Out[AbstractSet[int]]())
+assert chk[Out[Container[object]]](Out[Container[int]]())
+assert chk[Out[Reversible[object]]](Out[Reversible[int]]())
+
+class IntS(typing.Sequence[int]):
+    def __len__(self) -> int:
+        return 0
+    def __getitem__(self, index: int) -> int:
+        return 0
+assert chk[Sequence[object]](IntS())
+assert chk[Sequence[int]](IntS())
+print("ok")
+"#;
+
+/// `typing` names a class of `collections.abc` by an alias of it
+#[test]
+fn a_class_written_through_typing_is_the_class() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, TYPING_ALIASES_PROGRAM);
+}
+
+const RACING_FIRST_USE_PROGRAM: &str = r#"
+import sys
+import threading
+from collections.abc import Container, Iterable, Mapping, Sequence
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+sys.setswitchinterval(1e-6)
+errors: list[BaseException] = []
+barrier = threading.Barrier(16)
+
+def race() -> None:
+    barrier.wait()
+    try:
+        for _ in range(20):
+            assert chk[Out[Sequence[str]]](Out[str]())
+            assert chk[Out[Container[object]]](Out[Mapping[str, int]]())
+            assert chk[Out[Iterable[object]]](Out[dict[str, int]]())
+    except BaseException as error:
+        errors.append(error)
+
+threads = [threading.Thread(target=race) for _ in range(16)]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+assert errors == [], errors
+print("ok")
+"#;
+
+/// what the runtime is told is settled by whichever thread asks first
+#[test]
+fn threads_racing_on_the_first_test_agree() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, RACING_FIRST_USE_PROGRAM);
+}
+
+const STRUCTURAL_STUB_PROTOCOL_PROGRAM: &str = r#"
+from collections.abc import Iterable, Iterator
+from typing import IO, Protocol, SupportsAbs, TextIO, Hashable
+import io
+import types
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class MyIt:
+    def __iter__(self) -> Iterator[int]:
+        return iter([1])
+class StrIt:
+    def __iter__(self) -> Iterator[str]:
+        return iter([""])
+class NoIt: pass
+
+ok: Out[Iterable[int]] = Out[MyIt]()
+assert chk[Out[Iterable[int]]](ok)
+assert chk[Out[Iterable[object]]](Out[MyIt]())
+assert not chk[Out[Iterable[int]]](Out[StrIt]())
+assert not chk[Out[Iterable[int]]](Out[NoIt]())
+
+class Mine[T](Protocol):
+    def __iter__(self) -> Iterator[T]: ...
+assert chk[Out[Mine[int]]](Out[MyIt]())
+assert not chk[Out[Mine[str]]](Out[MyIt]())
+
+# a class of a stub against a protocol of a stub
+assert chk[Out[SupportsAbs[int]]](Out[int]())
+assert not chk[Out[SupportsAbs[str]]](Out[int]())
+assert chk[Out[Iterable[str]]](Out[io.StringIO]())
+assert not chk[Out[Iterable[int]]](Out[io.StringIO]())
+assert chk[Out[Iterable[str]]](Out[IO[str]]())
+# typeshed gives `IO.__iter__` a type parameter of its own, which any call can solve to anything
+assert chk[Out[Iterable[int]]](Out[IO[str]]())
+
+# the stub says it is no such thing, whatever the runtime class has
+assert not chk[Out[Hashable]](Out[types.MappingProxyType[str, int]]())
+print("ok")
+"#;
+
+/// a protocol of a stub has members of the types the stub says, for a class that has them
+#[test]
+fn a_protocol_of_a_stub_is_related_to_by_its_members() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, STRUCTURAL_STUB_PROTOCOL_PROGRAM);
+}
+
+const CONSTRUCTORS_FROM_ANNOTATIONS_PROGRAM: &str = r#"
+from typing import Literal
+
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class D:
+    def __init__(self, a: Literal["x"]): pass
+class E:
+    def __init__(self, a: Literal[":x"]): pass
+assert chk[Out[(Literal["x"]) -> D]](Out[type[D]]())
+assert chk[Out[(Literal[":x"]) -> E]](Out[type[E]]())
+assert not chk[Out[(Literal["y"]) -> E]](Out[type[E]]())
+assert not chk[Out[() -> E]](Out[type[E]]())
+
+# a class of a function
+def local() -> None:
+    class L:
+        def __init__(self, x: int): pass
+    ok: Out[(int) -> L] = Out[type[L]]()
+    assert chk[Out[(int) -> L]](ok)
+    assert not chk[Out[(str) -> L]](ok)
+local()
+
+# a class bound twice is called as each one says
+class A:
+    def __init__(self, x: int): pass
+first = chk[Out[(int) -> A]](Out[type[A]]())
+class A:  # type: ignore
+    def __init__(self, x: str): pass
+second = chk[Out[(str) -> A]](Out[type[A]]())
+assert first and second
+print("ok")
+"#;
+
+/// a class whose definition runs says what calling it is by its annotations
+#[test]
+fn a_class_is_called_as_its_annotations_say() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, CONSTRUCTORS_FROM_ANNOTATIONS_PROGRAM);
+}
+
+const DEPTH_AND_HOSTILE_CLASSES_PROGRAM: &str = r#"
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+class M(type):
+    def __hash__(cls) -> int:
+        raise ValueError("no hash")
+class G[out T](metaclass=M): pass
+assert G.__name__ == "G"
+print("ok")
+"#;
+
+#[test]
+fn a_metaclass_that_refuses_to_hash_its_class_runs_as_it_does_in_python() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, DEPTH_AND_HOSTILE_CLASSES_PROGRAM);
+}
+
+/// a type nested further than any bound a relation could have been given
+#[test]
+fn a_type_nested_deep_relates_as_a_shallow_one_does() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    let nested =
+        |depth: usize, leaf: &str| format!("{}{leaf}{}", "Out[".repeat(depth), "]".repeat(depth));
+    for depth in [70, 150] {
+        let program = format!(
+            "class Out[out T]: pass\ndef chk[T](x: object) -> bool:\n    return x is T\n\
+             assert chk[{}]({}())\n\
+             assert chk[{}]({}())\n\
+             assert not chk[{}]({}())\nprint(\"ok\")\n",
+            nested(depth, "object"),
+            nested(depth, "int"),
+            nested(depth, "int"),
+            nested(depth, "int"),
+            nested(depth, "int"),
+            nested(depth, "object"),
+        );
+        // `by` lowers a program on a thread of this size, and this nesting needs it where
+        // nothing inlines, a test's own thread having a fraction of that
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(ruff_db::STACK_SIZE)
+                .spawn_scoped(scope, || run_program(&python, &program))
+                .expect("failed to start the worker thread")
+                .join()
+                .expect("the program should run");
+        });
+    }
+}
+
+const FORWARD_REFERENCES_THAT_HOLD_PROGRAM: &str = r#"
+import copy
+import pickle
+
+class Inv[T]: pass
+class Out[out T]: pass
+
+def chk[T](x: object) -> bool:
+    return x is T
+
+# in a projection
+x = Inv[out Later]()
+class Later: pass
+assert chk[Inv[out Later]](x)
+assert chk[Inv[out Later]](Inv[out Later]())
+assert not chk[Inv[out int]](x)
+
+# through `pickle`
+y = Out[Later2]()
+class Later2: pass
+assert type(pickle.loads(pickle.dumps(y))).__name__ == "Out"
+assert chk[Out[Later2]](pickle.loads(pickle.dumps(y)))
+assert chk[Out[Later2]](copy.deepcopy(y))
+
+# of a function, which no module has
+def local() -> None:
+    y = Out[Local]()
+    class Local: pass
+    assert chk[Out[Local]](y)
+    assert chk[Out[Local]](Out[Local]())
+    assert not chk[Out[int]](y)
+local()
+print("ok")
+"#;
+
+/// a forward reference is the class it names wherever it is held
+#[test]
+fn a_forward_reference_in_a_projection_a_pickle_or_a_function_relates_as_the_class() {
+    let Some(python) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    run_program(&python, FORWARD_REFERENCES_THAT_HOLD_PROGRAM);
 }

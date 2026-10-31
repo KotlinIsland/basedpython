@@ -28,11 +28,7 @@ fn run(program: &str) -> Option<(String, String)> {
     };
     let transpiled = transpile(program, &config)
         .unwrap_or_else(|error| panic!("{program}\nshould transpile: {error}"));
-    let output = Command::new(&interpreter.command)
-        .arg("-c")
-        .arg(&transpiled)
-        .output()
-        .expect("failed to spawn python");
+    let output = common::run_source(&mut Command::new(&interpreter.command), &transpiled);
     assert!(
         output.status.success(),
         "failed on {interpreter}:\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
@@ -464,11 +460,7 @@ fn a_class_with_defaults_the_target_cannot_subscript_is_what_they_solve() {
             transpiled.contains("_by_subscript(memoryview, int)"),
             "{transpiled}"
         );
-        let output = Command::new(&interpreter.command)
-            .arg("-c")
-            .arg(&transpiled)
-            .output()
-            .expect("failed to spawn python");
+        let output = common::run_source(&mut Command::new(&interpreter.command), &transpiled);
         assert!(
             output.status.success(),
             "failed on {interpreter}:\n{}\n--- transpiled ---\n{transpiled}",
@@ -500,11 +492,7 @@ fn only_typing_cast_takes_a_type() {
         interpreter.version,
     )
     .unwrap();
-    let output = Command::new(&interpreter.command)
-        .arg("-c")
-        .arg(&transpiled)
-        .output()
-        .expect("failed to spawn python");
+    let output = common::run_source(&mut Command::new(&interpreter.command), &transpiled);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "c",

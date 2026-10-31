@@ -198,19 +198,6 @@ impl<'src> CallableSyntax<'src> {
         self.telling_variance = matches!(root, RootKind::AliasValue | RootKind::Application);
     }
 
-    /// `value`, the class of a subscript, telling the runtime its variance when the subscript
-    /// is where it has to be told
-    fn value_telling_variance(&self, value: &Expr) -> Option<String> {
-        if !self.telling_variance {
-            return None;
-        }
-        let variances = self.types?.variances_told_at_a_subscript(value)?;
-        Some(self.written.spelled(&RuntimeSpelling::telling_variance(
-            &RuntimeSpelling::text(self.src(value.range())),
-            &variances,
-        )))
-    }
-
     /// a union of the rendered `arms`, which is `Union[A, B]` below 3.10, since
     /// `A | B` calls `type.__or__`. a union this lowerer spells for a `?` or an `or`
     /// is written so wherever it stands, as the optional lowering writes a bare `T?`:
@@ -956,9 +943,7 @@ impl<'src> CallableSyntax<'src> {
                 {
                     self.needs_class_subscript_runtime = true;
                     let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
-                    let value = self
-                        .value_telling_variance(&s.value)
-                        .unwrap_or_else(|| self.src(s.value.range()).to_owned());
+                    let value = self.src(s.value.range());
                     return Some(format!("_by_subscript({value}, {slice})"));
                 }
                 // read as a type, this is the specialization, whatever the class would answer
@@ -972,17 +957,11 @@ impl<'src> CallableSyntax<'src> {
                 {
                     self.needs_specialization_runtime = true;
                     let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
-                    let value = self
-                        .value_telling_variance(&s.value)
-                        .unwrap_or_else(|| self.src(s.value.range()).to_owned());
+                    let value = self.src(s.value.range());
                     return Some(format!(
                         "{}({value}, {slice})",
                         self.written.helper(crate::runtime::SPECIALIZATION)
                     ));
-                }
-                if let Some(value) = self.value_telling_variance(&s.value) {
-                    let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
-                    return Some(format!("{value}[{slice}]"));
                 }
                 slice_rewrite.map(|s_text| format!("{}[{s_text}]", self.src(s.value.range())))
             }

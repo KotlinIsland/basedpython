@@ -313,13 +313,6 @@ pub(crate) trait TypeInfo {
         class: &StmtClassDef,
     ) -> Option<Box<[ty_python_semantic::ArgVariance]>>;
 
-    /// the variance of each type parameter of the class `value` is, when the runtime has to be
-    /// told that where it is subscripted, because no transpiled module defines the class
-    fn variances_told_at_a_subscript(
-        &self,
-        value: &Expr,
-    ) -> Option<Box<[ty_python_semantic::ArgVariance]>>;
-
     /// whether `annotation` declares a PEP 613 type alias, whose value is a type expression
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool;
 
@@ -1071,13 +1064,6 @@ impl TypeInfo for LoweringModel<'_> {
         class: &StmtClassDef,
     ) -> Option<Box<[ty_python_semantic::ArgVariance]>> {
         SemanticModel::class_variances(self, class)
-    }
-
-    fn variances_told_at_a_subscript(
-        &self,
-        value: &Expr,
-    ) -> Option<Box<[ty_python_semantic::ArgVariance]>> {
-        SemanticModel::variances_told_at_a_subscript(self, value)
     }
 
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool {

@@ -361,6 +361,7 @@ fn restage_transpiled(
     // transpile: a caller that re-read either of them separately could pair a line
     // table with bytes it does not describe
     let mut produced: Option<(crate::sourcemap::TracebackEntry, String)> = None;
+    let mut requirements = by_transforms::RuntimeRequirements::default();
     let outcome = check_and_transpile(
         db,
         std::slice::from_ref(&(source.clone(), *source_file)),
@@ -371,7 +372,7 @@ fn restage_transpiled(
             // continuing
             gate: CheckGate::AllErrors,
             rebuilder: &tree.rebuilder,
-            requirements: &mut by_transforms::RuntimeRequirements::default(),
+            requirements: &mut requirements,
             // a re-stage writes modules back into a tree the build already laid
             // out, so what it records is thrown away: whatever copy of the runtime
             // a module imports is already sitting where the build put it
@@ -384,6 +385,46 @@ fn restage_transpiled(
             Ok(())
         },
     )?;
+
+    // the running program has already run its file of helpers, and that file was written before
+    // this edit: what it doesn't hold, the module says itself
+    let copies: Vec<String> = tree
+        .record
+        .runtime_layout()
+        .files()
+        .filter_map(|copy| std::fs::read_to_string(tree.directory.join(copy)).ok())
+        .collect();
+    let outcome = if !copies.is_empty()
+        && requirements
+            .told()
+            .values()
+            .any(|row| !copies.iter().all(|copy| copy.contains(row.as_str())))
+    {
+        let config = by_transforms::Config {
+            told_in_module: true,
+            ..tree.config.clone()
+        };
+        produced = None;
+        check_and_transpile(
+            db,
+            std::slice::from_ref(&(source.clone(), *source_file)),
+            &mut Emit {
+                config: &config,
+                gate: CheckGate::AllErrors,
+                rebuilder: &tree.rebuilder,
+                requirements: &mut by_transforms::RuntimeRequirements::default(),
+                runtime: Some(&mut tree.record.runtime_layout()),
+                roots: &tree.record.module_roots,
+                root: &tree.record.project_root,
+            },
+            |emitted: &Transpiled<'_>| {
+                produced = Some((describe_module(emitted), emitted.python.to_owned()));
+                Ok(())
+            },
+        )?
+    } else {
+        outcome
+    };
 
     let Some((mut entry, python)) = produced.filter(|_| outcome.ok) else {
         return Ok(Err(refuse_file(
