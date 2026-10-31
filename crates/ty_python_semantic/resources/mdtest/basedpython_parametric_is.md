@@ -795,7 +795,7 @@ the base chain too, so a subclass answers for what its base was given:
 
 ```by
 class A[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 class B[U](A[U]):

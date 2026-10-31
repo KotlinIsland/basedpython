@@ -2,17 +2,18 @@
 
 A PEP 695 class type parameter is *reified* when it is declared `reified`, or when the class reads
 it in a value position — anywhere other than a type annotation. The reference becomes a real runtime
-value (the supplied type argument), so it types as `type[T]` rather than as the `TypeVar` object.
+value (the supplied type argument), so it types as `TypeForm[T]` rather than as the `TypeVar`
+object.
 
 Where a function's type argument belongs to the call, a class's belongs to the *instance*: every
 instance carries the argument it was constructed with, and a method reads it through its receiver.
 
-## a value-position type parameter is `type[T]`
+## a value-position type parameter is `TypeForm[T]`
 
 ```by
 class C[T]:
-    def kind(self) -> type[T]:
-        reveal_type(T)  # revealed: type[T]
+    def kind(self) -> object:
+        reveal_type(T)  # revealed: TypeForm[T]
         return T
 
 C[int]().kind()
@@ -22,7 +23,7 @@ C[int]().kind()
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 assert Box[int]().kind() === int
@@ -52,13 +53,14 @@ what a generic factory needs:
 
 ```by
 class Default[T]:
-    value: T
+    value: T | None
 
     def __init__(self):
-        self.value = T()
+        self.value = T() if isinstance(T, type) else None
 
 assert Default[int]().value == 0
 assert Default[str]().value == ""
+assert Default[None]().value is None
 ```
 
 ## `reified` declares reification outright
@@ -80,7 +82,7 @@ rather than left to fail at runtime:
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 # error: [unspecialized-reified-generic] "Cannot construct reified generic class `Box` without a specialization"
@@ -91,7 +93,7 @@ Box()
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 b: Box[int] = Box()
@@ -105,7 +107,7 @@ class Box[T]:
     def __init__(self, value: T):
         self.value = value
 
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 assert Box(1).kind() === int
@@ -118,7 +120,7 @@ they were given the same argument — an erased parameter no member mentions is 
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 def take(box: Box[object]) -> None: ...
@@ -131,7 +133,7 @@ take(Box[int]())
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 class IntBox(Box[int]):
@@ -147,7 +149,7 @@ parameter is invariant too and its constructions are solved the same way:
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 class Wrapper[U](Box[U]):
@@ -163,7 +165,7 @@ assert w.kind() === int
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 class Wrapper[U](Box[U]):
@@ -181,7 +183,7 @@ answers the same way:
 ```by
 class Box[T]:
     @classmethod
-    def kind(cls) -> type[T]:
+    def kind(cls) -> object:
         return T
 
 assert Box[int].kind() === int
@@ -193,8 +195,8 @@ Everything written inside a method closes over what the method read, so depth co
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
-        def inner() -> type[T]:
+    def kind(self) -> object:
+        def inner() -> object:
             return T
 
         return inner()
@@ -209,7 +211,7 @@ writes them or the declared type supplies them — a variadic binds a *run*, not
 
 ```by
 class Row[T, *Rest]:
-    def shape(self) -> tuple[type[T], tuple[type, ...]]:
+    def shape(self) -> tuple[object, tuple[object, ...]]:
         return (T, Rest)
 
 assert Row[int, str, bytes]().shape() == (int, (str, bytes))
@@ -222,7 +224,7 @@ assert r.shape() == (int, (str, bytes))
 
 ```by
 class Pair[A, B = str]:
-    def kinds(self) -> tuple[type[A], type[B]]:
+    def kinds(self) -> tuple[object, object]:
         return (A, B)
 
 assert Pair[int]().kinds() == (int, str)
@@ -253,7 +255,7 @@ class Box[T]:
 ```by
 class Box[T]:
     @staticmethod
-    def kind() -> type[T]:
+    def kind() -> object:
         # error: [reified-without-receiver]
         return T
 ```
@@ -267,7 +269,7 @@ import sys
 
 class Box[T]:
     if sys.version_info >= (3, 8):
-        def kind(self) -> type[T]:
+        def kind(self) -> object:
             return T
 
 assert Box[int]().kind() === int
@@ -278,7 +280,7 @@ assert Box[int]().kind() === int
 ```by
 # error: [invalid-variance-declaration] "Type parameter `T` cannot declare a variance"
 class Box[out T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 ```
 
@@ -292,7 +294,7 @@ class Box[T]:
     def __class_getitem__(cls, item: object) -> object:
         return cls
 
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 ```
 

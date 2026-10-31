@@ -190,11 +190,11 @@ use crate::types::{
     LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter, Parameters,
     ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance, Signature,
     SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext,
-    TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictType,
-    TypingModule, UnionAccumulator, UnionBuilder, UnionType, UnionTypeInstance, any_over_type,
-    binding_type, extract_fixed_length_iterable_element_types, infer_complete_scope_types,
-    infer_scope_types, is_discarded_dict_key_assignment, report_iteration_over_character,
-    todo_type,
+    TypeFormType, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, UnionTypeInstance,
+    any_over_type, binding_type, extract_fixed_length_iterable_element_types,
+    infer_complete_scope_types, infer_scope_types, is_discarded_dict_key_assignment,
+    report_iteration_over_character, todo_type,
 };
 use crate::{AnalysisSettings, Db, DisplaySettings, FxIndexSet, FxOrderSet, SemanticModel};
 use fluid::FluidTimeline;
@@ -14624,71 +14624,86 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let ty = ty.inner_type();
 
-        // basedpython: a pep 695 type parameter referenced in a value position is
-        // reified — the runtime value is the supplied type argument, so the
-        // reference types as `type[T]` rather than as the `TypeVar` object. a
-        // `*Ts` parameter absorbs a whole run of type arguments, so its value is
-        // a tuple of them; a `**Kwargs` pack binds its fields, so its value is a
-        // mapping of field name to type.
-        //
-        // a function's argument comes from the call and a class's from the
-        // instance, but the type of the reference is the same either way
-        if self.is_basedpython_file()
-            && !self.inference_flags().intersects(
+        if let Some(reified) = self.reified_type_parameter_read(ty) {
+            return (reified, definition);
+        }
+
+        (ty, definition)
+    }
+
+    /// basedpython: a pep 695 type parameter referenced in a value position is reified — the
+    /// runtime value is the supplied type argument, so the reference types as what was written
+    /// rather than as the `TypeVar` object: a `TypeForm[T]`, since `f[1]` and `f[int | str]` are
+    /// type arguments too, and a bound doesn't change that when a union of subclasses satisfies
+    /// it. `isinstance(T, type)` is what makes it a class. a `*Ts` parameter absorbs a whole run of
+    /// type arguments, so its value is a tuple of type forms; a `**Kwargs` pack binds its fields,
+    /// so its value is a mapping of field name to type form.
+    ///
+    /// a function's argument comes from the call and a class's from the instance, but the type of
+    /// the reference is the same either way
+    fn reified_type_parameter_read(&self, ty: Type<'db>) -> Option<Type<'db>> {
+        let db = self.db();
+        let env = self.program_environment();
+        if !self.is_basedpython_file()
+            || self.inference_flags().intersects(
                 // a dotted type expression infers its own receiver as a value, so
                 // the type-expression flag alone does not say `T.a` is a type
                 InferenceFlags::IN_TYPE_EXPRESSION
                     | InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION,
             )
-            && let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty
-            && matches!(
-                typevar.kind(db),
-                TypeVarKind::Pep695TypeVar
-                    | TypeVarKind::Pep695TypeVarTuple
-                    | TypeVarKind::Pep695KeywordVariadic
-            )
-            && let Some(owner) = typevar.definition(db).and_then(|definition| {
-                match definition.scope(db).node(db) {
-                    NodeWithScopeKind::FunctionTypeParameters(_) => {
-                        Some(TypeParamReification::Function)
-                    }
-                    NodeWithScopeKind::ClassTypeParameters(_) => Some(TypeParamReification::Class),
-                    _ => None,
-                }
-            })
-            && let Some(bound_typevar) = bind_typevar(
-                db,
-                self.index,
-                self.scope().file_scope_id(db),
-                self.typevar_binding_context,
-                typevar,
-            )
-            // a function's type parameter is reified by this very reference —
-            // the detector counts a value-position read as one. a class's is
-            // not: the read has to be somewhere an instance can answer it, so
-            // ask the class whether it reifies the parameter at all
-            && (matches!(owner, TypeParamReification::Function)
-                || bound_typevar.is_reified_class_typevar(db))
         {
-            let kind = typevar.kind(db);
-            let reified = if kind.is_typevartuple() {
-                Type::homogeneous_tuple(db, env, KnownClass::Type.to_instance(db, env))
-            } else if kind.is_keyword_variadic() {
-                KnownClass::Dict.to_specialized_instance(
-                    db,
-                    env,
-                    &[
-                        KnownClass::Str.to_instance(db, env),
-                        KnownClass::Type.to_instance(db, env),
-                    ],
-                )
-            } else {
-                Type::TypeVar(bound_typevar).to_meta_type(db, env)
-            };
-            return (reified, definition);
+            return None;
         }
-
-        (ty, definition)
+        let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty else {
+            return None;
+        };
+        let kind = typevar.kind(db);
+        if !matches!(
+            kind,
+            TypeVarKind::Pep695TypeVar
+                | TypeVarKind::Pep695TypeVarTuple
+                | TypeVarKind::Pep695KeywordVariadic
+        ) {
+            return None;
+        }
+        let owner = match typevar.definition(db)?.scope(db).node(db) {
+            NodeWithScopeKind::FunctionTypeParameters(_) => TypeParamReification::Function,
+            NodeWithScopeKind::ClassTypeParameters(_) => TypeParamReification::Class,
+            _ => return None,
+        };
+        let bound_typevar = bind_typevar(
+            db,
+            self.index,
+            self.scope().file_scope_id(db),
+            self.typevar_binding_context,
+            typevar,
+        )?;
+        // a function's type parameter is reified by this very reference — the detector counts a
+        // value-position read as one. a class's is not: the read has to be somewhere an instance
+        // can answer it, so ask the class whether it reifies the parameter at all
+        if matches!(owner, TypeParamReification::Class)
+            && !bound_typevar.is_reified_class_typevar(db)
+        {
+            return None;
+        }
+        let element = TypeFormType::from_type_expression(db, Type::object());
+        Some(if kind.is_typevartuple() {
+            Type::homogeneous_tuple(db, env, element)
+        } else if kind.is_keyword_variadic() {
+            KnownClass::Dict.to_specialized_instance(
+                db,
+                env,
+                &[KnownClass::Str.to_instance(db, env), element],
+            )
+        } else if typevar
+            .upper_bound(db, env)
+            .is_some_and(|bound| bound.is_unknown())
+        {
+            // the unresolved bound has been reported, and a read of it says nothing more
+            Type::TypeVar(bound_typevar).to_meta_type(db, env)
+        } else {
+            TypeFormType::from_type_expression(db, Type::TypeVar(bound_typevar))
+        })
     }
 
     /// Infer the type of a place expression from its ordered load sources.
@@ -14818,6 +14833,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             place
         } else {
             place.map_type(|ty| {
+                // a test of a reified type parameter is a test of the value it holds, and that
+                // value is what the test narrows: `isinstance(T, type)` asks about the type
+                // argument, which the `TypeVar` object would give a different answer to
+                let ty = if place_expr.is_symbol()
+                    && let Some(reified) = self.reified_type_parameter_read(ty)
+                {
+                    reified
+                } else {
+                    ty
+                };
                 self.narrow_place_with_applicable_constraints(place_expr, ty, narrowing_constraints)
             })
         }
@@ -16558,6 +16583,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::SubclassOf(subclass_of) => subclass_of
                     .into_type_var()
                     .is_some_and(|typevar| !typevar.typevar(db).is_self(db)),
+                Type::TypeForm(form) => matches!(
+                    form.type_argument(db),
+                    Type::TypeVar(typevar) if !typevar.typevar(db).is_self(db)
+                ),
                 _ => false,
             }
         };

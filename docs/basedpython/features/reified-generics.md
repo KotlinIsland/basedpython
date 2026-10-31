@@ -1,9 +1,9 @@
 # reified type parameters
 
 standard python erases type parameters: a `def f[T]` has no way to recover
-`T` at runtime, so `isinstance(x, T)`, `T()`, or `print(T)` inside the body
-are impossible. basedpython makes a type parameter available as a real
-runtime value when the body actually uses it as one:
+`T` at runtime, so `x is T` or `print(T)` inside the body are impossible.
+basedpython makes a type parameter available as a real runtime value when the
+body actually uses it as one:
 
 ```by
 def f[T]():
@@ -15,6 +15,43 @@ f[int]()
 the type parameter behaves like an ordinary positional parameter that happens
 to be filled by the `[...]` specialization step rather than the `(...)` call
 step
+
+## what the value is
+
+the value of `T` is the type argument exactly as it was written, and a type
+argument is not always a class: `f[1]`, `f[None]` and `f[int | str]` are all
+specializations of a `def f[T]`. a bound does not change that, because a union of
+subclasses satisfies a class bound, so `f[A | B]` specializes a `def f[T: Base]`.
+so `T` reads as a `TypeForm[T]`, whatever its bound. it can be printed, compared,
+tested against (`x is T`) and handed on (`g[T]()`, `list[T]`), but not used as a
+class:
+
+```by
+def f[T: int](x: object):
+    print(x is T)      # ok
+    T()                # error: `TypeForm[T]` is not callable
+    T.__name__         # error: `TypeForm[T]` has no attribute `__name__`
+    isinstance(x, T)   # error: `isinstance` takes a class
+    c: type[T] = T     # error: a `TypeForm[T]` is not a `type[T]`
+```
+
+`isinstance(T, type)` asks whether it is a class, and narrows `T` to a `type[T]`
+where it is. a call is then checked against the bound:
+
+```by
+class Base:
+    def __init__(self, x: int): ...
+
+def make[T: Base]() -> object:
+    if isinstance(T, type):
+        T()            # error: no argument for `x`
+        return T(1)    # ok
+    T()                # error: `TypeForm[T]` is not callable
+    return None
+```
+
+the elements of a [variadic and a keyword pack](#variadics-and-keyword-packs) are
+type forms too, and narrow the same way
 
 ## declaring it
 
@@ -68,7 +105,7 @@ sites route through specialization instead of being stripped:
 
 ```by
 def f[T](t: object):
-    return isinstance(t, T)
+    return isinstance(T, type) and isinstance(t, T)
 
 f[int](1)
 ```
@@ -78,7 +115,7 @@ f[int](1)
 ```python
 @generic
 def f[T](t: object):
-    return isinstance(t, T)
+    return isinstance(T, type) and isinstance(t, T)
 
 f[int](1)   # not stripped — routes through generic.__getitem__
 ```
@@ -216,10 +253,11 @@ f("")   # T is `""`: prints False
 ```
 
 the injected argument is a *runtime type expression* for what the checker
-solved, so `f(1)` hands `f` the type `Literal[1]`. the body reads it as it would
-read a class: `isinstance(x, T)` asks whether `x` is that value, `T()` is that
-value, and `T("2")` is a `TypeError`, since `2` isn't of that type. to have `T` be
-`int`, pass something that is only known to be one, such as `int(1)`. a float or
+solved, so `f(1)` hands `f` the type `Literal[1]`. `x is T` asks whether `x` is
+that value. the literal is held as a class, so `isinstance(T, type)` is true of it,
+and once narrowed `isinstance(x, T)` asks the same question, `T()` is that value,
+and `T("2")` is a `TypeError`, since `2` isn't of that type. to have `T` be `int`,
+pass something that is only known to be one, such as `int(1)`. a float or
 complex literal hands on its class instead, because equal floats can be different
 values (`0.0 == -0.0`) and the runtime couldn't tell them apart. structured
 annotations solve through their type arguments (`list[T]` + `[1]` → `int`),

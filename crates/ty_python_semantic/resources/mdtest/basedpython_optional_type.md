@@ -190,7 +190,7 @@ def f(x: Alias, y: Alias | str) -> None:
     reveal_type(y)  # revealed: int?? | str
 ```
 
-a type parameter read as a value is a `type[T]`, which is not a type expression, so its wrapped
+a type parameter read as a value is a `TypeForm[T]`, which is not a type expression, so its wrapped
 optional is still the wrapper class but denotes nothing more precise than `Unknown??`
 
 ```by
