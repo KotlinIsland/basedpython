@@ -1481,11 +1481,79 @@ class Box(Generic[T, U]):
         return result
 
     def wrong_wrap(self, value: T) -> "Box[T, T]":
-        # TODO: Only report the return error. The explicitly specialized constructor accepts
-        # `value: T` and `self: Self`; the incompatible return context should not reject them.
+        return Box[T, Self](value, self)  # error: [invalid-return-type]
+```
+
+### Constructing an explicit specialization of the enclosing class
+
+The type arguments of an explicit specialization are fixed, even when they mention the class's own
+type variable: the call solves nothing, and the `T` in `Box[list[T]]` stays the caller's `T`. The
+arguments are checked against the specialized parameters, and the result is the type as written.
+
+```py
+from typing_extensions import Generic, TypeVar
+
+T = TypeVar("T")
+U = TypeVar("U")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def nested(self, value: T) -> "Box[list[T]]":
+        reveal_type(Box[list[T]]([value]))  # revealed: Box[list[T@Box]]
+        return Box[list[T]]([value])  # no diagnostic
+
+    def same(self, value: T) -> "Box[T]":
+        reveal_type(Box[T](value))  # revealed: Box[T@Box]
+        return Box[T](value)  # no diagnostic
+
+    def wrong_argument(self, value: T) -> "Box[T]":
+        return Box[T](1)  # error: [invalid-argument-type]
+
+    def wrong_nested_argument(self, value: T) -> "Box[list[T]]":
+        return Box[list[T]]([1])  # error: [invalid-argument-type]
+
+    def wrong_return(self, value: T) -> "Box[list[T]]":
+        return Box[T](value)  # error: [invalid-return-type]
+
+class Empty(Generic[T]):
+    def nested(self) -> "Empty[list[T]]":
+        reveal_type(Empty[list[T]]())  # revealed: Empty[list[T@Empty]]
+        return Empty[list[T]]()  # no diagnostic
+
+    def too_deep(self) -> "Empty[list[T]]":
+        return Empty[list[list[T]]]()  # error: [invalid-return-type]
+
+class New(Generic[T]):
+    def __new__(cls, value: T) -> "New[T]":
+        return object.__new__(cls)
+
+    def nested(self, value: T) -> "New[list[T]]":
+        reveal_type(New[list[T]]([value]))  # revealed: New[list[T@New]]
+        return New[list[T]]([value])  # no diagnostic
+
+    def wrong_argument(self, value: T) -> "New[list[T]]":
+        return New[list[T]]([1])  # error: [invalid-argument-type]
+
+class Pair(Generic[T, U]):
+    def __init__(self, first: T, second: U) -> None:
+        pass
+
+    def swap(self, first: T, second: U) -> "Pair[U, T]":
+        return Pair[U, T](second, first)  # no diagnostic
+
+    def wrong_swap(self, first: T, second: U) -> "Pair[U, T]":
         # error: [invalid-argument-type]
-        # error: [invalid-return-type]
-        return Box[T, Self](value, self)
+        # error: [invalid-argument-type]
+        return Pair[U, T](first, second)
+
+    def nested(self, first: T, second: U) -> "Pair[list[T], dict[str, U]]":
+        return Pair[list[T], dict[str, U]]([first], {"": second})  # no diagnostic
+
+class Sub(Empty[list[T]]):
+    def deeper(self) -> "Sub[list[T]]":
+        return Sub[list[T]]()  # no diagnostic
 ```
 
 ### Constructing through a classmethod receiver
