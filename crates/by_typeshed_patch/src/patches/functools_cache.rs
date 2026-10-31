@@ -62,8 +62,8 @@ const REPLACEMENTS: &[(&str, &str)] = &[
         "def cache[Fn: (...) -> object](user_function: Fn, /) -> _lru_cache_wrapper[Fn]:",
     ),
     (
-        "def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:",
-        "def lru_cache[Fn: (...) -> object](maxsize: int | None = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:",
+        "def lru_cache[Element](maxsize: int? = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:",
+        "def lru_cache[Fn: (...) -> object](maxsize: int? = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:",
     ),
     (
         "def lru_cache[Element](maxsize: (...) -> Element, typed: bool = False) -> _lru_cache_wrapper[Element]",
@@ -132,6 +132,17 @@ mod tests {
         apply_edits(src, edits)
     }
 
+    /// a fragment that stops matching is skipped, which leaves the stub half converted and says
+    /// nothing, so what each one should have written is looked for in the stub itself
+    #[test]
+    fn every_replacement_reached_the_committed_stub() {
+        let stub = include_str!("../../../ty_vendored/vendor/typeshed/stdlib/functools.byi");
+        for (old, new) in REPLACEMENTS {
+            assert!(stub.contains(new), "`{old}` no longer matches the stub");
+        }
+        assert!(stub.contains(GET_MARKER));
+    }
+
     #[test]
     fn rewrites_wrapper_cache_and_lru_cache() {
         let src = "\
@@ -150,7 +161,7 @@ final class _lru_cache_wrapper[out Element]:
 class cached_property[out Element]:
     def __get__(self, instance: object, owner: type | None = None) -> Element
 
-def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:
+def lru_cache[Element](maxsize: int? = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:
     \"\"\"doc\"\"\"
 def lru_cache[Element](maxsize: (...) -> Element, typed: bool = False) -> _lru_cache_wrapper[Element]
 def cache[Element](user_function: (...) -> Element, /) -> _lru_cache_wrapper[Element]:
@@ -175,7 +186,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
 class cached_property[out Element]:
     def __get__(self, instance: object, owner: type | None = None) -> Element
 
-def lru_cache[Fn: (...) -> object](maxsize: int | None = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
+def lru_cache[Fn: (...) -> object](maxsize: int? = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
     \"\"\"doc\"\"\"
 def lru_cache[Fn: (...) -> object](maxsize: Fn, typed: bool = False) -> _lru_cache_wrapper[Fn]
 def cache[Fn: (...) -> object](user_function: Fn, /) -> _lru_cache_wrapper[Fn]:
