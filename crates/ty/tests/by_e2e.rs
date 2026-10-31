@@ -6583,7 +6583,7 @@ fn reified_generic_runs_value_position() {
         "\
 def f[T](t: object):
     print(T)
-    return isinstance(t, T)
+    return t is T
 
 def g[T = int]():
     print(T)

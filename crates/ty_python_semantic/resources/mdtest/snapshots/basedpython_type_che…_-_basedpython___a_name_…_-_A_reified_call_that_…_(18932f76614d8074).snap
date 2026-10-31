@@ -19,7 +19,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_type_checkin
  4 |     from decimal import Decimal
  5 | 
  6 | def pair[reified A, reified B](a: A, b: B) -> str:
- 7 |     return A.__name__ + B.__name__
+ 7 |     return str(A) + str(B)
  8 | 
  9 | def describe(value: Decimal) -> str:
 10 |     # error: [unspecialized-reified-generic]

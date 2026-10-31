@@ -2,29 +2,434 @@
 
 A PEP 695 type parameter is *reified* when it is declared `reified`, or when the function body
 references it in a value position — anywhere other than a type annotation. The reference becomes a
-real runtime value (the supplied type argument), so it types as `type[T]` rather than as the
+real runtime value (the supplied type argument), so it types as `TypeForm[T]` rather than as the
 `TypeVar` object. Reification makes the `[...]` specialization step required — written explicitly,
 or inferred from the arguments and injected by the transpiler.
 
 A class reifies too, from the same rule but through its instances; that is
 `basedpython_reified_class_generics.md`. This file is about functions.
 
-## a value-position type parameter is `type[T]`
+## a type parameter read as a value is a type form
+
+a type argument can be any type expression, not only a class: `1`, `None` and `int | str` are all
+type arguments, and the value is the object that was written. so the value of `T` is a `TypeForm`
 
 ```by
-def f[T]():
-    reveal_type(T)  # revealed: type[T]
+def f[T]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
 
 f[int]()
+f[1]()
+f[None]()
+f[int | str]()
+f[list[int]]()
+```
+
+a type form isn't callable, so an unbounded `T` can't be called, in a function or in a class
+
+```by
+def f[T]() -> None:
+    T()  # error: [call-non-callable] "Object of type `TypeForm[T]` is not callable"
+
+class A[T]:
+    def m(self) -> None:
+        T()  # error: [call-non-callable] "Object of type `TypeForm[T]` is not callable"
+```
+
+a default only fills in a type argument that wasn't given, so `f[1]` is still a specialization of
+this `f`, and `object` promises no more than leaving the bound off does
+
+```by
+def defaulted[T = int]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def top[T: object]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+```
+
+## a type form reads as a class once it is known to be one
+
+`isinstance(T, type)` narrows it, as it does any `TypeForm`
+
+```by
+def build[T]() -> object:
+    if isinstance(T, type):
+        reveal_type(T)  # revealed: type[T]
+        return T()
+    return None
+
+assert build[int]() == 0
+assert build[None]() is None
+assert build[int | str]() is None
+assert build[list[int]]() is None
+
+def guarded[T]() -> object:
+    if not isinstance(T, type):
+        return None
+    reveal_type(T)  # revealed: type[T]
+    return T()
+
+assert guarded[int]() == 0
+assert guarded[None]() is None
+```
+
+a literal the checker solved is held as a class that builds that value, so it takes the first branch
+
+```by
+def solved[T](t: T) -> object:
+    if isinstance(T, type):
+        return T()
+    return None
+
+assert solved(1) == 1
+assert solved("a") == "a"
+assert solved(int(1)) == 0
+```
+
+a class narrows the same way
+
+```by
+class Default[T]:
+    def make(self) -> object:
+        if isinstance(T, type):
+            reveal_type(T)  # revealed: type[T]
+            return T()
+        return None
+
+assert Default[int]().make() == 0
+assert Default[None]().make() is None
+```
+
+and a union of subclasses, which satisfies a class bound, isn't a class
+
+```by
+class Base: ...
+
+class A(Base): ...
+
+class B(Base): ...
+
+def bounded[T: Base]() -> object:
+    if isinstance(T, type):
+        return T()
+    return None
+
+assert bounded[A | B]() is None
+assert isinstance(bounded[A](), A)
+```
+
+## a narrowed call is checked against the bound
+
+```by
+class Needs:
+    def __init__(self, x: int) -> None: ...
+
+def needs[T: Needs]() -> None:
+    if isinstance(T, type):
+        reveal_type(T)  # revealed: type[T]
+        T()  # error: [missing-argument]
+        T(1)  # no diagnostic
+```
+
+## the branch where it isn't a class stays a type form
+
+```by
+def otherwise[T]() -> None:
+    if isinstance(T, type):
+        T()  # no diagnostic
+    else:
+        reveal_type(T)  # revealed: TypeForm[T] & not type
+        T()  # error: [call-non-callable]
+```
+
+## a bound doesn't make the value a class
+
+a union of subclasses satisfies a class bound, so `g[A | B]` is a specialization of this `g` and its
+value isn't a class
+
+```by
+class Base: ...
+
+class A(Base): ...
+
+class B(Base): ...
+
+def g[T: Base]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+```
+
+so every bound leaves a type form, whatever it names
+
+```by
+from typing import Any, Literal, NewType, Protocol, TypedDict
+from ty_extensions import Intersection
+
+class Other: ...
+
+class Proto(Protocol): ...
+
+class Fields(TypedDict): ...
+
+Id = NewType("Id", int)
+
+type Alias = Base
+type Nothing = None
+
+def named[T: int]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def mapping[T in (int, str)]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def mapping_none[T in (int, None)]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def aliased[T: Alias]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def aliased_none[T: Nothing]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def chained[B: Base, T: B]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def chained_free[U, T: U]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def both[T: Intersection[Base, Other]]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def protocol[T: Proto]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def typed_dict[T: Fields]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def new_type[T: Id]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def dynamic[T: Any]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def pair[T: (int, str)]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def union[T: int | str]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def none[T: None]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def literal[T: Literal[1]]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def callable_bound[T: () -> int]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+
+def class_bound[T: type[int]]() -> None:
+    reveal_type(T)  # revealed: TypeForm[T]
+    T()  # error: [call-non-callable]
+```
+
+a bound that was already reported as unresolved says nothing about the value, so a read of it isn't
+reported a second time
+
+```by
+# error: [unresolved-reference]
+def missing[T: Missing]() -> None:
+    T()  # no diagnostic
+```
+
+## what a class has to offer isn't on a type form
+
+each of these fails at runtime on the same type arguments that calling `T` does. `x: type[T] = T` is
+what would otherwise hand the same object to something that calls it
+
+```by
+def reads[T](x: object) -> None:
+    T.__name__  # error: [unresolved-attribute]
+    isinstance(x, T)  # error: [invalid-argument-type]
+    y: type[T] = T  # error: [invalid-assignment]
+
+def bounded[T: int](x: object) -> None:
+    T.__name__  # error: [unresolved-attribute]
+    isinstance(x, T)  # error: [invalid-argument-type]
+    y: type[T] = T  # error: [invalid-assignment]
+
+def narrowed[T: int](x: object) -> None:
+    if isinstance(T, type):
+        T.__name__  # no diagnostic
+        isinstance(x, T)  # no diagnostic
+        y: type[T] = T  # no diagnostic
+
+def construct[U](t: type[U]) -> U:
+    return t()
+
+def forwarded[T]() -> None:
+    construct(T)  # error: [invalid-argument-type]
+
+def stored[T]() -> None:
+    held = T
+    held()  # error: [call-non-callable]
+```
+
+## what a type form can be used for
+
+printing it, comparing it, testing against it and handing it on all work for every type argument
+
+```by
+class Box[T]:
+    init(var t: T)
+
+def g[T]() -> object:
+    return T
+
+def uses[T](t: T) -> None:
+    print(T)  # no diagnostic
+    print(f"{T}")  # no diagnostic
+    list[T]  # no diagnostic
+    print(T == int)  # no diagnostic
+    print(g[T]())  # no diagnostic
+    Box(t)  # no diagnostic
+
+uses[int](1)
+uses[1](1)
+uses[None](None)
+uses[int | str](1)
+uses[list[int]]([1])
+
+def tests[T](x: object) -> bool:
+    return x is T  # no diagnostic
+
+assert tests[int](1)
+assert not tests[None](1)
+assert tests[int | str](1)
+assert not tests[list[int]](1)
+```
+
+and it is assignable to a `TypeForm`
+
+```by
+from typing_extensions import TypeForm
+
+def takes[U](form: TypeForm[U]) -> None: ...
+
+def passes[T]() -> None:
+    form: TypeForm[T] = T  # no diagnostic
+    takes(T)  # no diagnostic
+
+passes[int]()
+```
+
+## the elements of a variadic and a pack are type forms
+
+a `*Ts` holds the run of type arguments and a `**Kwargs` holds its fields, and each of those can be
+any type expression too
+
+```by
+def run[*Ts]() -> None:
+    reveal_type(Ts)  # revealed: (*: TypeForm[object])
+    Ts[0]()  # error: [call-non-callable]
+
+def fields[**Kwargs]() -> None:
+    reveal_type(Kwargs)  # revealed: dict[str, TypeForm[object]]
+    Kwargs["a"]()  # error: [call-non-callable]
+
+def bounded[*Ts: int]() -> None:
+    reveal_type(Ts)  # revealed: (*: TypeForm[object])
+    Ts[0]()  # error: [call-non-callable]
+```
+
+## an element of a variadic or a pack narrows like any type form
+
+```by
+def first[*Ts]() -> object:
+    head = Ts[0]
+    if isinstance(head, type):
+        reveal_type(head)  # revealed: type
+        return head()
+    return None
+
+assert first[int]() == 0
+assert first[None]() is None
+assert first[int | str]() is None
+
+def field[**Kwargs]() -> object:
+    value = Kwargs["a"]
+    if isinstance(value, type):
+        reveal_type(value)  # revealed: type
+        return value()
+    return None
+
+assert field[a=int]() == 0
+assert field[a=None]() is None
+```
+
+## a value of `type[T]` is a class
+
+a parameter annotated `type[T]` is given a class by whoever calls it, and only a read of the type
+parameter is a type form
+
+```by
+def make[T](t: type[T]) -> T:
+    reveal_type(t)  # revealed: type[T]
+    return t()
+
+assert make(int) == 0
+```
+
+## a legacy `TypeVar` is the `TypeVar` object
+
+outside a `.by` file a read of a type parameter isn't reified, and a legacy `TypeVar` never is
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import TypeVar
+
+T = TypeVar("T")
+
+reveal_type(T)  # revealed: TypeVar
+
+def make(t: type[T]) -> T:
+    reveal_type(T)  # revealed: TypeVar
+    return t()
+
+def f[U]() -> None:
+    reveal_type(U)  # revealed: TypeVar
 ```
 
 ## `isinstance` against a reified parameter
 
-`isinstance`'s second argument is a value position, so `T` reifies and is accepted as a class:
+`isinstance`'s second argument is a value position, so `T` reifies. `isinstance` takes a class,
+which is what narrowing makes it:
 
 ```by
 def f[T](t: object) -> bool:
-    return isinstance(t, T)
+    return isinstance(T, type) and isinstance(t, T)
 
 reveal_type(f[int](1))  # revealed: bool
 ```
@@ -238,7 +643,7 @@ spelling (a scope-local class), or arguments hidden behind unpacking keep the ba
 
 ```by
 def f[T](t: object) -> bool:
-    return isinstance(t, T)
+    return t is T
 
 f[int](1)  # ok
 # error: [unspecialized-reified-generic] "Cannot call reified generic function `f` without explicit specialization"
@@ -264,7 +669,7 @@ the bare call is allowed:
 
 ```by
 def f[T = int]():
-    reveal_type(T)  # revealed: type[T]
+    reveal_type(T)  # revealed: TypeForm[T]
 
 f()       # ok — default supplies the reified value
 f[str]()  # ok
@@ -277,8 +682,8 @@ demands specialization:
 
 ```by
 def f[T, U = str]():
-    reveal_type(T)  # revealed: type[T]
-    reveal_type(U)  # revealed: type[U]
+    reveal_type(T)  # revealed: TypeForm[T]
+    reveal_type(U)  # revealed: TypeForm[U]
 
 f[int]()  # ok
 # error: [unspecialized-reified-generic] "Cannot call reified generic function `f` without explicit specialization"
@@ -334,7 +739,7 @@ attribute
 
 ```by
 def name[reified T]() -> str:
-    return T.__name__
+    return str(T)
 
 class Holder:
     def __init__(self):
@@ -513,8 +918,8 @@ tuple of them — and the arity of a parameter list containing one is unbounded:
 
 ```by
 def f[T, *Args]() -> None:
-    reveal_type(T)  # revealed: type[T]
-    reveal_type(Args)  # revealed: (*: type)
+    reveal_type(T)  # revealed: TypeForm[T]
+    reveal_type(Args)  # revealed: (*: TypeForm[object])
     assert T === int
     assert Args == (str, bool)
 
@@ -611,7 +1016,7 @@ Python's subscript grammar takes no keywords, so a keyword specialization lowers
 
 ```by
 def f[**Kwargs]() -> None:
-    reveal_type(Kwargs)  # revealed: dict[str, type]
+    reveal_type(Kwargs)  # revealed: dict[str, TypeForm[object]]
     assert Kwargs == {"foo": int, "bar": str}
 
 f[foo=int, bar=str]()
@@ -740,16 +1145,19 @@ assert test(None, None)
 assert not test(None, 1)
 ```
 
-A body reads the cell the way it would read a class. `isinstance` asks the same question, `T()` is
-the one value the type holds, and building any other value is refused:
+A literal cell is a class, so a body that narrows `T` to one reads it the way it would read any
+class. `isinstance` asks the same question, `T()` is the one value the type holds, and building any
+other value is refused:
 
 ```by
 def reads[T](t: T) -> tuple[bool, bool, T, str]:
+    assert isinstance(T, type)
     return isinstance(1, T), isinstance(2, T), T(), T.__name__
 
 assert reads(1) == (True, False, 1, "Literal[1]")
 
 def builds[T: int](t: T, text: str) -> T:
+    assert isinstance(T, type)
     return T(text)
 
 assert builds(1, "1") == 1

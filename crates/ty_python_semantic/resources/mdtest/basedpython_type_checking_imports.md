@@ -265,10 +265,10 @@ if TYPE_CHECKING:
 
 class Box[reified T]:
     def kind(self) -> str:
-        return T.__name__
+        return str(T)
 
 def kind_of[reified T](value: T) -> str:
-    return T.__name__
+    return str(T)
 
 class Holder:
     box: Box[Decimal]
@@ -335,7 +335,7 @@ if TYPE_CHECKING:
     from decimal import Decimal
 
 def pair[reified A, reified B](a: A, b: B) -> str:
-    return A.__name__ + B.__name__
+    return str(A) + str(B)
 
 def describe(value: Decimal) -> str:
     # error: [unspecialized-reified-generic]

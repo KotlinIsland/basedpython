@@ -26,7 +26,7 @@ for whichever receiver it was called on
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 Box[int]().kind()   # int
@@ -39,13 +39,14 @@ to write a reified class at all:
 
 ```by
 class Default[T]:
-    value: T
+    value: T | None
 
     def __init__(self):
-        self.value = T()
+        self.value = T() if isinstance(T, type) else None
 
-Default[int]().value   # 0
-Default[str]().value   # ""
+Default[int]().value    # 0
+Default[str]().value    # ""
+Default[None]().value   # None
 ```
 
 ## a receiver has to be in scope
@@ -73,7 +74,7 @@ class Box[T]:
 
     @staticmethod
     def make():
-        return T()          # error — a static method has no receiver
+        return T            # error — a static method has no receiver
 ```
 
 a `classmethod` is fine: it is handed the class, and a specialization *is* a
@@ -82,7 +83,7 @@ class
 ```by
 class Box[T]:
     @classmethod
-    def kind(cls) -> type[T]:
+    def kind(cls) -> object:
         return T
 
 Box[int].kind()   # int
@@ -122,7 +123,7 @@ constructor's arguments, or from a [PEP 696] default
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 b: Box[int] = Box()   # from the declaration
@@ -154,7 +155,7 @@ the same argument:
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 def take(box: Box[object]) -> None: ...
@@ -173,7 +174,7 @@ subclass passes its own along:
 
 ```by
 class Box[T]:
-    def kind(self) -> type[T]:
+    def kind(self) -> object:
         return T
 
 class IntBox(Box[int]):

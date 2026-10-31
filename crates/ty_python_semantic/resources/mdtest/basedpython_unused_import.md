@@ -791,7 +791,7 @@ def make() -> Widget:
 from widgets import Widget, make
 
 def describe[reified T](value: T) -> str:
-    return T.__name__
+    return str(T)
 
 describe(make())
 ```

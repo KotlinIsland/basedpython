@@ -77,7 +77,7 @@ def f(a: Hashed[str]):
 
 # error: [invalid-type-form] "a list is not hashable"
 def g(a: Hashed[list[int]]):
-    reveal_type(a)  # revealed: final TypeError | type[X]
+    reveal_type(a)  # revealed: final TypeError | TypeForm[X]
 ```
 
 ## a crash in the body is reported as a failure, not a wrong type

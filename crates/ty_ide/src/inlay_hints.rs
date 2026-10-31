@@ -3957,8 +3957,9 @@ Source with applied edits:
             class Source[T]:
                 def get(self) -> T: ...
 
-            def make[T]():
-                return T()
+            def make[T](t: T):
+                print(T)
+                return t
 
             @composable
             def Counter(items: list[int]):
