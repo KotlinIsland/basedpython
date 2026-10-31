@@ -746,14 +746,14 @@ reveal_type(factory())  # revealed: Box[Divergent]
 outer = Box(factory)
 reveal_type(outer)  # revealed: Box[Box[Divergent]]
 
-# an unannotated factory that is not recursive is unaffected, and still inferred exactly
+# an unannotated factory that is not recursive is unaffected, with no `Divergent` in its answer
 def plain():
     return 1
 
 def holder():
     return Box(plain)
 
-reveal_type(holder())  # revealed: Box[Literal[1]]
+reveal_type(holder())  # revealed: Box[int]
 ```
 
 ## a string built in a loop inside a larger cycle widens rather than diverging

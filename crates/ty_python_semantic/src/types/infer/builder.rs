@@ -8397,12 +8397,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn apply_type_context(&mut self, mut ty: Type<'db>, tcx: TypeContext<'db>) -> Type<'db> {
         let db = self.db();
         let env = self.program_environment();
-        // Avoid promoting explicitly annotated literal values.
+        // Avoid promoting explicitly annotated literal values. a literal in the context that is
+        // itself promotable was not written as a type: it comes from an earlier round of the
+        // inference of the function's own return type, or from solving a call with such a type
+        let written_literal = |ty: &Type<'db>| {
+            ty.as_literal_value()
+                .is_some_and(|literal| !literal.is_promotable())
+        };
         if let Type::LiteralValue(literal) = ty
             && let Some(tcx) = tcx.annotation()
             && let literal_tcx @ (Type::Union(_) | Type::LiteralValue(_)) = tcx
                 .resolve_type_alias(db)
-                .filter_union(db, env, |ty| ty.as_literal_value().is_some())
+                .filter_union(db, env, written_literal)
+            && (matches!(literal_tcx, Type::Union(_)) || written_literal(&literal_tcx))
             && ty.is_assignable_to(db, env, literal_tcx)
         {
             ty = Type::LiteralValue(literal.to_unpromotable());
