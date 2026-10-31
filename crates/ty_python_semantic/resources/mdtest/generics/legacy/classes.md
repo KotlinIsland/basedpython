@@ -1484,11 +1484,217 @@ class Box(Generic[T, U]):
         return Box[T, Self](value, self)  # error: [invalid-return-type]
 ```
 
-### Constructing an explicit specialization of the enclosing class
+### a type variable's bound is not a solution
 
-The type arguments of an explicit specialization are fixed, even when they mention the class's own
+a `__new__` that returns `Self` relates the receiver to `Self`: `C[T] ≤ Self`. `Self` is bounded by
+the class, and with `T`'s own bound that can give `Self ≤ C[int]`. relating the two would give
+`T ≤ int`, but `C[T] ≤ C[int]` holds for every `T` the declaration allows, so it says nothing about
+which one the call meant. with no argument to solve it, the variable is left to the type context, or
+is `Never` as in any other empty construction, whatever kind of type its bound is and whatever its
+variance
+
+```py
+from collections.abc import Hashable, Sized
+from typing import Generic, Protocol, Self, TypeVar
+
+class Named(Protocol):
+    def name(self) -> str: ...
+
+class HasName:
+    def name(self) -> str:
+        return ""
+
+TInt = TypeVar("TInt", bound=int, covariant=True)
+TStr = TypeVar("TStr", bound=str, covariant=True)
+TGeneric = TypeVar("TGeneric", bound=list[int], covariant=True)
+TUnion = TypeVar("TUnion", bound=int | str, covariant=True)
+TObject = TypeVar("TObject", bound=object, covariant=True)
+THashable = TypeVar("THashable", bound=Hashable, covariant=True)
+TSized = TypeVar("TSized", bound=Sized, covariant=True)
+TProtocol = TypeVar("TProtocol", bound=Named, covariant=True)
+TConstraints = TypeVar("TConstraints", int, str, covariant=True)
+TAny = TypeVar("TAny", covariant=True)
+
+class OfInt(Generic[TInt]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfStr(Generic[TStr]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfGeneric(Generic[TGeneric]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfUnion(Generic[TUnion]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfObject(Generic[TObject]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfHashable(Generic[THashable]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfSized(Generic[TSized]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfProtocol(Generic[TProtocol]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class OfConstraints(Generic[TConstraints]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+class Unbounded(Generic[TAny]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+```
+
+every one of them is solved the same way
+
+```py
+reveal_type(OfInt())  # revealed: OfInt[Never]
+reveal_type(OfStr())  # revealed: OfStr[Never]
+reveal_type(OfGeneric())  # revealed: OfGeneric[Never]
+reveal_type(OfUnion())  # revealed: OfUnion[Never]
+reveal_type(OfObject())  # revealed: OfObject[Never]
+reveal_type(OfHashable())  # revealed: OfHashable[Never]
+reveal_type(OfSized())  # revealed: OfSized[Never]
+reveal_type(OfProtocol())  # revealed: OfProtocol[Never]
+reveal_type(OfConstraints())  # revealed: OfConstraints[Never]
+reveal_type(Unbounded())  # revealed: Unbounded[Never]
+
+class IntList(list[int]): ...
+
+a1: OfInt[bool] = OfInt()  # no diagnostic
+a2: OfStr[str] = OfStr()  # no diagnostic
+a3: OfGeneric[IntList] = OfGeneric()  # no diagnostic
+a4: OfUnion[int] = OfUnion()  # no diagnostic
+a5: OfObject[int] = OfObject()  # no diagnostic
+a6: OfHashable[int] = OfHashable()  # no diagnostic
+a7: OfSized[str] = OfSized()  # no diagnostic
+a8: OfProtocol[HasName] = OfProtocol()  # no diagnostic
+a9: OfConstraints[int] = OfConstraints()  # no diagnostic
+a10: Unbounded[int] = Unbounded()  # no diagnostic
+```
+
+a type argument still has to fit the bound, and a specialization written out is still that
+specialization
+
+```py
+OfInt[str]()  # error: [invalid-type-arguments]
+OfGeneric[int]()  # error: [invalid-type-arguments]
+OfUnion[bytes]()  # error: [invalid-type-arguments]
+OfProtocol[int]()  # error: [invalid-type-arguments]
+
+# error: [invalid-assignment]
+b1: OfInt[bool] = OfInt[int]()
+# error: [invalid-assignment]
+b2: OfStr[str] = OfInt[int]()
+# error: [invalid-assignment]
+b3: OfHashable[int] = OfHashable[str]()
+```
+
+a parameter that is only written, or written and read, is left to them in the same way. `A()` is an
+`A[Never]` whatever its declared variance, as `list()` is, so such a value takes nothing until a
+type context or a specialization says what it holds
+
+```py
+TIn = TypeVar("TIn", bound=int, contravariant=True)
+TInvariant = TypeVar("TInvariant", bound=int)
+
+class Contravariant(Generic[TIn]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+    def put(self, x: TIn) -> None: ...
+
+class Invariant(Generic[TInvariant]):
+    def __new__(cls) -> Self:
+        return object.__new__(cls)
+
+    def get(self) -> TInvariant:
+        raise NotImplementedError
+
+    def put(self, x: TInvariant) -> None: ...
+
+reveal_type(Contravariant())  # revealed: Contravariant[Never]
+reveal_type(Invariant())  # revealed: Invariant[Never]
+
+c1: Contravariant[bool] = Contravariant()  # no diagnostic
+c1.put(True)  # no diagnostic
+c2: Invariant[bool] = Invariant()  # no diagnostic
+c2.put(True)  # no diagnostic
+Contravariant[int]().put(1)  # no diagnostic
+
+Contravariant().put(1)  # error: [invalid-argument-type]
+Invariant().put(1)  # error: [invalid-argument-type]
+Contravariant[str]()  # error: [invalid-type-arguments]
+Invariant[str]()  # error: [invalid-type-arguments]
+```
+
+`frozenset` is such a class
+
+```py
+reveal_type(frozenset())  # revealed: frozenset[Never]
+
+d: frozenset[int] = frozenset()  # no diagnostic
+e: frozenset[Hashable] = frozenset()  # no diagnostic
+f: frozenset[int] = frozenset([1])  # no diagnostic
+# error: [invalid-assignment]
+g: frozenset[int] = frozenset(["a"])
+```
+
+an argument does say which type it means, in a parameter of `__new__` as in any other, and has to
+fit the bound
+
+```py
+class Optional_(Generic[TInt]):
+    def __new__(cls, x: TInt | None = None) -> Self:
+        return object.__new__(cls)
+
+reveal_type(Optional_())  # revealed: Optional_[Never]
+reveal_type(Optional_(True))  # revealed: Optional_[Literal[True]]
+
+h1: Optional_[bool] = Optional_()  # no diagnostic
+h2: Optional_[bool] = Optional_(True)  # no diagnostic
+# error: [invalid-assignment]
+h3: Optional_[bool] = Optional_(1)
+# error: [invalid-argument-type]
+Optional_("a")
+```
+
+a callback's parameter type is evidence too: it is an upper bound on the type parameter, which the
+parameter's own bound then narrows
+
+```py
+from collections.abc import Callable
+
+TCallback = TypeVar("TCallback", bound=int)
+
+def callback(x: Callable[[TCallback], None]) -> TCallback:
+    raise NotImplementedError
+
+def takes_int(x: int) -> None: ...
+def takes_object(x: object) -> None: ...
+def takes_bool(x: bool) -> None: ...
+
+reveal_type(callback(takes_int))  # revealed: int
+reveal_type(callback(takes_object))  # revealed: int
+reveal_type(callback(takes_bool))  # revealed: bool
+```
+
+### constructing an explicit specialization of the enclosing class
+
+the type arguments of an explicit specialization are fixed, even when they mention the class's own
 type variable: the call solves nothing, and the `T` in `Box[list[T]]` stays the caller's `T`. The
-arguments are checked against the specialized parameters, and the result is the type as written.
+arguments are checked against the specialized parameters, and the result is the type as written
 
 ```py
 from typing_extensions import Generic, TypeVar

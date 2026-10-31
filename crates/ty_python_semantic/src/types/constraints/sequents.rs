@@ -711,6 +711,14 @@ impl<'db> AtomicConstraint<'db> {
             return;
         }
 
+        // `α ≤ β` holding for every specialization the declarations allow says nothing about which
+        // one was meant. in `class C[T: int]`, a receiver gives `C[T] ≤ Self`, and `Self`'s bound
+        // with `T`'s can give `Self ≤ C[int]`. relating those would give `T ≤ int`, which is `T`'s
+        // own declaration, as if the receiver had said it
+        if lower.bound().is_subtype_of(db, env, upper.bound()) {
+            return;
+        }
+
         let when = lower
             .bound()
             .when_constraint_set_assignable_to_owned(db, env, upper.bound());
