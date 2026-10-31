@@ -1283,7 +1283,13 @@ pub(crate) fn run_against_source<'a>(
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>, Columns) {
     let spelling_helpers = RefCell::new(BTreeSet::new());
     let told_classes = RefCell::new(BTreeMap::new());
-    let written = written.writing_spellings(&spelling_helpers, &told_classes, config.min_version);
+    let spelling_modules = RefCell::new(BTreeSet::new());
+    let written = written.writing_spellings(
+        &spelling_helpers,
+        &told_classes,
+        &spelling_modules,
+        config.min_version,
+    );
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -2102,6 +2108,12 @@ pub(crate) fn run_against_source<'a>(
         ctx.runtime.insert(crate::runtime::TEMPLATE_TEXT);
     }
     ctx.runtime.extend(spelling_helpers.take());
+    ctx.required_imports.extend(
+        spelling_modules
+            .take()
+            .iter()
+            .map(|module| written.import_module(module)),
+    );
     let told_classes = told_classes.take();
     if config.class_variance && !told_classes.is_empty() {
         ctx.runtime.insert(crate::runtime::TOLD);

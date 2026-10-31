@@ -10988,3 +10988,125 @@ fn run_reads_a_class_of_another_module_past_the_names_this_one_binds() {
         "False True 5 O"
     );
 }
+
+/// a test written in place reads what a name of another module holds as a type argument does:
+/// what the defaults of a class in it solve, whichever way the name reaches the class
+#[test]
+fn run_tests_in_place_as_a_type_argument_tests_what_another_module_holds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let class = |name: &str, indent: &str, modifier: &str| {
+        format!(
+            "{indent}{modifier}class {name}[T = int]:\n\
+             {indent}    v: T\n\
+             {indent}    def __init__(self, v: T):\n\
+             {indent}        self.v = v\n"
+        )
+    };
+    fs::write(dir.path().join("third.by"), class("Far", "", "")).unwrap();
+    fs::write(
+        dir.path().join("dep.by"),
+        format!(
+            "from third import Far\n{}class Outer:\n{}{}A = O\ntype X = O\nU = O | None\ntype XU = O | None\nF = Far | None\nM = Outer.N | None\nPB = P\ndef make(n: int) -> object:\n    return P[str](\"a\") if n == 0 else P[int](1) if n == 1 else 3\n",
+            class("O", "", ""),
+            class("N", "    ", ""),
+            class("P", "", "private "),
+        ),
+    )
+    .unwrap();
+    let forms = |value: &str, target: &str| {
+        format!(
+            "print(chk[{target}]({value}(0)), chk[{target}]({value}(1)), chk[{target}]({value}(2)))\n\
+             print({value}(0) is {target}, {value}(1) is {target}, {value}(2) is {target})\n\
+             print(({value}(0) cast? {target}) is not None, ({value}(1) cast? {target}) is not None, ({value}(2) cast? {target}) is not None)\n\
+             print(raises(lambda: {value}(0) cast! {target}), raises(lambda: {value}(1) cast! {target}), raises(lambda: {value}(2) cast! {target}))\n"
+        )
+    };
+    let targets = [
+        ("o", "dep.O"),
+        ("o", "dep.A"),
+        ("o", "dep.X"),
+        ("o", "dep.U"),
+        ("o", "dep.XU"),
+        ("o", "Imported"),
+        ("n", "dep.M"),
+        ("n", "dep.Outer.N"),
+        ("f", "dep.F"),
+        ("dep.make", "dep.PB"),
+    ];
+    let mut main = String::from(concat!(
+        "import dep\n",
+        "import third\n",
+        "from dep import A as Imported\n",
+        "def chk[T](x: object) -> bool:\n",
+        "    return x is T\n",
+        "def raises(f: () -> object) -> bool:\n",
+        "    try:\n",
+        "        f()\n",
+        "    except TypeError:\n",
+        "        return False\n",
+        "    return True\n",
+        "def o(n: int) -> object:\n",
+        "    return dep.O[str](\"a\") if n == 0 else dep.O[int](1) if n == 1 else 3\n",
+        "def n(i: int) -> object:\n",
+        "    return dep.Outer.N[str](\"a\") if i == 0 else dep.Outer.N[int](1) if i == 1 else 3\n",
+        "def f(n: int) -> object:\n",
+        "    return third.Far[str](\"a\") if n == 0 else third.Far[int](1) if n == 1 else 3\n",
+    ));
+    for (value, target) in targets {
+        main.push_str(&forms(value, target));
+    }
+    fs::write(dir.path().join("main.by"), main).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for (index, line) in stdout.lines().enumerate() {
+        assert_eq!(
+            line,
+            "False True False",
+            "{} of {}, form {}",
+            targets[index / 4].1,
+            targets[index / 4].0,
+            index % 4
+        );
+    }
+    assert_eq!(stdout.lines().count(), targets.len() * 4, "{stdout}");
+}
+
+/// a name bound only for a checker is no name to test against, however the test comes to be
+/// spelled
+#[test]
+fn run_refuses_a_test_of_a_name_bound_only_for_a_checker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("dep.by"), "class O[T = int]: ...\nB = O\n").unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "from typing import TYPE_CHECKING\n",
+            "if TYPE_CHECKING:\n",
+            "    from dep import B\n",
+            "def f(x: object) -> bool:\n",
+            "    return x is B\n",
+            "print(f(1))\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "should be refused");
+    assert!(stderr.contains("is not bound when it runs"), "{stderr}");
+}

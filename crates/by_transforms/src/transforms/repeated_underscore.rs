@@ -199,6 +199,8 @@ pub struct WrittenNames<'src> {
     spelling_helpers: Option<&'src RefCell<BTreeSet<Helper>>>,
     /// what the runtime is told of the classes the spellings written so far name
     spelling_told: Option<&'src RefCell<BTreeMap<String, String>>>,
+    /// the modules the spellings written so far read
+    spelling_modules: Option<&'src RefCell<BTreeSet<String>>>,
     /// a `str` or `bytes` value of a literal type is written without quotes, for a target
     /// whose f-strings can't hold them
     values_without_quotes: bool,
@@ -551,6 +553,7 @@ impl<'src> WrittenNames<'src> {
             synthesized: None,
             spelling_helpers: None,
             spelling_told: None,
+            spelling_modules: None,
             values_without_quotes: false,
         }
     }
@@ -583,6 +586,7 @@ impl<'src> WrittenNames<'src> {
             synthesized: self.synthesized,
             spelling_helpers: self.spelling_helpers,
             spelling_told: self.spelling_told,
+            spelling_modules: self.spelling_modules,
             values_without_quotes: self.values_without_quotes,
         }
     }
@@ -593,6 +597,7 @@ impl<'src> WrittenNames<'src> {
         self,
         spelling_helpers: &'a RefCell<BTreeSet<Helper>>,
         spelling_told: &'a RefCell<BTreeMap<String, String>>,
+        spelling_modules: &'a RefCell<BTreeSet<String>>,
         min_version: PythonVersion,
     ) -> WrittenNames<'a>
     where
@@ -601,6 +606,7 @@ impl<'src> WrittenNames<'src> {
         WrittenNames {
             spelling_helpers: Some(spelling_helpers),
             spelling_told: Some(spelling_told),
+            spelling_modules: Some(spelling_modules),
             values_without_quotes: min_version < PythonVersion::PY312,
             ..self
         }
@@ -619,6 +625,7 @@ impl<'src> WrittenNames<'src> {
             synthesized: self.synthesized,
             spelling_helpers: self.spelling_helpers,
             spelling_told: self.spelling_told,
+            spelling_modules: self.spelling_modules,
             values_without_quotes: self.values_without_quotes,
         }
     }
@@ -637,6 +644,7 @@ impl<'src> WrittenNames<'src> {
             synthesized: self.synthesized,
             spelling_helpers: self.spelling_helpers,
             spelling_told: self.spelling_told,
+            spelling_modules: self.spelling_modules,
             values_without_quotes: self.values_without_quotes,
         }
     }
@@ -722,6 +730,11 @@ impl<'src> WrittenNames<'src> {
             for told in spelling.told() {
                 spelling_told.borrow_mut().extend(told.clone());
             }
+        }
+        if let Some(spelling_modules) = self.spelling_modules {
+            spelling_modules
+                .borrow_mut()
+                .extend(spelling.modules().map(ToOwned::to_owned));
         }
         let module_private = |symbol: &str| self.module_private(symbol);
         let helper = |helper: SpellingHelper| self.helper(of(helper));

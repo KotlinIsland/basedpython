@@ -348,13 +348,14 @@ pub(crate) enum TypeParamCells<'a, 'db> {
         scope: FileScopeId,
     },
     /// those the source reifies, in a spelling of a type written in place of a name in the code
-    /// of `scope`, which the program runs for `min_version`. a class is read by what names it
-    /// there, rather than by a name of the module's own ([`spell_class_name`]), and a subscript
-    /// the runtime may refuse goes through the helper that asks it
+    /// of `scope`. a class is read by what names it there, rather than by a name of the module's
+    /// own ([`spell_class_name`]). with the version the program runs for, a subscript the runtime
+    /// may refuse goes through the helper that asks it. a test has answered that already, and
+    /// has no version to ask with
     WrittenIn {
         file: ProgramFile<'db>,
         scope: FileScopeId,
-        min_version: PythonVersion,
+        min_version: Option<PythonVersion>,
     },
 }
 
@@ -1055,7 +1056,10 @@ fn spell_specialization_of<'db>(
             &arguments,
         ));
     }
-    if let TypeParamCells::WrittenIn { min_version, .. } = cells
+    if let TypeParamCells::WrittenIn {
+        min_version: Some(min_version),
+        ..
+    } = cells
         && class_subscript_is_unattested(db, env, class, min_version)
     {
         return Some(RuntimeSpelling::helper_subscript(
@@ -1197,6 +1201,7 @@ pub(crate) fn bare_type_argument_spelling<'db>(
     file: File,
     read: Type<'db>,
     written_class: Option<(ClassLiteral<'db>, RuntimeSpelling)>,
+    node: &ast::Expr,
     site: RuntimeSite<'db>,
     written_in: (ProgramFile<'db>, FileScopeId),
     min_version: PythonVersion,
@@ -1233,14 +1238,16 @@ pub(crate) fn bare_type_argument_spelling<'db>(
     let cells = TypeParamCells::WrittenIn {
         file: written_in.0,
         scope: written_in.1,
-        min_version,
+        min_version: Some(min_version),
     };
     if let Some((class, written)) = written_class
         && let Type::NominalInstance(instance) = read
         && let ClassType::Generic(alias) = instance.class(db, env)
         && ClassLiteral::Static(alias.origin(db)) == class
     {
-        return spell_specialization_of(db, env, file, written, alias, cells);
+        return written_unbound_read(db, env, node, site.inferred())
+            .is_none()
+            .then(|| spell_specialization_of(db, env, file, written, alias, cells))?;
     }
     let spelling = spell_type(db, env, file, read, cells)?;
     spelling
@@ -1249,14 +1256,77 @@ pub(crate) fn bare_type_argument_spelling<'db>(
         .then_some(spelling)
 }
 
-/// what `name`, read in the code of `scope`, evaluates to, if it is a class
-pub(crate) fn class_named_at<'db>(
+/// the class the name or dotted name `node`, read in the code of `scope`, evaluates to, if it
+/// evaluates to one, with the name to write it by
+pub(crate) fn written_class_at<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: ProgramFile<'db>,
     scope: FileScopeId,
-    name: &str,
-) -> Option<ClassLiteral<'db>> {
-    name_bound_at(db, file, scope, name)?.ty.as_class_literal()
+    node: &ast::Expr,
+) -> Option<(ClassLiteral<'db>, RuntimeSpelling)> {
+    fn value_at<'db>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: ProgramFile<'db>,
+        scope: FileScopeId,
+        node: &ast::Expr,
+    ) -> Option<Type<'db>> {
+        match node {
+            ast::Expr::Name(name) => Some(name_bound_at(db, file, scope, name.id.as_str())?.ty),
+            ast::Expr::Attribute(attribute) => value_at(db, env, file, scope, &attribute.value)?
+                .member(db, env, attribute.attr.as_str())
+                .place
+                .ignore_possibly_undefined(),
+            _ => None,
+        }
+    }
+    let class = value_at(db, env, file, scope, node)?.as_class_literal()?;
+    let dotted = ast::name::UnqualifiedName::from_expr(node)?;
+    let (root, path) = dotted.segments().split_first()?;
+    // written where the source wrote it, it holds there what the source's does. a `private` name
+    // is emitted under another
+    let mut name = if name_bound_at(db, file, scope, root)?.in_global_scope {
+        RuntimeSpelling::global_private(db, file.file(db), root)
+    } else {
+        RuntimeSpelling::text(*root)
+    };
+    for segment in path {
+        name.push_str(&format!(".{segment}"));
+    }
+    Some((class, name))
+}
+
+/// the spelling of `class`, the target of a test or a part of one, when no name of the module's
+/// own spells it, as what names it where the test is written. what the source wrote is better
+/// than any of these wherever it evaluates to the target, being in scope by construction
+fn spell_target_at<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    class: ClassType<'db>,
+    written: WrittenTarget<'_, 'db>,
+) -> Option<RuntimeSpelling> {
+    let (written_in, scope) = written.scope(db, file)?;
+    let cells = TypeParamCells::WrittenIn {
+        file: written_in,
+        scope,
+        min_version: None,
+    };
+    match (class, written.node()) {
+        // a name that evaluates to the class has to be told what its defaults solve
+        (ClassType::Generic(alias), Some(node)) => {
+            let (origin, name) = written_class_at(db, env, written_in, scope, node)?;
+            if origin != ClassLiteral::Static(alias.origin(db))
+                || written_unbound_read(db, env, node, written.inferred?).is_some()
+            {
+                return None;
+            }
+            spell_specialization_of(db, env, file, name, alias, cells)
+        }
+        (_, Some(_)) => None,
+        (_, None) => spell_class_with(db, env, file, class, cells),
+    }
 }
 
 /// what is known about whether `origin[…]` *evaluates* at runtime rather than
@@ -1490,7 +1560,13 @@ fn spell_specialization_arguments<'db>(
     // import; a wrong no costs the specialization nothing else can observe. a spelling
     // written in place of a name asks the runtime through the helper instead
     if runtime_subscript(db, env, origin) != RuntimeSubscript::Supported
-        && !matches!(cells, TypeParamCells::WrittenIn { .. })
+        && !matches!(
+            cells,
+            TypeParamCells::WrittenIn {
+                min_version: Some(_),
+                ..
+            }
+        )
     {
         return Err(ReifiedInferenceError::NoBinding);
     }
@@ -2529,7 +2605,15 @@ fn runtime_test_plan<'db>(
                 return ParametricIsPlan::Unresolved;
             }
             open.push(target);
-            let plan = runtime_test_plan(db, env, file, value_ty, alias.value_type(db), None, open);
+            let plan = runtime_test_plan(
+                db,
+                env,
+                file,
+                value_ty,
+                alias.value_type(db),
+                written.map(WrittenTarget::part),
+                open,
+            );
             open.pop();
             plan
         }
@@ -2541,7 +2625,7 @@ fn runtime_test_plan<'db>(
             file,
             value_ty,
             restricted.value_type(db),
-            None,
+            written.map(WrittenTarget::part),
             open,
         ),
 
@@ -2554,7 +2638,15 @@ fn runtime_test_plan<'db>(
             for element in union.elements(db) {
                 // the source spells the union, not this arm, so the arm's own
                 // plan may not read type arguments back out of it
-                let arm = type_test_plan_seen(db, env, file, value_ty, *element, None, open);
+                let arm = type_test_plan_seen(
+                    db,
+                    env,
+                    file,
+                    value_ty,
+                    *element,
+                    written.map(WrittenTarget::part),
+                    open,
+                );
                 // one unusable arm makes the whole disjunction unusable: it may
                 // not quietly fold to `False`, since that would answer `False`
                 // for a value the arm would have accepted
@@ -2704,6 +2796,9 @@ pub(crate) struct WrittenTarget<'a, 'db> {
     node: Option<&'a ast::Expr>,
     /// present once the scopes around the test are inferred, which the question needs
     inferred: Option<InferredInCheckOrder<'db>>,
+    /// whether the target is a part of what `node` writes, an arm of its union or the value of
+    /// its alias, which `node` is the place of and does not spell
+    part: bool,
 }
 
 impl<'a, 'db> WrittenTarget<'a, 'db> {
@@ -2713,6 +2808,7 @@ impl<'a, 'db> WrittenTarget<'a, 'db> {
         Self {
             node: Some(node),
             inferred: None,
+            part: false,
         }
     }
 
@@ -2722,7 +2818,13 @@ impl<'a, 'db> WrittenTarget<'a, 'db> {
         Self {
             node: None,
             inferred: None,
+            part: false,
         }
+    }
+
+    /// a part of this target, written where this one is
+    fn part(self) -> Self {
+        Self { part: true, ..self }
     }
 
     fn is_held(self) -> bool {
@@ -2734,11 +2836,21 @@ impl<'a, 'db> WrittenTarget<'a, 'db> {
         Self {
             node: Some(node),
             inferred: Some(inferred),
+            part: false,
         }
     }
 
+    /// what spells the target, which a part of one has nothing of
     fn node(self) -> Option<&'a ast::Expr> {
-        self.node
+        self.node.filter(|_| !self.part)
+    }
+
+    /// the code the test is written in, once it is inferred
+    fn scope(self, db: &'db dyn Db, file: File) -> Option<(ProgramFile<'db>, FileScopeId)> {
+        self.inferred?;
+        let program_file = db.program_file(file);
+        let scope = semantic_index(db, program_file).try_expression_scope_id(self.node?)?;
+        Some((program_file, scope))
     }
 
     fn site(self) -> Option<RuntimeSite<'db>> {
@@ -2781,6 +2893,11 @@ fn written_or_spelled<'db>(
         }
     }
     if written.is_some_and(WrittenTarget::is_held) {
+        return Ok(TargetSpelling::Written);
+    }
+    // what names a part of a target where the test is written is asked once the file is
+    // inferred. inference takes it that something does, and the question reports if not
+    if written.is_some_and(|written| written.part && written.inferred.is_none()) {
         return Ok(TargetSpelling::Written);
     }
     let Some(node) = written
@@ -2921,7 +3038,18 @@ fn class_target_plan<'db>(
                 .all(Type::is_dynamic) =>
         {
             match written_or_spelled(db, env, written, false, || {
-                spell_class_literal(db, env, file, ClassLiteral::Static(alias.origin(db)))
+                spell_class_literal(db, env, file, ClassLiteral::Static(alias.origin(db))).or_else(
+                    || {
+                        let (written_in, scope) = written?.scope(db, file)?;
+                        let cells = TypeParamCells::WrittenIn {
+                            file: written_in,
+                            scope,
+                            min_version: None,
+                        };
+                        let origin = ClassLiteral::Static(alias.origin(db));
+                        spell_class_name(db, env, file, origin, cells)
+                    },
+                )
             }) {
                 Ok(spelling) => ParametricIsPlan::Isinstance(spelling),
                 Err(reason) => ParametricIsPlan::ErasedTarget(reason),
@@ -2939,6 +3067,7 @@ fn class_target_plan<'db>(
             if let Some((members, declared_in)) = conformance_members(db, file, class) {
                 return match written_or_spelled(db, env, written, false, || {
                     spell_class(db, env, file, class)
+                        .or_else(|| spell_target_at(db, env, file, class, written?))
                 }) {
                     Ok(target) => ParametricIsPlan::Conformance {
                         target,
@@ -2969,6 +3098,7 @@ fn class_target_plan<'db>(
             }
             match written_or_spelled(db, env, written, false, || {
                 spell_class(db, env, file, class)
+                    .or_else(|| spell_target_at(db, env, file, class, written?))
             }) {
                 Ok(spelling) => ParametricIsPlan::Isinstance(spelling),
                 Err(reason) => ParametricIsPlan::ErasedTarget(reason),
@@ -3253,7 +3383,10 @@ fn classify_value<'db>(
         // the source's own spelling is preferred: a name it wrote is in scope,
         // and the runtime probe unwraps a `TypeAliasType` for itself
         let target = match written_or_spelled(db, env, written, true, || {
-            spell_class(db, env, file, ClassType::Generic(rhs_alias))
+            let class = ClassType::Generic(rhs_alias);
+            written
+                .and_then(|written| spell_target_at(db, env, file, class, written))
+                .or_else(|| spell_class(db, env, file, class))
         }) {
             Ok(target) => target,
             Err(reason) => return ParametricIsPlan::ErasedTarget(reason),

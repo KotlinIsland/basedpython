@@ -2516,29 +2516,15 @@ impl<'db> LoweringModel<'db> {
         let env = &self.program_environment();
         let file = self.program_file();
         let scope = semantic_index(self.db, file).try_expression_scope_id(&ExprRef::from(expr))?;
-        let written_class = match expr {
-            Expr::Name(name) => {
-                crate::types::reified_infer::class_named_at(self.db, file, scope, name.id.as_str())
-            }
-            Expr::Attribute(attribute) => attribute
-                .value
-                .inferred_type(self)?
-                .member(self.db, env, attribute.attr.as_str())
-                .place
-                .ignore_possibly_undefined()?
-                .as_class_literal(),
-            _ => None,
-        }
-        .and_then(|class| {
-            let dotted = ast::name::UnqualifiedName::from_expr(expr)?;
-            Some((class, RuntimeSpelling::text(dotted.to_string())))
-        });
+        let written_class =
+            crate::types::reified_infer::written_class_at(self.db, env, file, scope, expr);
         crate::types::reified_infer::bare_type_argument_spelling(
             self.db,
             env,
             self.file(),
             expr.inferred_type(self)?,
             written_class,
+            expr,
             RuntimeSite::at(expr, self.inferred_in_check_order()),
             (file, scope),
             min_version,
