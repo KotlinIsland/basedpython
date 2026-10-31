@@ -811,6 +811,7 @@ impl<'db> Bindings<'db> {
                         }
                     }
                     CallableItem::Constructor(binding) => {
+                        binding.solves_class_parameters = true;
                         for overload in &mut binding.entry.overloads {
                             overload.signature.generic_context = GenericContext::merge_optional(
                                 db,

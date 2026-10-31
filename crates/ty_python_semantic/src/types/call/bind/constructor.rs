@@ -58,6 +58,10 @@ pub(super) struct ConstructorBinding<'db> {
     /// The next downstream constructor method, if any, to be (conditionally) checked after this
     /// one.
     pub(super) downstream_constructor: Option<Box<Bindings<'db>>>,
+    /// whether the call solves the constructed class's own type parameters, as `C(1)` does. in
+    /// `C[list[T]]()` the arguments are fixed, and a `T` in them is the caller's even inside `C`,
+    /// where it is the same type parameter, so nothing may be substituted into them
+    pub(super) solves_class_parameters: bool,
 }
 
 impl<'db> ConstructorBinding<'db> {
@@ -69,6 +73,7 @@ impl<'db> ConstructorBinding<'db> {
             entry,
             constructor_context,
             downstream_constructor: None,
+            solves_class_parameters: false,
         }
     }
 
@@ -102,22 +107,20 @@ impl<'db> ConstructorBinding<'db> {
         env: &ProgramEnvironment<'db>,
         nonce_generator: &TypeVarNonceGenerator<'db>,
     ) {
+        if !self.solves_class_parameters {
+            self.entry
+                .freshen_generic_contexts_in_place(db, env, nonce_generator);
+            if let Some(downstream) = self.downstream_constructor_mut() {
+                downstream.freshen_generic_contexts_in_place(db, env, nonce_generator);
+            }
+            return;
+        }
         let instance_type = self.constructed_instance_type();
         let Some((_, specialization)) = instance_type.class_specialization(db, env) else {
             return;
         };
         let generic_context = specialization.generic_context(db);
-        // A constructor can use a class specialization reached through a fixed TypeVar's domain
-        // without owning that class's type variables. Only a context inherited by the constructor
-        // signature is eligible for freshening.
-        let owns_generic_context = self.entry.overloads.iter().any(|overload| {
-            overload
-                .signature
-                .generic_context
-                .is_some_and(|owned| generic_context.is_subset_of(db, owned))
-        });
-        if !owns_generic_context
-            || generic_context_has_parameter_pack(db, generic_context)
+        if generic_context_has_parameter_pack(db, generic_context)
             || !nonce_generator.should_freshen(db, generic_context)
         {
             return;
@@ -359,6 +362,7 @@ impl<'db> ConstructorBinding<'db> {
             entry: f(self.entry),
             constructor_context: self.constructor_context,
             downstream_constructor: None,
+            solves_class_parameters: self.solves_class_parameters,
         }
     }
 
@@ -401,6 +405,9 @@ impl<'db> ConstructorBinding<'db> {
     /// specific return type.
     fn instance_return_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         let instance_type = self.constructed_instance_type();
+        if !self.solves_class_parameters {
+            return instance_type;
+        }
         if let Some(specialization) = self.instance_return_specialization(db, env) {
             return instance_type.apply_optional_specialization(db, Some(specialization));
         }
@@ -463,6 +470,9 @@ impl<'db> ConstructorBinding<'db> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Option<Specialization<'db>> {
+        if !self.solves_class_parameters {
+            return None;
+        }
         let constructed_instance_type = self.constructed_instance_type();
         // This will be `None` if we're constructing a non-generic class. If we're constructing a
         // non-specialized generic class (`C(...)`), it'll be the identity specialization. If we're

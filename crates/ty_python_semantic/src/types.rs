@@ -9107,12 +9107,11 @@ impl<'db> Type<'db> {
 
         let class_literal = class.class_literal(db);
         let class_generic_context = class_literal.generic_context(db);
-        let inferable_class_context =
-            if matches!(self, Type::ClassLiteral(_) | Type::GenericAlias(_)) {
-                class_generic_context
-            } else {
-                None
-            };
+        let inferable_class_context = if matches!(self, Type::ClassLiteral(_)) {
+            class_generic_context
+        } else {
+            None
+        };
         let constructor_member_policy =
             if class_generic_context.is_some() && inferable_class_context.is_none() {
                 MemberLookupPolicy::NO_INHERITED_GENERIC_CONTEXT
