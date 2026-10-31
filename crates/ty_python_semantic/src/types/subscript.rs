@@ -74,14 +74,16 @@ pub(crate) fn specializes_on_subscript<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
     }
 }
 
-/// basedpython: whether subscripting the class object `ty` calls something that hands back
-/// other than a specialization, as a metaclass `__getitem__` or a `__class_getitem__` of the
-/// class's own may. a type expression reads `U[int]` as a specialization all the same, while
-/// the same subscript run as a value is that call
+/// basedpython: whether subscripting the class object `ty` at runtime calls something that
+/// hands back other than a specialization, as a metaclass `__getitem__` or a `__class_getitem__`
+/// of the class's own may. the checker reads `U[int]` of a generic `U` as a specialization all
+/// the same, as every type checker does, so this only tells where a type read from `U` has to
+/// be built without asking it
 ///
 /// a stub writes the `__class_getitem__` of a class python subscripts as returning a
 /// `types.GenericAlias`, which is one, or as returning `Any`, which says nothing, for a class
-/// whose runtime is `classmethod(GenericAlias)`
+/// whose runtime is `classmethod(GenericAlias)`. nothing writes one at all behind a `dynamic`
+/// metaclass or base, which says nothing either
 pub(crate) fn subscript_calls_the_class<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -103,7 +105,9 @@ pub(crate) fn subscript_calls_the_class<'db>(
         Err(CallDunderError::MethodNotAvailable) => {}
         Err(_) => return true,
         Ok(bindings) => {
-            return !returned(bindings).is_subtype_of(db, env, specialization);
+            let returned = returned(bindings);
+            return !(returned.is_subtype_of(db, env, specialization)
+                || (returned.is_dynamic() && written_on_the_metaclass(db, class).is_none()));
         }
     }
     match ty.try_call_dunder_on_class(
@@ -118,24 +122,44 @@ pub(crate) fn subscript_calls_the_class<'db>(
         Ok(bindings) => {
             let returned = returned(bindings);
             !(returned.is_subtype_of(db, env, specialization)
-                || (returned.is_dynamic() && class_getitem_is_a_stubs(db, class)))
+                || (returned.is_dynamic() && written_in_a_stub_or_not_at_all(db, class)))
         }
     }
 }
 
-/// whether the `__class_getitem__` `class` has is written in a stub
-fn class_getitem_is_a_stubs<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
+/// the first class in the mro of `class` that writes the method `name` in its body
+fn class_writing<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+    name: &str,
+) -> Option<ClassLiteral<'db>> {
     class.iter_mro(db).find_map(|base| {
         let ClassBase::Class(base) = base else {
             return None;
         };
-        let ClassLiteral::Static(literal) = base.class_literal(db) else {
+        let literal = base.class_literal(db);
+        let ClassLiteral::Static(static_literal) = literal else {
             return None;
         };
-        ty_python_core::place_table(db, literal.body_scope(db))
-            .symbol_by_name("__class_getitem__")
-            .map(|_| literal.file(db).source_type(db).is_stub())
-    }) == Some(true)
+        ty_python_core::place_table(db, static_literal.body_scope(db))
+            .symbol_by_name(name)
+            .map(|_| literal)
+    })
+}
+
+/// the class in the mro of the metaclass of `class` that writes a `__getitem__`
+fn written_on_the_metaclass<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+) -> Option<ClassLiteral<'db>> {
+    let metaclass = class.metaclass(db).as_class_literal()?;
+    class_writing(db, metaclass, "__getitem__")
+}
+
+/// whether the `__class_getitem__` `class` has is written in a stub, or nowhere in its mro
+fn written_in_a_stub_or_not_at_all<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
+    class_writing(db, class, "__class_getitem__")
+        .is_none_or(|writer| writer.file(db).source_type(db).is_stub())
 }
 
 /// basedpython: whether subscripting a value of type `ty` gives a function type arguments it

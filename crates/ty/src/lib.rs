@@ -700,6 +700,7 @@ impl MainLoop {
                     let db = db.clone();
                     let sender = self.sender.clone();
                     let printer = self.printer;
+                    let mode = self.mode;
 
                     // Spawn a new task that checks the project. This needs to be done in a separate thread
                     // to prevent blocking the main loop here.
@@ -707,7 +708,14 @@ impl MainLoop {
                         match salsa::Cancelled::catch(|| {
                             let mut reporter = IndicatifReporter::new(printer.progress_target());
                             db.check_with_reporter(&mut reporter);
-                            reporter.into_sorted_diagnostics(&db)
+                            let diagnostics = reporter.into_sorted_diagnostics(&db);
+                            match mode {
+                                MainLoopMode::Check => {
+                                    by_stage::emit::with_helper_name_clashes(&db, diagnostics)
+                                }
+                                // nothing fixes these, and an ignore comment doesn't silence one
+                                MainLoopMode::Fix(_) => diagnostics,
+                            }
                         }) {
                             Ok(result) => {
                                 // Send the result back to the main loop for printing.

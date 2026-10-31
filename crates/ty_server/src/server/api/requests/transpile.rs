@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 
+use by_stage::emit::project_config;
 use by_transforms::Config;
 use lsp_types::{LspRequestMethod, MessageDirection, Request, TextDocumentIdentifier, Uri};
 use ty_project::{Db as _, ProjectDatabase};
@@ -172,36 +173,6 @@ fn config_for(db: &ProjectDatabase, uri: &Uri) -> Config {
         is_python: matches!(extension, "py" | "pyi"),
         is_stub: matches!(extension, "pyi" | "byi"),
         ..project_config(db)
-    }
-}
-
-/// what the project asks a transpile of one of its modules to be: lowered for the python version
-/// it targets
-pub(crate) fn project_config(db: &ProjectDatabase) -> Config {
-    Config {
-        min_version: db
-            .project()
-            .program(db)
-            .python_version(db)
-            .to_string()
-            .parse()
-            .unwrap_or_else(|_| Config::default().min_version),
-        float_literals: match db
-            .project()
-            .metadata(db)
-            .options()
-            .lowering
-            .as_ref()
-            .and_then(|lowering| lowering.float_literals.as_deref())
-        {
-            Some(ty_project::metadata::options::FloatLiteralLowering::Literal) => {
-                by_transforms::FloatLiteralLowering::Literal
-            }
-            Some(ty_project::metadata::options::FloatLiteralLowering::Nominal) | None => {
-                by_transforms::FloatLiteralLowering::Nominal
-            }
-        },
-        ..Config::default()
     }
 }
 

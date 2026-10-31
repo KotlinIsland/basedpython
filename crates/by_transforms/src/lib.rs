@@ -1430,6 +1430,9 @@ pub enum TranspileErrorKind {
     /// the module is well-formed basedpython with no correct lowering, and the message says
     /// what to change
     Refused,
+    /// a refusal for a module that binds a name its lowering writes a runtime helper under, which
+    /// `by check` reports as well, asking only a module [`binds_a_helper_name`] says can have one
+    HelperNameClash,
     /// the transpiler broke a contract of its own — emitting a call to a helper it never asked
     /// for, or leaving surface syntax unlowered
     Bug,
@@ -1563,6 +1566,18 @@ impl AuthorNames {
     }
 }
 
+/// whether `suite`, a module as the author wrote it, binds the name of a runtime helper, in any
+/// scope. a [`TranspileErrorKind::HelperNameClash`] needs that, and whether the lowering writes
+/// that helper takes lowering the module to find out, so this is what is asked first
+pub fn binds_a_helper_name(suite: &[Stmt]) -> bool {
+    let author = AuthorNames::new(suite);
+    !author.shadows.scopes.is_empty()
+        || author
+            .binds_at_module_scope
+            .keys()
+            .any(|name| runtime::defines(name))
+}
+
 /// reject output whose module binds a name the runtime helpers it was given bind
 ///
 /// the helpers reach a module under fixed names — pasted in as definitions, or
@@ -1595,7 +1610,7 @@ fn verify_no_helper_name_clash(suite: &[Stmt], author: &AuthorNames) -> Result<(
     clashes.sort_by(|a, b| a.1.start().cmp(&b.1.start()).then_with(|| a.0.cmp(b.0)));
     match clashes.first() {
         Some((name, range)) => Err(TranspileError {
-            kind: TranspileErrorKind::Refused,
+            kind: TranspileErrorKind::HelperNameClash,
             message: format!(
                 "this module binds `{name}`, which is the name a runtime helper its lowering \
                  needs is provided under, so the lowered code would read this module's value \
@@ -1669,7 +1684,7 @@ fn verify_no_shadowed_helper(suite: &[Stmt], author: &AuthorNames) -> Result<(),
         None => "this module binds".to_owned(),
     };
     Err(TranspileError {
-        kind: TranspileErrorKind::Refused,
+        kind: TranspileErrorKind::HelperNameClash,
         message: format!(
             "{binder} `{name}`, which is the name a runtime helper its lowering needs is \
              provided under, so the lowered code in that scope would read this binding \
