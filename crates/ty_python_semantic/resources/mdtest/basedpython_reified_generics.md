@@ -501,8 +501,8 @@ stored = chk[UserId]  # error: [erased-type-check]
 
 ## a protocol held by a type parameter
 
-a protocol that isn't `@runtime_checkable` is refused because `isinstance` refuses it. a test
-written in place checks it member by member, which needs to know the protocol where it is written
+a protocol that isn't `@runtime_checkable` is tested member by member through a type parameter, as
+it is in place, against the annotations of the value's class
 
 ```by
 from typing import Protocol, runtime_checkable
@@ -517,15 +517,26 @@ class G[T](Protocol):
 class R(Protocol):
     a: int
 
+class Has:
+    a: int = 1
+
+class Other:
+    a: str = "x"
+
 def chk[T](x: object) -> bool:
     return x is T
 
-chk[P](1)  # error: [erased-type-check]
-chk[G[int]](1)  # error: [erased-type-check]
-chk[R](1)  # no diagnostic
-
 def place(x: object) -> bool:
-    return x is P  # no diagnostic
+    return x is P
+
+assert chk[P](Has())  # no diagnostic
+assert not chk[P](Other())
+assert not chk[P](1)
+assert chk[G[int]](Has())  # no diagnostic
+assert not chk[G[int]](Other())
+assert chk[R](Has())  # no diagnostic
+assert place(Has())
+assert not place(Other())
 ```
 
 ## a type argument forwarded to a test

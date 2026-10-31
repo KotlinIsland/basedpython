@@ -340,9 +340,8 @@ the runtime can't see, such as the arguments of a value that records none, answe
 
 a function that tests `x is T`, or hands `T` to something that does, refuses a type
 argument the runtime can't test (`erased-type-check`), for the same reason
-`x is UserId` is refused: a `NewType`, a `TypedDict`, `LiteralString`, `Any`, a
-callable with a signature, and a protocol that isn't `@runtime_checkable`. nothing
-about a value says it is one of those:
+`x is UserId` is refused: a `NewType`, a `TypedDict`, `LiteralString`, `Any`, and a
+callable with a signature. nothing about a value says it is one of those:
 
 ```by
 from typing import NewType

@@ -4557,17 +4557,6 @@ fn erased_type_check_diagnostic<'ctx, 'db>(
             ));
             diagnostic
         }
-        ErasedTargetReason::HeldProtocol => {
-            let mut diagnostic = builder.into_diagnostic(format_args!(
-                "`is {target}` cannot be checked through a type parameter: `isinstance` refuses \
-                 a protocol that isn't `@runtime_checkable`"
-            ));
-            diagnostic.info(format_args!(
-                "decorate `{target}` with `@typing.runtime_checkable`, or test against it where \
-                 it can be named"
-            ));
-            diagnostic
-        }
     })
 }
 
