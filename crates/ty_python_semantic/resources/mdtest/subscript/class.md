@@ -25,6 +25,78 @@ reveal_type(Identity[0])  # revealed: str
 reveal_type(Identity.__class_getitem__(0))  # revealed: str
 ```
 
+## class getitem under decorators
+
+a decorated `__class_getitem__` is no longer the plain function that the class machinery makes
+implicitly a classmethod, so it needs an explicit `classmethod`. under one, the key is checked
+against the parameters of the wrapped function, however the cache was written
+
+```py
+from functools import cache, lru_cache
+
+class Unbounded:
+    @classmethod
+    @lru_cache(None)
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+reveal_type(Unbounded[0])  # revealed: str
+# error: [invalid-argument-type]
+Unbounded["a"]
+
+class Keywords:
+    @classmethod
+    @lru_cache(maxsize=4, typed=True)
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+reveal_type(Keywords[0])  # revealed: str
+# error: [invalid-argument-type]
+Keywords["a"]
+
+class Bare:
+    @classmethod
+    @lru_cache
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+reveal_type(Bare[0])  # revealed: str
+# error: [invalid-argument-type]
+Bare["a"]
+
+class Cached:
+    @classmethod
+    @cache
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+reveal_type(Cached[0])  # revealed: str
+# error: [invalid-argument-type]
+Cached["a"]
+
+class Inferred:
+    @classmethod
+    @lru_cache(None)
+    def __class_getitem__(cls, item: int):
+        return item + 1
+
+reveal_type(Inferred[0])  # revealed: int
+```
+
+without the `classmethod`, the cache is called with the key alone, as `cls`, and `item` is missing
+
+```py
+from functools import lru_cache
+
+class NoClassmethod:
+    @lru_cache
+    def __class_getitem__(cls, item: int) -> str:
+        return str(item)
+
+# error: [invalid-argument-type]
+NoClassmethod[0]
+```
+
 ## Class getitem union
 
 ```py

@@ -177,6 +177,40 @@ f("wrong")  # error: [invalid-argument-type]
 f(1, 2)  # error: [too-many-positional-arguments]
 ```
 
+`lru_cache` with its arguments written out keeps the signature too:
+
+```py
+from functools import lru_cache
+
+@lru_cache(None)
+def f(x: int) -> int:
+    return x**2
+
+# revealed: _lru_cache_wrapper[def f(x: int) -> int]
+reveal_type(f)
+# revealed: int
+reveal_type(f(1))
+
+f("wrong")  # error: [invalid-argument-type]
+f(1, 2)  # error: [too-many-positional-arguments]
+
+@lru_cache(maxsize=4, typed=True)
+def g(x: int) -> str:
+    return str(x)
+
+# revealed: _lru_cache_wrapper[def g(x: int) -> str]
+reveal_type(g)
+g("wrong")  # error: [invalid-argument-type]
+
+class C:
+    @lru_cache(maxsize=None)
+    def m(self, x: int) -> str:
+        return "a"
+
+reveal_type(C().m(1))  # revealed: str
+C().m("wrong")  # error: [invalid-argument-type]
+```
+
 Decorating a method strips `self` on access, so the bound call is still checked:
 
 ```py
