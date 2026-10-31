@@ -6246,6 +6246,13 @@ impl<'db> Type<'db> {
             );
         }
 
+        if attribute
+            .qualifiers
+            .contains(TypeQualifiers::STORED_ON_INSTANCE)
+        {
+            return (attribute, AttributeKind::NormalOrNonDataDescriptor, None);
+        }
+
         let (member, kind, error) = match attribute {
             // A directly dynamic attribute could be a data descriptor even though we cannot see
             // its methods. Preserve that uncertainty, along with the existing bottom and cycle
@@ -13645,6 +13652,11 @@ bitflags! {
         /// A protected member is reachable from the declaring class's body and from a
         /// subclass's, and from nowhere else.
         const PROTECTED = 1 << 9;
+                /// a non-standard type qualifier for a class-body declaration whose value lives on the
+        /// instance, where python's attribute lookup does not apply the descriptor protocol to
+        /// it: an attribute declared with a type parameter, which only a value on the instance
+        /// can satisfy
+        const STORED_ON_INSTANCE = 1 << 10;
     }
 }
 

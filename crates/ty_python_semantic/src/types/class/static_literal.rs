@@ -1981,7 +1981,59 @@ impl<'db> StaticClassLiteral<'db> {
             return Member::definitely_declared(value_ty);
         }
 
+        if self.stores_on_instance(db, env, name, member.inner) {
+            let mut member = member;
+            member
+                .inner
+                .qualifiers
+                .insert(TypeQualifiers::STORED_ON_INSTANCE);
+            return member;
+        }
+
         member
+    }
+
+    /// whether an attribute declared with a type parameter holds its value on the instance:
+    ///
+    /// ```py
+    /// class Stored[F]:
+    ///     x: F
+    ///
+    ///     def __init__(self, f: F):
+    ///         self.x = f
+    /// ```
+    ///
+    /// nothing on the class can be a `F` a caller chooses, so a function or a descriptor that
+    /// solves `F` was stored on the instance, and python's attribute lookup hands it back as it
+    /// is. a declaration that names a descriptor class (`x: Descriptor`, `x: Field[F]`) says the
+    /// class holds one, and a value in the class body that is one puts it there
+    fn stores_on_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        name: &str,
+        member: PlaceAndQualifiers<'db>,
+    ) -> bool {
+        let is_type_parameter = |ty: Type<'db>| matches!(ty, Type::TypeVar(_));
+        let declared_with_type_parameter = member.place.raw_type().is_some_and(|ty| match ty {
+            Type::Union(union) => union.elements(db).iter().copied().any(is_type_parameter),
+            ty => is_type_parameter(ty),
+        });
+        if !declared_with_type_parameter || member.qualifiers.contains(TypeQualifiers::CLASS_VAR) {
+            return false;
+        }
+        let body_scope = self.body_scope(db);
+        let Some(symbol) = place_table(db, body_scope).symbol_id(name) else {
+            return false;
+        };
+        place_from_bindings(
+            db,
+            env,
+            use_def_map(db, body_scope).end_of_scope_symbol_bindings(symbol),
+        )
+        .place
+        .ignore_possibly_undefined()
+        .is_none_or(|value| value.class_member(db, env, "__get__").place.is_undefined())
     }
 
     /// Returns the type of a synthesized dataclass member like `__init__` or `__lt__`, or
