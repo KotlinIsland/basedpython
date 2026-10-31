@@ -2062,7 +2062,9 @@ print(x!)
 ```
 
 checks clean, and binds `Optional`, the name the runtime helper behind `Some`
-is provided under. the code is `transpile-refused` for a module the transpiler
+is provided under. a star import binds what the module it imports exports, so
+`from typing import *` is refused for the same module. the code is
+`transpile-refused` for a module the transpiler
 declines to lower, `invalid-syntax` for python it wrote that the target version
 does not run, and `internal-error` for a transpiler that broke a contract of its
 own. a failure about the python is put on the `.by` text it was copied from

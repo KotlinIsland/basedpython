@@ -691,19 +691,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     ));
                 }
             }
-            // basedpython: a reified generic *method* is specialized through
-            // `obj.m[int]` just like a free function. the explicit
-            // specialization applies to the underlying function and re-wraps as
-            // a bound method; gated on reification so erased generic methods are
-            // unaffected. a classmethod is excluded — its binding is opaque at
-            // runtime (reported at the def site by `reified-classmethod`), so
-            // the subscript falls through to the ordinary non-subscriptable path
+            // basedpython: a generic *method* is specialized through `obj.m[int]` just like a
+            // free function, whether its body reads the parameter or not. the explicit
+            // specialization applies to the underlying function and re-wraps as a bound method.
+            // a reified classmethod is excluded — its binding is opaque at runtime (reported at
+            // the def site by `reified-classmethod`), so the subscript falls through to the
+            // ordinary non-subscriptable path. the receiver already gave `Self` its argument, so
+            // the arguments written here are for the parameters left
             Type::BoundMethod(bound_method) if let Some(function) = bound_method.function(db) => {
                 let signature = function.signature(db);
-                if function.is_reified(db)
-                    && !bound_method.binds_classmethod(db)
+                if !(function.is_reified(db) && bound_method.binds_classmethod(db))
                     && let Some(overload) = signature.overloads.first()
                     && let Some(generic_context) = overload.generic_context
+                    && let Some(generic_context) = generic_context.remove_self(db, None)
                 {
                     return Ok(self.infer_explicit_function_specialization(
                         subscript,

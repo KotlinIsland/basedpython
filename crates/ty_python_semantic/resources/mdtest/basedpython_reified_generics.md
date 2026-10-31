@@ -814,6 +814,48 @@ assert chk[object](1)
 assert not chk[list[UserId]](1)  # no diagnostic
 ```
 
+## subscripting a method
+
+a method's type arguments are written as a function's are, whether its body reads them or not
+
+```by
+class K:
+    def erases[T](self, x: T) -> T:
+        return x
+
+    def reads[T](self, x: T) -> T:
+        print(T)
+        return x
+
+    class def erases_on_class[T](cls, x: T) -> T:
+        return x
+
+reveal_type(K().erases[int](1))  # revealed: int
+reveal_type(K().reads[int](1))  # revealed: int
+reveal_type(K.erases_on_class[int](1))  # revealed: int
+K().erases[str](1)  # error: [invalid-argument-type]
+```
+
+the receiver gives `Self` its argument, including that of a method of a generic class, so a method
+with no parameter of its own is not generic
+
+```by
+class G[U]:
+    def erases[T](self, x: T) -> T:
+        return x
+
+    def reads[T](self, x: T) -> T:
+        print(T)
+        return x
+
+    def plain(self, x: int) -> int:
+        return x
+
+reveal_type(G[int]().erases[str]("a"))  # revealed: str
+reveal_type(G[int]().reads[str]("a"))  # revealed: str
+G[int]().plain[str](1)  # error: [not-subscriptable]
+```
+
 ## subscripting a function in a `.py` file
 
 python functions aren't subscriptable and a `.py` file is run as written, so the subscript raises. a

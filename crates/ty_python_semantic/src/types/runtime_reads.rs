@@ -709,16 +709,21 @@ impl<'db> GenericUse<'db> {
                 });
             }
             Type::FunctionLiteral(function) => function,
-            // a method that erases its type arguments is reported as not subscriptable where it
-            // is inferred, and a classmethod hides the function a specialization would be given
-            Type::BoundMethod(method) if !method.binds_classmethod(db) => method
+            // a reified classmethod is reported as not subscriptable where it is inferred
+            Type::BoundMethod(method) => method
                 .function(db)
-                .filter(|function| function.is_reified(db))?,
+                .filter(|function| !(method.binds_classmethod(db) && function.is_reified(db)))?,
             _ => return None,
+        };
+        let context = function.signature(db).overloads.first()?.generic_context?;
+        let context = if matches!(ty, Type::BoundMethod(_)) {
+            context.remove_self(db, None)?
+        } else {
+            context
         };
         Some(Self {
             scope: function_body_scope(db, function),
-            context: function.signature(db).overloads.first()?.generic_context?,
+            context,
             name: function.name(db).clone(),
             function: Some(function),
         })

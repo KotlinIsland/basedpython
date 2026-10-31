@@ -15689,6 +15689,7 @@ impl Lowering<'_, '_> {
         match target {
             CheckTarget::AnyOf(parts) => parts.iter().any(|part| self.proves(ty, part)),
             CheckTarget::NoneType => *ty == RType::NONE,
+            CheckTarget::ClassValue => false,
             CheckTarget::Class(name) => {
                 let name = name.source();
                 match ty {
@@ -15735,6 +15736,12 @@ impl Lowering<'_, '_> {
                 SoundTarget::Class(class)
             }
             CheckTarget::NoneType => SoundTarget::NoneType,
+            CheckTarget::ClassValue => {
+                return Err(Decline::new(
+                    "a soundness check on a value read as a class, which may be a specialization \
+                     of one, is not lowered",
+                ));
+            }
             CheckTarget::AnyOf(parts) => SoundTarget::AnyOf(
                 parts
                     .iter()

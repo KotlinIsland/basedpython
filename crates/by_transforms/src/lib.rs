@@ -213,7 +213,10 @@ fn transpile_with_report(
     .load(&local_db);
     // what the author wrote, before any rewrite, so phase 3 can tell a helper
     // call the transpiler emitted from a name the program reads itself
-    let author = AuthorNames::new(parsed.suite());
+    let author = AuthorNames::new(parsed.suite()).with_star_imports(
+        &local_db,
+        ty_python_semantic::Db::program_file(&local_db, local_file),
+    );
     // the names the module spells as written, which a repeated `_` parameter is
     // numbered around and a lowering's typing name kept clear of. read before any
     // rewrite, as the native compiler reads them
@@ -454,7 +457,8 @@ pub fn transpile_typed_with_report(
         ty_python_semantic::Db::program_file(db, file).python_file(db),
     )
     .load(db);
-    let author = AuthorNames::new(parsed.suite());
+    let author = AuthorNames::new(parsed.suite())
+        .with_star_imports(db, ty_python_semantic::Db::program_file(db, file));
     // the names the module spells as written, which a repeated `_` parameter is
     // numbered around and a lowering's typing name kept clear of. read before any
     // rewrite, as the native compiler reads them
@@ -1574,6 +1578,24 @@ impl AuthorNames {
         }
     }
 
+    /// these names, with each helper's name a star import in `file` binds as bound by that import.
+    /// the binding is none of the source's own statements, so a helper the output is given binds
+    /// the name once more than they account for
+    fn with_star_imports(
+        mut self,
+        db: &dyn ty_python_semantic::Db,
+        file: ty_python_core::ProgramFile,
+    ) -> Self {
+        if self.binds_at_module_scope.contains_key("*") {
+            for (name, range) in
+                ty_python_semantic::star_imported_names(db, file, runtime::defined_names())
+            {
+                self.binds_at_module_scope.entry(name).or_insert((0, range));
+            }
+        }
+        self
+    }
+
     #[cfg(test)]
     fn none() -> Self {
         Self {
@@ -1587,13 +1609,15 @@ impl AuthorNames {
 /// whether `suite`, a module as the author wrote it, binds the name of a runtime helper, in any
 /// scope. a [`TranspileErrorKind::HelperNameClash`] needs that, and whether the lowering writes
 /// that helper takes lowering the module to find out, so this is what is asked first
+///
+/// what a star import binds takes knowing the module it imports, so one counts as binding it
 pub fn binds_a_helper_name(suite: &[Stmt]) -> bool {
     let author = AuthorNames::new(suite);
     !author.shadows.scopes.is_empty()
         || author
             .binds_at_module_scope
             .keys()
-            .any(|name| runtime::defines(name))
+            .any(|name| name == "*" || runtime::defines(name))
 }
 
 /// reject output whose module binds a name the runtime helpers it was given bind
@@ -2116,7 +2140,9 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         src,
         module.tokens(),
         module.suite(),
+        &model,
     );
+    let mut self_read_rev = reverse_transforms::self_read::SelfReadReverse::new(src);
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
     let mut unique_loop_bindings_rev =
         reverse_transforms::unique_loop_bindings::UniqueLoopBindingsReverse::new(src);
@@ -2149,6 +2175,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         flexible_keyword_rev.visit_stmt(stmt);
         reified_generic_rev.visit_stmt(stmt);
         runtime_helpers_rev.visit_stmt(stmt);
+        self_read_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
         export_import_rev.visit_stmt(stmt);
         unique_loop_bindings_rev.visit_stmt(stmt);
@@ -2213,6 +2240,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(flexible_keyword_rev.edits);
     fixes.extend(reified_generic_rev.edits);
     fixes.extend(runtime_helpers_rev.edits);
+    fixes.extend(self_read_rev.edits);
     fixes.extend(string_tag_rev.edits);
     fixes.extend(unique_loop_bindings_rev.edits);
     fixes.extend(typing_redirect_rev.edits);

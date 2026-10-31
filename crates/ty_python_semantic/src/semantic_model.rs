@@ -58,6 +58,41 @@ use ty_python_core::semantic_index;
 use ty_python_core::symbol::Symbol;
 use ty_python_core::{BindingWithConstraintsIterator, Program, ProgramFile};
 
+/// each of `names` a star import in the module scope of `file` binds, with the import. what a star
+/// import binds is what the module it imports exports, which takes the checker to say
+pub fn star_imported_names<'a>(
+    db: &dyn crate::Db,
+    file: ty_python_core::ProgramFile,
+    names: impl Iterator<Item = &'a str>,
+) -> Vec<(String, ruff_text_size::TextRange)> {
+    let scope = ty_python_core::global_scope(db, file);
+    let table = ty_python_core::place_table(db, scope);
+    let use_def = ty_python_core::use_def_map(db, scope);
+    let module = ruff_db::parsed::parsed_module(db, file.python_file(db)).load(db);
+    names
+        .filter_map(|name| {
+            let bindings = use_def.reachable_symbol_bindings(table.symbol_id(name)?);
+            bindings
+                .filter_map(|binding| binding.binding.definition())
+                .find_map(|definition| match definition.kind(db) {
+                    ty_python_core::definition::DefinitionKind::StarImport(import) => {
+                        Some((name.to_owned(), import.import(&module).range()))
+                    }
+                    _ => None,
+                })
+        })
+        .collect()
+}
+
+/// what python binds the first parameter of a method to
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MethodReceiver {
+    /// the instance it is called through
+    Instance,
+    /// the class it is called through, as a `classmethod` and `__new__` are given it
+    Class,
+}
+
 /// The primary interface the LSP should use for querying semantic information about a [`File`].
 ///
 /// Although you can in principle freely construct this type given a `db` and `file`, you should
@@ -103,6 +138,16 @@ impl<'db> SemanticModel<'db> {
     /// parameter
     pub fn class_variances(&self, class: &ast::StmtClassDef) -> Option<Box<[ArgVariance]>> {
         let literal = basedpython_class_type(self, class)?.as_class_literal()?;
+        crate::types::reified_infer::class_variances(self.db, literal)
+    }
+
+    /// basedpython: [`Self::class_variances`], read past whatever decorates the class
+    pub fn declared_class_variances(
+        &self,
+        class: &ast::StmtClassDef,
+    ) -> Option<Box<[ArgVariance]>> {
+        let index = semantic_index(self.db, self.program_file());
+        let literal = crate::types::original_class_type(self.db, index.try_definition(class)?)?;
         crate::types::reified_infer::class_variances(self.db, literal)
     }
 
@@ -179,6 +224,26 @@ impl<'db> SemanticModel<'db> {
                 ty,
             )
         })
+    }
+
+    /// basedpython: what python binds the first parameter of the method `function` to, which is
+    /// none of its business if it is a `staticmethod`
+    pub fn method_receiver(&self, function: &ast::StmtFunctionDef) -> Option<MethodReceiver> {
+        let definition = semantic_index(self.db, self.program_file()).try_definition(function)?;
+        let inference = crate::types::infer_definition_types(self.db, definition);
+        let function_type = inference
+            .undecorated_type()
+            .unwrap_or_else(|| inference.binding_type(definition))
+            .as_function_literal()?;
+        if function_type.is_classmethod(self.db)
+            || crate::types::function::is_implicit_staticmethod(function.name.as_str())
+        {
+            Some(MethodReceiver::Class)
+        } else if function_type.is_staticmethod(self.db) {
+            None
+        } else {
+            Some(MethodReceiver::Instance)
+        }
     }
 
     /// basedpython: the type parameters of `function` its body forwards into a specialization
@@ -2564,17 +2629,19 @@ impl<'db> LoweringModel<'db> {
         value: &ast::Expr,
         min_version: PythonVersion,
     ) -> bool {
-        value
-            .inferred_type(self)
-            .and_then(Type::as_function_literal)
-            .is_some_and(|function| {
-                function
-                    .signature(self.db)
-                    .overloads
-                    .first()
-                    .is_some_and(|signature| signature.generic_context.is_some())
-                    && !self.takes_type_arguments_at(function, min_version)
-            })
+        let function = match value.inferred_type(self) {
+            Some(Type::FunctionLiteral(function)) => Some(function),
+            Some(Type::BoundMethod(method)) => method.function(self.db),
+            _ => None,
+        };
+        function.is_some_and(|function| {
+            function
+                .signature(self.db)
+                .overloads
+                .first()
+                .is_some_and(|signature| signature.generic_context.is_some())
+                && !self.takes_type_arguments_at(function, min_version)
+        })
     }
 
     /// basedpython: whether every name `expr` reads holds, where it is written, the binding the

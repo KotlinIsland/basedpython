@@ -307,6 +307,12 @@ pub(crate) trait TypeInfo {
         min_version: ruff_python_ast::PythonVersion,
     ) -> Option<RuntimeSpelling>;
 
+    /// [`Self::class_variances`], read past whatever decorates the class
+    fn declared_class_variances(
+        &self,
+        class: &StmtClassDef,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>>;
+
     /// the variance of each type parameter of the class `class` defines, when one of them varies
     fn class_variances(
         &self,
@@ -401,6 +407,12 @@ pub(crate) trait TypeInfo {
         &self,
         function: &ruff_python_ast::StmtFunctionDef,
     ) -> ty_python_semantic::ForwardedTypeParams;
+
+    /// what python binds the first parameter of the method `function` to
+    fn method_receiver(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> Option<ty_python_semantic::MethodReceiver>;
 
     /// whether `value` is a generic class that nothing in view attests the runtime can
     /// subscript at `min_version`, so that a subscript of it may raise where the checker
@@ -1066,6 +1078,13 @@ impl TypeInfo for LoweringModel<'_> {
         SemanticModel::class_variances(self, class)
     }
 
+    fn declared_class_variances(
+        &self,
+        class: &StmtClassDef,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>> {
+        SemanticModel::declared_class_variances(self, class)
+    }
+
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool {
         SemanticModel::is_type_alias_annotation(self, annotation)
     }
@@ -1156,6 +1175,13 @@ impl TypeInfo for LoweringModel<'_> {
         function: &ruff_python_ast::StmtFunctionDef,
     ) -> ty_python_semantic::ForwardedTypeParams {
         SemanticModel::forwarded_type_params(self, function)
+    }
+
+    fn method_receiver(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> Option<ty_python_semantic::MethodReceiver> {
+        SemanticModel::method_receiver(self, function)
     }
 
     fn class_subscript_is_unattested(
@@ -1836,7 +1862,7 @@ impl TypeInfo for LoweringModel<'_> {
         // `<class 'int'>`); `type[int]` is its promoted form, and the type ty
         // itself reads back off the undeclared attribute through an instance
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version, false, None)
+        spell_for_python(db, &env, self, promoted, min_version, false, Some(expr))
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {

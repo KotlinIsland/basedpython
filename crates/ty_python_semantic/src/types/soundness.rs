@@ -21,7 +21,7 @@ use crate::types::literal::LiteralValueTypeKind;
 use crate::types::reified_infer::{
     ArgVariance, parametric_soundness_spelling, protocol_structural_members,
 };
-use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
+use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling, SpellingHelper};
 use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
@@ -39,6 +39,10 @@ pub enum CheckTarget {
     Class(RuntimeSpelling),
     /// `type(None)`
     NoneType,
+    /// a value the checker reads as a class, which holds a class or a specialization of one:
+    /// `[list[int]][0]` is a `type[list[int]]` to the checker, and a `types.GenericAlias`, which
+    /// no `isinstance(_, type)` admits, to python
+    ClassValue,
     /// any one of several, which `isinstance` accepts as a tuple
     AnyOf(Vec<CheckTarget>),
 }
@@ -49,6 +53,7 @@ impl CheckTarget {
         match self {
             Self::Class(name) => name.clone(),
             Self::NoneType => RuntimeSpelling::text("type(None)"),
+            Self::ClassValue => RuntimeSpelling::helper(SpellingHelper::ClassValue),
             Self::AnyOf(parts) => {
                 let mut spelling = RuntimeSpelling::text("(");
                 spelling.push(&RuntimeSpelling::join(
@@ -504,10 +509,9 @@ fn target<'db>(
         }
         // a TypedDict inhabitant is a plain dict at runtime
         Type::TypedDict(_) => builtin_target(db, file, "dict"),
-        // values that are classes: the shallow runtime fact is `type`
-        Type::ClassLiteral(_) | Type::GenericAlias(_) | Type::SubclassOf(_) => {
-            builtin_target(db, file, "type")
-        }
+        // a class literal can only be the class
+        Type::ClassLiteral(_) => builtin_target(db, file, "type"),
+        Type::GenericAlias(_) | Type::SubclassOf(_) => Some(CheckTarget::ClassValue),
         Type::TypeIs(_) | Type::TypeGuard(_) => builtin_target(db, file, "bool"),
         Type::TypeAlias(alias) => target(db, env, file, alias.value_type(db), depth + 1),
         _ => None,

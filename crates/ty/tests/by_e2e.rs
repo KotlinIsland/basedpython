@@ -6357,7 +6357,7 @@ a.f()
         "reified class should be decorated:\n{out}"
     );
     assert!(
-        out.contains("        T = _type_argument(self, \"T\", __class__)"),
+        out.contains("        T = _type_argument(self, \"T\")"),
         "the read should bind from the receiver:\n{out}"
     );
     assert!(

@@ -106,6 +106,8 @@ helpers! {
     SUBSCRIPT = "_by_subscript",
     SPECIALIZATION = "_by_specialization",
     GENERIC_CLASS = "generic_class",
+    GENERIC_CLASS_WITH_KEYWORDS = "generic_class_with_keywords",
+    CLASS_VALUE = "_by_class_value",
     TYPE_ARGUMENT = "_type_argument",
     DISCARD = "_by_discard",
     RAISE = "_by_raise",
@@ -171,8 +173,8 @@ pub fn with_told_rows<'a>(python: &str, rows: impl Iterator<Item = &'a String>) 
 /// the helpers a module whose own code uses their names reads under names of their own
 /// ([`WrittenNames::helper`](crate::transforms::repeated_underscore::WrittenNames::helper)):
 /// the ones a checker's spelling of a type writes
-pub(crate) const READ_THROUGH_WRITTEN_NAMES: [Helper; 5] =
-    [LITERAL, VARIANCE, OUT, IN, SPECIALIZATION];
+pub(crate) const READ_THROUGH_WRITTEN_NAMES: [Helper; 6] =
+    [LITERAL, VARIANCE, OUT, IN, SPECIALIZATION, CLASS_VALUE];
 
 mod global_reads;
 
@@ -1155,6 +1157,11 @@ fn closure(helpers: impl IntoIterator<Item = Helper>) -> Vec<&'static Definition
         queue.extend(definition.needs.iter().map(String::as_str));
     }
     resolved.into_values().collect()
+}
+
+/// every name the runtime defines
+pub(crate) fn defined_names() -> impl Iterator<Item = &'static str> {
+    index().keys().map(String::as_str)
 }
 
 /// whether `name` is one of the runtime's definitions

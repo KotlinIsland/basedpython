@@ -719,6 +719,7 @@ impl<'src> WrittenNames<'src> {
             SpellingHelper::In => crate::runtime::IN,
             SpellingHelper::Specialization => crate::runtime::SPECIALIZATION,
             SpellingHelper::Subscript => crate::runtime::SUBSCRIPT,
+            SpellingHelper::ClassValue => crate::runtime::CLASS_VALUE,
         };
         if let Some(spelling_helpers) = self.spelling_helpers {
             spelling_helpers
