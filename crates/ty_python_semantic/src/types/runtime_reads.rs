@@ -5,7 +5,7 @@
 //! lowered to code that names classes — the test's target, the specialization the call is
 //! given — and the program has to find there the class the checker resolved. a name bound
 //! only under `if TYPE_CHECKING:`, only on some paths, or only further on does not hold it
-//! ([`runtime_binding`](crate::place::runtime_binding)). which one it is depends on every
+//! ([`runtime_binding`]). which one it is depends on every
 //! binding the module makes of the name and on every condition deciding whether each is
 //! made, the conditions after the site included, so it is asked once the scope holding the
 //! site, and every scope around it, is inferred ([`InferredInCheckOrder`])
