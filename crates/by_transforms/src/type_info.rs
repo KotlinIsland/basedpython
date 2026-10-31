@@ -261,18 +261,43 @@ pub(crate) trait TypeInfo {
     /// application rewrote the key to the type it inferred for it
     fn subscript_is_type_context(&self, value: &Expr) -> bool;
 
-    /// stricter variant: only `true` when ty *resolved* the value to a class /
-    /// generic / special form. unresolved values return `false`. used by
-    /// transforms that may fire on value-position subscripts (where an
-    /// unresolved name should be treated as a runtime subscript, not a type)
-    fn subscript_is_known_type_context(&self, value: &Expr) -> bool;
-
     /// whether subscripting `value` specializes it, so the checker infers its slice as type
     /// expressions — see [`SemanticModel::subscript_specializes`]
     fn subscript_specializes(&self, value: &Expr) -> bool;
 
     /// whether subscripting `value` gives a function type arguments it keeps as runtime values
     fn subscript_specializes_reified_function(&self, value: &Expr) -> bool;
+
+    /// whether subscripting `value` where it stands as a value is a call the class answers for
+    /// itself, whatever a type expression reads the same subscript as
+    fn subscript_calls_the_class(&self, value: &Expr) -> bool;
+
+    /// whether the subscript of `value` written as a value specializes it, so that its slice
+    /// holds type arguments rather than a key
+    fn subscript_applies_type_arguments(&self, value: &Expr) -> bool {
+        self.subscript_specializes(value) && !self.subscript_calls_the_class(value)
+    }
+
+    /// whether `value` is a generic function that erases its type arguments at
+    /// `min_version`, so that a subscript of it has nothing to evaluate at runtime
+    fn subscript_erases_type_arguments(
+        &self,
+        value: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool;
+
+    /// whether the slice `()` of a subscript of `value` is one type argument, the empty tuple,
+    /// rather than an empty list of them
+    fn empty_slice_is_the_empty_tuple(&self, value: &Expr) -> bool;
+
+    /// what `expr`, written bare as a type argument, is read as when what it evaluates to says
+    /// less: a generic class whose parameters are solved by their defaults is the specialization
+    /// the checker reads, while the class itself is every specialization of it
+    fn bare_type_argument_spelling(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<RuntimeSpelling>;
 
     /// the variance of each type parameter of the class `class` defines, when one of them varies
     fn class_variances(
@@ -977,20 +1002,10 @@ impl TypeInfo for LoweringModel<'_> {
             return true;
         }
         match value.inferred_type(self) {
-            Some(ty) => ty.is_subscript_type_context(),
+            Some(ty) => ty.is_subscript_type_context(self.db()),
             // unresolved → assume type context (covers builtins like `list`,
             // unknown imports, basedpython sugar contexts)
             None => true,
-        }
-    }
-
-    fn subscript_is_known_type_context(&self, value: &Expr) -> bool {
-        if SemanticModel::subscript_specializes_reified_function(self, value) {
-            return true;
-        }
-        match value.inferred_type(self) {
-            Some(ty) => ty.is_subscript_type_context() && !ty.is_dynamic(),
-            None => false,
         }
     }
 
@@ -1001,6 +1016,30 @@ impl TypeInfo for LoweringModel<'_> {
 
     fn subscript_specializes_reified_function(&self, value: &Expr) -> bool {
         SemanticModel::subscript_specializes_reified_function(self, value)
+    }
+
+    fn subscript_calls_the_class(&self, value: &Expr) -> bool {
+        SemanticModel::subscript_calls_the_class(self, value)
+    }
+
+    fn subscript_erases_type_arguments(
+        &self,
+        value: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> bool {
+        LoweringModel::subscript_erases_type_arguments(self, value, min_version)
+    }
+
+    fn empty_slice_is_the_empty_tuple(&self, value: &Expr) -> bool {
+        SemanticModel::empty_slice_is_the_empty_tuple(self, value)
+    }
+
+    fn bare_type_argument_spelling(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<RuntimeSpelling> {
+        LoweringModel::bare_type_argument_spelling(self, expr, min_version)
     }
 
     fn class_variances(

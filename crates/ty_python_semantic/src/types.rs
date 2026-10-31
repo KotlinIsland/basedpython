@@ -3798,17 +3798,10 @@ impl<'db> Type<'db> {
     }
 
     /// whether `X[…]` where `X` evaluates to this type treats the slice as
-    /// type arguments rather than a runtime subscript key
-    pub const fn is_subscript_type_context(self) -> bool {
-        matches!(
-            self,
-            Type::ClassLiteral(_)
-                | Type::GenericAlias(_)
-                | Type::SpecialForm(_)
-                | Type::KnownInstance(_)
-                | Type::SubclassOf(_)
-                | Type::Dynamic(_)
-        )
+    /// type arguments rather than a runtime subscript key. a value the checker could not
+    /// resolve counts as one, since what it reads there are type expressions if anything
+    pub fn is_subscript_type_context(self, db: &'db dyn Db) -> bool {
+        self.is_dynamic() || subscript::specializes_on_subscript(db, self)
     }
 
     /// whether this type represents a module or type-level object whose

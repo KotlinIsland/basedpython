@@ -16,11 +16,11 @@
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::any_over_expr;
-use ruff_python_ast::{Expr, Operator, Stmt, UnaryOp};
+use ruff_python_ast::{Expr, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::RuntimeSpelling;
 
-use crate::config::FloatLiteralLowering;
+use crate::config::{Config, FloatLiteralLowering};
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
@@ -39,6 +39,10 @@ pub(crate) struct LiteralType<'src> {
     /// may read one of those back as the type argument it is, so it is written as an inferred
     /// one is, through the helper that builds a literal type
     in_application: bool,
+    /// whether what the literals of a union in a type application are written as can be joined
+    /// with `|`, which on a target without `type.__or__` they can't, and they are written as
+    /// the one `Literal[...]` there
+    union_operator_runs: bool,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_literal_import: bool,
     /// every string the edits write as a literal type
@@ -59,6 +63,7 @@ impl<'src> LiteralType<'src> {
             types,
             float_literals,
             in_application: false,
+            union_operator_runs: true,
             edits: Vec::new(),
             needs_literal_import: false,
             literal_strings: Vec::new(),
@@ -243,6 +248,7 @@ impl<'src> LiteralType<'src> {
             return;
         }
 
+        let through_helper = self.in_application && self.union_operator_runs;
         let mut group_start: Option<TextSize> = None;
         let mut group_end = TextSize::from(0);
         let mut group_list: Vec<String> = Vec::new();
@@ -251,7 +257,7 @@ impl<'src> LiteralType<'src> {
         macro_rules! flush_group {
             () => {
                 if let Some(start) = group_start.take() {
-                    let replacement = if self.in_application {
+                    let replacement = if through_helper {
                         std::mem::take(&mut group_list).join(" | ")
                     } else {
                         self.needs_literal_import = true;
@@ -287,7 +293,7 @@ impl<'src> LiteralType<'src> {
                 if p.is_string_literal_expr() {
                     self.literal_strings.push(p.range());
                 }
-                group_list.push(if self.in_application {
+                group_list.push(if through_helper {
                     self.application_literal(p)
                 } else {
                     self.src(p.range()).to_owned()
@@ -369,18 +375,16 @@ pub(crate) struct LiteralTypePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
     float_literals: FloatLiteralLowering,
+    union_operator_runs: bool,
 }
 
 impl<'src> LiteralTypePass<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        float_literals: FloatLiteralLowering,
-    ) -> Self {
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
         Self {
             source,
             written,
-            float_literals,
+            float_literals: config.float_literals,
+            union_operator_runs: config.is_stub || config.min_version >= PythonVersion::PY310,
         }
     }
 }
@@ -392,6 +396,7 @@ impl TypeAwarePass for LiteralTypePass<'_> {
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = LiteralType::new(self.source, self.written, types, self.float_literals);
+        inner.union_operator_runs = self.union_operator_runs;
         walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);
         if inner.needs_literal_import {
             ctx.required_imports
@@ -446,6 +451,18 @@ fn is_literal_expr(expr: &Expr, float_literals: FloatLiteralLowering) -> bool {
                 )
         }
         _ => false,
+    }
+}
+
+/// whether `expr` is a union of literal arms alone, which [`LiteralType`] writes as the one
+/// `Literal[...]`, with no union operator to spell for a target that hasn't one
+pub(crate) fn is_one_literal_type(expr: &Expr, float_literals: FloatLiteralLowering) -> bool {
+    match expr {
+        Expr::BinOp(b) if b.op == Operator::BitOr => {
+            is_one_literal_type(&b.left, float_literals)
+                && is_one_literal_type(&b.right, float_literals)
+        }
+        arm => is_literal_expr(arm, float_literals),
     }
 }
 
@@ -1098,5 +1115,45 @@ mod tests {
             "from typing import Annotated\na: Annotated[\"x\", \"meta\"]\n",
             "from typing import Annotated, Literal\na: Annotated[Literal[\"x\"], \"meta\"]\n",
         );
+    }
+
+    /// a union the runtime would evaluate has no operator to run below 3.10, and a union of
+    /// literals needs none
+    #[test]
+    fn a_union_of_literals_is_one_literal_type_below_the_union_operator() {
+        let at_39 = |source: &str| {
+            let config = Config {
+                min_version: crate::PythonVersion::PY39,
+                ..Config::test_default()
+            };
+            crate::transpile(source, &config).unwrap()
+        };
+        for (source, written) in [
+            ("a = list[1 | 2]\n", "a = list[Literal[1, 2]]\n"),
+            ("a = list[1 | None]\n", "a = list[Literal[1, None]]\n"),
+            (
+                "a = list[\"a\" | \"b\"]\n",
+                "a = list[Literal[\"a\", \"b\"]]\n",
+            ),
+            (
+                "class K(list[1 | 2]): ...\n",
+                "class K(list[Literal[1, 2]]): ...\n",
+            ),
+            (
+                "from typing import cast\na = cast(1 | 2, 1)\n",
+                "cast(Literal[1, 2], 1)",
+            ),
+            (
+                "a = list[1 | 2 | int]\n",
+                "a = list[Union[Literal[1], Literal[2], int]]\n",
+            ),
+            (
+                "a = list[1.5 | 2]\n",
+                "a = list[Union[float, Literal[2]]]\n",
+            ),
+        ] {
+            let out = at_39(source);
+            assert!(out.contains(written), "{source}\n{out}");
+        }
     }
 }

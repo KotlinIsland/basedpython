@@ -593,6 +593,7 @@ mod tests {
             [crate::runtime::LOOP_BIND],
             &[],
             crate::transforms::repeated_underscore::WrittenNames::new(input),
+            crate::transforms::repeated_underscore::WrittenNames::new(input),
         )
         .join("\n");
         runtime.push('\n');

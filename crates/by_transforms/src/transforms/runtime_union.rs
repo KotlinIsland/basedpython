@@ -45,7 +45,9 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::types::classinfo_spelling;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::literal_types::is_one_literal_type;
 use super::repeated_underscore::WrittenNames;
+use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
 /// the version `type.__or__` arrived in
@@ -54,13 +56,19 @@ const MIN_VERSION: PythonVersion = PythonVersion::PY310;
 pub(crate) struct RuntimeUnionPass<'src> {
     written: WrittenNames<'src>,
     min_version: PythonVersion,
+    float_literals: FloatLiteralLowering,
 }
 
 impl<'src> RuntimeUnionPass<'src> {
-    pub(crate) fn new(written: WrittenNames<'src>, min_version: PythonVersion) -> Self {
+    pub(crate) fn new(
+        written: WrittenNames<'src>,
+        min_version: PythonVersion,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             written,
             min_version,
+            float_literals,
         }
     }
 }
@@ -84,6 +92,7 @@ impl TypeAwarePass for RuntimeUnionPass<'_> {
             types,
             self.written.imported("typing", "Union"),
             self.written.builtin("type"),
+            self.float_literals,
         );
         for stmt in stmts {
             lower.visit_stmt(stmt);
@@ -100,7 +109,12 @@ impl TypeAwarePass for RuntimeUnionPass<'_> {
 /// classes, and so are spelled as a tuple of classes below 3.10.
 pub(crate) fn classinfo_optionals(stmts: &[Stmt], types: &dyn TypeInfo) -> HashSet<TextRange> {
     // only the ranges are read, never the spelling
-    let mut lower = Lower::new(types, String::new(), String::new());
+    let mut lower = Lower::new(
+        types,
+        String::new(),
+        String::new(),
+        FloatLiteralLowering::default(),
+    );
     for stmt in stmts {
         lower.visit_stmt(stmt);
     }
@@ -113,6 +127,7 @@ struct Lower<'a> {
     union: String,
     /// the name the builtin `type` is written under
     type_: String,
+    float_literals: FloatLiteralLowering,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_import: bool,
     /// every optional the classinfo walk reached, for the optional lowering
@@ -120,11 +135,17 @@ struct Lower<'a> {
 }
 
 impl<'a> Lower<'a> {
-    fn new(types: &'a dyn TypeInfo, union: String, type_: String) -> Self {
+    fn new(
+        types: &'a dyn TypeInfo,
+        union: String,
+        type_: String,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             types,
             union,
             type_,
+            float_literals,
             edits: Vec::new(),
             needs_import: false,
             classinfo_optionals: HashSet::new(),
@@ -189,7 +210,11 @@ impl<'ast> Lower<'_> {
         let Expr::BinOp(binop) = expr else {
             return None;
         };
-        if binop.op != Operator::BitOr || !self.types.is_runtime_union(expr) {
+        // literal arms alone are the one `Literal[...]`, with no operator left to spell
+        if binop.op != Operator::BitOr
+            || !self.types.is_runtime_union(expr)
+            || is_one_literal_type(expr, self.float_literals)
+        {
             return None;
         }
         Some(classinfo_spelling::union_arms(expr))

@@ -257,6 +257,7 @@ mod tests {
             [crate::runtime::TEMPLATE, crate::runtime::INTERPOLATION],
             &[],
             crate::transforms::repeated_underscore::WrittenNames::new(input),
+            crate::transforms::repeated_underscore::WrittenNames::new(input),
         ) {
             body = body
                 .strip_prefix(definition.as_str())

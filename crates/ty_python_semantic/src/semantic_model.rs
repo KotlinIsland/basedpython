@@ -1025,6 +1025,49 @@ impl<'db> SemanticModel<'db> {
             .is_some_and(|ty| crate::types::subscript::specializes_on_subscript(self.db, ty))
     }
 
+    /// basedpython: whether subscripting the class `value` at runtime runs a method of its own
+    /// that may hand back other than a specialization (see
+    /// `types::subscript::subscript_calls_the_class`)
+    pub fn subscript_calls_the_class(&self, value: &Expr) -> bool {
+        let env = &self.program_environment();
+        value
+            .inferred_type(self)
+            .is_some_and(|ty| crate::types::subscript::subscript_calls_the_class(self.db, env, ty))
+    }
+
+    /// basedpython: whether the slice `()` of a subscript of `value` is one type argument, the
+    /// empty tuple, rather than an empty list of them, as it is for a parameter that takes a
+    /// run of them
+    pub fn empty_slice_is_the_empty_tuple(&self, value: &Expr) -> bool {
+        let db = self.db;
+        let context = match value.inferred_type(self) {
+            Some(Type::ClassLiteral(class)) if !class.is_tuple(db) => class.generic_context(db),
+            Some(Type::FunctionLiteral(function)) => function
+                .signature(db)
+                .overloads
+                .first()
+                .and_then(|signature| signature.generic_context),
+            Some(Type::BoundMethod(method)) => method.function(db).and_then(|function| {
+                function
+                    .signature(db)
+                    .overloads
+                    .first()
+                    .and_then(|signature| signature.generic_context)
+            }),
+            Some(Type::KnownInstance(crate::types::KnownInstanceType::TypeAliasType(alias))) => {
+                alias.generic_context(db)
+            }
+            _ => None,
+        };
+        context
+            .and_then(|context| context.variables(db).next())
+            .is_some_and(|first| {
+                !first.is_paramspec(db)
+                    && !first.is_typevartuple(db)
+                    && !first.typevar(db).is_keyword_variadic(db)
+            })
+    }
+
     /// basedpython: whether `expr` is `typing.Callable` or `collections.abc.Callable`, whatever
     /// name it is reached by — an alias (`from typing import Callable as Fn`), an assignment
     /// (`C = typing.Callable`) — and not a class of the program's own that is named `Callable`
@@ -2408,6 +2451,39 @@ impl<'db> LoweringModel<'db> {
             .get_or_init(|| infer_file_in_check_order(self.db, self.file, |_, _| {}))
     }
 
+    /// basedpython: what `expr`, a name or attribute standing as a type argument, is read as
+    /// when what it evaluates to says less (see `reified_infer::bare_type_argument_spelling`)
+    pub fn bare_type_argument_spelling(
+        &self,
+        expr: &Expr,
+        min_version: PythonVersion,
+    ) -> Option<RuntimeSpelling> {
+        if !matches!(expr, Expr::Name(_) | Expr::Attribute(_)) {
+            return None;
+        }
+        let env = &self.program_environment();
+        let through_module = expr.as_attribute_expr().and_then(|attribute| {
+            let class = attribute
+                .value
+                .inferred_type(self)?
+                .member(self.db, env, attribute.attr.as_str())
+                .place
+                .ignore_possibly_undefined()?
+                .as_class_literal()?;
+            let dotted = ast::name::UnqualifiedName::from_expr(expr)?;
+            Some((class, RuntimeSpelling::text(dotted.to_string())))
+        });
+        crate::types::reified_infer::bare_type_argument_spelling(
+            self.db,
+            env,
+            self.file(),
+            expr.inferred_type(self)?,
+            through_module,
+            RuntimeSite::at(expr, self.inferred_in_check_order()),
+            min_version,
+        )
+    }
+
     /// basedpython: the specialization step the transpiler splices in after the
     /// callee of a bare reified-generic call (`f(1)` → `"[int]"`). `None` when
     /// the call is not a bare reified-generic call or no injectable spelling
@@ -2439,6 +2515,26 @@ impl<'db> LoweringModel<'db> {
         function.is_reified(self.db)
             || (!function.forwarded_type_params(self.db).names.is_empty()
                 && function.can_forward_at(self.db, min_version))
+    }
+
+    /// basedpython: whether `value` is a generic function that erases its type arguments at
+    /// `min_version`, so that a subscript of it has nothing to evaluate at runtime
+    pub fn subscript_erases_type_arguments(
+        &self,
+        value: &ast::Expr,
+        min_version: PythonVersion,
+    ) -> bool {
+        value
+            .inferred_type(self)
+            .and_then(Type::as_function_literal)
+            .is_some_and(|function| {
+                function
+                    .signature(self.db)
+                    .overloads
+                    .first()
+                    .is_some_and(|signature| signature.generic_context.is_some())
+                    && !self.takes_type_arguments_at(function, min_version)
+            })
     }
 
     /// basedpython: whether every name `expr` reads holds, where it is written, the binding the

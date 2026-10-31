@@ -2098,6 +2098,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             super::ast_driver::Lowering::VisibilityRename,
             super::ast_driver::Lowering::VarianceStrip,
             super::ast_driver::Lowering::RuntimeVariance,
+            super::ast_driver::Lowering::ClassSubscript,
         ]
     }
 

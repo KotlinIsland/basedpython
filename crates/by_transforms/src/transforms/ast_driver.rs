@@ -1565,7 +1565,7 @@ pub(crate) fn run_against_source<'a>(
     let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass =
         kw_subscript::KwSubscriptPass::new(source_ref, written, config.min_version);
-    let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref, config.min_version);
+    let generic_call_pass = generic_call::GenericCallStripPass::new(config.min_version);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, written, config.min_version);
     let reified_class_pass = reified_class::ReifiedClassPass::new(source_ref, config.min_version);
@@ -1574,9 +1574,11 @@ pub(crate) fn run_against_source<'a>(
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass { written };
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, written);
     let class_subscript_pass = class_subscript::ClassSubscriptPass {
+        written,
         min_version: config.min_version,
     };
     let runtime_variance_pass = runtime_variance::RuntimeVariancePass {
+        written,
         source: source_ref,
         class_variance: config.class_variance,
         min_version: config.min_version,
@@ -1592,8 +1594,7 @@ pub(crate) fn run_against_source<'a>(
     let template_type_pass = template_type::TemplateTypePass { written };
     let tuple_types_pass =
         annotation::TupleLiteralTypePass::new(source_ref, written, quotes, config.clone());
-    let literal_types_pass =
-        literal_types::LiteralTypePass::new(source_ref, written, config.float_literals);
+    let literal_types_pass = literal_types::LiteralTypePass::new(source_ref, written, config);
     let callable_pass =
         callable::CallableSyntaxPass::new(source_ref, written, quotes, config.clone());
     let protocol_type_pass = protocol_type::ProtocolTypePass;
@@ -1605,7 +1606,8 @@ pub(crate) fn run_against_source<'a>(
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
     let optional_type_pass =
         optional_type::OptionalTypePass::new(source_ref, written, config.min_version);
-    let runtime_union_pass = runtime_union::RuntimeUnionPass::new(written, config.min_version);
+    let runtime_union_pass =
+        runtime_union::RuntimeUnionPass::new(written, config.min_version, config.float_literals);
     let generics_pass =
         generics::GenericPolyfillPass::new(source_ref, written, quotes, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
@@ -2100,10 +2102,11 @@ pub(crate) fn run_against_source<'a>(
         match config.runtime_module.as_deref() {
             Some(module) => ctx
                 .required_imports
-                .push(crate::runtime::import_line(module, helpers)),
+                .push(crate::runtime::import_line(module, helpers, written)),
             None => ctx.required_imports.extend(crate::runtime::inline(
                 helpers,
                 parsed_handle.suite(),
+                written,
                 written,
             )),
         }
@@ -2773,6 +2776,11 @@ mod subsumed_lowerings {
         ),
         (
             "GenericPolyfillPass",
+            Lowering::ClassSubscript,
+            "a_class_subscript_inside_a_polyfilled_alias_goes_through_the_helper",
+        ),
+        (
+            "GenericPolyfillPass",
             Lowering::MatchType,
             "polyfilled_match_type_lowers_to_object",
         ),
@@ -3163,20 +3171,6 @@ mod subsumed_lowerings {
                 "from collections.abc import Sequence\nclass A[T]:\n    t: T\ndef f(x: object):\n    return x is A[Sequence[int]]\n",
                 &["_parametric_is(x, A[_by_variance(1)(Sequence)[int]], (0,))"],
                 &[],
-            ),
-            case(
-                "GenericCallStripPass",
-                &[Lowering::ClassSubscript],
-                "def f[T](t: T) -> T:\n    return t\nf[map[int]](map(int, []))\n",
-                &["f(map(int, []))"],
-                &["_by_subscript(map"],
-            ),
-            case(
-                "GenericCallStripPass",
-                &[Lowering::RuntimeVariance],
-                "from collections.abc import Sequence\ndef f[T](t: T) -> T:\n    return t\nf[Sequence[int]]([1])\n",
-                &["f([1])"],
-                &["_by_variance(1)(Sequence)"],
             ),
             case(
                 "GenericPolyfillPass",

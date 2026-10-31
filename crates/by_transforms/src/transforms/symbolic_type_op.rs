@@ -27,7 +27,7 @@ use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{CmpOp, Expr, ModModule, Operator, Stmt, UnaryOp};
 use ruff_python_parser::parse_expression;
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
 use super::literal_types::float_literal_spelling;
@@ -251,6 +251,19 @@ fn uses_name(expr: &Expr, name: &str) -> bool {
     uses.found
 }
 
+/// `range` of `rendered` with the parentheses written around it
+fn parenthesized(rendered: &str, mut range: TextRange) -> TextRange {
+    while rendered[..usize::from(range.start())].ends_with('(')
+        && rendered[usize::from(range.end())..].starts_with(')')
+    {
+        range = TextRange::new(
+            range.start() - TextSize::from(1),
+            range.end() + TextSize::from(1),
+        );
+    }
+    range
+}
+
 /// `rendered` with each float or complex literal type in `parsed` (its parse) spelled as
 /// [`float_literal_spelling`] spells a written one, or `None` when it holds none
 fn spell_float_literals(
@@ -274,6 +287,23 @@ fn spell_float_literals(
                 && matches!(subscript.value.as_ref(), Expr::Name(name) if name.id.as_str() == "Literal")
             {
                 return;
+            }
+            // ty spells a complex literal type with both of its parts as the sum python prints,
+            // `(1+2j)`, and nothing else in a type is written with these operators
+            if let Expr::BinOp(sum) = expr
+                && matches!(sum.op, Operator::Add | Operator::Sub)
+            {
+                let range = parenthesized(self.rendered, expr.range());
+                if let Some(spelling) = float_literal_spelling(
+                    &sum.right,
+                    &self.rendered[range],
+                    self.written,
+                    self.literal,
+                    self.float_literals,
+                ) {
+                    self.edits.push((range, spelling));
+                    return;
+                }
             }
             let text = &self.rendered[expr.range()];
             if let Some(spelling) =
@@ -1132,5 +1162,13 @@ mod tests {
     #[test]
     fn python_passthrough_unchanged() {
         unchanged("c: 1 + 1\n");
+    }
+
+    /// ty spells a complex literal type as the sum python prints
+    #[test]
+    fn a_complex_literal_type_is_written_as_one_type() {
+        check("c: 1 + 2j\n", "c: complex\n");
+        check("c: 3 - 2j\n", "c: complex\n");
+        check("c: list[1 + 2j]\n", "c: list[complex]\n");
     }
 }

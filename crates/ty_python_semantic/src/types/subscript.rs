@@ -40,9 +40,102 @@ pub(crate) fn specializes_on_subscript<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
                 || class.is_tuple(db)
                 || class.is_known(db, KnownClass::Type)
         }
-        Type::GenericAlias(_) | Type::SpecialForm(_) | Type::KnownInstance(_) => true,
+        Type::GenericAlias(_) | Type::SpecialForm(_) => true,
+        Type::KnownInstance(instance) => match instance {
+            KnownInstanceType::SubscriptedProtocol(_)
+            | KnownInstanceType::SubscriptedGeneric(_)
+            | KnownInstanceType::TypeAliasType(_)
+            | KnownInstanceType::UnionType(_)
+            | KnownInstanceType::Literal(_)
+            | KnownInstanceType::Annotated(_)
+            | KnownInstanceType::WrappedOptional(_)
+            | KnownInstanceType::WrappedOptionalClass(_)
+            | KnownInstanceType::TypeGenericAlias(_)
+            | KnownInstanceType::Callable(_)
+            | KnownInstanceType::LiteralStringAlias(_) => true,
+            // an ordinary object the checker knows more about than its class says, `range(3)`
+            // among them, or a type parameter, which nothing specializes
+            KnownInstanceType::TypeVar(_)
+            | KnownInstanceType::Deprecated(_)
+            | KnownInstanceType::Field(_)
+            | KnownInstanceType::ConstraintSet(_)
+            | KnownInstanceType::ConstraintSetSolution(_)
+            | KnownInstanceType::GenericContext(_)
+            | KnownInstanceType::Specialization(_)
+            | KnownInstanceType::NewType(_)
+            | KnownInstanceType::Sentinel(_)
+            | KnownInstanceType::NamedTupleSpec(_)
+            | KnownInstanceType::FunctoolsPartial(_)
+            | KnownInstanceType::Range { .. }
+            | KnownInstanceType::FunctoolsPartialCall(_)
+            | KnownInstanceType::MethodWrapper(_) => false,
+        },
         _ => false,
     }
+}
+
+/// basedpython: whether subscripting the class object `ty` calls something that hands back
+/// other than a specialization, as a metaclass `__getitem__` or a `__class_getitem__` of the
+/// class's own may. a type expression reads `U[int]` as a specialization all the same, while
+/// the same subscript run as a value is that call
+///
+/// a stub writes the `__class_getitem__` of a class python subscripts as returning a
+/// `types.GenericAlias`, which is one, or as returning `Any`, which says nothing, for a class
+/// whose runtime is `classmethod(GenericAlias)`
+pub(crate) fn subscript_calls_the_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    let Type::ClassLiteral(class) = ty else {
+        return false;
+    };
+    let specialization = KnownClass::GenericAlias.to_instance(db, env);
+    let arguments = CallArguments::positional([Type::any()]);
+    let returned = |bindings: Bindings<'db>| bindings.return_type(db, env);
+    match ty.try_call_dunder(
+        db,
+        env,
+        "__getitem__",
+        arguments.clone(),
+        TypeContext::default(),
+    ) {
+        Err(CallDunderError::MethodNotAvailable) => {}
+        Err(_) => return true,
+        Ok(bindings) => {
+            return !returned(bindings).is_subtype_of(db, env, specialization);
+        }
+    }
+    match ty.try_call_dunder_on_class(
+        db,
+        env,
+        "__class_getitem__",
+        &arguments,
+        TypeContext::default(),
+    ) {
+        Err(CallDunderError::MethodNotAvailable) => false,
+        Err(_) => true,
+        Ok(bindings) => {
+            let returned = returned(bindings);
+            !(returned.is_subtype_of(db, env, specialization)
+                || (returned.is_dynamic() && class_getitem_is_a_stubs(db, class)))
+        }
+    }
+}
+
+/// whether the `__class_getitem__` `class` has is written in a stub
+fn class_getitem_is_a_stubs<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
+    class.iter_mro(db).find_map(|base| {
+        let ClassBase::Class(base) = base else {
+            return None;
+        };
+        let ClassLiteral::Static(literal) = base.class_literal(db) else {
+            return None;
+        };
+        ty_python_core::place_table(db, literal.body_scope(db))
+            .symbol_by_name("__class_getitem__")
+            .map(|_| literal.file(db).source_type(db).is_stub())
+    }) == Some(true)
 }
 
 /// basedpython: whether subscripting a value of type `ty` gives a function type arguments it

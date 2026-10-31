@@ -1017,12 +1017,100 @@ fn spell_class_with<'db>(
                 cells,
             )
             .ok()?;
+            if crate::types::subscript::subscript_calls_the_class(
+                db,
+                env,
+                Type::ClassLiteral(origin),
+            ) {
+                return Some(RuntimeSpelling::own_subscript(&spelling, &arguments));
+            }
             spelling.push_str("[");
             spelling.push(&arguments);
             spelling.push_str("]");
             Some(spelling)
         }
     }
+}
+
+/// what a name or attribute standing as a type argument at `site` is read as when what it
+/// evaluates to says less. a generic class whose parameters its defaults solve is the
+/// specialization the checker reads, while the class itself is every specialization of it, so
+/// the runtime has to be told the arguments. the name may be another for the class, or for a
+/// larger type holding it, and `read` is what it reads as. a `type` statement's alias is written
+/// with the arguments in its value, and evaluates to them
+pub(crate) fn bare_type_argument_spelling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    read: Type<'db>,
+    through_module: Option<(ClassLiteral<'db>, RuntimeSpelling)>,
+    site: RuntimeSite<'db>,
+    min_version: PythonVersion,
+) -> Option<RuntimeSpelling> {
+    /// whether `read` holds a class its defaults solve. `None` when it holds a generic class
+    /// the runtime can't be asked to subscript at `min_version`, and the name then stays bare
+    fn solved_by_defaults<'db>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        read: Type<'db>,
+        min_version: PythonVersion,
+    ) -> Option<bool> {
+        let any = |types: &[Type<'db>]| {
+            let mut found = false;
+            for ty in types {
+                found |= solved_by_defaults(db, env, *ty, min_version)?;
+            }
+            Some(found)
+        };
+        match read {
+            Type::Union(union) => any(union.elements(db)),
+            Type::NominalInstance(instance) => {
+                let ClassType::Generic(alias) = instance.class(db, env) else {
+                    return Some(false);
+                };
+                let origin = ClassLiteral::Static(alias.origin(db));
+                if class_subscript_is_unattested(db, env, Type::ClassLiteral(origin), min_version) {
+                    return None;
+                }
+                let found = any(alias.specialization(db).types(db))?;
+                Some(found || origin.default_specialization(db) == ClassType::Generic(alias))
+            }
+            _ => Some(false),
+        }
+    }
+
+    if !solved_by_defaults(db, env, read, min_version)? {
+        return None;
+    }
+    // a class reached through a module has no name of its own here, and the written one has it
+    if let Some((origin, dotted)) = through_module
+        && let Type::NominalInstance(instance) = read
+        && let ClassType::Generic(alias) = instance.class(db, env)
+        && ClassLiteral::Static(alias.origin(db)) == origin
+    {
+        let arguments = spell_specialization_arguments(
+            db,
+            env,
+            file,
+            origin,
+            alias.specialization(db),
+            TypeParamCells::Written,
+        )
+        .ok()?;
+        if crate::types::subscript::subscript_calls_the_class(db, env, Type::ClassLiteral(origin)) {
+            return Some(RuntimeSpelling::own_subscript(&dotted, &arguments));
+        }
+        let mut spelling = dotted;
+        spelling.push_str("[");
+        spelling.push(&arguments);
+        spelling.push_str("]");
+        return Some(spelling);
+    }
+    let spelling = runtime_spelling(db, env, file, read)?;
+    spelling
+        .unbound_read(db, env, site)
+        .is_none()
+        .then_some(spelling)
 }
 
 /// what is known about whether `origin[…]` *evaluates* at runtime rather than
@@ -1355,6 +1443,11 @@ pub(crate) fn constructor_specialization<'db>(
     };
     let origin = ClassLiteral::Static(alias.origin(db));
     if origin != class_literal {
+        return Err(ReifiedInferenceError::NoBinding);
+    }
+    // the specialization is written as a subscript of the class where it is called, and a class
+    // that answers a subscript for itself would answer that one too
+    if crate::types::subscript::subscript_calls_the_class(db, env, Type::ClassLiteral(origin)) {
         return Err(ReifiedInferenceError::NoBinding);
     }
     let spelling =

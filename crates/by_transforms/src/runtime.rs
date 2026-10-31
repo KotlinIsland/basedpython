@@ -102,6 +102,7 @@ helpers! {
     GENERIC = "generic",
     SPECIALIZED = "_by_specialized",
     SUBSCRIPT = "_by_subscript",
+    SPECIALIZATION = "_by_specialization",
     GENERIC_CLASS = "generic_class",
     TYPE_ARGUMENT = "_type_argument",
     DISCARD = "_by_discard",
@@ -129,6 +130,12 @@ helpers! {
     DATACLASS_SLOTS = "_by_dataclass_slots",
 }
 
+/// the helpers a module whose own code uses their names reads under names of their own
+/// ([`WrittenNames::helper`](crate::transforms::repeated_underscore::WrittenNames::helper)):
+/// the ones a checker's spelling of a type writes
+pub(crate) const READ_THROUGH_WRITTEN_NAMES: [Helper; 5] =
+    [LITERAL, VARIANCE, OUT, IN, SPECIALIZATION];
+
 mod global_reads;
 
 /// one definition of the runtime, with whatever finishes setting it up
@@ -147,6 +154,9 @@ struct Definition {
     /// globals of the module the definition runs in before the builtins, by its range in
     /// [`Self::source`]
     builtin_reads: Vec<(TextRange, String)>,
+    /// each place it names a helper in [`READ_THROUGH_WRITTEN_NAMES`], its definition included,
+    /// by its range in [`Self::source`]
+    helper_names: Vec<(TextRange, String)>,
 }
 
 /// every definition, indexed by each name it binds
@@ -202,6 +212,10 @@ fn build_index() -> BTreeMap<String, Definition> {
             .filter(|(_, name)| !defined.contains(name))
             .map(|(range, name)| (range - span.start(), name))
             .collect();
+        let helper_names: Vec<(TextRange, String)> = helper_names_in(&suite[at..=last])
+            .into_iter()
+            .map(|(range, name)| (range - span.start(), name))
+            .collect();
         // `every_name_has_one_definition` keeps a name from being bound twice,
         // so first-wins here never decides anything
         for name in names.into_keys() {
@@ -211,12 +225,48 @@ fn build_index() -> BTreeMap<String, Definition> {
                 line: u32::try_from(line).unwrap_or(u32::MAX),
                 needs: needs.clone(),
                 builtin_reads: builtin_reads.clone(),
+                helper_names: helper_names.clone(),
             });
         }
         order += 1;
         at = last + 1;
     }
     definitions
+}
+
+/// each place `suite` names a helper in [`READ_THROUGH_WRITTEN_NAMES`]
+fn helper_names_in(suite: &[Stmt]) -> Vec<(TextRange, String)> {
+    struct Names(Vec<(TextRange, String)>);
+    impl Names {
+        fn name(&mut self, range: TextRange, name: &str) {
+            if READ_THROUGH_WRITTEN_NAMES
+                .iter()
+                .any(|helper| helper.name() == name)
+            {
+                self.0.push((range, name.to_owned()));
+            }
+        }
+    }
+    impl SourceOrderVisitor<'_> for Names {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::FunctionDef(function) = stmt {
+                self.name(function.name.range(), function.name.as_str());
+            }
+            ruff_python_ast::visitor::source_order::walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Name(name) = expr {
+                self.name(name.range(), name.id.as_str());
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut names = Names(Vec::new());
+    for stmt in suite {
+        names.visit_stmt(stmt);
+    }
+    names.0
 }
 
 /// the names a statement binds, each with the range of the binding itself
@@ -1099,12 +1149,22 @@ pub fn definition_lines() -> BTreeMap<&'static str, u32> {
 ///
 /// [`WrittenNames::builtin`]: crate::transforms::repeated_underscore::WrittenNames::builtin
 /// [`WrittenNames::builtin_imports`]: crate::transforms::repeated_underscore::WrittenNames::builtin_imports
+///
+/// `as_written` says which name the emitted code reads a helper by, which is the name its
+/// definition and every read of it from another definition are pasted under: a binding of the
+/// module's own under the helper's name would otherwise take over those reads too
 pub(crate) fn inline(
     helpers: impl IntoIterator<Item = Helper>,
     module: &[Stmt],
     written: crate::transforms::repeated_underscore::WrittenNames,
+    as_written: crate::transforms::repeated_underscore::WrittenNames,
 ) -> Vec<String> {
     let definitions = closure(helpers);
+    let helper_names: BTreeMap<&str, String> = READ_THROUGH_WRITTEN_NAMES
+        .iter()
+        .map(|helper| (helper.name(), as_written.helper(*helper)))
+        .filter(|(name, local)| name != local)
+        .collect();
     let read: BTreeSet<&str> = definitions
         .iter()
         .flat_map(|definition| &definition.builtin_reads)
@@ -1132,17 +1192,17 @@ pub(crate) fn inline(
         .into_iter()
         .map(|definition| {
             let mut source = definition.source.clone();
-            let mut reads: Vec<&(TextRange, String)> = definition
+            let mut reads: Vec<(TextRange, &str)> = definition
                 .builtin_reads
                 .iter()
-                .filter(|(_, name)| renamed.contains_key(name.as_str()))
+                .filter_map(|(range, name)| Some((*range, renamed.get(name.as_str())?.as_str())))
+                .chain(definition.helper_names.iter().filter_map(|(range, name)| {
+                    Some((*range, helper_names.get(name.as_str())?.as_str()))
+                }))
                 .collect();
             reads.sort_by_key(|(range, _)| std::cmp::Reverse(range.start()));
-            for (range, name) in reads {
-                source.replace_range(
-                    std::ops::Range::<usize>::from(*range),
-                    &renamed[name.as_str()],
-                );
+            for (range, local) in reads {
+                source.replace_range(std::ops::Range::<usize>::from(range), local);
             }
             source
         })
@@ -1155,7 +1215,10 @@ pub(crate) fn pasted_definitions(suite: &[Stmt], source: &str) -> Vec<TextRange>
     let mut pasted = Vec::new();
     for (at, stmt) in suite.iter().enumerate() {
         let names = bindings(stmt);
-        let Some(definition) = names.keys().find_map(|name| index().get(name)) else {
+        let Some(definition) = names
+            .keys()
+            .find_map(|name| index().get(helper_of_local_name(name)))
+        else {
             continue;
         };
         let Some(length) = pasted_length(definition, &source[stmt.start().to_usize()..])
@@ -1172,13 +1235,29 @@ pub(crate) fn pasted_definitions(suite: &[Stmt], source: &str) -> Vec<TextRange>
     pasted
 }
 
-/// the length of `definition` at the start of `text`, where a read of a builtin may be under
-/// whichever name [`inline`] gave it
+/// the name `local` is a helper's under: its own, or the name of a helper in
+/// [`READ_THROUGH_WRITTEN_NAMES`] it is written as a fresh name for, which is that name and a
+/// number
+pub(crate) fn helper_of_local_name(local: &str) -> &str {
+    let stem = local.trim_end_matches(|c: char| c.is_ascii_digit());
+    if READ_THROUGH_WRITTEN_NAMES
+        .iter()
+        .any(|helper| helper.name() == stem)
+    {
+        stem
+    } else {
+        local
+    }
+}
+
+/// the length of `definition` at the start of `text`, where a read of a builtin or a helper may
+/// be under whichever name [`inline`] gave it
 fn pasted_length(definition: &Definition, text: &str) -> Option<usize> {
     let written = definition.source.trim_end_matches('\n');
     let mut reads: Vec<TextRange> = definition
         .builtin_reads
         .iter()
+        .chain(&definition.helper_names)
         .map(|(range, _)| *range)
         .collect();
     reads.sort_by_key(Ranged::start);
@@ -1198,12 +1277,24 @@ fn pasted_length(definition: &Definition, text: &str) -> Option<usize> {
 /// it names only what the emitted code calls: a helper that exists because
 /// another helper calls it is resolved inside `_by_runtime`. absolute rather than
 /// relative, because a relative import fails in a module run as `__main__`
-pub(crate) fn import_line(module: &str, helpers: impl IntoIterator<Item = Helper>) -> String {
-    let names: BTreeSet<&str> = helpers.into_iter().map(Helper::name).collect();
-    format!(
-        "from {module} import {}",
-        names.into_iter().collect::<Vec<_>>().join(", ")
-    )
+pub(crate) fn import_line(
+    module: &str,
+    helpers: impl IntoIterator<Item = Helper>,
+    as_written: crate::transforms::repeated_underscore::WrittenNames,
+) -> String {
+    let names: BTreeSet<Helper> = helpers.into_iter().collect();
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|helper| {
+            let local = as_written.helper(helper);
+            if local == helper.name() {
+                local
+            } else {
+                format!("{} as {local}", helper.name())
+            }
+        })
+        .collect();
+    format!("from {module} import {}", names.join(", "))
 }
 
 #[cfg(test)]
@@ -1342,7 +1433,7 @@ print(" ".join(sorted(found)))
         let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
         let written =
             crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
-        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written).concat();
+        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written, written).concat();
         assert!(
             pasted.contains("return getattr2(m, attr)") && !pasted.contains("getattr(m,"),
             "{pasted}"
@@ -1371,12 +1462,63 @@ print(" ".join(sorted(found)))
         let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
         let written =
             crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
-        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written).concat();
+        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written, written).concat();
         assert!(
             pasted.contains("return getattr2(m, attr)") && !pasted.contains("getattr(m,"),
             "{pasted}"
         );
         // a local binding leaves the module's alone
         assert!(pasted.contains("return sorted(names)"), "{pasted}");
+    }
+
+    /// a binding of the module's own under a helper's name would take over what the runtime
+    /// reads of it too
+    #[test]
+    fn a_helper_a_module_spells_is_pasted_under_a_name_of_its_own_everywhere() {
+        let module = "_by_lit = 5\n";
+        let parsed = parse_module(module).unwrap();
+        let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
+        let written =
+            crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+        let pasted = inline([LITERAL, GENERIC], parsed.suite(), written, written).concat();
+        // every place the runtime names it follows
+        for (range, name) in helper_names_in(parse_module(&pasted).unwrap().suite()) {
+            assert_ne!(name, "_by_lit", "{}", &pasted[range]);
+        }
+        assert!(pasted.contains("def _by_lit2("), "{pasted}");
+        assert!(!pasted.contains("def _by_lit("), "{pasted}");
+        assert_eq!(
+            import_line("_by_runtime", [LITERAL, SUBSCRIPT], written),
+            "from _by_runtime import _by_lit as _by_lit2, _by_subscript"
+        );
+    }
+
+    #[test]
+    fn a_helper_a_module_does_not_spell_is_pasted_under_its_own_name() {
+        let module = "x = 5\n";
+        let parsed = parse_module(module).unwrap();
+        let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
+        let written =
+            crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+        assert!(
+            inline([LITERAL], parsed.suite(), written, written)
+                .concat()
+                .contains("def _by_lit(")
+        );
+    }
+
+    /// a pasted definition under a name of its own is the definition it is, for whatever reads
+    /// the output back
+    #[test]
+    fn a_definition_pasted_under_a_name_of_its_own_is_recognised() {
+        let module = "_by_lit = 5\n";
+        let parsed = parse_module(module).unwrap();
+        let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
+        let written =
+            crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+        let pasted = inline([LITERAL], parsed.suite(), written, written).concat();
+        let output = format!("{pasted}{module}");
+        let suite = parse_module(&output).unwrap();
+        assert!(!pasted_definitions(suite.suite(), &output).is_empty());
     }
 }

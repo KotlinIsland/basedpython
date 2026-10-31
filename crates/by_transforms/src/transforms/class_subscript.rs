@@ -25,37 +25,65 @@
 //! or default of a type parameter included, since the polyfills evaluate those. an
 //! annotation stays a type expression for whoever reads it, and is quoted instead
 //! ([`AutoQuote`](super::auto_quote::AutoQuote))
+//!
+//! a class that answers a subscript for itself, through a metaclass `__getitem__` or a
+//! `__class_getitem__` of its own, is the other way round: as a value, `U[1]` is a call of
+//! that, and stays as it was written. read as a type, `chk[U[int]]` and `x is U[int]` mean the
+//! specialization whatever the call would return, which goes through a helper that builds it
+//!
+//! ```python
+//! chk[_by_specialization(U, int)]
+//! ```
 
-use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{Expr, PythonVersion};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt, walk_type_params};
+use ruff_python_ast::{CmpOp, Expr, ExprSubscript, PythonVersion, Stmt, TypeParams};
 use ruff_text_size::{Ranged, TextRange};
 
-use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
-use crate::type_info::TypeInfo;
+use super::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
+use crate::type_info::{TypeInfo, trailing_name};
 
-pub(crate) struct ClassSubscriptPass {
+pub(crate) struct ClassSubscriptPass<'src> {
+    pub(crate) written: WrittenNames<'src>,
     pub(crate) min_version: PythonVersion,
 }
 
 struct ClassSubscripts<'a> {
+    written: WrittenNames<'a>,
     types: &'a dyn TypeInfo,
     min_version: PythonVersion,
-    edits: Vec<(TextRange, String)>,
+    edits: Vec<(TextRange, Vec<Fragment>)>,
     /// whether a subscript tells the runtime the variance of its class
     tells: bool,
+    runtime: Vec<crate::runtime::Helper>,
+    /// whether the expression being visited is read as a type: a type argument of a
+    /// subscript that specializes its value, or the type a test asks about
+    in_type: bool,
 }
 
-impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
-    fn visit_annotation(&mut self, _expr: &'ast Expr) {}
+impl ClassSubscripts<'_> {
+    fn visit_reading(&mut self, expr: &Expr, in_type: bool) {
+        let previous = std::mem::replace(&mut self.in_type, in_type);
+        self.visit_expr(expr);
+        self.in_type = previous;
+    }
 
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Subscript(subscript) = expr
-            && !subscript.slice.is_slice_expr()
-            && self
-                .types
-                .class_subscript_is_unattested(&subscript.value, self.min_version)
+    fn visit_subscript(&mut self, subscript: &ExprSubscript) {
+        let specializes = self.types.subscript_specializes(&subscript.value);
+        let calls_the_class = self.types.subscript_calls_the_class(&subscript.value);
+        let helper = if subscript.slice.is_slice_expr() {
+            None
+        } else if self.in_type && specializes && calls_the_class {
+            Some(crate::runtime::SPECIALIZATION)
+        } else if self
+            .types
+            .class_subscript_is_unattested(&subscript.value, self.min_version)
         {
-            let (value, slice) = (subscript.value.range(), subscript.slice.range());
+            Some(crate::runtime::SUBSCRIPT)
+        } else {
+            None
+        };
+        if let Some(helper) = helper {
             // the variance of a class no transpiled module defines is told where it is
             // subscripted, and this is the subscript
             let told = self
@@ -66,26 +94,105 @@ impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
                         .iter()
                         .map(|variance| variance.code().to_string())
                         .collect::<Vec<_>>();
-                    format!("_by_variance({})(", codes.join(", "))
+                    format!(
+                        "{}({})(",
+                        self.written.helper(crate::runtime::VARIANCE),
+                        codes.join(", ")
+                    )
                 });
             self.tells |= told.is_some();
-            // these take any parentheses around the value with them, on both of its sides
+            self.runtime.push(helper);
+            // written as a whole, and without any parentheses around the value, so that a type
+            // lowering writing this subscript itself leaves nothing of it behind
             self.edits.push((
-                TextRange::new(subscript.start(), value.start()),
-                format!("_by_subscript({}", told.as_deref().unwrap_or_default()),
+                subscript.range(),
+                vec![
+                    Fragment::Lit(format!(
+                        "{}({}",
+                        self.written.helper(helper),
+                        told.as_deref().unwrap_or_default()
+                    )),
+                    Fragment::Src(subscript.value.range()),
+                    Fragment::Lit(if told.is_some() { "), " } else { ", " }.to_owned()),
+                    Fragment::Src(subscript.slice.range()),
+                    Fragment::Lit(")".to_owned()),
+                ],
             ));
-            self.edits.push((
-                TextRange::new(value.end(), slice.start()),
-                if told.is_some() { "), " } else { ", " }.to_owned(),
-            ));
-            self.edits
-                .push((TextRange::new(slice.end(), subscript.end()), ")".to_owned()));
         }
-        walk_expr(self, expr);
+        self.visit_reading(&subscript.value, false);
+        match trailing_name(&subscript.value) {
+            Some("Literal") => {}
+            Some("Annotated") => match subscript.slice.as_ref() {
+                Expr::Tuple(tuple) if !tuple.parenthesized => {
+                    for (index, element) in tuple.elts.iter().enumerate() {
+                        self.visit_reading(element, specializes && index == 0);
+                    }
+                }
+                slice => self.visit_reading(slice, specializes),
+            },
+            _ => self.visit_reading(&subscript.slice, specializes),
+        }
     }
 }
 
-impl TypeAwarePass for ClassSubscriptPass {
+impl<'ast> Visitor<'ast> for ClassSubscripts<'_> {
+    fn visit_annotation(&mut self, _expr: &'ast Expr) {}
+
+    fn visit_type_params(&mut self, type_params: &'ast TypeParams) {
+        let in_type = std::mem::replace(&mut self.in_type, true);
+        walk_type_params(self, type_params);
+        self.in_type = in_type;
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        match stmt {
+            Stmt::TypeAlias(alias) => {
+                self.visit_expr(&alias.name);
+                if let Some(type_params) = &alias.type_params {
+                    self.visit_type_params(type_params);
+                }
+                self.visit_reading(&alias.value, true);
+            }
+            Stmt::AnnAssign(assign) if self.types.is_type_alias_annotation(&assign.annotation) => {
+                if let Some(value) = &assign.value {
+                    self.visit_reading(value, true);
+                }
+            }
+            stmt => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match expr {
+            Expr::Subscript(subscript) => self.visit_subscript(subscript),
+            // a type is written with these, and each operand is a type if it is
+            Expr::BinOp(_)
+            | Expr::BoolOp(_)
+            | Expr::UnaryOp(_)
+            | Expr::Tuple(_)
+            | Expr::List(_)
+            | Expr::Starred(_)
+            | Expr::CallableType(_)
+            | Expr::ProtocolType(_)
+            | Expr::Dict(_) => walk_expr(self, expr),
+            Expr::Compare(compare) => {
+                self.visit_reading(compare.first_operand(), false);
+                for (op, comparator) in compare.ops.iter().zip(compare.comparators()) {
+                    let test =
+                        matches!(op, CmpOp::Is | CmpOp::IsNot) && comparator.is_subscript_expr();
+                    self.visit_reading(comparator, test);
+                }
+            }
+            _ => {
+                let in_type = std::mem::replace(&mut self.in_type, false);
+                walk_expr(self, expr);
+                self.in_type = in_type;
+            }
+        }
+    }
+}
+
+impl TypeAwarePass for ClassSubscriptPass<'_> {
     // nothing in a stub is evaluated
     fn runtime_only(&self) -> bool {
         true
@@ -95,21 +202,22 @@ impl TypeAwarePass for ClassSubscriptPass {
         Some(Lowering::ClassSubscript)
     }
 
-    fn run(&self, stmts: &[ruff_python_ast::Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut subscripts = ClassSubscripts {
+            written: self.written,
             types,
             min_version: self.min_version,
             edits: Vec::new(),
             tells: false,
+            runtime: Vec::new(),
+            in_type: false,
         };
         subscripts.visit_body(stmts);
         if subscripts.tells {
             ctx.runtime.insert(crate::runtime::VARIANCE);
         }
-        if !subscripts.edits.is_empty() {
-            ctx.runtime.insert(crate::runtime::SUBSCRIPT);
-            ctx.text_edits.extend(subscripts.edits);
-        }
+        ctx.runtime.extend(subscripts.runtime);
+        ctx.template_edits.extend(subscripts.edits);
     }
 }
 
@@ -316,5 +424,120 @@ mod tests {
             out.contains("def f(a: IO[str], b: ContextManager[int])"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn a_union_holding_a_class_subscript_keeps_its_parentheses_balanced() {
+        let out = out("a = list[map[int] | None]\n");
+        assert!(
+            out.contains("a = list[_by_subscript(map, int) | None]\n"),
+            "{out}"
+        );
+    }
+
+    /// the checker reads a value subscript of a generic class as a specialization whatever
+    /// method of its own answers it, so it is lowered as one, and that method is handed the result
+    #[test]
+    fn a_value_subscript_of_a_generic_class_that_answers_it_is_lowered_as_a_specialization() {
+        let lowered = |header: &str| {
+            out(&format!(
+                "{header}\na = G[1 | 2]\nb = G[\"x\"]\nc = G[(1, 2)]\nd = G[int?]\n"
+            ))
+            .lines()
+            .skip_while(|line| !line.starts_with("a = "))
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        let plain = lowered("class G[T]: ...");
+        assert!(plain.contains("a = G[_by_lit(1) | _by_lit(2)]"), "{plain}");
+        let own =
+            lowered("class G[T]:\n    def __class_getitem__(cls, item):\n        return item");
+        let metaclass = lowered(
+            "class M(type):\n    def __getitem__(cls, item):\n        return item\nclass G[T](metaclass=M): ...",
+        );
+        assert_eq!(own, plain);
+        assert_eq!(metaclass, plain);
+    }
+
+    #[test]
+    fn a_type_read_from_a_class_that_answers_a_subscript_is_built_without_asking_it() {
+        let out = out(indoc! {"
+            class G[T]:
+                def __class_getitem__(cls, item):
+                    return item
+            def f[T](x: object) -> object:
+                return T
+            a = f[G[int]](1)
+            b = f[G[1]](1)
+            c = list[G[int]]
+            d = list[G[int] | None]
+            e = list[() -> G[int]]
+            g = list[(G[int], str)]
+            type H = G[int]
+            def i(x: object) -> bool:
+                return x is G[int]
+        "});
+        for written in [
+            "a = f[_by_specialization(G, int)](1)\n",
+            "b = f[_by_specialization(G, _by_lit(1))](1)\n",
+            "c = list[_by_specialization(G, int)]\n",
+            "d = list[_by_specialization(G, int) | None]\n",
+            "e = list[Callable[[], _by_specialization(G, int)]]\n",
+            "g = list[tuple[_by_specialization(G, int), str]]\n",
+            "type H = _by_specialization(G, int)\n",
+            "_parametric_is(x, _by_specialization(G, int), (",
+        ] {
+            assert!(
+                out.contains(written),
+                "`{written}` should be written in:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_annotation_of_a_class_that_answers_a_subscript_is_quoted() {
+        let out = out(indoc! {"
+            class G[T]:
+                def __class_getitem__(cls, item):
+                    return cls
+            def f(x: G[int]) -> None: ...
+        "});
+        assert!(out.contains("def f(x: \"G[int]\") -> None"), "{out}");
+    }
+
+    #[test]
+    fn a_stub_that_says_nothing_of_what_a_subscript_returns_is_read_as_specializing() {
+        let out = out("from multiprocessing.managers import ValueProxy\na = ValueProxy[1]\n");
+        assert!(out.contains("a = ValueProxy[_by_lit(1)]\n"), "{out}");
+    }
+
+    #[test]
+    fn a_class_stub_that_returns_a_specialization_specializes() {
+        let out = out("a = list[1]\nfrom collections.abc import Sequence\nb = Sequence[1]\n");
+        assert!(out.contains("a = list[_by_lit(1)]\n"), "{out}");
+        assert!(out.contains("Sequence)[_by_lit(1)]\n"), "{out}");
+    }
+
+    #[test]
+    fn the_subscript_of_a_value_is_left_alone() {
+        let source = indoc! {"
+            import re
+            x = range(3)
+            a = x[1]
+            b = \"abc\"[1]
+            c = [1][0]
+            d = {\"k\": 1}[\"k\"]
+            def f(k: type[int], v: type):
+                return (k[1], v[1])
+            class K:
+                @classmethod
+                def m(cls):
+                    return cls[1]
+        "};
+        let out = out(source);
+        for written in ["a = x[1]\n", "return (k[1], v[1])", "return cls[1]"] {
+            assert!(out.contains(written), "{out}");
+        }
+        assert!(!out.contains("_by_lit("), "{out}");
     }
 }

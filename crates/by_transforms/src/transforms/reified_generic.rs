@@ -340,6 +340,7 @@ mod tests {
             [crate::runtime::GENERIC],
             &[],
             crate::transforms::repeated_underscore::WrittenNames::new(""),
+            crate::transforms::repeated_underscore::WrittenNames::new(""),
         )
         .join("\n");
         preamble.push('\n');
