@@ -409,9 +409,7 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
     }
 
     fn enter_root(&mut self, kind: RootKind) {
-        self.leaves
-            .borrow_mut()
-            .set_evaluated(kind == RootKind::Evaluated);
+        self.leaves.borrow_mut().set_root(kind);
     }
 }
 

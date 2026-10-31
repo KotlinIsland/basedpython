@@ -51,7 +51,7 @@ impl<'src> GenericCallStripPass<'src> {
 impl TypeAwarePass for GenericCallStripPass<'_> {
     /// the type arguments it strips evaluate nothing, so there is nothing left to lower
     fn subsumes(&self) -> &'static [Lowering] {
-        &[Lowering::ClassSubscript]
+        &[Lowering::ClassSubscript, Lowering::RuntimeVariance]
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {

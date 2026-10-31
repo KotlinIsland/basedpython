@@ -15,14 +15,16 @@
 //! resolves to a class, type alias, or imported/unknown name).
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::helpers::any_over_expr;
 use ruff_python_ast::{Expr, Operator, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use ty_python_semantic::RuntimeSpelling;
 
 use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
-    Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
+    Recurse, RootKind, TypeExprVisitor, TypePos, walk_type_positions_skipping,
 };
 use crate::type_info::{TypeInfo, trailing_name};
 
@@ -33,6 +35,10 @@ pub(crate) struct LiteralType<'src> {
     written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     float_literals: FloatLiteralLowering,
+    /// whether the literal is written in a type application that runs as a value. the program
+    /// may read one of those back as the type argument it is, so it is written as an inferred
+    /// one is, through the helper that builds a literal type
+    in_application: bool,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_literal_import: bool,
     /// every string the edits write as a literal type
@@ -52,6 +58,7 @@ impl<'src> LiteralType<'src> {
             written,
             types,
             float_literals,
+            in_application: false,
             edits: Vec::new(),
             needs_literal_import: false,
             literal_strings: Vec::new(),
@@ -62,10 +69,34 @@ impl<'src> LiteralType<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
+    /// a float or complex literal type holds no value the runtime can tell apart from its
+    /// class's (`0.0 == -0.0`), so a type argument records the class whatever an annotation
+    /// is asked to keep
+    fn float_lowering(&self) -> FloatLiteralLowering {
+        if self.in_application {
+            FloatLiteralLowering::Nominal
+        } else {
+            self.float_literals
+        }
+    }
+
+    /// the literal type the literal `expr` is written as in a type application
+    fn application_literal(&self, expr: &Expr) -> String {
+        let value = match expr {
+            Expr::StringLiteral(string) => RuntimeSpelling::string(string.value.to_str()),
+            Expr::BytesLiteral(bytes) => {
+                RuntimeSpelling::bytes(&bytes.value.bytes().collect::<Vec<_>>())
+            }
+            _ => RuntimeSpelling::text(self.src(expr.range())),
+        };
+        self.written.spelled(&RuntimeSpelling::literal(&value))
+    }
+
     /// Whether a `Subscript.value` resolves to something whose subscript slice
     /// is a type-argument position.
     fn is_type_subscript(&self, value: &Expr) -> bool {
-        trailing_name(value).is_some() && self.types.subscript_is_type_context(value)
+        (trailing_name(value).is_some() && self.types.subscript_is_type_context(value))
+            || self.types.subscript_specializes_reified_function(value)
     }
 
     /// Is `value` a reference to the named typing special form?
@@ -88,9 +119,16 @@ impl<'src> LiteralType<'src> {
         if matches!(expr, Expr::NoneLiteral(_)) {
             return;
         }
-        if is_literal_expr(expr, self.float_literals) {
+        if is_literal_expr(expr, self.float_lowering()) {
             if expr.is_string_literal_expr() {
                 self.literal_strings.push(expr.range());
+            }
+            if self.in_application {
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    self.application_literal(expr),
+                    expr.range(),
+                )));
+                return;
             }
             self.needs_literal_import = true;
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -99,7 +137,15 @@ impl<'src> LiteralType<'src> {
             )));
             return;
         }
-        if let Some(nominal) = nominal_float_type(expr, self.float_literals) {
+        // an enum member names a value where a type is read, as a literal does
+        if self.in_application && expr.is_attribute_expr() && self.types.is_plain_value(expr) {
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                self.application_literal(expr),
+                expr.range(),
+            )));
+            return;
+        }
+        if let Some(nominal) = nominal_float_type(expr, self.float_lowering()) {
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 self.written.builtin(nominal),
                 expr.range(),
@@ -159,21 +205,33 @@ impl<'src> LiteralType<'src> {
                 Expr::Tuple(t) if !t.parenthesized => {
                     for e in &t.elts {
                         if specializes || !matches!(e, Expr::StringLiteral(_)) {
-                            self.emit_type_edits(e, false);
+                            self.emit_type_argument_edits(e);
                         }
                     }
                 }
                 Expr::StringLiteral(_) if !specializes => {}
-                slice => self.emit_type_edits(slice, false),
+                slice => self.emit_type_argument_edits(slice),
             }
         }
+    }
+
+    /// a type argument holding a forward reference is written as a string, which nothing but
+    /// a checker reads, and there a literal stays the literal type a checker knows
+    fn emit_type_argument_edits(&mut self, argument: &Expr) {
+        let in_application = self.in_application;
+        self.in_application &= !any_over_expr(
+            argument,
+            |node| matches!(node, Expr::Name(name) if self.types.is_forward_reference(name) == Some(true)),
+        );
+        self.emit_type_edits(argument, false);
+        self.in_application = in_application;
     }
 
     /// Emit one edit per contiguous literal group within a union expression.
     /// Each edit covers only `first_literal.start..last_literal.end`, so
     /// non-literal name nodes between groups are left at their original ranges.
     fn emit_union_group_edits(&mut self, union_expr: &Expr) {
-        let float_literals = self.float_literals;
+        let float_literals = self.float_lowering();
         let parts = flatten_union(union_expr);
         if !parts.iter().any(|p| {
             is_literal_expr(p, float_literals) || nominal_float_type(p, float_literals).is_some()
@@ -193,10 +251,15 @@ impl<'src> LiteralType<'src> {
         macro_rules! flush_group {
             () => {
                 if let Some(start) = group_start.take() {
-                    let lit_str = std::mem::take(&mut group_list).join(", ");
-                    self.needs_literal_import = true;
+                    let replacement = if self.in_application {
+                        std::mem::take(&mut group_list).join(" | ")
+                    } else {
+                        self.needs_literal_import = true;
+                        let lit_str = std::mem::take(&mut group_list).join(", ");
+                        format!("{}[{lit_str}]", self.literal)
+                    };
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("{}[{lit_str}]", self.literal),
+                        replacement,
                         TextRange::new(start, group_end),
                     )));
                 }
@@ -224,7 +287,11 @@ impl<'src> LiteralType<'src> {
                 if p.is_string_literal_expr() {
                     self.literal_strings.push(p.range());
                 }
-                group_list.push(self.src(p.range()).to_owned());
+                group_list.push(if self.in_application {
+                    self.application_literal(p)
+                } else {
+                    self.src(p.range()).to_owned()
+                });
                 group_end = p.range().end();
             } else {
                 // non-literal: flush current group, discard pending None
@@ -237,6 +304,45 @@ impl<'src> LiteralType<'src> {
         // trailing None stays as-is; flush final group
         flush_group!();
     }
+}
+
+/// where a type a lowering writes whole is read, which decides how a literal in it is written
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiteralReading {
+    Annotation,
+    Application,
+}
+
+/// `expr`, a type expression a lowering is writing whole, with the literals it holds written as
+/// [`LiteralType`] would have, and whether that needs `typing.Literal`. `None` when it holds none
+pub(crate) fn lower_literals(
+    source: &str,
+    written: WrittenNames,
+    types: &dyn TypeInfo,
+    expr: &Expr,
+    reading: LiteralReading,
+) -> Option<(String, bool)> {
+    let mut inner = LiteralType::new(source, written, types, FloatLiteralLowering::default());
+    inner.in_application = reading == LiteralReading::Application;
+    inner.emit_type_edits(expr, false);
+    let mut edits: Vec<_> = inner
+        .edits
+        .iter()
+        .flat_map(|fix| fix.edits().iter().cloned())
+        .collect();
+    if edits.is_empty() {
+        return None;
+    }
+    edits.sort_by_key(Ranged::start);
+    let mut lowered = String::new();
+    let mut at = expr.start();
+    for edit in edits {
+        lowered.push_str(&source[TextRange::new(at, edit.start())]);
+        lowered.push_str(edit.content().unwrap_or_default());
+        at = edit.end();
+    }
+    lowered.push_str(&source[TextRange::new(at, expr.end())]);
+    Some((lowered, inner.needs_literal_import))
 }
 
 /// every string in `stmts` that the lowering writes as a literal type, because the checker reads
@@ -310,6 +416,10 @@ impl TypeExprVisitor for LiteralType<'_> {
         let at_root = matches!(pos, TypePos::Root);
         self.emit_type_edits(expr, at_root);
         Recurse::Stop
+    }
+
+    fn enter_root(&mut self, kind: RootKind) {
+        self.in_application = kind == RootKind::Application;
     }
 }
 
@@ -814,15 +924,14 @@ mod tests {
             x = X[1 | 2]()
             b = x[1 | 2]
         "};
-        let expected = indoc! {"
-            from typing import Literal
-            type X[T] = list[T]
-            x = X[Literal[1, 2]]()
-            b = x[1 | 2]
-        "};
-        assert_eq!(
-            transpile(input, &config).unwrap(),
-            crate::python_passthrough::lazify_expected(expected)
+        let out = transpile(input, &config).unwrap();
+        assert!(
+            out.ends_with(indoc! {"
+                type X[T] = list[T]
+                x = X[_by_lit(1) | _by_lit(2)]()
+                b = x[1 | 2]
+            "}),
+            "{out}"
         );
     }
 

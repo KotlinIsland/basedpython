@@ -98,6 +98,9 @@ pub struct Config {
     /// written on a line of its own rather than joined to one of the module's own imports,
     /// which would change a statement that cannot run again
     pub session: bool,
+    /// whether a class that varies tells the runtime so where it is defined, which is how a
+    /// type test the checker leaves to the runtime answers by the variance the checker read
+    pub class_variance: bool,
 }
 
 /// What a float or complex literal type becomes in the emitted python.
@@ -141,6 +144,7 @@ impl Default for Config {
             stamps: BTreeMap::new(),
             stamps_undetermined: false,
             session: false,
+            class_variance: true,
         }
     }
 }
@@ -150,13 +154,15 @@ impl Config {
     /// [`Config::default`] but with `lazy_imports` and
     /// `prune_unused_imports_after_reverse` disabled so test expected
     /// strings don't need to include the lazy preamble or worry about pruning,
-    /// and all soundness checks off so plain output isn't peppered with them
+    /// and all soundness checks and class variance off so plain output isn't peppered
+    /// with them
     #[cfg(test)]
     pub(crate) fn test_default() -> Self {
         Self {
             lazy_imports: false,
             prune_unused_imports_after_reverse: false,
             soundness: SoundnessPositions::none(),
+            class_variance: false,
             ..Self::default()
         }
     }

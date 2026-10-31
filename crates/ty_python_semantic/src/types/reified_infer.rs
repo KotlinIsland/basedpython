@@ -24,7 +24,7 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, PythonVersion, name::Name};
+use ruff_python_ast::{self as ast, PySourceType, PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{KnownModule, SearchPath, file_to_module};
@@ -968,6 +968,9 @@ fn spell_class_with<'db>(
         ClassType::Generic(alias) => {
             let origin = ClassLiteral::Static(alias.origin(db));
             let mut spelling = spell_class_literal(db, env, file, origin)?;
+            if let Some(variances) = variances_told_at_a_subscript(db, origin) {
+                spelling = RuntimeSpelling::telling_variance(&spelling, &variances);
+            }
             let arguments = spell_specialization_arguments(
                 db,
                 env,
@@ -1265,12 +1268,15 @@ fn spell_specialization_arguments<'db>(
         if matches!(kind, ParameterKind::Single) && (promoted.is_never() || promoted.is_dynamic()) {
             return Err(ReifiedInferenceError::Unsolved(typevar.name(db).clone()));
         }
-        let Some(spelling) = kind.spelling(db, env, file, promoted, cells) else {
+        let Some(mut spelling) = kind.spelling(db, env, file, promoted, cells) else {
             return Err(ReifiedInferenceError::Unspellable(
                 typevar.name(db).clone(),
                 promoted,
             ));
         };
+        if let Some(projection) = specialization.projection_for(db, bound_typevar) {
+            spelling = RuntimeSpelling::projected(spelling, projection);
+        }
         // an empty run stands for no arguments at all, which is what the runtime
         // binding fills in for an unsupplied variadic
         if !spelling.is_empty() {
@@ -1799,6 +1805,57 @@ pub enum ArgVariance {
     Contravariant,
     /// matches either way
     Bivariant,
+}
+
+impl ArgVariance {
+    fn of(variance: TypeVarVariance) -> Self {
+        match variance {
+            TypeVarVariance::Invariant => Self::Invariant,
+            TypeVarVariance::Covariant => Self::Covariant,
+            TypeVarVariance::Contravariant => Self::Contravariant,
+            TypeVarVariance::Bivariant => Self::Bivariant,
+        }
+    }
+
+    /// the code the runtime reads this variance as
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Invariant => 0,
+            Self::Covariant => 1,
+            Self::Contravariant => 2,
+            Self::Bivariant => 3,
+        }
+    }
+}
+
+/// the variance of each type parameter of `class`, when one of them varies. the runtime takes a
+/// parameter it was told nothing about for an invariant one
+pub(crate) fn class_variances<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+) -> Option<Box<[ArgVariance]>> {
+    let variances: Box<[ArgVariance]> = class
+        .generic_context(db)?
+        .variables(db)
+        .map(|bound_typevar| ArgVariance::of(bound_typevar.probe_variance(db)))
+        .collect();
+    variances
+        .iter()
+        .any(|variance| *variance != ArgVariance::Invariant)
+        .then_some(variances)
+}
+
+/// [`class_variances`], for a class the runtime has to be told about where it is subscripted
+/// because no transpiled module defines it to say so: a stub's, or one written in python. a
+/// tuple's elements vary as the language says rather than as a parameter of `tuple` does
+pub(crate) fn variances_told_at_a_subscript<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+) -> Option<Box<[ArgVariance]>> {
+    if class.is_tuple(db) || class.file(db).source_type(db) == PySourceType::BasedPython {
+        return None;
+    }
+    class_variances(db, class)
 }
 
 /// why the target class can't back a runtime `__orig_class__` probe, or
@@ -2882,12 +2939,7 @@ fn target_variances<'db>(db: &'db dyn Db, alias: GenericAlias<'db>) -> Box<[ArgV
                 false,
             )
             .unwrap_or(declared);
-            match effective {
-                TypeVarVariance::Invariant => ArgVariance::Invariant,
-                TypeVarVariance::Covariant => ArgVariance::Covariant,
-                TypeVarVariance::Contravariant => ArgVariance::Contravariant,
-                TypeVarVariance::Bivariant => ArgVariance::Bivariant,
-            }
+            ArgVariance::of(effective)
         })
         .collect()
 }

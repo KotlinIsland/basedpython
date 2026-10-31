@@ -26,7 +26,7 @@
 //!    as ty reads the annotation)
 //! 5. `TypeParam` bound (PEP 695 + the basedpython type mapping `T in (…)`)
 //! 6. `TypeParam` default
-//! 7. value-position type applications (`list[T]`, `dict[K, V]` outside an
+//! 7. value-position type applications (`list[T]`, `dict[K, V]`, `f[T]` outside an
 //!    annotation — gated on ty's `is_known_type_subscript`)
 //! 8. `cast(T, _)` first arg
 //! 9. `Annotated[T, meta…]` only the first arg
@@ -94,10 +94,21 @@ pub(crate) enum RootKind {
     /// a variable, parameter or return annotation, which a target without
     /// `type.__or__` always defers through `from __future__ import annotations`
     Annotation,
-    /// every other root: an alias value, a type parameter's bound or default (each
-    /// a call argument once polyfilled), a class base, a `cast` target, a
-    /// value-position type application, the type argument of a typing construct
+    /// a type parameter's bound or default (each a call argument once polyfilled), a class base,
+    /// a `cast` target, the type argument of a typing construct: read by whatever reads the
+    /// construct, a static reader of the emitted python included
     Evaluated,
+    /// an alias value, which a test or a reified type parameter may hold
+    AliasValue,
+    /// a type application written as a value, `list[T]` or `f[T]`, whose arguments the program
+    /// may read back as they are
+    Application,
+}
+
+impl RootKind {
+    pub(crate) fn is_evaluated(self) -> bool {
+        self != Self::Annotation
+    }
 }
 
 pub(crate) trait TypeExprVisitor {
@@ -439,7 +450,8 @@ impl TypePosWalker<'_> {
         let Some(types) = self.types else {
             return false;
         };
-        trailing_name(value).is_some() && types.subscript_is_known_type_context(value)
+        (trailing_name(value).is_some() && types.subscript_is_known_type_context(value))
+            || types.subscript_specializes_reified_function(value)
     }
 }
 
@@ -461,14 +473,14 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                         .types
                         .is_some_and(|types| types.is_type_alias_annotation(annotation))
                     {
-                        self.visit_root(v, RootKind::Evaluated);
+                        self.visit_root(v, RootKind::AliasValue);
                     } else {
                         self.visit_expr(v);
                     }
                 }
             }
             Stmt::TypeAlias(a) => {
-                self.visit_root(&a.value, RootKind::Evaluated);
+                self.visit_root(&a.value, RootKind::AliasValue);
                 if let Some(tp) = &a.type_params {
                     for p in &tp.type_params {
                         self.visit_type_param(p);
@@ -521,7 +533,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
         // value-position type application: `list[T]` outside annotation
         if let Expr::Subscript(s) = expr {
             if self.is_known_type_subscript(&s.value) {
-                self.visit_root(expr, RootKind::Evaluated);
+                self.visit_root(expr, RootKind::Application);
                 return;
             }
         }
@@ -601,7 +613,7 @@ fn name_matches(expr: &Expr, ident: &str) -> bool {
     }
 }
 
-fn is_cast_name(func: &Expr) -> bool {
+pub(crate) fn is_cast_name(func: &Expr) -> bool {
     match func {
         Expr::Name(n) => n.id.as_str() == "cast",
         Expr::Attribute(a) => a.attr.id.as_str() == "cast",

@@ -1148,7 +1148,7 @@ impl<'src> GenericPolyfill<'src> {
             &alias.value,
             &substitutions,
             &self.config,
-            RootKind::Evaluated,
+            RootKind::AliasValue,
         )
         .unwrap_or(raw_value_src);
 
@@ -2097,6 +2097,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             super::ast_driver::Lowering::Modifiers,
             super::ast_driver::Lowering::VisibilityRename,
             super::ast_driver::Lowering::VarianceStrip,
+            super::ast_driver::Lowering::RuntimeVariance,
         ]
     }
 

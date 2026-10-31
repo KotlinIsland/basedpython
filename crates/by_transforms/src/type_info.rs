@@ -271,6 +271,22 @@ pub(crate) trait TypeInfo {
     /// expressions — see [`SemanticModel::subscript_specializes`]
     fn subscript_specializes(&self, value: &Expr) -> bool;
 
+    /// whether subscripting `value` gives a function type arguments it keeps as runtime values
+    fn subscript_specializes_reified_function(&self, value: &Expr) -> bool;
+
+    /// the variance of each type parameter of the class `class` defines, when one of them varies
+    fn class_variances(
+        &self,
+        class: &StmtClassDef,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>>;
+
+    /// the variance of each type parameter of the class `value` is, when the runtime has to be
+    /// told that where it is subscripted, because no transpiled module defines the class
+    fn variances_told_at_a_subscript(
+        &self,
+        value: &Expr,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>>;
+
     /// whether `annotation` declares a PEP 613 type alias, whose value is a type expression
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool;
 
@@ -957,6 +973,9 @@ impl TypeInfo for LoweringModel<'_> {
     }
 
     fn subscript_is_type_context(&self, value: &Expr) -> bool {
+        if SemanticModel::subscript_specializes_reified_function(self, value) {
+            return true;
+        }
         match value.inferred_type(self) {
             Some(ty) => ty.is_subscript_type_context(),
             // unresolved → assume type context (covers builtins like `list`,
@@ -966,6 +985,9 @@ impl TypeInfo for LoweringModel<'_> {
     }
 
     fn subscript_is_known_type_context(&self, value: &Expr) -> bool {
+        if SemanticModel::subscript_specializes_reified_function(self, value) {
+            return true;
+        }
         match value.inferred_type(self) {
             Some(ty) => ty.is_subscript_type_context() && !ty.is_dynamic(),
             None => false,
@@ -974,6 +996,25 @@ impl TypeInfo for LoweringModel<'_> {
 
     fn subscript_specializes(&self, value: &Expr) -> bool {
         SemanticModel::subscript_specializes(self, value)
+            || SemanticModel::subscript_specializes_reified_function(self, value)
+    }
+
+    fn subscript_specializes_reified_function(&self, value: &Expr) -> bool {
+        SemanticModel::subscript_specializes_reified_function(self, value)
+    }
+
+    fn class_variances(
+        &self,
+        class: &StmtClassDef,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>> {
+        SemanticModel::class_variances(self, class)
+    }
+
+    fn variances_told_at_a_subscript(
+        &self,
+        value: &Expr,
+    ) -> Option<Box<[ty_python_semantic::ArgVariance]>> {
+        SemanticModel::variances_told_at_a_subscript(self, value)
     }
 
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool {

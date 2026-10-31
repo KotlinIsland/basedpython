@@ -19,6 +19,7 @@ use super::diagnostic::{
     POSSIBLY_MISSING_IMPLICIT_CALL, report_index_out_of_bounds, report_invalid_key_on_typed_dict,
     report_not_subscriptable, report_slice_step_size_zero,
 };
+use super::function::FunctionType;
 use super::infer::TypeContext;
 use super::instance::SliceLiteral;
 use super::special_form::SpecialFormType;
@@ -40,6 +41,25 @@ pub(crate) fn specializes_on_subscript<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
                 || class.is_known(db, KnownClass::Type)
         }
         Type::GenericAlias(_) | Type::SpecialForm(_) | Type::KnownInstance(_) => true,
+        _ => false,
+    }
+}
+
+/// basedpython: whether subscripting a value of type `ty` gives a function type arguments it
+/// keeps as runtime values: `f[int]`, and `obj.m[int]` for a method. a function that erases its
+/// type arguments has the subscript stripped from the program, so nothing evaluates its slice
+pub(crate) fn specializes_reified_function_on_subscript<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+) -> bool {
+    let reifies = |function: FunctionType<'db>| {
+        function.is_reified(db) || !function.forwarded_type_params(db).names.is_empty()
+    };
+    match ty {
+        Type::FunctionLiteral(function) => reifies(function),
+        Type::BoundMethod(bound_method) => bound_method
+            .function(db)
+            .is_some_and(|function| !bound_method.binds_classmethod(db) && reifies(function)),
         _ => false,
     }
 }

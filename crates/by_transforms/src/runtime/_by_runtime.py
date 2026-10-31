@@ -592,7 +592,7 @@ def _bind_type_params(params, supplied, fields, owner):
             continue
         has_default = getattr(param, "has_default", None)
         if has_default is not None and has_default():
-            bound[name] = param.__default__
+            bound[name] = _by_literal_type(param.__default__)
         elif isinstance(param, TypeVarTuple):
             bound[name] = ()
         elif param is pack:
@@ -860,6 +860,8 @@ def _by_subst(annotation, mapping):
             return mapping[annotation]
     except TypeError:
         pass
+    if isinstance(annotation, _ByProjection):
+        return _by_project(annotation.__by_variance__, _by_subst(annotation.__by_projected__, mapping))
     args = getattr(annotation, "__args__", ())
     if not args:
         return annotation
@@ -874,6 +876,14 @@ def _by_subst(annotation, mapping):
     except TypeError:
         return annotation
 
+def _by_type_params(klass):
+    # a class the pep 695 polyfill wrote declares its parameters through
+    # `Generic[...]`, which records them in `__parameters__` and leaves
+    # `__type_params__` empty, or absent before 3.12. the class of a function has the
+    # attribute too, as the descriptor each function reads its own through
+    params = getattr(klass, "__type_params__", ()) or getattr(klass, "__parameters__", ())
+    return params if isinstance(params, tuple) else ()
+
 def _by_specialize(alias, origin, depth=0):
     # the arguments with which `alias` satisfies `origin`, resolved *down the
     # declared base chain* rather than assumed to line up positionally. a base
@@ -887,10 +897,7 @@ def _by_specialize(alias, origin, depth=0):
     if not isinstance(klass, type):
         return None
     args = getattr(alias, "__args__", ())
-    # a class the pep 695 polyfill wrote declares its parameters through
-    # `Generic[...]`, which records them in `__parameters__` and leaves
-    # `__type_params__` empty, or absent before 3.12
-    params = getattr(klass, "__type_params__", ()) or getattr(klass, "__parameters__", ())
+    params = _by_type_params(klass)
     if not args:
         defaulted = _by_type_param_defaults(params)
         if defaulted is not params:
@@ -916,13 +923,28 @@ def _by_specialize(alias, origin, depth=0):
     # arguments do line up positionally once membership is established. this runs
     # only after resolution has failed, so it applies to the already-resolved base
     # (`list[int]`), never to a subclass that fixes or reorders arguments
-    if args and isinstance(origin, type):
-        try:
-            if issubclass(klass, origin):
-                return args
-        except TypeError:
-            pass
+    if args and isinstance(origin, type) and _by_declared_as(klass, origin):
+        return args
     return None
+
+def _by_declared_as(klass, origin):
+    # whether `klass` was declared to be an `origin`, by a base or by registering with a
+    # class that is one. an abc's `__subclasshook__` admits whatever has the methods, which
+    # says nothing about the arguments: `enumerate[int]` has `__next__`, and is an
+    # `Iterator[tuple[int, int]]`
+    if origin in klass.__mro__:
+        return True
+    pending = [origin]
+    while pending:
+        abc = pending.pop()
+        try:
+            if "__subclasshook__" not in abc.__dict__ and issubclass(klass, abc):
+                return True
+            pending.extend(type.__subclasses__(abc))
+        except TypeError:
+            # a protocol `issubclass` refuses shows nothing
+            pass
+    return False
 
 def _by_recorded_alias(value):
     # the specialization `value` records, if it records one. a function that
@@ -947,11 +969,15 @@ def _by_generic_args(value, origin):
     return [found] if found is not None else []
 
 def _parametric_is(value, alias, variances):
-    alias = _by_alias(getattr(alias, "__value__", alias))
+    alias = _by_type_normal(alias)
     origin = getattr(alias, "__origin__", alias)
     if not isinstance(value, origin):
         return False
     target_args = getattr(alias, "__args__", ())
+    # a tuple's arguments are its elements, however many of them the target lists
+    if origin is tuple and hasattr(alias, "__args__"):
+        recorded = _by_recorded_alias(value)
+        return _by_tuple_is_sub(recorded if recorded is not None else type(value), alias, (), False)
     if len(target_args) != len(variances):
         return False
     for reified_args in _by_generic_args(value, origin):
@@ -963,34 +989,32 @@ def _parametric_is(value, alias, variances):
 
 def _by_cell_is(value, cell):
     # `value is T`, for a reified `T`. the cell holds whatever the call supplied, and
-    # `isinstance` refuses `None` and a subscripted class outright. a subscripted class is
-    # compared exactly, unless its own parameters say how they vary: `class B[out T]` lowers
-    # to a parameter whose variance the runtime can't see
+    # `isinstance` refuses `None` and a subscripted class outright
     import typing
-    if cell is None:
+    cell = _by_type_normal(cell)
+    if cell is type(None):
         return value is None
-    args = typing.get_args(cell)
-    if not args:
-        return isinstance(value, cell)
-    origin = typing.get_origin(cell)
-    if origin is typing.Union or origin is type(int | str):
-        return any(_by_cell_is(value, arm) for arm in args)
-    if origin is typing.Literal:
+    if cell is typing.Any:
+        return True
+    if _by_is_never(cell):
+        return False
+    if isinstance(cell, _ByProjection):
+        return _by_cell_is(value, cell.__by_projected__)
+    if _by_union_args(cell) is not None:
+        return any(_by_cell_is(value, arm) for arm in _by_union_args(cell))
+    if _by_literal_args(cell) is not None:
         return isinstance(value, _by_literal_type(cell))
-    variances = tuple(
-        1 if getattr(param, "__covariant__", False)
-        else 2 if getattr(param, "__contravariant__", False)
-        else 0
-        for param in getattr(origin, "__parameters__", ())
-    )
-    return _parametric_is(value, cell, variances if len(variances) == len(args) else (0,) * len(args))
+    if not hasattr(cell, "__args__"):
+        return isinstance(value, cell)
+    args = cell.__args__
+    return _parametric_is(value, cell, _by_told_variance(cell.__origin__, len(args)))
 
 def _parametric_is_lenient(value, alias, variances):
     # the checked-cast form: a value that records no reification has no
     # arguments to check, so the base class test is the whole guarantee. this is
     # what keeps `[1, 2] cast list[int]` legal while still rejecting a value
     # whose recorded arguments contradict the target
-    alias = _by_alias(getattr(alias, "__value__", alias))
+    alias = _by_type_normal(alias)
     origin = getattr(alias, "__origin__", alias)
     if not isinstance(value, origin):
         return False
@@ -1096,39 +1120,367 @@ def _by_literal_args(t):
     import typing
     return typing.get_args(t) if typing.get_origin(t) is typing.Literal else None
 
-def _by_proto_sub(a, b):
-    if a is b or b is object:
-        return True
-    a_values = _by_literal_args(a)
-    b_values = _by_literal_args(b)
-    if a_values is not None:
-        # `Literal[True]` is a subtype of another literal that lists all its
-        # values, and of any class every value is an instance of
-        if b_values is not None:
-            return all(value in b_values for value in a_values)
-        return isinstance(b, type) and all(isinstance(value, b) for value in a_values)
-    if b_values is not None:
-        # a whole class is never a subtype of a narrower literal
+# --- subtyping between runtime types --------------------------------------
+# what `_parametric_is` asks of each type argument: the checker's relation, over the objects
+# the runtime holds. the variance of a class is the checker's as well, and the runtime learns it
+# from `_by_variance`, which a transpiled class wears as a decorator. a class no transpiled
+# module defines is told where one subscripts it, since nothing else names it
+#
+# a use-site projection is a fact about one type argument rather than about the class, so it is
+# in the argument: `Box[out object]` is `Box[_by_out(object)]`, which is its own alias, the one
+# `typing` caches, and no `Box[object]` can be mistaken for it. everything else the relation reads
+# is already in the alias, a forwarded cell included: `Out[T]` evaluates to what `T` holds
+
+
+def _by_variance_registry():
+    # one per process, as the conformance registry is and for the same reason. weak, since a
+    # class written in a function is a new class on each call
+    import sys
+    import types
+    import weakref
+    module = sys.modules.get("_by_variance_registry")
+    if module is None:
+        module = types.ModuleType("_by_variance_registry")
+        module.table = weakref.WeakKeyDictionary()
+        sys.modules["_by_variance_registry"] = module
+    return module.table
+
+_by_variances = _by_variance_registry()
+
+def _by_variance(*codes):
+    # one code per type parameter: 0 invariant, 1 covariant, 2 contravariant, 3 bivariant
+    def told(cls):
+        try:
+            _by_variances[cls] = codes
+        except TypeError:
+            # a decorator beneath this one may have replaced the class with what no weak
+            # reference can hold, and that is no class to read a type argument of
+            pass
+        return cls
+    return told
+
+def _by_told_variance(origin, count):
+    # the code of each of `count` type arguments of `origin`. the checker told the runtime or
+    # it did not: what a class that was never told answers is what its parameters declare,
+    # which for a class no transpiled module wrote is `TypeVar(covariant=True)` read back, and
+    # for a pep 695 parameter of one, whose variance only a checker can infer, is invariant
+    try:
+        codes = _by_variances.get(origin)
+    except TypeError:
+        codes = None
+    params = _by_type_params(origin)
+    if codes is None:
+        codes = tuple(
+            1 if getattr(param, "__covariant__", False)
+            else 2 if getattr(param, "__contravariant__", False)
+            else 0
+            for param in params
+        )
+    if len(codes) == count:
+        return codes
+    # a `*Ts` stands for the run of arguments it absorbs, each varying as it does
+    import typing
+    variadic = getattr(typing, "TypeVarTuple", ())
+    for index, param in enumerate(params):
+        if isinstance(param, variadic) and len(codes) == len(params) and len(params) <= count + 1:
+            return codes[:index] + codes[index:index + 1] * (count - len(params) + 1) + codes[index + 1:]
+    return (0,) * count
+
+# what `out T` and `in T` are at runtime, as a type argument
+class _ByProjection(type):
+    types = {}
+
+    def __call__(cls, *args, **kwargs):
+        return cls.__by_projected__(*args, **kwargs)
+
+
+__import__("copyreg").pickle(
+    _ByProjection, lambda projection: (_by_project, (projection.__by_variance__, projection.__by_projected__))
+)
+
+
+def _by_project(variance, inner):
+    # memoized as `_by_lit` is, so the same projection is the same type argument and `typing`
+    # hands back the same alias for it
+    key = (variance, inner)
+    projection = _ByProjection.types.get(key)
+    if projection is None:
+        written = inner.__qualname__ if isinstance(inner, type) else repr(inner)
+        keyword = {1: "out", 2: "in"}[variance]
+        projection = _ByProjection(
+            f"{keyword} {written}",
+            (),
+            {"__by_variance__": variance, "__by_projected__": inner, "__module__": "builtins"},
+        )
+        _ByProjection.types[key] = projection
+    return projection
+
+def _by_out(inner):
+    return _by_project(1, inner)
+
+def _by_in(inner):
+    return _by_project(2, inner)
+
+def _by_type_normal(t):
+    # what a type stands for once what only spells it is gone: an alias, a metadata wrapper, the
+    # `None` that means `NoneType`, a reified class's specialization. each step strictly opens
+    # one, so the bound only stops an alias that is its own value
+    for _ in range(64):
+        if t is None:
+            return type(None)
+        origin = getattr(t, "__origin__", None)
+        if hasattr(t, "__metadata__"):
+            t = origin
+        elif hasattr(origin, "__value__"):
+            t = _by_subst(origin.__value__, dict(zip(origin.__type_params__, t.__args__)))
+        elif hasattr(t, "__value__"):
+            t = t.__value__
+        elif _by_alias(t) is not t:
+            t = _by_alias(t)
+        else:
+            return t
+    return t
+
+def _by_union_args(t):
+    import types
+    import typing
+    if isinstance(t, getattr(types, "UnionType", ())) or typing.get_origin(t) is typing.Union:
+        return t.__args__
+    return None
+
+def _by_is_never(t):
+    import typing
+    return t is typing.NoReturn or t is getattr(typing, "Never", typing.NoReturn)
+
+def _by_finite_members(t):
+    # the values a class holds, where it is the same type as the union of their literal types
+    import enum
+    if t is bool:
+        return (True, False)
+    if isinstance(t, type) and issubclass(t, enum.Enum):
+        return tuple(t)
+    return None
+
+def _by_value_is_sub(value, b, seen):
+    arms = _by_union_args(b)
+    if arms is not None:
+        return any(_by_value_is_sub(value, _by_type_normal(arm), seen) for arm in arms)
+    values = _by_literal_args(b)
+    if values is not None:
+        return (type(value), value) in _by_literal_members(values)
+    return _by_is_sub(type(value), b, seen)
+
+def _by_class_is_sub(a, b):
+    import typing
+    is_typeddict = getattr(typing, "is_typeddict", lambda _: False)
+    if b in a.__mro__:
+        # the runtime's mro of a `TypedDict` says `dict`, which no checker agrees with
+        return b is a or not is_typeddict(a)
+    if is_typeddict(a):
+        return any(
+            is_typeddict(base) and _by_class_is_sub(base, b)
+            for base in getattr(a, "__orig_bases__", ())
+        )
+    try:
+        return issubclass(a, b)
+    except TypeError:
+        # a protocol that isn't runtime checkable, or one with data members, and a `TypedDict`,
+        # which `issubclass` refuses: no subclass relation the runtime can show
         return False
+
+def _by_tuple_parts(args):
+    # a tuple's elements as what comes before its unbounded run, the run, and what comes after
+    if args == ((),):
+        args = ()
+    if len(args) == 2 and args[1] is Ellipsis:
+        return (), args[0], ()
+    import typing
+    unpack = getattr(typing, "Unpack", _by_absent)
+    before, run, after = [], None, []
+    for element in args:
+        unpacked = None
+        if getattr(element, "__unpacked__", False):
+            unpacked = element
+        elif getattr(element, "__origin__", None) is unpack:
+            unpacked = element.__args__[0]
+        if getattr(unpacked, "__origin__", None) is tuple:
+            head, middle, tail = _by_tuple_parts(unpacked.__args__)
+        else:
+            head, middle, tail = (element,), None, ()
+        if run is None:
+            before.extend(head)
+            run = middle
+            if run is not None:
+                after.extend(tail)
+        else:
+            after.extend(head)
+    return tuple(before), run, tuple(after)
+
+def _by_tuple_args(a):
+    # the arguments a tuple type lists, and whether it lists them at all: only `tuple` itself
+    # says nothing, and it is `tuple[Any, ...]`. a class the runtime can't map is `None`
+    origin = getattr(a, "__origin__", a)
+    if origin is tuple:
+        return getattr(a, "__args__", None), True
+    fields = getattr(origin, "_fields", None)
+    if fields is not None:
+        import typing
+        try:
+            hints = typing.get_type_hints(origin)
+            mapping = dict(zip(_by_type_params(origin), getattr(a, "__args__", ())))
+            return tuple(_by_subst(hints[field], mapping) for field in fields), True
+        except (KeyError, NameError, TypeError):
+            return None, False
+    args = _by_specialize(a, tuple)
+    return args, args is not None
+
+def _by_tuple_is_sub(a, b, seen, gradual=True):
+    origin = getattr(a, "__origin__", a)
+    if not (isinstance(origin, type) and issubclass(origin, tuple)):
+        return False
+    a_args, known = _by_tuple_args(a)
+    if not known:
+        return False
+    if a_args is None:
+        return gradual and origin is tuple
+    head, run, tail = _by_tuple_parts(a_args)
+    b_head, b_run, b_tail = _by_tuple_parts(b.__args__)
+    is_sub = lambda x, y: _by_is_sub(x, y, seen)
+    if b_run is None:
+        return (
+            run is None
+            and len(head) == len(b_head)
+            and all(map(is_sub, head, b_head))
+        )
+    if run is None:
+        # a fixed tuple fills the run with what the target's two ends leave of it
+        if len(head) < len(b_head) + len(b_tail):
+            return False
+        split = len(head) - len(b_tail)
+        head, tail = head[:split], head[split:]
+    if len(head) < len(b_head) or len(tail) < len(b_tail):
+        return False
+    left, middle = head[:len(b_head)], head[len(b_head):]
+    right = tail[len(tail) - len(b_tail):]
+    middle += tail[:len(tail) - len(b_tail)]
+    if run is not None:
+        middle += (run,)
+    return (
+        all(map(is_sub, left, b_head))
+        and all(map(is_sub, right, b_tail))
+        and all(is_sub(element, b_run) for element in middle)
+    )
+
+def _by_callable_is_sub(a, b, seen):
+    from collections.abc import Callable
+    if getattr(a, "__origin__", a) is not Callable:
+        return False
+    a_args = getattr(a, "__args__", None)
+    if a_args is None:
+        return True
+    a_params, a_return = a_args[:-1], a_args[-1]
+    b_params, b_return = b.__args__[:-1], b.__args__[-1]
+    if not _by_is_sub(a_return, b_return, seen):
+        return False
+    if a_params == (Ellipsis,) or b_params == (Ellipsis,):
+        return True
+    return len(a_params) == len(b_params) and all(
+        _by_is_sub(y, x, seen) for x, y in zip(a_params, b_params)
+    )
+
+def _by_is_sub(a, b, seen=()):
+    # whether `a` is a subtype of `b`. this has the checker's answer wherever the runtime holds
+    # what the checker read, and says no where it doesn't: a test has to earn its `True`
+    import typing
+    a = _by_type_normal(a)
+    b = _by_type_normal(b)
+    if a is b or b is object or a is typing.Any or b is typing.Any or _by_is_never(a):
+        return True
+    if _by_is_never(b):
+        return False
+    # coming back to a pair still being answered means a recursive alias has been followed
+    # all the way round with nothing saying no. the bound is for an alias that grows forever
+    pair = (id(a), id(b))
+    if pair in seen:
+        return True
+    if len(seen) > 64:
+        return False
+    seen += (pair,)
+    arms = _by_union_args(a)
+    if arms is not None:
+        return all(_by_is_sub(arm, b, seen) for arm in arms)
+    values = _by_literal_args(a)
+    if values is not None:
+        return all(_by_value_is_sub(value, b, seen) for value in values)
+    arms = _by_union_args(b)
+    if arms is not None and any(_by_is_sub(a, arm, seen) for arm in arms):
+        return True
+    if arms is not None or _by_literal_args(b) is not None:
+        members = _by_finite_members(a)
+        return members is not None and all(_by_value_is_sub(value, b, seen) for value in members)
+    supertype = getattr(a, "__supertype__", None)
+    if supertype is not None:
+        return _by_is_sub(supertype, b, seen)
     a_origin = getattr(a, "__origin__", a)
     b_origin = getattr(b, "__origin__", b)
-    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, "__args__", ()):
-        try:
-            return issubclass(a_origin, b_origin)
-        except TypeError:
+    if not (isinstance(a_origin, type) and isinstance(b_origin, type)):
+        return a == b
+    if not hasattr(b, "__args__"):
+        return _by_class_is_sub(a_origin, b_origin)
+    from collections.abc import Callable
+    if b_origin is tuple:
+        return _by_tuple_is_sub(a, b, seen)
+    if b_origin is Callable:
+        return _by_callable_is_sub(a, b, seen)
+    if b_origin is type:
+        # `type` is covariant for the language rather than for any parameter it declares
+        if a_origin is not type:
             return False
-    return a == b
+        return not hasattr(a, "__args__") or _by_is_sub(a.__args__[0], b.__args__[0], seen)
+    mapped = _by_specialize(a, b_origin)
+    if mapped is None:
+        return _by_is_bare_generic(a, a_origin) and _by_class_is_sub(a_origin, b_origin)
+    args = b.__args__
+    return len(mapped) == len(args) and all(
+        _by_variance_ok(x, y, code, seen)
+        for x, y, code in zip(mapped, args, _by_told_variance(b_origin, len(args)))
+    )
 
-def _by_variance_ok(actual, expected, variance):
-    # 0 invariant (equality), 1 covariant (actual <: expected),
-    # 2 contravariant (expected <: actual), 3 bivariant (any)
-    if variance == 3 or actual == expected:
+def _by_is_bare_generic(a, origin):
+    # a generic class with no arguments has unknown ones. a class that only inherits from a
+    # generic one has whatever its stub fixes them to, which the runtime can't see
+    if hasattr(a, "__args__"):
+        return False
+    own = origin.__dict__
+    return "__class_getitem__" in own or bool(own.get("__parameters__") or own.get("__type_params__"))
+
+def _by_projected_variance(declared, source, target):
+    # how an argument relates once each side's projection has had its say, `None` for not at
+    # all. a declared variance already covers anything a projection could say
+    if declared != 0:
+        return declared
+    if target is None:
+        return 0 if source is None else None
+    return target if source is None or source == target else None
+
+def _by_variance_ok(actual, expected, variance, seen=()):
+    # 0 invariant, 1 covariant (actual <: expected), 2 contravariant (expected <: actual),
+    # 3 bivariant (any)
+    source = target = None
+    if isinstance(actual, _ByProjection):
+        source, actual = actual.__by_variance__, actual.__by_projected__
+    if isinstance(expected, _ByProjection):
+        target, expected = expected.__by_variance__, expected.__by_projected__
+    variance = _by_projected_variance(variance, source, target)
+    if variance is None:
+        return False
+    if variance == 3:
         return True
-    if variance == 1 and _by_proto_sub(actual, expected):
-        return True
-    if variance == 2 and _by_proto_sub(expected, actual):
-        return True
-    return False
+    if variance == 1:
+        return _by_is_sub(actual, expected, seen)
+    if variance == 2:
+        return _by_is_sub(expected, actual, seen)
+    return _by_is_sub(actual, expected, seen) and _by_is_sub(expected, actual, seen)
 
 def _by_method_matches(klass, name, params, ret):
     method = getattr(klass, name, None)
@@ -1343,7 +1695,7 @@ def _specialize(cls, item):
     from types import GenericAlias
     from typing import TypeVar, TypeVarTuple
 
-    args = item if isinstance(item, tuple) else (item,)
+    args = tuple(_by_literal_type(arg) for arg in (item if isinstance(item, tuple) else (item,)))
     if "__by_type_arguments__" in cls.__dict__:
         raise TypeError(f"{cls.__name__} is already specialized")
     cache = cls.__dict__.get("__by_specializations__")
