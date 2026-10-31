@@ -55,7 +55,9 @@ type only has if cpython wrote one by hand — `list` got one in 3.9,
 `reversed` and `itertools.count` never did. so a builtin either accepts the
 subscript and drops the stamp, or refuses the subscript outright
 
-so a builtin never reports a specialization back. two rules follow from that
+so a builtin never reports a specialization back, which is one reason a call of a class of the
+standard library is left as it is written, whatever the class would do with a subscript. the rest
+follows from that
 
 a **display** is left exactly as written, even where its element type is known.
 wrapping it would turn syntax into a constructor call and record nothing:
@@ -67,20 +69,16 @@ s = {3}
 t = 1, "x"
 ```
 
-a **call** is rewritten only when the subscript is known to evaluate — a class
-whose real definition is in view, one typeshed writes a `__class_getitem__` for
-at the version being targeted, or one that inherits a base which does. `zip` is
-none of those, so it is left alone rather than becoming python that raises when
-it runs:
+a **call** of a class of the standard library reads as it is written, so a module with no generic
+code of its own transpiles to itself. a call of any other generic class is rewritten, if the
+subscript is known to evaluate, whether its definition or a stub of it is in view:
 
 ```by
-pairs = zip([1, 2], [True, False])   # stays bare — `zip[…]` is a TypeError
-counts = enumerate(["a"])            # → enumerate[str](["a"]) — inert, but valid
+pairs = zip([1, 2], [True, False])   # stays as it is written
+counts = enumerate(["a"])            # stays as it is written
+letters = list("ab")                 # stays as it is written
+box = Box(1)                         # → Box[int](1)
 ```
-
-the second line is the honest cost of one uniform rule: on a builtin that does
-accept the subscript the wrap is inert rather than wrong, and the transpiler
-does not try to guess which classes can hold the stamp
 
 a subscript the source writes itself is another matter: `map[int]` is valid
 basedpython, whether or not `map` would allow it, so it evaluates to what it
@@ -129,8 +127,9 @@ doesn't fire when no runtime spelling exists:
 
 - a non-generic class, which has no specialization to make explicit
 
-- a class the target runtime is not known to subscript — see
-    [above](#a-builtin-cannot-record-a-specialization)
+- a class of the standard library — see [above](#a-builtin-cannot-record-a-specialization)
+
+- a class the target runtime is not known to subscript
 
 ## what never reifies
 

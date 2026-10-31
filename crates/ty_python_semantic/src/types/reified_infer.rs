@@ -24,7 +24,7 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, PySourceType, PythonVersion, name::Name};
+use ruff_python_ast::{self as ast, PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{KnownModule, SearchPath, file_to_module};
@@ -944,8 +944,7 @@ fn spell_type<'db>(
         Type::LiteralValue(literal) => {
             match literal_value_spelling(db, env, file, literal, cells) {
                 LiteralValueSpelling::Value(value) => Some(
-                    RuntimeSpelling::literal(&value)
-                        .telling(told_classes_of_type(db, env, file, ty)),
+                    RuntimeSpelling::literal(&value).telling(told_classes_of_type(db, env, ty)),
                 ),
                 LiteralValueSpelling::Unknown => None,
                 LiteralValueSpelling::NotRecordable => {
@@ -1042,9 +1041,6 @@ fn spell_specialization_of<'db>(
     cells: TypeParamCells<'_, 'db>,
 ) -> Option<RuntimeSpelling> {
     let origin = ClassLiteral::Static(alias.origin(db));
-    if let Some(variances) = variances_told_at_a_subscript(db, origin) {
-        name = RuntimeSpelling::telling_variance(&name, &variances);
-    }
     let arguments =
         spell_specialization_arguments(db, env, file, origin, alias.specialization(db), cells)
             .ok()?;
@@ -1670,6 +1666,17 @@ pub(crate) fn constructor_specialization<'db>(
     if origin != class_literal {
         return Err(ReifiedInferenceError::NoBinding);
     }
+    // nothing in the standard library reads its type arguments, so a call of one of its classes
+    // reads as written. a stub of anything else can sit over a class that does
+    if file_to_module(db, db.program_file(origin.file(db)).resolver_file(db)).is_some_and(
+        |module| {
+            module
+                .search_path(db)
+                .is_some_and(SearchPath::is_standard_library)
+        },
+    ) {
+        return Err(ReifiedInferenceError::NoBinding);
+    }
     // the specialization is written as a subscript of the class where it is called, and a class
     // that answers a subscript for itself would answer that one too
     if crate::types::subscript::subscript_calls_the_class(db, env, Type::ClassLiteral(origin)) {
@@ -1733,16 +1740,14 @@ fn spell_class_literal<'db>(
         .ignore_possibly_undefined()
     {
         return (global.as_class_literal()? == literal).then(|| {
-            RuntimeSpelling::global(db, file, name)
-                .telling(told_classes_of_class(db, env, file, literal))
+            RuntimeSpelling::global(db, file, name).telling(told_classes_of_class(db, literal))
         });
     }
     let builtin = builtins_symbol(db, env, name)
         .place
         .ignore_possibly_undefined()?;
-    (builtin.as_class_literal()? == literal).then(|| {
-        RuntimeSpelling::text(name.as_str()).telling(told_classes_of_class(db, env, file, literal))
-    })
+    (builtin.as_class_literal()? == literal)
+        .then(|| RuntimeSpelling::text(name.as_str()).telling(told_classes_of_class(db, literal)))
 }
 
 /// How a parametric type test (`x is C[args]`, keyword form) resolves.
@@ -1869,7 +1874,6 @@ impl ParametricIsPlan {
         match self {
             Self::Fold(_)
             | Self::Isinstance(_)
-            | Self::Cell(_)
             | Self::IsCallable
             | Self::IsNone
             | Self::Equality { .. }
@@ -1877,7 +1881,10 @@ impl ParametricIsPlan {
             | Self::Subclass(_)
             | Self::Pattern(_) => true,
             Self::Union(arms) => arms.iter().all(Self::narrows_negatively),
-            Self::TokenEq(_)
+            // a cell holds whatever it was given, and a value that records no arguments isn't one
+            // of `list[int]` as far as a test can tell, in the cell as in place
+            Self::Cell(_)
+            | Self::TokenEq(_)
             | Self::Probe { .. }
             | Self::ProtocolStructural(_)
             | Self::Conformance { .. }
@@ -2214,19 +2221,6 @@ pub(crate) fn class_variances<'db>(
         .then_some(variances)
 }
 
-/// [`class_variances`], for a class the runtime has to be told about where it is subscripted
-/// because no transpiled module defines it to say so: a stub's, or one written in python. a
-/// tuple's elements vary as the language says rather than as a parameter of `tuple` does
-pub(crate) fn variances_told_at_a_subscript<'db>(
-    db: &'db dyn Db,
-    class: ClassLiteral<'db>,
-) -> Option<Box<[ArgVariance]>> {
-    if class.is_tuple(db) || class.file(db).source_type(db) == PySourceType::BasedPython {
-        return None;
-    }
-    class_variances(db, class)
-}
-
 /// why the target class can't back a runtime `__orig_class__` probe, or
 /// `None` when it can. the builtin collections are C types that erase their
 /// type arguments and reject the attribute; a protocol's instances record
@@ -2414,6 +2408,16 @@ pub(crate) fn type_test_plan<'db>(
     target: Type<'db>,
     written: Option<WrittenTarget<'_, 'db>>,
 ) -> ParametricIsPlan {
+    // nothing at runtime can say what a type isn't, however deep in the target it is asked
+    if any_over_type(
+        db,
+        env,
+        target,
+        false,
+        |part| matches!(part, Type::Intersection(intersection) if !intersection.negative(db).is_empty()),
+    ) {
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::Intersection);
+    }
     let plan = type_test_plan_seen(db, env, file, value_ty, target, written, &mut Vec::new());
     // each spelling the plan rebuilds is written where the test is: one for a union's arm
     // has no node of its own to have been asked about

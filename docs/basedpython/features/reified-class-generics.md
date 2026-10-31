@@ -209,7 +209,8 @@ IntBox().kind()        # int
 Wrapper[str]().kind()  # str
 ```
 
-the argument may be built from the subclass's own parameters, and is substituted
+a class deriving two specializations is what each of them makes it. the argument may be built from
+the subclass's own parameters, and is substituted
 through however many bases it takes, even where a subclass calls its parameter what
 the base calls its own:
 

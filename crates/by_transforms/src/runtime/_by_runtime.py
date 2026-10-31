@@ -980,23 +980,26 @@ def _by_tuple_element(args):
     elements = (*head, *(() if run is None else (run,)), *tail)
     return typing.Union[elements] if elements else typing.NoReturn
 
-def _by_bound_forward(annotation, module):
-    # `annotation` with each forward reference in it saying that its name is one of `module`'s.
-    # a base is written with one saying nothing, and is said for by the class it is a base of
+def _by_bound_forward(annotation, module, readers=None):
+    # `annotation` with each forward reference in it saying whose name it is. a base is written
+    # with one saying nothing, and is said for by the class it is a base of
     import typing
     if isinstance(annotation, str):
-        return annotation if isinstance(annotation, _ByForwardName) else _ByForwardName(annotation, module)
+        return annotation if isinstance(annotation, _ByForwardName) else _ByForwardName(annotation, module, readers)
     if isinstance(annotation, typing.ForwardRef):
         name = annotation.__forward_arg__
         if isinstance(name, _ByForwardName) or getattr(annotation, "__forward_module__", None) is not None:
             return annotation
-        return typing.ForwardRef(_ByForwardName(name, module))
+        return typing.ForwardRef(_ByForwardName(name, module, readers))
+    if isinstance(annotation, _ByProjection):
+        inner = _by_bound_forward(annotation.__by_projected__, module, readers)
+        return annotation if inner is annotation.__by_projected__ else _by_project(annotation.__by_variance__, inner)
     if _by_literal_args(annotation) is not None:
         return annotation
     args = getattr(annotation, "__args__", ())
     if not args:
         return annotation
-    replaced = tuple(_by_bound_forward(arg, module) for arg in args)
+    replaced = tuple(_by_bound_forward(arg, module, readers) for arg in args)
     # what was bound is equal to what wasn't, by design
     if all(new is old for new, old in zip(replaced, args)):
         return annotation
@@ -1124,7 +1127,7 @@ def _parametric_is(value, alias, variances):
         recorded = _by_recorded_alias(value)
         if recorded is None and _by_tuple_args(type(value)) == (None, True):
             return _by_tuple_value_is(value, alias)
-        return _by_tuple_is_sub(recorded if recorded is not None else type(value), alias, (), False)
+        return _by_tuple_is_sub(recorded if recorded is not None else type(value), alias, None, False)
     if len(target_args) != len(variances):
         return False
     # the base of a tuple is specialized with what its elements are, as a tuple's own target is
@@ -1245,7 +1248,7 @@ def _by_lit(*values, text=None, data=None):
     literal = _by_literals.get(key)
     if literal is None:
         import typing
-        literal = _by_literals[key] = typing.Literal[values]
+        literal = _by_literals.setdefault(key, typing.Literal[values])
     return literal
 
 def _by_literal_args(t):
@@ -1284,38 +1287,46 @@ def _by_variance(*codes):
     def told(cls):
         try:
             _by_variances[cls] = codes
-        except TypeError:
+        except Exception:
             # a decorator beneath this one may have replaced the class with what no weak
-            # reference can hold, and that is no class to read a type argument of
+            # reference can hold, or its metaclass may refuse to hash it, and neither is for a
+            # class statement to fail over
             pass
         return cls
     return told
 
-# the bases a stub gives a class are in no object the runtime holds: `class str(Sequence[str])` is
-# a `str` whose `__bases__` is `(object,)`. a module tells the runtime about each class of a stub it
-# reads as a type, and each class those derive from, as one row each: the class, a default or `...`
-# for each of its type parameters (`None` if it has none), the members it declares if the checker
-# reads it as a protocol (`None` if not), its bases, and what calling it is
+# what a stub says of a class is in no object the runtime holds: `class str(Sequence[str])` is a `str`
+# whose `__bases__` is `(object,)`. whatever writes the helpers for a program writes these for each
+# class of a stub the program reads as a type, and each class those derive from, as one row each:
+# the class, a default or `...` for each of its type parameters (`None` if it has none), the members
+# it declares if the checker reads it as a protocol (`None` if not), its bases, what each parameter
+# varies by (`None` if none does), and the signatures of the members a protocol may ask about, as
+# `(name, ways)`. a `name` that is `None` in the stub has `ways` of `None`, and one it can't say more
+# of has `()`. a row whose class ends in `()` holds the ways of calling the class instead
 #
-# a row is data, so that it can be written ahead of anything the module binds, and read by what
-# each name means in whichever module it was read from. a class is `"module:qualified.name"`, a
-# leading `:` being the module doing the telling. a type is a class, an `int` for a type parameter
-# of the row's class, `None`, a tuple of a class and its arguments, a tuple `("|", ...)` of a union's
-# arms or `("=", ...)` of a literal's values. what can't be spelled is `"?"`, which names nothing
+# a row is data, so that nothing is evaluated until a test asks, and each name is read as what it
+# means in the module the stub describes. a class is `"module:qualified.name"`. a type is a class, an
+# `int` for a type parameter of the row's class, `-1` for `Self`, `None`, a tuple of a class and its
+# arguments, a tuple `("|", ...)` of a union's arms or `("=", ...)` of a literal's values. what can't
+# be spelled is `"?"`, which names nothing
 #
-# each way of calling it is `(required, params, rest, returned)`: how many of `params` must be
-# given, the type of each positional parameter, that of a `*args` or `None`, and the type returned
+# each way of calling is `(required, params, rest, returned)`: how many of `params` must be given,
+# the type of each positional parameter, that of a `*args` or `None`, and the type returned
 def _by_told_registry():
     # one per process, as the conformance registry is and for the same reason. a row is pending
-    # until the class it describes can be looked up: a module imported lazily has no class yet
+    # until the class it describes can be looked up, which a module imported lazily can't be yet
     import sys
     import types
+    import _thread
     module = sys.modules.get("_by_told_registry")
     if module is None:
         module = types.ModuleType("_by_told_registry")
         module.pending = {}
         module.rows = {}
-        sys.modules["_by_told_registry"] = module
+        module.constructors = {}
+        module.lock = _thread.allocate_lock()
+        sys.modules.setdefault("_by_told_registry", module)
+        module = sys.modules["_by_told_registry"]
     return module
 
 _by_told_rows = _by_told_registry()
@@ -1324,20 +1335,16 @@ _by_told_rows = _by_told_registry()
 class _ByUnseen:
     pass
 
-def _by_told(teller, *rows):
-    def absolute(part):
-        if isinstance(part, str) and part.startswith(":"):
-            return teller + part
-        if isinstance(part, tuple):
-            return tuple(map(absolute, part))
-        return part
+def _by_told(*rows):
+    pending = _by_told_rows.pending
     for row in rows:
-        row = absolute(row)
-        _by_told_rows.pending[row[0]] = row
+        pending[row[0]] = row
 
 def _by_told_class(path):
-    # the class `path` names, or `None` if nothing at runtime is, or isn't yet. `typing` names the
-    # classes of `collections.abc` as aliases of them
+    # the class `path` names, `None` if there is none yet, and `False` if there never will be: what
+    # is there is no class, or a module that has finished loading doesn't have it. a module's
+    # namespace is read rather than asked, since its `__getattr__` may do anything, and a module
+    # imported lazily isn't made to load by a test of something else
     import sys
     module, _, qualified = path.partition(":")
     found = sys.modules.get(module)
@@ -1345,21 +1352,47 @@ def _by_told_class(path):
         return None
     try:
         for part in qualified.split("."):
-            found = getattr(found, part)
-    except AttributeError:
-        return None
-    return getattr(found, "__origin__", found)
+            within = found
+            found = object.__getattribute__(within, "__dict__").get(part, _by_absent)
+            if found is _by_absent:
+                if type(within).__name__ == "_LazyModule":
+                    return None
+                spec = object.__getattribute__(within, "__dict__").get("__spec__")
+                return None if getattr(spec, "_initializing", False) else False
+        if isinstance(found, type):
+            return found
+        # what `typing` calls a class of `collections.abc`
+        origin = object.__getattribute__(found, "__origin__")
+        return origin if isinstance(origin, type) else False
+    except Exception:
+        return False
+
+def _by_told_settle():
+    # a row waits for its class, and once that has been looked up it is done with
+    registry = _by_told_rows
+    if not registry.pending:
+        return
+    with registry.lock:
+        for path, row in registry.pending.copy().items():
+            ways = path.endswith("()")
+            found = _by_told_class(path[:-2] if ways else path)
+            if found is None:
+                continue
+            if found is not False:
+                try:
+                    (registry.constructors if ways else registry.rows)[found] = row
+                except Exception:
+                    # a metaclass that refuses to hash its class has nothing to be looked up by
+                    pass
+            # gone from here only once it can be found there, for a thread that takes an empty
+            # table as settled
+            registry.pending.pop(path, None)
 
 def _by_told_row(klass):
-    pending = _by_told_rows.pending
-    if pending:
-        for path in list(pending):
-            found = _by_told_class(path)
-            if found is not None:
-                _by_told_rows.rows[found] = pending.pop(path)
+    _by_told_settle()
     try:
         return _by_told_rows.rows.get(klass)
-    except TypeError:
+    except Exception:
         return None
 
 def _by_told_defaults(row):
@@ -1370,7 +1403,8 @@ def _by_told_defaults(row):
     return tuple(_by_told_type(param, ()) for param in params)
 
 def _by_told_type(part, args):
-    # the type `part` stands for, with `args` for the parameters of the class it is about
+    # the type `part` stands for, with `args` for the parameters of the class it is about, and for
+    # `Self` when it ends with one
     import typing
     from types import GenericAlias
     if part is None:
@@ -1381,7 +1415,7 @@ def _by_told_type(part, args):
         return args[part]
     if isinstance(part, str):
         found = _by_told_class(part)
-        return _ByUnseen if found is None else found
+        return found if isinstance(found, type) else _ByUnseen
     head = part[0]
     if head == "=":
         return typing.Literal[part[1:]]
@@ -1389,7 +1423,63 @@ def _by_told_type(part, args):
     if head == "|":
         return typing.Union[arguments]
     found = _by_told_class(head)
-    return _ByUnseen if found is None else GenericAlias(found, arguments)
+    return GenericAlias(found, arguments) if isinstance(found, type) else _ByUnseen
+
+def _by_told_ways(ways, args):
+    # the ways of calling something told about, read as types: `None` for one that says too little
+    # to read, as a parameter of a class written with no arguments does
+    read = []
+    for required, params, rest, returned in ways:
+        try:
+            read.append((
+                required,
+                tuple(_by_told_type(param, args) for param in params),
+                None if rest is None else _by_told_type(rest, args),
+                _by_told_type(returned, args),
+            ))
+        except IndexError:
+            pass
+    return read
+
+def _by_signature_ways(function, constructs=None):
+    # the ways of calling `function`, a method with a receiver or the constructor of what
+    # `constructs` is, by its annotations. what no annotation says is `Any`, as it is to a checker
+    import inspect, typing
+    try:
+        overloads = typing.get_overloads(function)
+    except AttributeError:
+        # below 3.11, or something written in c
+        overloads = ()
+    ways = []
+    for way in overloads or (function,):
+        try:
+            hints = typing.get_type_hints(way)
+        except Exception:
+            hints = dict(getattr(way, "__annotations__", {}))
+        try:
+            parameters = list(inspect.signature(way).parameters.values())[1:]
+        except (TypeError, ValueError):
+            continue
+        required, params, rest = 0, [], None
+        for parameter in parameters:
+            hint = hints.get(parameter.name, typing.Any)
+            if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD):
+                params.append(hint)
+                if parameter.default is parameter.empty:
+                    required = len(params)
+            elif parameter.kind == parameter.VAR_POSITIONAL:
+                rest = hint
+            elif parameter.kind == parameter.KEYWORD_ONLY and parameter.default is parameter.empty:
+                # a call with positional arguments alone isn't one of these
+                break
+        else:
+            ways.append((
+                required,
+                tuple(params),
+                rest,
+                hints.get("return", typing.Any) if constructs is None else constructs,
+            ))
+    return ways
 
 def _by_told_variance(origin, count):
     # the code of each of `count` type arguments of `origin`. the checker told the runtime or
@@ -1398,9 +1488,14 @@ def _by_told_variance(origin, count):
     # for a pep 695 parameter of one, whose variance only a checker can infer, is invariant
     try:
         codes = _by_variances.get(origin)
-    except TypeError:
+    except Exception:
         codes = None
+    if codes is None:
+        row = _by_told_row(origin)
+        codes = None if row is None else row[4]
     params = _by_type_params(origin)
+    if codes is None and row is not None and row[1]:
+        codes = (0,) * len(row[1])
     if codes is None:
         codes = tuple(
             1 if getattr(param, "__covariant__", False)
@@ -1434,7 +1529,7 @@ __import__("copyreg").pickle(
 def _by_project(variance, inner):
     # memoized as `_by_lit` is, so the same projection is the same type argument and `typing`
     # hands back the same alias for it
-    key = (variance, inner)
+    key = (variance, inner, getattr(inner, "__by_module__", None))
     projection = _ByProjection.types.get(key)
     if projection is None:
         written = inner.__qualname__ if isinstance(inner, type) else repr(inner)
@@ -1444,7 +1539,7 @@ def _by_project(variance, inner):
             (),
             {"__by_variance__": variance, "__by_projected__": inner, "__module__": "builtins"},
         )
-        _ByProjection.types[key] = projection
+        projection = _ByProjection.types.setdefault(key, projection)
     return projection
 
 def _by_out(inner):
@@ -1455,21 +1550,35 @@ def _by_in(inner):
 
 # a forward reference is a string, and nothing in `"F"` says whose `F` it is. this one does, and is
 # otherwise the same string, in whatever `typing` makes of it, so that what reads the alias it is
-# in reads what the same alias holds where it says nothing
+# in reads what the same alias holds where it says nothing. a name a function binds comes with what
+# reads it from there, since no module has it
 class _ByForwardName(str):
-    def __new__(cls, name, module=None):
+    def __new__(cls, name, module=None, readers=None):
         self = super().__new__(cls, name)
         self.__by_module__ = module
+        self.__by_readers__ = readers
         return self
 
-def _by_forward(specialization, module):
+    # what a function's local name reads can't outlive the call, and pickling is what it would be for
+    def __reduce__(self):
+        return (_ByForwardName, (str(self), self.__by_module__))
+
+def _by_forward_ref_reduce(ref):
+    # python compiles a forward reference as it makes it, and can't pickle what that made
+    import typing
+    return (typing.ForwardRef, (ref.__forward_arg__,), None)
+
+def _by_forward(specialization, module, /, **readers):
     # a specialization whose type arguments python evaluates before what they name is bound,
     # which a test reads once it is
-    return _by_bound_forward(specialization, module)
+    import copyreg
+    import typing
+    copyreg.pickle(typing.ForwardRef, _by_forward_ref_reduce)
+    return _by_bound_forward(specialization, module, readers)
 
 def _by_forward_value(ref):
     # what a forward reference names now, or `_by_absent` if that can't be read yet, or can't be
-    # read at all: a name local to a function has no module to look it up in
+    # read at all
     import sys
     import typing
     name = ref.__forward_arg__ if isinstance(ref, typing.ForwardRef) else ref
@@ -1478,8 +1587,15 @@ def _by_forward_value(ref):
     )
     if module is None:
         return _by_absent
+    readers = getattr(name, "__by_readers__", None)
+    local = {}
+    for bound, reader in (readers or {}).items():
+        try:
+            local[bound] = reader()
+        except NameError:
+            return _by_absent
     try:
-        return eval(str(name), vars(module))
+        return eval(str(name), vars(module), local)
     except Exception:
         return _by_absent
 
@@ -1576,6 +1692,77 @@ def _by_has_ancestor(klass, target, depth=0):
         isinstance(base, type) and _by_has_ancestor(base, target, depth + 1)
         for base in bases
     )
+
+def _by_told_member_ways(row, alias, args, name):
+    # how a member a stub declares is called: `_by_absent` if the row doesn't say
+    for member, ways in row[5]:
+        if member == name:
+            if ways is None:
+                return None
+            if not args:
+                args = _by_told_defaults(row) or ()
+            return _by_told_ways(ways, (*args, alias))
+    return _by_absent
+
+def _by_member_ways(alias, name):
+    # how a member of `alias` is called: its ways, `()` if what it is can't be said, and `None` if
+    # it has no such member or the stub says it is `None`
+    klass = getattr(alias, "__origin__", alias)
+    args = getattr(alias, "__args__", ())
+    # the arguments of a tuple are its elements, and its parameter is any of them
+    if klass is tuple and hasattr(alias, "__args__"):
+        args = (_by_tuple_element(args),)
+    row = _by_told_row(klass)
+    if row is not None:
+        told = _by_told_member_ways(row, alias, args, name)
+        if told is not _by_absent:
+            return told
+    # what an instance has, which a metaclass's members aren't
+    owner = next((base for base in klass.__mro__ if name in base.__dict__), None)
+    if owner is None or owner.__dict__[name] is None:
+        return None
+    # what `object` gives every class says nothing of this one
+    if row is not None or owner is object:
+        return ()
+    owned = _by_told_row(owner)
+    if owned is not None:
+        told = _by_told_member_ways(owned, alias, _by_specialize(alias, owner) or (), name)
+        return () if told is _by_absent else told
+    function = owner.__dict__[name]
+    ways = _by_signature_ways(getattr(function, "__func__", function))
+    mapping = _by_param_mapping(_by_type_params(klass), args)
+    if not mapping:
+        return ways
+    return [
+        (required, tuple(_by_subst(p, mapping) for p in params), None if rest is None else _by_subst(rest, mapping), _by_subst(returned, mapping))
+        for required, params, rest, returned in ways
+    ]
+
+def _by_way_fits(way, params, returned, seen):
+    # whether calling `way` can stand for a call taking `params` and returning `returned`, with
+    # `params` of `Ellipsis` for one that takes anything
+    required, way_params, rest, way_returned = way
+    if not _by_is_sub(way_returned, returned, seen):
+        return False
+    if params is Ellipsis:
+        return True
+    if len(params) < required or (rest is None and len(params) > len(way_params)):
+        return False
+    return all(
+        _by_is_sub(param, way_params[index] if index < len(way_params) else rest, seen)
+        for index, param in enumerate(params)
+    )
+
+def _by_told_protocol_is(a, b, attrs, seen):
+    # whether `a` has the members a protocol of a stub declares, of the types the stub says
+    for name in attrs:
+        have = _by_member_ways(a, name)
+        if have is None:
+            return False
+        for required, params, rest, returned in _by_member_ways(b, name) or ():
+            if have and not any(_by_way_fits(way, params, returned, seen) for way in have):
+                return False
+    return True
 
 def _by_protocol_attrs(klass):
     # the members `klass` declares if the checker reads it as a protocol, which a class of the
@@ -1678,6 +1865,8 @@ def _by_class_is_sub(a, b):
     except TypeError:
         # a protocol that isn't runtime checkable, or one with data members
         pass
+    if _by_told_row(b) is not None:
+        return _by_told_protocol_is(a, b, attrs, None)
     return _by_class_has_members(a, b, attrs)
 
 def _by_tuple_parts(args):
@@ -1778,9 +1967,9 @@ def _by_callable_is_sub(a, b, seen):
     )
 
 def _by_class_call_is_sub(a, b, seen):
-    # what calling a class is, is its constructor, which the checker tells the runtime where a
-    # `type[C]` is read. `type` and `type[object]` could be any class, and the checker reads
-    # calling one as it would calling something it knows nothing of
+    # what calling a class is, is its constructor: as its annotations say, or as a stub says for a
+    # class with no annotations to read. `type` and `type[object]` could be any class, and the
+    # checker reads calling one as it would calling something it knows nothing of
     args = getattr(a, "__args__", ())
     target = _by_type_normal(args[0]) if args else object
     if target is object:
@@ -1789,37 +1978,49 @@ def _by_class_call_is_sub(a, b, seen):
     if arms is not None:
         return all(_by_class_call_is_sub(type[arm], b, seen) for arm in arms)
     klass = getattr(target, "__origin__", target)
-    row = _by_told_row(klass) if isinstance(klass, type) else None
-    if row is None:
+    if not isinstance(klass, type):
         return False
-    told_args = getattr(target, "__args__", ())
-    return any(_by_constructor_is_sub(constructor, told_args, b, seen) for constructor in row[4])
-
-def _by_constructor_is_sub(constructor, args, b, seen):
-    required, params, rest, returned = constructor
     b_params, b_return = b.__args__[:-1], b.__args__[-1]
-    try:
-        if not _by_is_sub(_by_told_type(returned, args), b_return, seen):
-            return False
-        if b_params == (Ellipsis,):
-            return True
-        if len(b_params) < required or (rest is None and len(b_params) > len(params)):
-            return False
-        return all(
-            _by_is_sub(
-                param,
-                _by_told_type(params[index] if index < len(params) else rest, args),
-                seen,
-            )
-            for index, param in enumerate(b_params)
-        )
-    except IndexError:
-        # a parameter of a class written with no arguments
-        return False
+    params = Ellipsis if b_params == (Ellipsis,) else b_params
+    return any(_by_way_fits(way, params, b_return, seen) for way in _by_constructor_ways(klass, target))
 
-def _by_is_sub(a, b, seen=()):
+def _by_constructor_ways(klass, target):
+    # the ways of calling `klass`, `target` being what it is specialized to
+    import typing
+    _by_told_settle()
+    args = getattr(target, "__args__", ())
+    try:
+        told = _by_told_rows.constructors.get(klass)
+    except Exception:
+        told = None
+    if told is not None:
+        row = _by_told_row(klass)
+        if not args and row is not None:
+            args = _by_told_defaults(row) or ()
+        return _by_told_ways(told[1], (*args, target))
+    function = klass.__init__ if klass.__init__ is not object.__init__ else klass.__new__
+    if function is object.__new__:
+        return [(0, (), None, target)]
+    ways = _by_signature_ways(function, target)
+    # a parameter nothing specialized is what any call can solve it to
+    params = _by_type_params(klass)
+    mapping = _by_param_mapping(params, args)
+    for param in params:
+        mapping.setdefault(param, typing.Any)
+    return [
+        (required, tuple(_by_subst(p, mapping) for p in way_params), None if rest is None else _by_subst(rest, mapping), returned)
+        for required, way_params, rest, returned in ways
+    ]
+
+def _by_is_sub(a, b, seen=None):
     # whether `a` is a subtype of `b`. this has the checker's answer wherever the runtime holds
     # what the checker read, and says no where it doesn't: a test has to earn its `True`
+    if seen is None:
+        try:
+            return _by_is_sub(a, b, ())
+        except RecursionError:
+            # nesting no stack can hold, or an alias that grows each time it is opened
+            return False
     import typing
     a = _by_type_normal(a)
     b = _by_type_normal(b)
@@ -1828,12 +2029,10 @@ def _by_is_sub(a, b, seen=()):
     if _by_is_never(b):
         return False
     # coming back to a pair still being answered means a recursive alias has been followed
-    # all the way round with nothing saying no. the bound is for an alias that grows forever
+    # all the way round with nothing saying no
     pair = (id(a), id(b))
     if pair in seen:
         return True
-    if len(seen) > 64:
-        return False
     seen += (pair,)
     arms = _by_union_args(a)
     if arms is not None:
@@ -1883,13 +2082,20 @@ def _by_is_sub(a, b, seen=()):
     if mapped is None:
         if _by_is_bare_generic(a, a_origin) and _by_class_is_sub(a_origin, b_origin):
             return True
-        # a protocol the program wrote says what each of its members is, which one a stub declares
-        # doesn't say at runtime
-        attrs = None if _by_told_row(b_origin) is not None else _by_protocol_attrs(b_origin)
-        return attrs is not None and _by_class_has_members(a_origin, b, attrs)
-    return _by_arguments_ok(b_origin, mapped, args, _by_told_variance(b_origin, len(args)), seen)
+        attrs = _by_protocol_attrs(b_origin)
+        if attrs is None:
+            return False
+        if _by_told_row(b_origin) is not None:
+            return _by_told_protocol_is(a, b, attrs, seen)
+        return _by_class_has_members(a_origin, b, attrs)
+    if _by_arguments_ok(b_origin, mapped, args, _by_told_variance(b_origin, len(args)), seen):
+        return True
+    # a class that derives from a protocol is one by its members as well, and a member needn't
+    # mention the parameter
+    attrs = _by_protocol_attrs(b_origin)
+    return attrs is not None and _by_told_row(b_origin) is not None and _by_told_protocol_is(a, b, attrs, seen)
 
-def _by_arguments_ok(origin, actual, expected, codes, seen=()):
+def _by_arguments_ok(origin, actual, expected, codes, seen=None):
     # whether the type arguments `actual` fit `expected`, as the parameters of `origin` vary, a
     # code each for `expected`. a `*Ts` takes the run the other parameters leave, and either
     # side may leave that open
@@ -1937,9 +2143,10 @@ def _by_projected_variance(declared, source, target):
         return 0 if source is None else None
     return target if source is None or source == target else None
 
-def _by_variance_ok(actual, expected, variance, seen=()):
+def _by_variance_ok(actual, expected, variance, seen=None):
     # 0 invariant, 1 covariant (actual <: expected), 2 contravariant (expected <: actual),
     # 3 bivariant (any)
+    actual, expected = _by_type_normal(actual), _by_type_normal(expected)
     source = target = None
     if isinstance(actual, _ByProjection):
         source, actual = actual.__by_variance__, actual.__by_projected__
@@ -2233,8 +2440,8 @@ def _specialize(cls, item):
             cls.__init_subclass__ = saved
     made.__module__ = cls.__module__
     made.__qualname__ = cls.__qualname__
-    cache[args] = made
-    return made
+    # two threads may both have made it, and only one of them can be the class
+    return cache.setdefault(args, made)
 
 
 def _by_bound_through(value, own):
@@ -2258,7 +2465,6 @@ def _by_names_a_parameter(value):
 
 def _type_argument(owner, name, declaring=None):
     cls = owner if isinstance(owner, type) else type(owner)
-    bound = getattr(cls, "__by_type_arguments__", None) or {}
     value = _by_absent
     # a read from outside a class names the nearest parameter of that name
     for klass in ((declaring,) if declaring is not None else ()) + cls.__mro__:
@@ -2267,7 +2473,14 @@ def _type_argument(owner, name, declaring=None):
             None,
         )
         if param is not None:
-            value = bound.get(param, param)
+            # each base that specializes it says what, nearest first: a class deriving two
+            # specializations is what each of them makes it
+            value = param
+            for base in cls.__mro__:
+                bound = base.__dict__.get("__by_type_arguments__")
+                if bound is not None and param in bound:
+                    value = bound[param]
+                    break
             break
     # a bare class stands for the defaults of the parameters it leaves open
     has_default = getattr(value, "has_default", None)

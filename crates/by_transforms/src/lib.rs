@@ -266,6 +266,7 @@ fn transpile_with_report(
     let unchanged = !reified_changed
         && !qualified_changed
         && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
+    let told = std::cell::RefCell::new(std::collections::BTreeMap::new());
     let (source, ast_errors, _phase0_map, _) = transforms::ast_driver::run_against_source(
         source,
         written_names,
@@ -276,6 +277,7 @@ fn transpile_with_report(
         } else {
             transforms::ast_driver::SemanticSource::Fresh(python_version)
         },
+        &told,
     );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone());
@@ -304,7 +306,8 @@ fn transpile_with_report(
     }
 
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
-    let (final_output, _, requirements) = run_import_redirect_phase(output, config);
+    let (final_output, _, mut requirements) = run_import_redirect_phase(output, config);
+    requirements.told = told.into_inner();
     let (final_output, _) =
         run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
     let (final_output, _) = run_lazy_import_phase(
@@ -368,9 +371,12 @@ pub(crate) fn transpile_typed_with_map(
 /// of the built artifact, and nothing in the source says so, which is why the
 /// transpile is what reports it: a wheel that shipped without it would install
 /// cleanly and fail on the first import.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RuntimeRequirements {
     typing_extensions: bool,
+    /// what the runtime is to be told of each class of a stub the module reads as a type, a row
+    /// of python data by the path that names what it describes
+    told: std::collections::BTreeMap<String, String>,
 }
 
 /// What the emitted python needs when lowering reached for `typing_extensions`.
@@ -388,13 +394,20 @@ impl RuntimeRequirements {
     /// Fold in what another module needed.
     pub fn merge(&mut self, other: Self) {
         self.typing_extensions |= other.typing_extensions;
+        self.told.extend(other.told);
+    }
+
+    /// What the runtime is to be told of the classes of a stub the program reads as types, which
+    /// whatever holds the program's helpers holds.
+    pub fn told(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.told
     }
 
     /// The requirements, spelled the way a `[project] dependencies` entry is.
     ///
     /// A list rather than a set of flags, so that a second requirement is a line
     /// here instead of an edit at every place a caller asks what is needed.
-    pub fn specifiers(self) -> Vec<&'static str> {
+    pub fn specifiers(&self) -> Vec<&'static str> {
         let mut specifiers = Vec::new();
         if self.typing_extensions {
             specifiers.push(TYPING_EXTENSIONS_REQUIREMENT);
@@ -527,6 +540,7 @@ pub fn transpile_typed_with_report(
     let eager_model = ty_python_semantic::LoweringModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
     let eager_names = eager_model.eagerly_imported_names();
+    let told = std::cell::RefCell::new(std::collections::BTreeMap::new());
     let (spliced, ast_errors, phase0_map, phase0_columns) =
         transforms::ast_driver::run_against_source(
             working_source,
@@ -534,6 +548,7 @@ pub fn transpile_typed_with_report(
             &quotes,
             config,
             project,
+            &told,
         );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
@@ -585,7 +600,9 @@ pub fn transpile_typed_with_report(
         return Err(first.clone().into());
     }
 
-    let (final_output, redirect_columns, requirements) = run_import_redirect_phase(output, config);
+    let (final_output, redirect_columns, mut requirements) =
+        run_import_redirect_phase(output, config);
+    requirements.told = told.into_inner();
     let (final_output, cleanup_columns) =
         run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
     let (final_output, lazy_columns) = run_lazy_import_phase(
@@ -950,6 +967,7 @@ fn run_import_redirect_phase(
             // a stub is never imported, and the checker that reads it brings
             // its own `typing_extensions`
             typing_extensions: !config.is_stub,
+            told: std::collections::BTreeMap::new(),
         },
     )
 }

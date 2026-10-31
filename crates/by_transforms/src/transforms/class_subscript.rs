@@ -53,8 +53,6 @@ struct ClassSubscripts<'a> {
     types: &'a dyn TypeInfo,
     min_version: PythonVersion,
     edits: Vec<(TextRange, Vec<Fragment>)>,
-    /// whether a subscript tells the runtime the variance of its class
-    tells: bool,
     runtime: Vec<crate::runtime::Helper>,
     /// whether the expression being visited is read as a type: a type argument of a
     /// subscript that specializes its value, or the type a test asks about
@@ -84,36 +82,15 @@ impl ClassSubscripts<'_> {
             None
         };
         if let Some(helper) = helper {
-            // the variance of a class no transpiled module defines is told where it is
-            // subscripted, and this is the subscript
-            let told = self
-                .types
-                .variances_told_at_a_subscript(&subscript.value)
-                .map(|variances| {
-                    let codes = variances
-                        .iter()
-                        .map(|variance| variance.code().to_string())
-                        .collect::<Vec<_>>();
-                    format!(
-                        "{}({})(",
-                        self.written.helper(crate::runtime::VARIANCE),
-                        codes.join(", ")
-                    )
-                });
-            self.tells |= told.is_some();
             self.runtime.push(helper);
             // written as a whole, and without any parentheses around the value, so that a type
             // lowering writing this subscript itself leaves nothing of it behind
             self.edits.push((
                 subscript.range(),
                 vec![
-                    Fragment::Lit(format!(
-                        "{}({}",
-                        self.written.helper(helper),
-                        told.as_deref().unwrap_or_default()
-                    )),
+                    Fragment::Lit(format!("{}(", self.written.helper(helper))),
                     Fragment::Src(subscript.value.range()),
-                    Fragment::Lit(if told.is_some() { "), " } else { ", " }.to_owned()),
+                    Fragment::Lit(", ".to_owned()),
                     Fragment::Src(subscript.slice.range()),
                     Fragment::Lit(")".to_owned()),
                 ],
@@ -208,14 +185,10 @@ impl TypeAwarePass for ClassSubscriptPass<'_> {
             types,
             min_version: self.min_version,
             edits: Vec::new(),
-            tells: false,
             runtime: Vec::new(),
             in_type: false,
         };
         subscripts.visit_body(stmts);
-        if subscripts.tells {
-            ctx.runtime.insert(crate::runtime::VARIANCE);
-        }
         ctx.runtime.extend(subscripts.runtime);
         ctx.template_edits.extend(subscripts.edits);
     }
@@ -345,7 +318,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("c = _by_subscript(_by_variance(1)(zip), tuple[int, str])\n"),
+            out.contains("c = _by_subscript(zip, tuple[int, str])\n"),
             "{out}"
         );
         assert!(
@@ -387,9 +360,7 @@ mod tests {
     fn a_probe_evaluates_its_target_through_the_helper() {
         let out = out("def f(x: object):\n    return x is zip[int]\n");
         assert!(
-            out.contains(
-                "return _parametric_is(x, _by_subscript(_by_variance(1)(zip), int), (1,))"
-            ),
+            out.contains("return _parametric_is(x, _by_subscript(zip, int), (1,))"),
             "{out}"
         );
     }
@@ -515,7 +486,7 @@ mod tests {
     fn a_class_stub_that_returns_a_specialization_specializes() {
         let out = out("a = list[1]\nfrom collections.abc import Sequence\nb = Sequence[1]\n");
         assert!(out.contains("a = list[_by_lit(1)]\n"), "{out}");
-        assert!(out.contains("Sequence)[_by_lit(1)]\n"), "{out}");
+        assert!(out.contains("b = Sequence[_by_lit(1)]\n"), "{out}");
     }
 
     #[test]

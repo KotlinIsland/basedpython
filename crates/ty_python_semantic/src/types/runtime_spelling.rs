@@ -22,7 +22,7 @@ use crate::Db;
 use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
 use crate::types::ProgramEnvironment;
 use crate::types::check_order::InferredInCheckOrder;
-use crate::types::reified_infer::{ArgVariance, python_bytes_literal, python_str_literal};
+use crate::types::reified_infer::{python_bytes_literal, python_str_literal};
 use crate::types::told_classes::ToldClasses;
 use crate::types::visibility::private_symbols;
 
@@ -79,17 +79,13 @@ enum SpellingPart {
     Str(String),
     /// a `bytes` value, whose quotes depend on the python it is written for
     Bytes(Vec<u8>),
-    /// what opens telling the runtime the variance of the class spelled up to [`Self::Close`],
-    /// which a class no transpiled module defines has told wherever it is subscripted. a
-    /// matter for the program that runs, so the source reads as if it weren't there
-    TellVariance(Box<[u8]>),
     /// what opens the projection of the type spelled up to [`Self::Close`]
     Project(UseSiteVariance),
-    /// what closes [`Self::TellVariance`] or [`Self::Project`]
+    /// what closes [`Self::Project`]
     Close,
     /// what the runtime is to be told of the classes the spelling names, which a module says
     /// once rather than where it writes the spelling. it writes nothing here
-    Told(Box<ToldClasses>),
+    Told(ToldClasses),
     /// what opens a subscript the program that runs writes through a helper, because the class
     /// would answer it for itself or has none to answer it with: the class up to
     /// [`Self::HelperSubscriptArguments`] and its arguments up to
@@ -107,8 +103,6 @@ enum SpellingPart {
 pub enum SpellingHelper {
     /// `_by_lit`, which builds a literal type
     Literal,
-    /// `_by_variance`, which tells the runtime what a class varies by
-    Variance,
     /// `_by_out`, the projection `out T`
     Out,
     /// `_by_in`, the projection `in T`
@@ -150,18 +144,6 @@ impl RuntimeSpelling {
         Self {
             parts: vec![SpellingPart::Bytes(value.to_vec())],
         }
-    }
-
-    /// `class`, telling the runtime the variance of each of its type parameters as it is read
-    pub fn telling_variance(class: &Self, variances: &[ArgVariance]) -> Self {
-        let mut spelling = Self {
-            parts: vec![SpellingPart::TellVariance(
-                variances.iter().copied().map(ArgVariance::code).collect(),
-            )],
-        };
-        spelling.push(class);
-        spelling.parts.push(SpellingPart::Close);
-        spelling
     }
 
     /// `inner`, projected as `variance` says. `in out` is the plain form
@@ -214,24 +196,26 @@ impl RuntimeSpelling {
     /// this spelling, with what the runtime is to be told of what it names
     pub(crate) fn telling(mut self, told: ToldClasses) -> Self {
         if !told.is_empty() {
-            self.parts.push(SpellingPart::Told(Box::new(told)));
+            self.parts.push(SpellingPart::Told(told));
         }
         self
     }
 
     /// what the runtime is to be told of the classes the spelling names
-    pub fn told(&self) -> impl Iterator<Item = &ToldClasses> {
-        self.parts.iter().filter_map(|part| match part {
-            SpellingPart::Told(told) => Some(&**told),
-            _ => None,
-        })
+    pub fn told(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.parts
+            .iter()
+            .filter_map(|part| match part {
+                SpellingPart::Told(told) => Some(told.iter()),
+                _ => None,
+            })
+            .flatten()
     }
 
     /// each runtime helper the spelling writes a call to
     pub fn helpers(&self) -> impl Iterator<Item = SpellingHelper> {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::LiteralHelper => Some(SpellingHelper::Literal),
-            SpellingPart::TellVariance(_) => Some(SpellingHelper::Variance),
             SpellingPart::Project(UseSiteVariance::Out) => Some(SpellingHelper::Out),
             SpellingPart::Project(UseSiteVariance::In) => Some(SpellingHelper::In),
             SpellingPart::HelperSubscriptOpen(helper) => Some(*helper),
@@ -285,7 +269,6 @@ impl RuntimeSpelling {
             | SpellingPart::LiteralHelper
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
-            | SpellingPart::TellVariance(_)
             | SpellingPart::Project(_)
             | SpellingPart::HelperSubscriptOpen(_)
             | SpellingPart::HelperSubscriptArguments
@@ -310,7 +293,6 @@ impl RuntimeSpelling {
             | SpellingPart::LiteralHelper
             | SpellingPart::Str(_)
             | SpellingPart::Bytes(_)
-            | SpellingPart::TellVariance(_)
             | SpellingPart::Project(_)
             | SpellingPart::HelperSubscriptOpen(_)
             | SpellingPart::HelperSubscriptArguments
@@ -352,7 +334,6 @@ impl RuntimeSpelling {
                 | SpellingPart::LiteralHelper
                 | SpellingPart::Str(_)
                 | SpellingPart::Bytes(_)
-                | SpellingPart::TellVariance(_)
                 | SpellingPart::Project(_)
                 | SpellingPart::HelperSubscriptOpen(_)
                 | SpellingPart::HelperSubscriptArguments
@@ -443,13 +424,6 @@ impl RuntimeSpelling {
                     "data",
                     value.iter().map(ToString::to_string).collect(),
                 )),
-                SpellingPart::TellVariance(codes) if running => {
-                    let codes = codes.iter().map(ToString::to_string).collect::<Vec<_>>();
-                    spelled.push_str(&helper(SpellingHelper::Variance));
-                    spelled.push('(');
-                    spelled.push_str(&codes.join(", "));
-                    spelled.push_str(")(");
-                }
                 SpellingPart::Project(UseSiteVariance::Out) if running => {
                     spelled.push_str(&helper(SpellingHelper::Out));
                     spelled.push('(');
@@ -472,8 +446,7 @@ impl RuntimeSpelling {
                     spelled.push(if running { ')' } else { ']' });
                 }
                 SpellingPart::Module(imported) => spelled.push_str(&module(imported)),
-                SpellingPart::TellVariance(_)
-                | SpellingPart::Project(UseSiteVariance::InOut)
+                SpellingPart::Project(UseSiteVariance::InOut)
                 | SpellingPart::HelperSubscriptOpen(_)
                 | SpellingPart::Told(_)
                 | SpellingPart::Close => {}

@@ -715,7 +715,6 @@ impl<'src> WrittenNames<'src> {
     pub(crate) fn spelled(self, spelling: &RuntimeSpelling) -> String {
         let of = |helper: SpellingHelper| match helper {
             SpellingHelper::Literal => crate::runtime::LITERAL,
-            SpellingHelper::Variance => crate::runtime::VARIANCE,
             SpellingHelper::Out => crate::runtime::OUT,
             SpellingHelper::In => crate::runtime::IN,
             SpellingHelper::Specialization => crate::runtime::SPECIALIZATION,
@@ -727,9 +726,11 @@ impl<'src> WrittenNames<'src> {
                 .extend(spelling.helpers().map(of));
         }
         if let Some(spelling_told) = self.spelling_told {
-            for told in spelling.told() {
-                spelling_told.borrow_mut().extend(told.clone());
-            }
+            spelling_told.borrow_mut().extend(
+                spelling
+                    .told()
+                    .map(|(path, row)| (path.clone(), row.clone())),
+            );
         }
         if let Some(spelling_modules) = self.spelling_modules {
             spelling_modules

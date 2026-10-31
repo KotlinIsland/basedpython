@@ -315,8 +315,8 @@ assert chk[Out[() -> int]](Out[type[int]]())
 assert not chk[Out[Hashable]](Out[Sized]())
 ```
 
-a type argument that names a class further down the module is read once the class
-exists, and relates as that class does:
+a type argument that names a class further down the module, or further down a
+function, is read once the class exists, and relates as that class does:
 
 ```by
 class Out[out T]: pass
@@ -331,12 +331,15 @@ class Later: pass
 assert chk[Out[Later]](x)
 ```
 
-a class no `.by` module defines is known to the runtime once a `.by` module has
-read it as a type, and until then is treated as invariant unless its own `TypeVar`
-declares otherwise, and as deriving from what its runtime class derives from. what
+what a stub says of a class is written with the helpers a build writes, for every class any of its
+modules reads as a type, so the module itself reads as it was written. a module with nowhere to put
+that, because its helpers are pasted into it, holds it if it tests something, and a class nothing
+in the program reads as a type is treated as invariant unless its own `TypeVar` declares otherwise,
+and as deriving from what its runtime class derives from. what
 the runtime can't see, such as the arguments of a value that records none, answers
-`False`. a tuple records none, but its elements are there to ask: `(1, "a")` is a
-`(int, str)`
+`False`, and failing the test says nothing more of the value than it would in place: in the `else`
+of `if x is T`, `x` is what it was. a tuple records none, but its elements are there to ask:
+`(1, "a")` is a `(int, str)`
 
 a function that tests `x is T`, or hands `T` to something that does, refuses a type
 argument the runtime can't test (`erased-type-check`), for the same reason

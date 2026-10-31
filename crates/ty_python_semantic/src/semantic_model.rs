@@ -106,26 +106,19 @@ impl<'db> SemanticModel<'db> {
         crate::types::reified_infer::class_variances(self.db, literal)
     }
 
-    /// basedpython: the variance of each type parameter of the class `value` is, when subscripting
-    /// it has to tell the runtime that, because no transpiled definition of the class can
-    pub fn variances_told_at_a_subscript(&self, value: &ast::Expr) -> Option<Box<[ArgVariance]>> {
-        let literal = value.inferred_type(self)?.as_class_literal()?;
-        crate::types::reified_infer::variances_told_at_a_subscript(self.db, literal)
-    }
-
     /// basedpython: what the runtime has to be told of the classes `expr`, read as a type, names,
-    /// because what the checker read of them is in no object the runtime holds
-    pub fn told_classes(&self, expr: &ast::Expr) -> crate::types::told_classes::ToldClasses {
+    /// because what the checker read of them is in no object the runtime holds, as a row of python
+    /// data by the path that names what it describes
+    pub fn told_classes(&self, expr: &ast::Expr) -> std::collections::BTreeMap<String, String> {
         use crate::types::told_classes::{told_classes_of_class_read, told_classes_of_type};
         let env = self.program_environment();
-        let file = self.file.file(self.db);
         expr.inferred_type(self)
             .map_or_else(Default::default, |ty| match expr {
                 // a name reads the class it names, however a type argument reads it
                 ast::Expr::Name(_) | ast::Expr::Attribute(_) => {
-                    told_classes_of_class_read(self.db, &env, file, ty)
+                    (*told_classes_of_class_read(self.db, &env, ty)).clone()
                 }
-                _ => told_classes_of_type(self.db, &env, file, ty),
+                _ => (*told_classes_of_type(self.db, &env, ty)).clone(),
             })
     }
 
@@ -133,15 +126,15 @@ impl<'db> SemanticModel<'db> {
     pub fn told_classes_of_base(
         &self,
         expr: &ast::Expr,
-    ) -> crate::types::told_classes::ToldClasses {
+    ) -> std::collections::BTreeMap<String, String> {
         expr.inferred_type(self)
             .map_or_else(Default::default, |ty| {
-                crate::types::told_classes::told_classes_of_class_read(
+                (*crate::types::told_classes::told_classes_of_class_read(
                     self.db,
                     &self.program_environment(),
-                    self.file.file(self.db),
                     ty,
-                )
+                ))
+                .clone()
             })
     }
 

@@ -232,7 +232,7 @@ pub fn check_and_transpile(
             }),
         })
         .collect();
-    let finished = fan_out(jobs, gate == CheckGate::AllErrors, db.clone(), |db, job| {
+    let finished: Vec<_> = fan_out(jobs, gate == CheckGate::AllErrors, db.clone(), |db, job| {
         let config = Config {
             runtime_module: job.runtime_package.as_ref().map(RuntimePackage::module),
             ..config.clone()
@@ -259,6 +259,17 @@ pub fn check_and_transpile(
             Err(panic) => Outcome::Panicked(panic),
         }
     });
+    // a module holding its own helpers holds what they read of the whole program, since nothing
+    // else it can read says what another module read
+    let program_told: by_transforms::RuntimeRequirements = {
+        let mut told = by_transforms::RuntimeRequirements::default();
+        for (_, outcome) in &finished {
+            if let Some(Outcome::Transpiled { requirements, .. }) = outcome {
+                told.merge(requirements.clone());
+            }
+        }
+        told
+    };
     for (job, outcome) in finished {
         // a job is skipped only after an earlier one failed, and the hand-over
         // has already stopped there
@@ -277,6 +288,12 @@ pub fn check_and_transpile(
             } => {
                 requirements.merge(needed);
                 let by_source = source_text(db, job.file);
+                let python = if job.runtime_package.is_none() {
+                    by_transforms::runtime::with_told_rows(&python, program_told.told().values())
+                        .unwrap_or(python)
+                } else {
+                    python
+                };
                 consume(&Transpiled {
                     by_path: job.by_path,
                     by_source: by_source.as_str(),

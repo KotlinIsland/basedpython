@@ -18,7 +18,7 @@
 //! a specialization the forward direction injected stays too, as `f[int](1)` does: it says the
 //! same thing as the bare call
 //!
-//! `_by_told(__name__, ...)` tells the runtime what the checker of the source says for itself, so
+//! `_by_told(...)` tells the runtime what the checker of the source says for itself, so
 //! the statement is dropped. `_by_forward(list["F"], __name__)` → `list["F"]`
 //!
 //! `_by_lit` builds a literal type, so it only reverses where a type is read: a type argument, or
@@ -469,8 +469,7 @@ impl<'src> RuntimeHelpersReverse<'src> {
             return false;
         };
         let span = self.argument_spans(call)[0];
-        if !call.arguments.keywords.is_empty()
-            || module.id.as_str() != "__name__"
+        if module.id.as_str() != "__name__"
             || self.source[TextRange::new(call.start(), span.start())].contains('#')
             || self.source[TextRange::new(span.end(), call.end())].contains('#')
         {
@@ -667,9 +666,20 @@ mod tests {
 
     #[test]
     fn what_a_module_tells_the_runtime_about_stub_classes_is_dropped() {
-        let (lowered, reversed) =
-            round_trip("class Out[out T]: ...\nclass Later: ...\na = Out[str]()\nb = Later\n");
-        assert!(lowered.contains("_by_told(__name__, "), "{lowered}");
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            prune_unused_imports_after_reverse: true,
+            class_variance: true,
+            told_in_module: true,
+            ..config()
+        };
+        let lowered = transpile(
+            "class Out[out T]: ...\nclass Later: ...\na = Out[str]()\nb = Later\n",
+            &config,
+        )
+        .unwrap();
+        let reversed = reverse_transpile(&lowered, &config).unwrap();
+        assert!(lowered.contains("_by_told((\""), "{lowered}");
         assert!(!reversed.contains("_by_told"), "{reversed}");
         assert!(reversed.contains("a = Out[str]()"), "{reversed}");
     }
@@ -968,10 +978,7 @@ mod tests {
             f[Sequence[object]](1)
         "});
         assert!(out.contains("@_by_variance(1)\nclass Inf[T]:"), "{out}");
-        assert!(
-            out.contains("f[_by_variance(1)(Sequence)[object]](1)"),
-            "{out}"
-        );
+        assert!(out.contains("f[Sequence[object]](1)"), "{out}");
         assert!(!back.contains("_by_variance"), "{back}");
         assert!(back.contains("class Inf[T]:"), "{back}");
         assert!(back.contains("f[Sequence[object]](1)"), "{back}");
