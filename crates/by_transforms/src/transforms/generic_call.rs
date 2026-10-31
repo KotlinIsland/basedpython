@@ -1,103 +1,72 @@
-use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, PythonVersion, Stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr};
+use ruff_python_ast::{Expr, ExprContext, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::transforms::ast_driver::{Lowering, PassContext, TypeAwarePass};
+use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-/// Strips explicit type arguments from generic function call sites.
+/// Strips explicit type arguments from a subscript of a generic function that erases them,
+/// wherever the subscript stands, since python has nothing to subscript.
 ///
 ///   `f[T](x)` → `f(x)`
+///   `y = f[T]` → `y = f`
 ///
-/// only fires when the subscript target resolves to a locally-defined
-/// function — avoids stripping constructor calls like `list[int](...)`.
-pub(crate) struct GenericCallStrip<'src> {
-    source: &'src str,
+/// only fires when the subscript target resolves to a generic function — avoids stripping
+/// constructor calls like `list[int](...)`, and a reified function keeps its `[…]`: the
+/// `@generic` wrapper routes the specialization through `generic.__getitem__`.
+///
+/// each edit deletes what it covers, so a lowering of a type argument inside one has nothing
+/// to reach the output with, and no type argument is evaluated
+struct GenericCallStrip<'src> {
     types: &'src dyn TypeInfo,
     min_version: PythonVersion,
-    edits: Vec<Fix>,
+    edits: Vec<(TextRange, String)>,
 }
 
-impl<'src> GenericCallStrip<'src> {
-    fn new(source: &'src str, types: &'src dyn TypeInfo, min_version: PythonVersion) -> Self {
-        Self {
-            source,
-            types,
-            min_version,
-            edits: Vec::new(),
-        }
-    }
-
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
-    }
-}
-
-pub(crate) struct GenericCallStripPass<'src> {
-    source: &'src str,
+pub(crate) struct GenericCallStripPass {
     min_version: PythonVersion,
 }
 
-impl<'src> GenericCallStripPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
-        Self {
-            source,
-            min_version,
-        }
+impl GenericCallStripPass {
+    pub(crate) fn new(min_version: PythonVersion) -> Self {
+        Self { min_version }
     }
 }
 
-impl TypeAwarePass for GenericCallStripPass<'_> {
-    /// the type arguments it strips evaluate nothing, so there is nothing left to lower
-    fn subsumes(&self) -> &'static [Lowering] {
-        &[Lowering::ClassSubscript, Lowering::RuntimeVariance]
-    }
-
+impl TypeAwarePass for GenericCallStripPass {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = GenericCallStrip::new(self.source, types, self.min_version);
-        for stmt in stmts {
-            inner.visit_stmt(stmt);
-        }
-        for fix in inner.edits {
-            for edit in fix.edits() {
-                let range = edit.range();
-                let repl = edit.content().unwrap_or_default().to_owned();
-                ctx.text_edits.push((range, repl));
-            }
-        }
+        let mut inner = GenericCallStrip {
+            types,
+            min_version: self.min_version,
+            edits: Vec::new(),
+        };
+        inner.visit_body(stmts);
+        ctx.text_edits.extend(inner.edits);
     }
 }
 
 impl<'ast> Visitor<'ast> for GenericCallStrip<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        walk_stmt(self, stmt);
-    }
+    fn visit_annotation(&mut self, _expr: &'ast Expr) {}
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Call(call) = expr {
-            if let Expr::Subscript(sub) = call.func.as_ref() {
-                if let Expr::Name(name) = sub.value.as_ref() {
-                    // a reified generic keeps its `[…]`: the `@generic` wrapper
-                    // routes the specialization through `generic.__getitem__`,
-                    // so stripping it would erase a runtime-significant step
-                    if self.types.is_function(name)
-                        && !self.types.is_reified_function(name, self.min_version)
-                    {
-                        let fn_src = self.src(sub.value.range()).to_owned();
-                        self.edits
-                            .push(Fix::safe_edit(Edit::range_replacement(fn_src, sub.range())));
-                        // visit args but not the subscript func again
-                        for arg in &call.arguments.args {
-                            self.visit_expr(arg);
-                        }
-                        for kw in &call.arguments.keywords {
-                            self.visit_expr(&kw.value);
-                        }
-                        return;
-                    }
-                }
+        // a `type def` applied is a type, which the lowering of a type writes
+        if let Expr::Subscript(subscript) = expr
+            && subscript.ctx == ExprContext::Load
+            && !self.types.is_type_fn_application(expr)
+            && self
+                .types
+                .subscript_erases_type_arguments(&subscript.value, self.min_version)
+        {
+            // these take any parentheses around the value with them, on both of its sides
+            let value = subscript.value.range();
+            let opening = TextRange::new(subscript.start(), value.start());
+            if !opening.is_empty() {
+                self.edits.push((opening, String::new()));
             }
+            self.edits
+                .push((TextRange::new(value.end(), subscript.end()), String::new()));
+            self.visit_expr(&subscript.value);
+            return;
         }
         walk_expr(self, expr);
     }
@@ -192,6 +161,70 @@ mod tests {
                 f()
             "},
             PythonVersion::PY314,
+        );
+    }
+
+    #[test]
+    fn a_subscript_is_stripped_wherever_it_stands() {
+        check_at(
+            indoc! {"
+                def f[T](x: T) -> T:
+                    return x
+                y = f[int]
+                print(f[1])
+                z = map(f[int], [1])
+                g = f
+                print(g[1])
+                print((f)[int])
+            "},
+            indoc! {"
+                def f[T](x: T) -> T:
+                    return x
+                y = f
+                print(f)
+                z = map(f, [1])
+                g = f
+                print(g)
+                print(f)
+            "},
+            PythonVersion::PY314,
+        );
+    }
+
+    #[test]
+    fn what_a_stripped_subscript_holds_is_not_lowered() {
+        let source = indoc! {"
+            from collections.abc import Sequence
+            def f[T](t: T) -> T:
+                return t
+            f[map[int]](map(int, []))
+            f[Sequence[int]]([1])
+            f[list[1]](1)
+            f[int?](1)
+            f[() -> int](1)
+        "};
+        let config = Config {
+            min_version: PythonVersion::PY314,
+            ..Config::default()
+        };
+        let out = transpile(source, &config).unwrap();
+        assert!(
+            out.contains("f(map(int, []))\nf([1])\nf(1)\nf(1)\nf(1)\n"),
+            "{out}"
+        );
+        for lowered in ["_by_subscript(map", "_by_variance(1)(Sequence)", "Literal"] {
+            assert!(
+                !out[out.rfind("def f").unwrap()..].contains(lowered),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_function_that_is_not_generic_is_left_to_fail_as_written() {
+        check(
+            "def h(x: int): ...\nh[int](1)\n",
+            "def h(x: int): ...\nh[int](1)\n",
         );
     }
 }

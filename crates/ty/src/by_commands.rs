@@ -3143,6 +3143,50 @@ def _svarint(out, value):
     _varint(out, (-value << 1) | 1 if value < 0 else value << 1)
 
 
+def _class_first_line(code, consts, by_line):
+    """The bytecode and constants of `code`, with the `__firstlineno__` a class body records at
+    the `.by` line of the class, which is what `inspect.getsource` starts reading the `.by` from.
+
+    Python writes it into the body as a number rather than a location. A decorator the
+    transpiler wrote above the class has no `.by` line, and the class starts on the next line
+    that does. A class body whose constants have outgrown the one byte its load has room for
+    keeps the number it has."""
+    if sys.version_info < (3, 13) or "__firstlineno__" not in code.co_names:
+        return code.co_code, consts
+    load = None
+    for instruction in dis.get_instructions(code):
+        if instruction.opname == "STORE_NAME" and instruction.argval == "__firstlineno__":
+            break
+        load = instruction
+    else:
+        return code.co_code, consts
+    if load is None or load.opname not in ("LOAD_CONST", "LOAD_SMALL_INT"):
+        return code.co_code, consts
+    last = max((line for _, _, line in code.co_lines() if line is not None), default=load.argval)
+    line = load.argval
+    while by_line(line) == 0 and line < last:
+        line += 1
+    first = by_line(line)
+    bytecode = bytearray(code.co_code)
+    if load.opname == "LOAD_SMALL_INT" and first < 256:
+        bytecode[load.offset + 1] = first
+        return bytes(bytecode), consts
+    # the slot it was loaded from may hold what the body itself reads, `x = 3` in a class on line 3
+    slot = next(
+        (index for index, const in enumerate(consts) if type(const) is int and const == first),
+        None,
+    )
+    if slot is None:
+        slot, consts = len(consts), consts + (first,)
+    if slot > 255:
+        return code.co_code, consts
+    if load.opname == "LOAD_CONST" and load.arg > 255:
+        bytecode[load.offset - 1] = 0
+    bytecode[load.offset] = dis.opmap["LOAD_CONST"]
+    bytecode[load.offset + 1] = slot
+    return bytes(bytecode), consts
+
+
 def _relined(code, filename, by_line, width, by_span=None):
     """`code` and every code object it holds, named `filename`, with each location
     moved to the line `by_line` gives.
@@ -3175,6 +3219,7 @@ def _relined_one(code, filename, by_line, width, by_span):
     # own does, rather than at line 0 when the transpiler wrote that line — an import
     # it needed — on its own. a profile names the module by it, `main.by:1(<module>)`
     first = 1 if code.co_name == "<module>" else by_line(code.co_firstlineno)
+    bytecode, consts = _class_first_line(code, consts, by_line)
     table = bytearray()
     if sys.version_info >= (3, 11):
         # an entry for each run of up to 8 code units at one location, in the long form,
@@ -3212,7 +3257,11 @@ def _relined_one(code, filename, by_line, width, by_span):
                 previous = line
             start = end
         return code.replace(
-            co_filename=filename, co_firstlineno=first, co_consts=consts, co_linetable=bytes(table)
+            co_code=bytecode,
+            co_filename=filename,
+            co_firstlineno=first,
+            co_consts=consts,
+            co_linetable=bytes(table),
         )
     if sys.version_info >= (3, 10):
         # a (bytecode length, line delta) pair for each range, -128 for no line

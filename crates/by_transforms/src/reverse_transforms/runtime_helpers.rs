@@ -1,5 +1,6 @@
 //! reverse of the runtime helpers an expression is lowered onto:
 //!   `_by_subscript(map, int)` → `map[int]` (`crate::transforms::class_subscript`)
+//!   `_by_specialization(U, int)` → `U[int]` (`crate::transforms::class_subscript`)
 //!   `_by_raise(E, C)` → `raise E from C` (`crate::transforms::statement_expression`)
 //!   `B[_by_lit(1)]` → `B[1]` (the spelling of a literal type argument)
 //!   `_by_specialized(c.m, int)` → `c.m[int]` (`crate::transforms::reified_generic`)
@@ -37,8 +38,9 @@ use super::literal_types::is_literal_value;
 use crate::runtime::{self, Helper};
 use crate::transforms::source_util::{line_past_end, line_start};
 
-const REVERSED: [Helper; 8] = [
+const REVERSED: [Helper; 9] = [
     runtime::SUBSCRIPT,
+    runtime::SPECIALIZATION,
     runtime::RAISE,
     runtime::LITERAL,
     runtime::SPECIALIZED,
@@ -80,8 +82,9 @@ impl Enclosing {
 pub(crate) struct RuntimeHelpersReverse<'src> {
     source: &'src str,
     tokens: &'src Tokens,
-    /// the helpers whose names in this module are the runtime's
-    provided: Vec<Helper>,
+    /// the helpers whose names in this module are the runtime's, each with the name the module
+    /// reads it by
+    provided: Vec<(Helper, String)>,
     /// the definitions of the runtime pasted into this module
     pasted: Vec<TextRange>,
     enclosing: Enclosing,
@@ -106,22 +109,39 @@ impl<'src> RuntimeHelpersReverse<'src> {
         if REVERSED.iter().any(|helper| source.contains(helper.name())) {
             reverse.pasted = runtime::pasted_definitions(suite, source);
             let shadowed = runtime::shadowing(suite).scopes;
-            reverse.provided = REVERSED
-                .into_iter()
-                .filter(|helper| {
-                    let name = helper.name();
+            let local_names: Vec<String> = suite
+                .iter()
+                .flat_map(|stmt| runtime::module_bindings(stmt).into_keys())
+                .collect();
+            let mut provided = Vec::new();
+            for helper in REVERSED {
+                let provider = local_names.iter().find(|local| {
                     let mut binders = suite
                         .iter()
-                        .filter(|stmt| runtime::module_bindings(stmt).contains_key(name));
+                        .filter(|stmt| runtime::module_bindings(stmt).contains_key(*local));
                     let (Some(binder), None) = (binders.next(), binders.next()) else {
                         return false;
                     };
-                    (is_runtime_import(binder, name) || reverse.is_pasted(binder.range()))
-                        && !shadowed.iter().any(|(bound, ..)| bound == name)
-                })
-                .collect();
+                    (is_runtime_import(binder, helper.name(), local)
+                        || (runtime::helper_of_local_name(local) == helper.name()
+                            && reverse.is_pasted(binder.range())))
+                        && !shadowed.iter().any(|(bound, ..)| bound == *local)
+                });
+                if let Some(local) = provider {
+                    provided.push((helper, local.clone()));
+                }
+            }
+            reverse.provided = provided;
         }
         reverse
+    }
+
+    /// the helper `name` is this module's name for
+    fn reads_helper(&self, name: &str) -> Option<Helper> {
+        self.provided
+            .iter()
+            .find(|(_, local)| local == name)
+            .map(|(helper, _)| *helper)
     }
 
     fn is_pasted(&self, range: TextRange) -> bool {
@@ -419,8 +439,7 @@ impl<'src> RuntimeHelpersReverse<'src> {
         matches!(expr, Expr::Call(call) if matches!(
             call.func.as_ref(),
             Expr::Name(name)
-                if name.id.as_str() == runtime::VARIANCE.name()
-                    && self.provided.contains(&runtime::VARIANCE)
+                if self.reads_helper(name.id.as_str()) == Some(runtime::VARIANCE)
         ))
     }
 
@@ -448,15 +467,13 @@ impl<'src> RuntimeHelpersReverse<'src> {
         let Expr::Name(name) = call.func.as_ref() else {
             return false;
         };
-        let Some(helper) = self
-            .provided
-            .iter()
-            .find(|helper| helper.name() == name.id.as_str())
-        else {
+        let Some(helper) = self.reads_helper(name.id.as_str()) else {
             return false;
         };
-        match *helper {
-            runtime::SUBSCRIPT | runtime::SPECIALIZED => self.subscript(call),
+        match helper {
+            runtime::SUBSCRIPT | runtime::SPECIALIZATION | runtime::SPECIALIZED => {
+                self.subscript(call)
+            }
             runtime::RAISE => self.raise(call, enclosing),
             runtime::LITERAL => in_type && self.literal(call),
             runtime::CELL_IS => self.cell_is(call, enclosing),
@@ -469,7 +486,8 @@ impl<'src> RuntimeHelpersReverse<'src> {
 
 /// whether the statement is an import of `name`, under that name, from a `_by_runtime` module
 /// however a build qualifies it
-fn is_runtime_import(stmt: &Stmt, name: &str) -> bool {
+/// whether `stmt` imports the runtime's `name` under the name `local`
+fn is_runtime_import(stmt: &Stmt, name: &str, local: &str) -> bool {
     let Stmt::ImportFrom(import) = stmt else {
         return false;
     };
@@ -477,10 +495,14 @@ fn is_runtime_import(stmt: &Stmt, name: &str) -> bool {
         && import.module.as_ref().is_some_and(|module| {
             module.id.as_str().rsplit('.').next() == Some(runtime::MODULE_NAME)
         })
-        && import
-            .names
-            .iter()
-            .any(|alias| alias.name.id.as_str() == name && alias.asname.is_none())
+        && import.names.iter().any(|alias| {
+            alias.name.id.as_str() == name
+                && alias
+                    .asname
+                    .as_ref()
+                    .map_or(name, |asname| asname.id.as_str())
+                    == local
+        })
 }
 
 impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
@@ -569,7 +591,7 @@ mod tests {
     use indoc::indoc;
     use ruff_python_ast::PythonVersion;
 
-    const IMPORT: &str = "from _by_runtime import _by_cell_is, _by_in, _by_lit, _by_out, _by_raise, _by_specialized, _by_subscript, _by_variance\n";
+    const IMPORT: &str = "from _by_runtime import _by_cell_is, _by_in, _by_lit, _by_out, _by_raise, _by_specialization, _by_specialized, _by_subscript, _by_variance\n";
 
     /// the reverse of `source` in a module that imports every helper from the runtime
     fn rev(source: &str) -> String {
@@ -1085,5 +1107,99 @@ mod tests {
     fn a_printed_field_is_left_alone() {
         let source = "print(f\"{_by_subscript(map, int) = }\")\n";
         assert_eq!(rev(source), source);
+    }
+
+    #[test]
+    fn a_specialization_of_a_class_that_answers_a_subscript_is_written_as_one() {
+        assert_eq!(
+            rev("a = f[_by_specialization(U, int)]\n"),
+            "a = f[U[int]]\n"
+        );
+        assert_eq!(
+            rev("a = f[_by_specialization(U, int, str)]\n"),
+            "a = f[U[int, str]]\n"
+        );
+        assert_eq!(
+            rev("a = f[_by_specialization(U, _by_lit(1))]\n"),
+            "a = f[U[1]]\n"
+        );
+    }
+
+    #[test]
+    fn a_type_argument_a_class_answers_round_trips() {
+        let source = indoc! {"
+            class U[T]:
+                def __class_getitem__(cls, item):
+                    return (item, 1)
+
+            def chk[T](x: object) -> bool:
+                return x is T
+
+            a = chk[U[int]](1)
+            b = chk[U[1]](1)
+            c = chk[list[U[int]]]([])
+            d = U[1]
+        "};
+        let (lowered, reversed) = round_trip(source);
+        assert!(
+            lowered.contains("chk[_by_specialization(U, int)](1)"),
+            "{lowered}"
+        );
+        assert!(lowered.contains("d = U[_by_lit(1)]\n"), "{lowered}");
+        assert_eq!(reversed, source);
+    }
+
+    /// `tuple[()]` is `.by` as it stands, and lowers to the same python
+    #[test]
+    fn the_empty_tuple_as_a_type_argument_is_stable_through_a_round_trip() {
+        let (lowered, reversed) = round_trip("class Out[T]\n\na = Out[()]\nb: Out[()]\n");
+        assert!(lowered.contains("a = Out[tuple[()]]\n"), "{lowered}");
+        assert!(lowered.contains("b: Out[tuple[()]]\n"), "{lowered}");
+        assert!(reversed.contains("a = Out[tuple[()]]\n"), "{reversed}");
+        assert!(reversed.contains("b: Out[tuple[()]]\n"), "{reversed}");
+        let (again, _) = round_trip(&reversed);
+        assert_eq!(again, lowered);
+    }
+
+    /// the module's own binding stays its own, and what the emitted code reads under another
+    /// name is reversed all the same
+    #[test]
+    fn a_helper_read_under_a_name_of_its_own_round_trips() {
+        let source = indoc! {"
+            class B[T]
+
+            _by_lit = 5
+            a = B[1]
+        "};
+        let (lowered, reversed) = round_trip(source);
+        assert!(lowered.contains("import _by_lit as _by_lit2"), "{lowered}");
+        assert!(lowered.contains("a = B[_by_lit2(1)]\n"), "{lowered}");
+        assert_eq!(reversed, source);
+    }
+
+    #[test]
+    fn a_helper_pasted_under_a_name_of_its_own_is_read_under_it() {
+        let source = indoc! {"
+            class B[T]: ...
+
+            _by_lit = 5
+            a = B[1]
+        "};
+        let config = config();
+        let lowered = transpile(source, &config).unwrap();
+        assert!(lowered.contains("def _by_lit2("), "{lowered}");
+        assert!(lowered.contains("a = B[_by_lit2(1)]\n"), "{lowered}");
+        let reversed = reverse_transpile(&lowered, &config).unwrap();
+        assert!(reversed.contains("a = B[1]\n"), "{reversed}");
+    }
+
+    /// a name that only looks like one the module would read a helper under is the author's
+    #[test]
+    fn a_function_named_like_a_helper_read_under_a_name_of_its_own_is_left_alone() {
+        let source = "def _by_lit2(x):\n    return x\na = B[_by_lit2(1)]\n";
+        assert_eq!(
+            reverse_transpile(source, &Config::test_default()).unwrap(),
+            source
+        );
     }
 }

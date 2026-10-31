@@ -10699,3 +10699,163 @@ fn a_sealed_class_closes_over_the_source_of_the_project() {
     by(&["check", "pkg/use.by"]);
     by(&["build"]);
 }
+
+/// `inspect` reads a class's source from the `.by` by the first line the class records, which
+/// python compiled from the generated file: there the runtime's import sits above it, and a
+/// class that varies has a decorator of the transpiler's
+#[test]
+fn run_keeps_the_by_line_a_class_records_for_inspect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "import inspect\n",
+            "from dataclasses import dataclass\n",
+            "def f[T]() -> object:\n",
+            "    return T\n",
+            "print(f[int]())\n",
+            "class Plain:\n",
+            "    three = 8\n",
+            "class Varies[out T]:\n",
+            "    def m(self) -> int:\n",
+            "        return 1\n",
+            "@dataclass(slots=True)\n",
+            "class Decorated[out T]:\n",
+            "    v: int = 1\n",
+            "for klass in (Plain, Varies, Decorated):\n",
+            "    source, line = inspect.getsourcelines(klass)\n",
+            "    print(line, source[0].rstrip())\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    let python = python_version_of_run();
+    if python < (3, 13) {
+        return;
+    }
+    assert!(
+        stdout.contains("6 class Plain:\n"),
+        "a class under the runtime's import should name its own line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("8 class Varies[out T]:\n"),
+        "a class under a decorator of the transpiler's should name its own line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("11 @dataclass(slots=True)\n"),
+        "a class's own decorators are part of it:\n{stdout}"
+    );
+}
+
+/// the version of the interpreter `by run` picks
+fn python_version_of_run() -> (u32, u32) {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let output = Command::new(python)
+        .args(["-c", "import sys; print(*sys.version_info[:2])"])
+        .output()
+        .expect("failed to spawn python");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut parts = text
+        .split_whitespace()
+        .map(|part| part.parse().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+/// a subscript reached through a module is as ordinary as any, and what a module exports is
+/// read for what it is
+#[test]
+fn run_reads_a_subscript_of_another_module_as_what_it_is() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("dep.by"),
+        concat!(
+            "class M(type):\n",
+            "    def __getitem__(cls, k: int) -> int:\n",
+            "        return k + 1\n",
+            "class Reg(metaclass=M): pass\n",
+            "def f[T](x: object) -> object:\n",
+            "    return x\n",
+            "class O[T = int]:\n",
+            "    v: T\n",
+            "    def __init__(self, v: T):\n",
+            "        self.v = v\n",
+            "type X = O\n",
+            "A = O\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "import dep\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "print(dep.Reg[1])\n",
+            "print(dep.f[int](2))\n",
+            "y = dep.f[1]\n",
+            "print(y(3))\n",
+            "print(chk[dep.O](dep.O[str](\"a\")), chk[dep.O](dep.O[int](1)))\n",
+            "print(chk[dep.X](dep.O[str](\"a\")), chk[dep.X](dep.O[int](1)))\n",
+            "print(chk[dep.A](dep.O[str](\"a\")), chk[dep.A](dep.O[int](1)))\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["2", "2", "3", "False True", "False True", "False True"]
+    );
+}
+
+/// the helper is imported under a name of its own where the program uses the helper's
+#[test]
+fn run_keeps_the_name_of_a_helper_the_program_binds_its_own() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "_by_lit = 5\n",
+            "def f[T]() -> object:\n",
+            "    return T\n",
+            "def g(_by_variance: int) -> object:\n",
+            "    return (f[1](), _by_lit, _by_variance)\n",
+            "print(g(2))\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "(typing.Literal[1], 5, 2)"
+    );
+}

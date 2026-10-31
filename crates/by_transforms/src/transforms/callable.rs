@@ -96,6 +96,7 @@ pub(crate) struct CallableSyntax<'src> {
     needs_typeof_import: bool,
     needs_not_import: bool,
     needs_class_subscript_runtime: bool,
+    needs_specialization_runtime: bool,
     /// what an evaluated subscript has to run on
     min_version: ruff_python_ast::PythonVersion,
     needs_annotated_import: bool,
@@ -160,6 +161,7 @@ impl<'src> CallableSyntax<'src> {
             needs_typeof_import: false,
             needs_not_import: false,
             needs_class_subscript_runtime: false,
+            needs_specialization_runtime: false,
             min_version: config.min_version,
             needs_annotated_import: false,
             needs_type_is_import: false,
@@ -283,6 +285,9 @@ impl<'src> CallableSyntax<'src> {
         if self.needs_class_subscript_runtime {
             helpers.push(crate::runtime::SUBSCRIPT);
         }
+        if self.needs_specialization_runtime {
+            helpers.push(crate::runtime::SPECIALIZATION);
+        }
         // reset so a second call is a no-op rather than re-emitting every line
         self.needs_import = false;
         self.needs_concatenate_import = false;
@@ -291,6 +296,7 @@ impl<'src> CallableSyntax<'src> {
         self.needs_typeof_import = false;
         self.needs_not_import = false;
         self.needs_class_subscript_runtime = false;
+        self.needs_specialization_runtime = false;
         self.needs_annotated_import = false;
         self.needs_union_import = false;
         self.needs_optional_runtime = false;
@@ -677,6 +683,15 @@ impl<'src> CallableSyntax<'src> {
         if let Some(name) = self.substitution_for(expr.range()) {
             return Some(name.to_owned());
         }
+        // a name standing for a specialization the program may read back, which the class it
+        // evaluates to says less than: `chk[O]` for a `class O[T = int]` is `chk[O[int]]`
+        if self.evaluated
+            && let Some(spelling) = self
+                .types
+                .and_then(|types| types.bare_type_argument_spelling(expr, self.min_version))
+        {
+            return Some(self.written.spelled(&spelling));
+        }
         match expr {
             // basedpython ParamSpec/Concatenate: `(**P) -> R` is `Callable[P, R]`
             // and `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
@@ -777,7 +792,10 @@ impl<'src> CallableSyntax<'src> {
             // a union written with the operator is kept as written, unless the runtime
             // evaluates it on a target without the operator
             Expr::BinOp(b)
-                if b.op == Operator::BitOr && self.evaluated && !self.union_operator_runs =>
+                if b.op == Operator::BitOr
+                    && self.evaluated
+                    && !self.union_operator_runs
+                    && !super::literal_types::is_one_literal_type(expr, self.float_literals) =>
             {
                 let mut parts: Vec<Expr> = Vec::new();
                 collect_union(expr, &mut parts);
@@ -942,6 +960,25 @@ impl<'src> CallableSyntax<'src> {
                         .value_telling_variance(&s.value)
                         .unwrap_or_else(|| self.src(s.value.range()).to_owned());
                     return Some(format!("_by_subscript({value}, {slice})"));
+                }
+                // read as a type, this is the specialization, whatever the class would answer
+                // the subscript with
+                if self.evaluated
+                    && !s.slice.is_slice_expr()
+                    && self.types.is_some_and(|types| {
+                        types.subscript_specializes(&s.value)
+                            && types.subscript_calls_the_class(&s.value)
+                    })
+                {
+                    self.needs_specialization_runtime = true;
+                    let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
+                    let value = self
+                        .value_telling_variance(&s.value)
+                        .unwrap_or_else(|| self.src(s.value.range()).to_owned());
+                    return Some(format!(
+                        "{}({value}, {slice})",
+                        self.written.helper(crate::runtime::SPECIALIZATION)
+                    ));
                 }
                 if let Some(value) = self.value_telling_variance(&s.value) {
                     let slice = slice_rewrite.unwrap_or_else(|| self.lower_leaf(&s.slice));
@@ -1126,8 +1163,16 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
     fn visit(
         &mut self,
         expr: &Expr,
-        _pos: crate::transforms::type_expr_walker::TypePos,
+        pos: crate::transforms::type_expr_walker::TypePos,
     ) -> crate::transforms::type_expr_walker::Recurse {
+        // the type a name stands for is a question for what reads it as a type argument or
+        // through an alias. a base or a bound that is a name is the thing itself
+        if pos == crate::transforms::type_expr_walker::TypePos::Root
+            && !self.telling_variance
+            && matches!(expr, Expr::Name(_) | Expr::Attribute(_))
+        {
+            return crate::transforms::type_expr_walker::Recurse::Stop;
+        }
         // ParamSpec-targeted subscripts (`A[(int, str)]` where `class
         // A[P: Parameters]`): the tuple slice is a parameter list lowered
         // by `generics.rs` to `[int, str]`, not a tuple-type. don't fire

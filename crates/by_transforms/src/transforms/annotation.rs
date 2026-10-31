@@ -247,12 +247,10 @@ impl<'src> TupleLiteralType<'src> {
                             None
                         }
                     }
-                    // `X[()]` — the empty parenthesized tuple inside a
-                    // subscript is the canonical spelling for an empty tuple
-                    // type argument (`tuple[()]` is "empty tuple"). don't
-                    // recurse — that would re-lower `()` to `tuple[()]` and
-                    // emit `X[tuple[()]]`
-                    Expr::Tuple(t) if t.parenthesized && t.elts.is_empty() => None,
+                    // `X[()]`: see `empty_tuple_argument`
+                    Expr::Tuple(t) if t.parenthesized && t.elts.is_empty() => {
+                        self.empty_tuple_argument(&s.value)
+                    }
                     slice => self.transform_annotation(slice),
                 };
                 if let Some(slice_str) = slice_rewrite {
@@ -265,6 +263,15 @@ impl<'src> TupleLiteralType<'src> {
 
             _ => None,
         }
+    }
+
+    /// what the slice `()` of a subscript of `value` is written as. python reads it as no
+    /// arguments at all, which is what it means for `tuple[()]` and for a parameter that takes
+    /// a run of them, and anywhere else it is one argument, the empty tuple
+    fn empty_tuple_argument(&self, value: &Expr) -> Option<String> {
+        self.types
+            .empty_slice_is_the_empty_tuple(value)
+            .then(|| format!("{}[()]", self.written.builtin("tuple")))
     }
 
     /// Lowers one element of a parameter-shape tuple to a Python type
@@ -389,11 +396,18 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
         // a generic's type arguments are lowered one by one, each where it stands, so a
         // pass that writes one of them whole, a forward reference quoted where python reads
         // it lazily, wraps that argument's lowering rather than landing inside a rewrite of
-        // the whole subscript. `X[()]` is python's spelling already
-        if let Expr::Subscript(s) = expr
-            && !matches!(s.slice.as_ref(), Expr::Tuple(t) if t.parenthesized && t.elts.is_empty())
-        {
-            return Recurse::Descend;
+        // the whole subscript
+        if let Expr::Subscript(s) = expr {
+            if !matches!(s.slice.as_ref(), Expr::Tuple(t) if t.parenthesized && t.elts.is_empty()) {
+                return Recurse::Descend;
+            }
+            if let Some(argument) = self.empty_tuple_argument(&s.value) {
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    argument,
+                    s.slice.range(),
+                )));
+            }
+            return Recurse::Stop;
         }
         // `transform_annotation` is a deep recursive rewriter that produces
         // a single replacement string for the whole expression. emit the
@@ -946,5 +960,47 @@ mod tests {
         // `a: ()` is shorthand for the empty-tuple type. without rewriting it
         // we'd leave `()` raw in python output, which is invalid as an annotation
         check("a: () = ()\n", "a: tuple[()] = ()\n");
+    }
+
+    #[test]
+    fn an_empty_tuple_slice_is_the_empty_tuple_where_a_parameter_takes_one_argument() {
+        for (source, written) in [
+            ("class A[T]: ...\na = A[()]\n", "a = A[tuple[()]]\n"),
+            ("class A[T]: ...\nb: A[()]\n", "b: A[tuple[()]]\n"),
+            (
+                "class A[T, U = int]: ...\na = A[()]\n",
+                "a = A[tuple[()]]\n",
+            ),
+            ("class V[T, *Ts]: ...\na = V[()]\n", "a = V[tuple[()]]\n"),
+            ("a = list[()]\n", "a = list[tuple[()]]\n"),
+            ("type X[T] = list[T]\na = X[()]\n", "a = X[tuple[()]]\n"),
+            (
+                "def f[T]() -> object:\n    return T\na = f[()]()\n",
+                "a = f[tuple[()]]()\n",
+            ),
+        ] {
+            let config = Config {
+                min_version: PythonVersion::PY314,
+                ..Config::test_default()
+            };
+            let out = crate::transpile(source, &config).unwrap();
+            assert!(out.contains(written), "{source}\n{out}");
+        }
+    }
+
+    #[test]
+    fn an_empty_tuple_slice_is_no_arguments_where_a_parameter_takes_a_run_of_them() {
+        for (source, written) in [
+            ("class V[*Ts]: ...\na = V[()]\n", "a = V[()]\n"),
+            ("a = tuple[()]\n", "a = tuple[()]\n"),
+            ("class K[**P]: ...\nb: K[()]\n", "b: K[[]]\n"),
+        ] {
+            let config = Config {
+                min_version: PythonVersion::PY314,
+                ..Config::test_default()
+            };
+            let out = crate::transpile(source, &config).unwrap();
+            assert!(out.contains(written), "{source}\n{out}");
+        }
     }
 }

@@ -450,7 +450,7 @@ impl TypePosWalker<'_> {
         let Some(types) = self.types else {
             return false;
         };
-        (trailing_name(value).is_some() && types.subscript_is_known_type_context(value))
+        (trailing_name(value).is_some() && types.subscript_applies_type_arguments(value))
             || types.subscript_specializes_reified_function(value)
     }
 }

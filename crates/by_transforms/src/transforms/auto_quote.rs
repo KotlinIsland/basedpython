@@ -170,7 +170,8 @@ impl Walk<'_> {
             edits: &mut self.edits,
             skip_root: false,
         };
-        // a subscript the runtime refuses would raise as the annotation is evaluated. a quote
+        // a subscript the runtime refuses would raise as the annotation is evaluated, and one a
+        // class answers for itself would be handed a type it has no reason to expect. a quote
         // changes what `__annotations__` holds, and frameworks read that, so this asks for
         // more than the value-position lowering, which only ever asks the runtime
         if quoter.contains_forward_reference(annotation)
@@ -192,6 +193,8 @@ fn holds_refused_class_subscript(types: &dyn TypeInfo, annotation: &Expr) -> boo
                 expr,
                 Expr::Subscript(subscript)
                     if self.types.class_subscript_is_refused(&subscript.value)
+                        || (self.types.subscript_specializes(&subscript.value)
+                            && self.types.subscript_calls_the_class(&subscript.value))
             );
             if !self.found {
                 walk_expr(self, expr);

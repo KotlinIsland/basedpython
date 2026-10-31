@@ -694,23 +694,44 @@ impl<'src> WrittenNames<'src> {
     }
 
     /// `spelling`, which the checker spelled for this module, as the module is emitted: each
-    /// module-level `private` symbol it reads under the name the symbol is emitted under
+    /// module-level `private` symbol it reads under the name the symbol is emitted under, and
+    /// each runtime helper under the name the module reads it by
     pub(crate) fn spelled(self, spelling: &RuntimeSpelling) -> String {
+        let of = |helper: SpellingHelper| match helper {
+            SpellingHelper::Literal => crate::runtime::LITERAL,
+            SpellingHelper::Variance => crate::runtime::VARIANCE,
+            SpellingHelper::Out => crate::runtime::OUT,
+            SpellingHelper::In => crate::runtime::IN,
+            SpellingHelper::Specialization => crate::runtime::SPECIALIZATION,
+        };
         if let Some(spelling_helpers) = self.spelling_helpers {
             spelling_helpers
                 .borrow_mut()
-                .extend(spelling.helpers().map(|helper| match helper {
-                    SpellingHelper::Literal => crate::runtime::LITERAL,
-                    SpellingHelper::Variance => crate::runtime::VARIANCE,
-                    SpellingHelper::Out => crate::runtime::OUT,
-                    SpellingHelper::In => crate::runtime::IN,
-                }));
+                .extend(spelling.helpers().map(of));
         }
         let module_private = |symbol: &str| self.module_private(symbol);
+        let helper = |helper: SpellingHelper| self.helper(of(helper));
         if self.values_without_quotes {
-            spelling.spelled_without_quotes(module_private)
+            spelling.spelled_without_quotes(module_private, helper)
         } else {
-            spelling.spelled(module_private)
+            spelling.spelled(module_private, helper)
+        }
+    }
+
+    /// the name the emitted code reads `helper` by: its own, unless the module as it was written
+    /// spells that name, as a parameter or a local of its own or anything else, and then one the
+    /// module spells nowhere. this module's lowerings write these helpers only through here, and
+    /// the module imports or pastes each under the same name ([`crate::runtime::import_line`],
+    /// [`crate::runtime::inline`])
+    ///
+    /// every other helper is written under its own name wherever a lowering writes it, and a
+    /// module that takes one of those over is refused
+    pub(crate) fn helper(self, helper: crate::runtime::Helper) -> String {
+        let name = helper.name();
+        if crate::runtime::READ_THROUGH_WRITTEN_NAMES.contains(&helper) && self.names.spells(name) {
+            self.names.fresh_outside(name, crate::runtime::defines)
+        } else {
+            name.to_owned()
         }
     }
 

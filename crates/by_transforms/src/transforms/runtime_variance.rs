@@ -37,17 +37,20 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::ArgVariance;
 
 use super::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start};
 use super::type_expr_walker::is_cast_name;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct RuntimeVariancePass<'src> {
+    pub(crate) written: WrittenNames<'src>,
     pub(crate) source: &'src str,
     pub(crate) class_variance: bool,
     pub(crate) min_version: PythonVersion,
 }
 
 struct Telling<'a> {
+    written: WrittenNames<'a>,
     source: &'a str,
     class_variance: bool,
     min_version: PythonVersion,
@@ -59,12 +62,16 @@ struct Telling<'a> {
     in_type: bool,
 }
 
-fn variance_call(variances: &[ArgVariance]) -> String {
+fn variance_call(written: WrittenNames, variances: &[ArgVariance]) -> String {
     let codes = variances
         .iter()
         .map(|variance| variance.code().to_string())
         .collect::<Vec<_>>();
-    format!("_by_variance({})", codes.join(", "))
+    format!(
+        "{}({})",
+        written.helper(crate::runtime::VARIANCE),
+        codes.join(", ")
+    )
 }
 
 /// whether `expr`, read as a type, is one a lowering of its own writes whole: a tuple type or an
@@ -111,7 +118,7 @@ impl Telling<'_> {
         let anchor = line_start(self.source, top) + TextSize::of(indent);
         self.decorators.push((
             TextRange::empty(anchor),
-            format!("@{}\n{indent}", variance_call(&variances)),
+            format!("@{}\n{indent}", variance_call(self.written, &variances)),
         ));
         self.runtime.push(crate::runtime::VARIANCE);
     }
@@ -160,7 +167,7 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
                 UseSiteVariance::InOut => None,
             };
             if let Some(helper) = helper {
-                self.wrap(inner.range(), format!("{}(", helper.name()));
+                self.wrap(inner.range(), format!("{}(", self.written.helper(helper)));
                 self.runtime.push(helper);
             }
             self.visit_expr(inner);
@@ -212,7 +219,7 @@ impl<'ast> Visitor<'ast> for Telling<'_> {
         {
             self.wrap(
                 subscript.value.range(),
-                format!("{}(", variance_call(&variances)),
+                format!("{}(", variance_call(self.written, &variances)),
             );
             self.runtime.push(crate::runtime::VARIANCE);
         }
@@ -246,6 +253,7 @@ impl TypeAwarePass for RuntimeVariancePass<'_> {
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut telling = Telling {
+            written: self.written,
             source: self.source,
             class_variance: self.class_variance,
             min_version: self.min_version,

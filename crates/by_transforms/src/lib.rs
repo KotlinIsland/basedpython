@@ -829,6 +829,7 @@ fn run_cleanup_round(
         config,
         &synthesized.helpers,
         source,
+        written,
     )) {
         push_missing(&mut preamble, line.trim_end_matches('\n'));
     }
@@ -1097,7 +1098,7 @@ fn run_lazy_import_phase(
     if let Some(module) = config.runtime_module.as_deref()
         && !helpers.is_empty()
     {
-        let line = runtime::import_line(module, helpers.iter().copied());
+        let line = runtime::import_line(module, helpers.iter().copied(), written);
         let before = body.clone();
         let left_over = transforms::ast_driver::merge_into_own_imports(&mut body, vec![line]);
         if before != body {
@@ -1109,7 +1110,7 @@ fn run_lazy_import_phase(
             body = spliced;
         }
     } else {
-        let preamble = runtime_preamble(config, &helpers, &body);
+        let preamble = runtime_preamble(config, &helpers, &body, written);
         if !preamble.is_empty() {
             let (spliced, columns) = splice_preamble_described(&body, &preamble);
             described = columns::compose(&columns, &described);
@@ -1171,28 +1172,41 @@ fn insert_after_binding(module: &str, name: &str, text: &str) -> Result<(String,
 ///
 /// Both come out of `_by_runtime.py`, so the pasted-in form and the imported one
 /// are the same code either way.
-fn runtime_preamble(config: &Config, helpers: &[runtime::Helper], module: &str) -> String {
-    runtime_entries(config, helpers, module).concat()
+fn runtime_preamble(
+    config: &Config,
+    helpers: &[runtime::Helper],
+    module: &str,
+    as_written: WrittenNames,
+) -> String {
+    runtime_entries(config, helpers, module, as_written).concat()
 }
 
 /// The same lines, one per entry and each newline-terminated, for a caller that
 /// prepends them one at a time. Pasted in, the definitions read a builtin `module`
 /// binds for itself under a name of their own, imported ahead of them.
-fn runtime_entries(config: &Config, helpers: &[runtime::Helper], module: &str) -> Vec<String> {
+///
+/// `as_written` is the names of the module as it was written, which say what the emitted code
+/// reads a helper by.
+fn runtime_entries(
+    config: &Config,
+    helpers: &[runtime::Helper],
+    module: &str,
+    as_written: WrittenNames,
+) -> Vec<String> {
     if helpers.is_empty() {
         return Vec::new();
     }
     if let Some(runtime_module) = config.runtime_module.as_deref() {
         return vec![format!(
             "{}\n",
-            runtime::import_line(runtime_module, helpers.iter().copied())
+            runtime::import_line(runtime_module, helpers.iter().copied(), as_written)
         )];
     }
     let parsed =
         ruff_python_parser::parse_unchecked_source(module, ruff_python_ast::PySourceType::Python);
     let code = transforms::repeated_underscore::CodeNames::of(parsed.suite());
     let written = transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
-    let definitions = runtime::inline(helpers.iter().copied(), parsed.suite(), written);
+    let definitions = runtime::inline(helpers.iter().copied(), parsed.suite(), written, as_written);
     written
         .builtin_imports(&definitions.concat(), config.min_version.minor)
         .into_iter()

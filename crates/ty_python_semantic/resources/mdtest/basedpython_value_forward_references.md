@@ -32,6 +32,17 @@ def use(alias: Alias, maybe: Maybe, handler: Handler):
 class F: ...
 ```
 
+## an index is read where it is written
+
+a subscript of an ordinary object holds no type arguments, whatever the checker knows of the object
+beyond its class, so python's answer stands
+
+```by
+x = range(3)
+print(x[later])  # error: [unresolved-reference]
+later = 1
+```
+
 ## a base's type arguments may name a later class
 
 a base is the object the class is built on, so it is read where it is written, but its type

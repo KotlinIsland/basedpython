@@ -720,6 +720,13 @@ def _by_subscript(origin, *args):
     return GenericAlias(origin, args)
 
 
+# `origin[args]` read as a type, for a class that answers a subscript for itself: whatever its
+# metaclass `__getitem__` or `__class_getitem__` returns, `U[int]` in `x is U[int]` is the type
+def _by_specialization(origin, *args):
+    from types import GenericAlias
+    return GenericAlias(origin, args[0] if len(args) == 1 else args)
+
+
 # a bare call of a method that only forwards its type parameters. an override may
 # forward none, which makes it a plain method with no specialization to take
 def _by_specialized(callee, *items, **fields):

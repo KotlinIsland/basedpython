@@ -124,7 +124,7 @@ pub(crate) fn lower(source: String, config: &Config) -> String {
     // them
     let at = preamble_offset(&body);
     let body = format!("{}{imports}{}", &body[..at], &body[at..]);
-    let runtime = crate::runtime_preamble(config, &helpers(&needs, sentinel), &body);
+    let runtime = crate::runtime_preamble(config, &helpers(&needs, sentinel), &body, written);
     let at = preamble_offset(&body);
     format!("{}{runtime}{}", &body[..at], &body[at..])
 }
