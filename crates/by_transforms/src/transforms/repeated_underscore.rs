@@ -711,6 +711,7 @@ impl<'src> WrittenNames<'src> {
             SpellingHelper::Out => crate::runtime::OUT,
             SpellingHelper::In => crate::runtime::IN,
             SpellingHelper::Specialization => crate::runtime::SPECIALIZATION,
+            SpellingHelper::Subscript => crate::runtime::SUBSCRIPT,
         };
         if let Some(spelling_helpers) = self.spelling_helpers {
             spelling_helpers
@@ -724,10 +725,11 @@ impl<'src> WrittenNames<'src> {
         }
         let module_private = |symbol: &str| self.module_private(symbol);
         let helper = |helper: SpellingHelper| self.helper(of(helper));
+        let module = |module: &str| self.imported_module(module);
         if self.values_without_quotes {
-            spelling.spelled_without_quotes(module_private, helper)
+            spelling.spelled_without_quotes(module_private, helper, module)
         } else {
-            spelling.spelled(module_private, helper)
+            spelling.spelled(module_private, helper, module)
         }
     }
 
@@ -819,8 +821,17 @@ impl<'src> WrittenNames<'src> {
 
     /// the name a lowering reads `module`, a module it reads attributes of, under, as
     /// [`Self::imported`] answers for an exported name
+    ///
+    /// importing a dotted module binds its root, so a module that uses the root's name for
+    /// something else reads the dotted module under a name of the lowering's own
     pub(crate) fn imported_module(self, module: &str) -> String {
-        self.name_for(module, &Binding::Module)
+        match module.split_once('.') {
+            Some((root, _)) if self.name_for(root, &Binding::Module) != root => {
+                self.name_for(&module.replace('.', "_"), &Binding::Module)
+            }
+            Some(_) => module.to_owned(),
+            None => self.name_for(module, &Binding::Module),
+        }
     }
 
     /// the import that binds `module` to the name [`Self::imported_module`] answers for it

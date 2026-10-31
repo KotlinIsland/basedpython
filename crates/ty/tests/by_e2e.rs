@@ -10859,3 +10859,132 @@ fn run_keeps_the_name_of_a_helper_the_program_binds_its_own() {
         "(typing.Literal[1], 5, 2)"
     );
 }
+
+/// what a type argument names is read for what it holds, a class of another module included,
+/// and that module's name need not be anything this one spells
+#[test]
+fn run_reads_a_type_argument_holding_a_class_of_another_module_for_what_its_defaults_solve() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("third.by"),
+        concat!(
+            "class Far[T = int]:\n",
+            "    v: T\n",
+            "    def __init__(self, v: T):\n",
+            "        self.v = v\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("dep.by"),
+        concat!(
+            "from third import Far\n",
+            "class O[T = int]:\n",
+            "    v: T\n",
+            "    def __init__(self, v: T):\n",
+            "        self.v = v\n",
+            "class Outer:\n",
+            "    class N[T = int]:\n",
+            "        v: T\n",
+            "        def __init__(self, v: T):\n",
+            "            self.v = v\n",
+            "B = O | None\n",
+            "F = Far | None\n",
+            "M = Outer.N | None\n",
+            "type X = O | None\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "import dep\n",
+            "from dep import B as Imported, F\n",
+            "from third import Far as Near\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "s, i = dep.O[str](\"a\"), dep.O[int](1)\n",
+            "print(chk[dep.B](s), chk[dep.B](i))\n",
+            "print(chk[Imported](s), chk[Imported](i))\n",
+            "print(chk[dep.X](s), chk[dep.X](i))\n",
+            "print(chk[list[dep.B] | dep.B](s), chk[list[dep.B] | dep.B](i))\n",
+            "print(chk[F](Near[str](\"a\")), chk[F](Near[int](1)))\n",
+            "print(chk[dep.M](dep.Outer.N[str](\"a\")), chk[dep.M](dep.Outer.N[int](1)))\n",
+            "def local() -> tuple[bool, bool]:\n",
+            "    class O: ...\n",
+            "    print(O.__name__)\n",
+            "    return (chk[dep.B](s), chk[dep.B](i))\n",
+            "print(local())\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "False True",
+            "False True",
+            "False True",
+            "False True",
+            "False True",
+            "False True",
+            "O",
+            "(False, True)",
+        ]
+    );
+}
+
+/// a module that binds the name of a class some alias holds, or the name of the module it would
+/// reach the class through, reads neither of those for it
+#[test]
+fn run_reads_a_class_of_another_module_past_the_names_this_one_binds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("dep.by"),
+        concat!(
+            "class O[T = int]:\n",
+            "    v: T\n",
+            "    def __init__(self, v: T):\n",
+            "        self.v = v\n",
+            "B = O | None\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        concat!(
+            "from dep import B, O as Dep\n",
+            "class O: ...\n",
+            "dep = 5\n",
+            "def chk[T](x: object) -> bool:\n",
+            "    return x is T\n",
+            "print(chk[B](Dep[str](\"a\")), chk[B](Dep[int](1)), dep, O.__name__)\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "False True 5 O"
+    );
+}

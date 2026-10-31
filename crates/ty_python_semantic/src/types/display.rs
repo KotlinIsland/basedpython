@@ -1388,7 +1388,7 @@ fn file_binds_module<'db>(db: &'db dyn Db, file: ProgramFile<'db>, module: &str)
 /// The module to import so that `class`'s qualified name resolves, or `None` when the class
 /// has no importable spelling — it is local to a function, so its qualified name carries a
 /// `<locals of …>` component that is not a python path.
-fn importable_module_of<'db>(
+pub(super) fn importable_module_of<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     class: ClassLiteral<'db>,

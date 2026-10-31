@@ -690,6 +690,11 @@ impl<'src> CallableSyntax<'src> {
                 .types
                 .and_then(|types| types.bare_type_argument_spelling(expr, self.min_version))
         {
+            self.extra_imports.extend(
+                spelling
+                    .modules()
+                    .map(|module| self.written.import_module(module)),
+            );
             return Some(self.written.spelled(&spelling));
         }
         match expr {

@@ -450,7 +450,7 @@ impl TypePosWalker<'_> {
         let Some(types) = self.types else {
             return false;
         };
-        (trailing_name(value).is_some() && types.subscript_applies_type_arguments(value))
+        (trailing_name(value).is_some() && types.subscript_specializes(value))
             || types.subscript_specializes_reified_function(value)
     }
 }
@@ -539,7 +539,12 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
         }
         // `cast(T, x)` — first argument is a type position
         if let Expr::Call(c) = expr {
-            if is_cast_name(&c.func) {
+            if c.cast_kind.is_some()
+                || self.types.map_or_else(
+                    || is_cast_name(&c.func),
+                    |types| types.is_typing_cast(&c.func),
+                )
+            {
                 if let Some(t) = c.arguments.args.first() {
                     self.visit_root(t, RootKind::Evaluated);
                 }
@@ -613,7 +618,7 @@ fn name_matches(expr: &Expr, ident: &str) -> bool {
     }
 }
 
-pub(crate) fn is_cast_name(func: &Expr) -> bool {
+fn is_cast_name(func: &Expr) -> bool {
     match func {
         Expr::Name(n) => n.id.as_str() == "cast",
         Expr::Attribute(a) => a.attr.id.as_str() == "cast",

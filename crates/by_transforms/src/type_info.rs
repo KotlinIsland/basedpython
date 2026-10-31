@@ -268,8 +268,8 @@ pub(crate) trait TypeInfo {
     /// whether subscripting `value` gives a function type arguments it keeps as runtime values
     fn subscript_specializes_reified_function(&self, value: &Expr) -> bool;
 
-    /// whether subscripting `value` where it stands as a value is a call the class answers for
-    /// itself, whatever a type expression reads the same subscript as
+    /// whether subscripting the class `value` at runtime runs a method of its own that may hand
+    /// back other than a specialization, so a type read from it is built without asking it
     fn subscript_calls_the_class(&self, value: &Expr) -> bool;
 
     /// what the runtime has to be told of the classes `expr`, read as a type, names, as a row of
@@ -282,11 +282,9 @@ pub(crate) trait TypeInfo {
     /// whether `expr` reads `typing.Self`
     fn reads_typing_self(&self, expr: &Expr) -> bool;
 
-    /// whether the subscript of `value` written as a value specializes it, so that its slice
-    /// holds type arguments rather than a key
-    fn subscript_applies_type_arguments(&self, value: &Expr) -> bool {
-        self.subscript_specializes(value) && !self.subscript_calls_the_class(value)
-    }
+    /// whether `func`, called, is `typing.cast`, whose first argument is a type. a name nothing
+    /// resolves counts when it is spelled `cast`: there is nothing else to go on
+    fn is_typing_cast(&self, func: &Expr) -> bool;
 
     /// whether `value` is a generic function that erases its type arguments at
     /// `min_version`, so that a subscript of it has nothing to evaluate at runtime
@@ -1042,6 +1040,10 @@ impl TypeInfo for LoweringModel<'_> {
 
     fn reads_typing_self(&self, expr: &Expr) -> bool {
         SemanticModel::reads_typing_self(self, expr)
+    }
+
+    fn is_typing_cast(&self, func: &Expr) -> bool {
+        SemanticModel::is_typing_cast(self, func)
     }
 
     fn subscript_erases_type_arguments(

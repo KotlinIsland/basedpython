@@ -12,7 +12,7 @@
 
 use std::process::Command;
 
-use by_transforms::{Config, PythonVersion, transpile};
+use by_transforms::{Config, PythonVersion, transpile, transpile_analysed_at};
 
 mod common;
 mod interpreters;
@@ -380,6 +380,153 @@ fn a_body_behind_a_test_of_a_defaulted_class_reads_what_it_was_solved_to() {
             print(\"end\")
         "},
         &["end"],
+    );
+}
+
+/// the name is in scope where the subscript is written, whichever scope bound it
+#[test]
+fn a_class_with_defaults_defined_in_a_function_is_what_they_solve() {
+    let local = "class O[T = int]:\n        v: T\n        def __init__(self, v: T):\n            self.v = v\n";
+    let chk = "def chk[T](x: object) -> bool:\n    return x is T\n";
+    for (setup, argument) in [
+        ("", "O"),
+        ("    A = O\n", "A"),
+        ("    B = O | None\n", "B"),
+        ("    type X = O\n", "X"),
+        ("", "O | None"),
+        ("", "list[O] | O"),
+    ] {
+        let program = format!(
+            "{chk}def g() -> object:\n    {local}{setup}    return (chk[{argument}](O[str](\"a\")), chk[{argument}](O[int](1)))\nprint(g())\n"
+        );
+        prints(&program, &["(False, True)"]);
+    }
+    // the name the class has is another binding where the subscript is, and the one written isn't
+    prints(
+        &format!(
+            "{chk}def g() -> object:\n    {local}    P = O\n    a = O[str](\"a\")\n    b = O[int](1)\n    def inner(O: int) -> object:\n        return (chk[P](a), chk[P](b), O)\n    return inner(1)\nprint(g())\n"
+        ),
+        &["(False, True, 1)"],
+    );
+    // through a class, and read from a method
+    prints(
+        &format!(
+            "{chk}class Outer:\n    {local}    def m(self) -> object:\n        return (chk[Outer.O](Outer.O[str](\"a\")), chk[Outer.O](Outer.O[int](1)))\nprint(Outer().m())\nprint(chk[Outer.O](Outer.O[str](\"a\")))\n"
+        ),
+        &["(False, True)", "False"],
+    );
+}
+
+/// a class's default that is itself a class of the function
+#[test]
+fn a_default_naming_a_class_of_the_function_is_spelled_in_it() {
+    prints(
+        indoc::indoc! {"
+            def chk[T](x: object) -> bool:
+                return x is T
+            def g() -> object:
+                class Inner: ...
+                class O[T = Inner]:
+                    v: T
+                    def __init__(self, v: T):
+                        self.v = v
+                return (chk[O](O[str](\"a\")), chk[O](O[Inner](Inner())))
+            print(g())
+        "},
+        &["(False, True)"],
+    );
+}
+
+/// below 3.14 the runtime has no `memoryview[...]` to ask for, and the checker reads a bare one
+/// as a `memoryview[int]` all the same
+#[test]
+fn a_class_with_defaults_the_target_cannot_subscript_is_what_they_solve() {
+    let Some(interpreter) = common::python(PythonVersion::PY313) else {
+        return;
+    };
+    let program = indoc::indoc! {"
+        def chk[T](x: object) -> bool:
+            return x is T
+        class Out[out T]: ...
+        print(chk[Out[memoryview]](Out[memoryview]()))
+        print(chk[Out[memoryview]](Out[memoryview[int]]()))
+        print(chk[Out[memoryview]](Out[memoryview[bytes]]()))
+        print(chk[Out[memoryview[bytes]]](Out[memoryview]()))
+    "};
+    let config = Config {
+        min_version: PythonVersion::PY313,
+        ..Config::default()
+    };
+    // analysed at the version it is written for, or at one that has the subscript
+    for analysed_at in [PythonVersion::PY313, PythonVersion::latest_ty()] {
+        let transpiled = transpile_analysed_at(program, &config, analysed_at).unwrap();
+        assert!(
+            transpiled.contains("_by_subscript(memoryview, int)"),
+            "{transpiled}"
+        );
+        let output = Command::new(&interpreter.command)
+            .arg("-c")
+            .arg(&transpiled)
+            .output()
+            .expect("failed to spawn python");
+        assert!(
+            output.status.success(),
+            "failed on {interpreter}:\n{}\n--- transpiled ---\n{transpiled}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .collect::<Vec<_>>(),
+            ["True", "True", "False", "False"],
+            "{transpiled}"
+        );
+    }
+}
+
+/// `typing.cast` is the function a first argument is a type of, and no other `cast` is
+#[test]
+fn only_typing_cast_takes_a_type() {
+    let Some(interpreter) = common::python(PythonVersion::PY312) else {
+        return;
+    };
+    let config = Config {
+        min_version: interpreter.version,
+        ..Config::default()
+    };
+    let transpiled = transpile_analysed_at(
+        "print(memoryview(b\"a\").cast(\"c\").format)\n",
+        &config,
+        interpreter.version,
+    )
+    .unwrap();
+    let output = Command::new(&interpreter.command)
+        .arg("-c")
+        .arg(&transpiled)
+        .output()
+        .expect("failed to spawn python");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "c",
+        "{}\n{transpiled}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    prints_and_keeps(
+        indoc::indoc! {"
+            from typing import cast
+            class K:
+                def cast(self, s: str) -> str:
+                    return s + \"!\"
+            print(K().cast(\"x\"))
+            print(cast(\"str\", \"y\"))
+        "},
+        &["x!", "y"],
+        &["K().cast(\"x\")"],
+    );
+    prints_and_keeps(
+        "def cast(s: str) -> str:\n    return s + \"!\"\nprint(cast(\"x\"))\n",
+        &["x!"],
+        &["print(cast(\"x\"))"],
     );
 }
 

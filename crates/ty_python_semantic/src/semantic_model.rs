@@ -1106,6 +1106,20 @@ impl<'db> SemanticModel<'db> {
             })
     }
 
+    /// basedpython: whether `func`, called, is `typing.cast`, whose first argument is a type. a
+    /// name nothing resolves counts when it is spelled `cast`: there is nothing else to go on
+    pub fn is_typing_cast(&self, func: &Expr) -> bool {
+        match func.inferred_type(self) {
+            Some(Type::FunctionLiteral(function)) => {
+                function.is_known(self.db, crate::types::function::KnownFunction::Cast)
+            }
+            Some(Type::Dynamic(_)) | None => {
+                matches!(func, Expr::Name(name) if name.id.as_str() == "cast")
+            }
+            Some(_) => false,
+        }
+    }
+
     /// basedpython: whether `expr` is `typing.Callable` or `collections.abc.Callable`, whatever
     /// name it is reached by — an alias (`from typing import Callable as Fn`), an assignment
     /// (`C = typing.Callable`) — and not a class of the program's own that is named `Callable`
@@ -2500,14 +2514,22 @@ impl<'db> LoweringModel<'db> {
             return None;
         }
         let env = &self.program_environment();
-        let through_module = expr.as_attribute_expr().and_then(|attribute| {
-            let class = attribute
+        let file = self.program_file();
+        let scope = semantic_index(self.db, file).try_expression_scope_id(&ExprRef::from(expr))?;
+        let written_class = match expr {
+            Expr::Name(name) => {
+                crate::types::reified_infer::class_named_at(self.db, file, scope, name.id.as_str())
+            }
+            Expr::Attribute(attribute) => attribute
                 .value
                 .inferred_type(self)?
                 .member(self.db, env, attribute.attr.as_str())
                 .place
                 .ignore_possibly_undefined()?
-                .as_class_literal()?;
+                .as_class_literal(),
+            _ => None,
+        }
+        .and_then(|class| {
             let dotted = ast::name::UnqualifiedName::from_expr(expr)?;
             Some((class, RuntimeSpelling::text(dotted.to_string())))
         });
@@ -2516,8 +2538,9 @@ impl<'db> LoweringModel<'db> {
             env,
             self.file(),
             expr.inferred_type(self)?,
-            through_module,
+            written_class,
             RuntimeSite::at(expr, self.inferred_in_check_order()),
+            (file, scope),
             min_version,
         )
     }
