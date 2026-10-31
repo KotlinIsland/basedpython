@@ -4496,5 +4496,112 @@ class Explicit(String, Integer):
         return ""
 ```
 
+## attributes declared with a type variable
+
+an attribute declared with a type variable and given no descriptor in the class body holds its value
+on the instance, where python's attribute lookup doesn't bind it. a function or a descriptor stored
+there comes back as itself
+
+```py
+from collections.abc import Callable
+from typing import Generic, TypeVar
+
+F = TypeVar("F")
+
+def function(x: int) -> str:
+    return str(x)
+
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+class Stored(Generic[F]):
+    x: F
+
+    def __init__(self, f: F) -> None:
+        self.x = f
+
+reveal_type(Stored(function).x)  # revealed: (x: int) -> str
+reveal_type(Stored(function).x(1))  # revealed: str
+Stored(function).x("a")  # error: [invalid-argument-type]
+
+reveal_type(Stored(Descriptor()).x)  # revealed: Descriptor
+reveal_type(Stored(int).x)  # revealed: <class 'int'>
+reveal_type(Stored(1).x)  # revealed: int
+
+class Optional_(Generic[F]):
+    x: F | None
+
+    def __init__(self, f: F | None = None) -> None:
+        self.x = f
+
+def _(optional: Optional_[Callable[[int], str]]):
+    reveal_type(optional.x)  # revealed: ((int, /) -> str) | None
+
+optional = Optional_(function)
+reveal_type(optional.x)  # revealed: ((x: int) -> str) | None
+
+class Defaulted(Generic[F]):
+    x: F | None = None
+
+    def __init__(self, f: F) -> None:
+        self.x = f
+
+reveal_type(Defaulted(function).x)  # revealed: ((x: int) -> str) | None
+```
+
+reading it inside the class is no different
+
+```py
+class Inside(Generic[F]):
+    x: F
+
+    def __init__(self, f: F) -> None:
+        self.x = f
+
+    def read(self) -> F:
+        return self.x  # no diagnostic
+
+reveal_type(Inside(function).read())  # revealed: (x: int) -> str
+```
+
+what is on the class is still bound when it is read through an instance
+
+```py
+def takes_instance(self: object, x: int) -> str:
+    return str(x)
+
+class OnTheClass(Generic[F]):
+    function_value = takes_instance
+    descriptor = Descriptor()
+    declared_descriptor: Descriptor
+
+    def method(self, x: int) -> str:
+        return str(x)
+
+    def stored(self, f: F) -> F:
+        return f
+
+instance: OnTheClass[int] = OnTheClass()
+reveal_type(instance.method(1))  # revealed: str
+reveal_type(instance.function_value(1))  # revealed: str
+reveal_type(instance.descriptor)  # revealed: int
+reveal_type(instance.declared_descriptor)  # revealed: int | Descriptor
+```
+
+a descriptor declared with a type that has a type variable in it is still a descriptor
+
+```py
+class Generic_(Generic[F]):
+    def __get__(self, instance: object, owner: type | None = None) -> F:
+        raise NotImplementedError
+
+class DeclaresDescriptor(Generic[F]):
+    x: Generic_[F]
+
+declares: DeclaresDescriptor[int] = DeclaresDescriptor()
+reveal_type(declares.x)  # revealed: int | Generic_[int]
+```
+
 [crtp]: https://en.wikipedia.org/wiki/Curiously_recurring_template_pattern
 [f-bound]: https://en.wikipedia.org/wiki/Bounded_quantification#F-bounded_quantification

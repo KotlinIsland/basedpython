@@ -211,6 +211,29 @@ reveal_type(C().m(1))  # revealed: str
 C().m("wrong")  # error: [invalid-argument-type]
 ```
 
+the wrapped function is stored on the wrapper's instance, so `__wrapped__` reads as itself
+
+```py
+from functools import cache, lru_cache
+
+@cache
+def cached(x: int) -> int:
+    return x
+
+@lru_cache
+def bare(x: int) -> int:
+    return x
+
+@lru_cache(None)
+def unbounded(x: int) -> int:
+    return x
+
+reveal_type(cached.__wrapped__)  # revealed: def cached(x: int) -> int
+reveal_type(bare.__wrapped__(1))  # revealed: int
+reveal_type(unbounded.__wrapped__(1))  # revealed: int
+unbounded.__wrapped__()  # error: [missing-argument]
+```
+
 Decorating a method strips `self` on access, so the bound call is still checked:
 
 ```py
