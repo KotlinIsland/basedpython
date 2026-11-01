@@ -5,409 +5,291 @@
 //! Python's subscript grammar doesn't accept keyword args (PEP 637 was
 //! rejected), so basedpython's surface syntax falls back to the explicit
 //! method call. positional and keyword args are forwarded in source order
+//!
+//! A value is written where it lands rather than printed from its source, so whatever lowers
+//! inside it, a type form above all, reaches the output, however the arguments are reordered
+//! around it: [`KwSubscriptPass`] passes it through, and a lowerer writing a whole type
+//! expression renders it.
 
-use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, PythonVersion, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_python_ast::{Expr, ExprSubscript, PythonVersion, Stmt};
+use ruff_text_size::Ranged;
 
-use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
-use crate::transforms::literal_types::{LiteralReading, lower_literals};
-use crate::transforms::repeated_underscore::WrittenNames;
+use crate::transforms::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-pub(crate) struct KwSubscript<'src> {
-    source: &'src str,
-    written: WrittenNames<'src>,
-    types: Option<&'src dyn TypeInfo>,
-    min_version: PythonVersion,
-    edits: Vec<Fix>,
-    /// how the slice being written reads a literal, when its elements are type arguments
-    type_arguments: Option<LiteralReading>,
-    in_annotation: bool,
-    needs_literal_import: bool,
+/// one part of what a keyword subscript is written as
+pub(crate) enum Piece<'a> {
+    Text(String),
+    Value(&'a Expr),
 }
 
-impl<'src> KwSubscript<'src> {
-    fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        types: Option<&'src dyn TypeInfo>,
-        min_version: PythonVersion,
-    ) -> Self {
-        Self {
-            source,
-            written,
-            types,
-            min_version,
-            edits: Vec::new(),
-            type_arguments: None,
-            in_annotation: false,
-            needs_literal_import: false,
+/// `arguments` with `separator` between them
+fn joined<'a>(arguments: Vec<Vec<Piece<'a>>>, separator: &str) -> Vec<Piece<'a>> {
+    let mut pieces = Vec::new();
+    for (index, argument) in arguments.into_iter().enumerate() {
+        if index > 0 {
+            pieces.push(Piece::Text(separator.to_owned()));
         }
+        pieces.extend(argument);
     }
+    pieces
+}
 
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
-    }
+/// `value[arguments]`
+fn subscript_of<'a>(value: &'a Expr, arguments: Vec<Vec<Piece<'a>>>) -> Vec<Piece<'a>> {
+    let mut pieces = vec![Piece::Value(value), Piece::Text("[".to_owned())];
+    pieces.extend(joined(arguments, ", "));
+    pieces.push(Piece::Text("]".to_owned()));
+    pieces
+}
 
-    /// render a subscript argument value, lowering any postfix `?` it carries
-    /// (`M[V=int?]`). our whole-subscript replacement subsumes `optional_type`'s
-    /// narrow edits, so we lower the optional here; the runtime `Optional[...]`
-    /// import for nested `??` is still raised by `OptionalTypePass`, which walks
-    /// every expression independently
-    fn value_src(&mut self, expr: &Expr) -> String {
-        if let (Some(reading), Some(types)) = (self.type_arguments, self.types)
-            && let Some((lowered, needs_import)) = lower_literals(
-                self.source,
-                self.written,
-                types,
-                expr,
-                reading,
-                self.min_version,
-            )
-        {
-            self.needs_literal_import |= needs_import;
-            return lowered;
-        }
-        crate::transforms::optional_type::rewrite_type_expr(
-            self.source,
-            self.written,
-            expr,
-            self.min_version,
-        )
-        .unwrap_or_else(|| self.src(expr.range()).to_owned())
-    }
-
-    /// Lower a subscript of a class declaring a keyword-variadic pack.
-    ///
-    /// `class A[**Kwargs]` is a `ParamSpec` at runtime, and python has no keyword subscript, so
-    /// the pack's fields lower to the `ParamSpec` list form — `A[foo=int, bar=str]` → `A[[int,
-    /// str]]`, `A[()]` → `A[[]]`. field names are erased, which matches python's own erasure of
-    /// type arguments; the names are checked against the `.by` source, not this output.
-    ///
-    /// Returns whether the subscript was rewritten.
-    fn rewrite_keyword_pack_subscript(
-        &mut self,
-        sub: &ruff_python_ast::ExprSubscript,
-        pack_index: usize,
-    ) -> bool {
-        let elements: Vec<&Expr> = match sub.slice.as_ref() {
-            Expr::Tuple(t) => t.elts.iter().collect(),
-            single => vec![single],
-        };
-
-        let mut fields: Vec<String> = Vec::new();
-        let mut positional: Vec<String> = Vec::new();
-        for element in elements {
+/// `sub` as a call of `__getitem__`, its keyword fields passed as `name=value`
+fn getitem_call(sub: &ExprSubscript) -> Vec<Piece<'_>> {
+    let arguments = subscript_elements(sub)
+        .into_iter()
+        .map(|element| {
             if let Expr::Named(n) = element
-                && n.label().is_some()
+                && let Some(target) = n.label()
             {
-                fields.push(self.value_src(n.value.as_ref()));
-            } else {
-                positional.push(self.value_src(element));
+                return vec![
+                    Piece::Text(format!("{}=", target.id.as_str())),
+                    Piece::Value(&n.value),
+                ];
             }
-        }
+            vec![Piece::Value(element)]
+        })
+        .collect();
+    let mut pieces = vec![
+        Piece::Value(&sub.value),
+        Piece::Text(".__getitem__(".to_owned()),
+    ];
+    pieces.extend(joined(arguments, ", "));
+    pieces.push(Piece::Text(")".to_owned()));
+    pieces
+}
 
-        // an all-positional subscript with no pack slot to fill is already valid python
-        if fields.is_empty() && positional.len() > pack_index {
-            return false;
-        }
+/// whether the subscript carries a keyword field (`x[a=1]`) — the parser
+/// spells one as a named expression whose target is [`ExprContext::Invalid`]
+fn is_keyword_field(element: &Expr) -> bool {
+    matches!(element, Expr::Named(n) if n.label().is_some())
+}
 
-        let mut parts = positional;
-        let pack = format!("[{}]", fields.join(", "));
-        if pack_index <= parts.len() {
-            parts.insert(pack_index, pack);
-        } else {
-            parts.push(pack);
-        }
-
-        let value_src = self.src(sub.value.range()).to_owned();
-        let replacement = format!("{value_src}[{}]", parts.join(", "));
-        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            replacement,
-            sub.range(),
-        )));
-        true
-    }
-
-    /// whether the subscript specializes a *class* rather than calling
-    /// `__getitem__`. a value ty could not resolve counts as a class: the
-    /// keyword form spells type arguments in practice, and rewriting an
-    /// annotation into a call is the more damaging of the two guesses
-    fn subscripts_a_class(&self, value: &Expr) -> bool {
-        self.types
-            .is_none_or(|types| !types.subscript_is_getitem_call(value))
-    }
-
-    /// whether the subscript carries a keyword field (`x[a=1]`) — the parser
-    /// spells one as a named expression whose target is [`ExprContext::Invalid`]
-    fn is_keyword_field(element: &Expr) -> bool {
-        matches!(element, Expr::Named(n) if n.label().is_some())
-    }
-
-    fn subscript_elements(sub: &ruff_python_ast::ExprSubscript) -> Vec<&Expr> {
-        match sub.slice.as_ref() {
-            Expr::Tuple(t) if !t.parenthesized => t.elts.iter().collect(),
-            single => vec![single],
-        }
-    }
-
-    /// the subscript's arguments, keyword fields rendered as `name=value`
-    fn subscript_parts(&mut self, sub: &ruff_python_ast::ExprSubscript) -> Vec<String> {
-        Self::subscript_elements(sub)
-            .into_iter()
-            .map(|element| {
-                if let Expr::Named(n) = element
-                    && let Some(target) = n.label()
-                {
-                    return format!(
-                        "{}={}",
-                        target.id.as_str(),
-                        self.value_src(n.value.as_ref())
-                    );
-                }
-                self.value_src(element)
-            })
-            .collect()
-    }
-
-    fn rewrite_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
-        self.type_arguments = self
-            .types
-            .is_some_and(|types| types.subscript_specializes(&sub.value))
-            .then_some(if self.in_annotation {
-                LiteralReading::Annotation
-            } else {
-                LiteralReading::Application
-            });
-        // subscripting a function is a *type* specialization, not a runtime
-        // keyword subscript: an erased generic has its whole `[…]` stripped by
-        // `generic_call`, and a reified one routes the fields through the
-        // `generic` wrapper's `__getitem__`, which takes them as keywords
-        if let Some(types) = self.types
-            && let Expr::Name(name) = sub.value.as_ref()
-            && types.is_function(name)
-        {
-            if types.is_reified_function(name, self.min_version)
-                && Self::subscript_elements(sub)
-                    .iter()
-                    .any(|element| Self::is_keyword_field(element))
-            {
-                let value_src = self.src(sub.value.range()).to_owned();
-                let replacement = format!(
-                    "{value_src}.__getitem__({})",
-                    self.subscript_parts(sub).join(", ")
-                );
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    replacement,
-                    sub.range(),
-                )));
-            }
-            return;
-        }
-        if let Some(types) = self.types
-            && let Some(pack_index) = types.class_keyword_pack_index(&sub.value)
-            && self.rewrite_keyword_pack_subscript(sub, pack_index)
-        {
-            return;
-        }
-        // single keyword arg, e.g. `A[T=int]` (no surrounding tuple).
-        // for a multi-typevar class with declared defaults, expand to a
-        // positional list filling unbound slots with their declared defaults
-        // (`A[R=int]` with `class A[T=int, R=str]` → `A[int, int]`).
-        // single-typevar class drops the kw name
-        if let Expr::Named(n) = sub.slice.as_ref()
-            && let Some(target) = n.label()
-        {
-            let typevars = self
-                .types
-                .and_then(|types| types.class_typevars(&sub.value))
-                .filter(|typevars| typevars.len() > 1);
-            if let Some(typevars) = typevars {
-                let value_src = self.value_src(n.value.as_ref());
-                let mut parts: Vec<String> = Vec::with_capacity(typevars.len());
-                for (tv_name, tv_default) in &typevars {
-                    if tv_name == target.id.as_str() {
-                        parts.push(value_src.clone());
-                    } else if let Some(default) = tv_default {
-                        parts.push(default.clone());
-                    } else {
-                        // typevar has no default and no kw arg — fall back
-                        // to drop-name behavior; ty's diagnostics will catch
-                        // the missing-arg case
-                        let value_src = self.value_src(n.value.as_ref());
-                        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            value_src,
-                            n.range(),
-                        )));
-                        return;
-                    }
-                }
-                let value_src = self.src(sub.value.range()).to_owned();
-                let replacement = format!("{value_src}[{}]", parts.join(", "));
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    replacement,
-                    sub.range(),
-                )));
-                return;
-            }
-            // a class the subscript specializes erases the keyword with the rest
-            // of its type arguments. anything else — an instance, a `Mapping`
-            // whose `__getitem__` takes keywords — is a runtime call, the same
-            // reading the tuple form below takes and the one ty checks
-            if self.subscripts_a_class(&sub.value) {
-                let value_src = self.value_src(n.value.as_ref());
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    value_src,
-                    n.range(),
-                )));
-                return;
-            }
-            let value_src = self.src(sub.value.range()).to_owned();
-            let replacement = format!(
-                "{value_src}.__getitem__({}={})",
-                target.id.as_str(),
-                self.value_src(n.value.as_ref())
-            );
-            self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                replacement,
-                sub.range(),
-            )));
-            return;
-        }
-        let Expr::Tuple(t) = sub.slice.as_ref() else {
-            return;
-        };
-        if t.parenthesized {
-            return;
-        }
-        if !t.elts.iter().any(Self::is_keyword_field) {
-            return;
-        }
-        // when the value is a known generic class, reorder by typevar declaration and emit a
-        // positional subscript. positional arguments fill the leading typevars in source order,
-        // keyword arguments bind by name, and any remaining typevar falls back to its declared
-        // default (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]` with
-        // `B`'s default → `C[int, <B default>, bytes]`)
-        if let Some(types) = self.types
-            && let Some(typevars) = types.class_typevars(&sub.value)
-        {
-            let mut by_name: std::collections::HashMap<&str, &Expr> =
-                std::collections::HashMap::new();
-            let mut positional: Vec<&Expr> = Vec::new();
-            for elt in &t.elts {
-                if let Expr::Named(n) = elt
-                    && let Some(target) = n.label()
-                {
-                    by_name.insert(target.id.as_str(), n.value.as_ref());
-                } else {
-                    positional.push(elt);
-                }
-            }
-            let mut positional_iter = positional.iter();
-            let mut parts: Vec<String> = Vec::with_capacity(typevars.len());
-            let mut filled_all = true;
-            for (tv_name, tv_default) in &typevars {
-                if let Some(value_expr) = by_name.get(tv_name.as_str()) {
-                    parts.push(self.value_src(value_expr));
-                } else if let Some(value_expr) = positional_iter.next() {
-                    parts.push(self.value_src(value_expr));
-                } else if let Some(default) = tv_default {
-                    parts.push(default.clone());
-                } else {
-                    filled_all = false;
-                    break;
-                }
-            }
-            // a leftover positional argument means the source over-specified the class; leave it
-            // for the generic form below so ty's diagnostic is the authority on the arity
-            if filled_all && positional_iter.next().is_none() {
-                let value_src = self.src(sub.value.range()).to_owned();
-                let replacement = format!("{value_src}[{}]", parts.join(", "));
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    replacement,
-                    sub.range(),
-                )));
-                return;
-            }
-            // missing typevar without default — fall through to the
-            // generic `value.__getitem__(name=value, ...)` form so the
-            // output is at least syntactically valid Python
-        }
-        // Build `value.__getitem__(<args>)` where each Named field renders
-        // as `name=value` and bare exprs render verbatim
-        let value_src = self.src(sub.value.range()).to_owned();
-        let replacement = format!(
-            "{value_src}.__getitem__({})",
-            self.subscript_parts(sub).join(", ")
-        );
-        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            replacement,
-            sub.range(),
-        )));
+fn subscript_elements(sub: &ExprSubscript) -> Vec<&Expr> {
+    match sub.slice.as_ref() {
+        Expr::Tuple(t) if !t.parenthesized => t.elts.iter().collect(),
+        single => vec![single],
     }
 }
 
-pub(crate) struct KwSubscriptPass<'src> {
-    source: &'src str,
-    written: WrittenNames<'src>,
+/// Lower a subscript of a class declaring a keyword-variadic pack.
+///
+/// `class A[**Kwargs]` is a `ParamSpec` at runtime, and python has no keyword subscript, so
+/// the pack's fields lower to the `ParamSpec` list form — `A[foo=int, bar=str]` → `A[[int,
+/// str]]`, `A[()]` → `A[[]]`. field names are erased, which matches python's own erasure of
+/// type arguments; the names are checked against the `.by` source, not this output.
+///
+/// `None` for an all-positional subscript with no pack slot to fill, which is already valid
+/// python
+fn keyword_pack_subscript(sub: &ExprSubscript, pack_index: usize) -> Option<Vec<Piece<'_>>> {
+    let elements: Vec<&Expr> = match sub.slice.as_ref() {
+        Expr::Tuple(t) => t.elts.iter().collect(),
+        single => vec![single],
+    };
+
+    let mut fields = Vec::new();
+    let mut parts = Vec::new();
+    for element in elements {
+        if let Expr::Named(n) = element
+            && n.label().is_some()
+        {
+            fields.push(vec![Piece::Value(&n.value)]);
+        } else {
+            parts.push(vec![Piece::Value(element)]);
+        }
+    }
+
+    if fields.is_empty() && parts.len() > pack_index {
+        return None;
+    }
+
+    let mut pack = vec![Piece::Text("[".to_owned())];
+    pack.extend(joined(fields, ", "));
+    pack.push(Piece::Text("]".to_owned()));
+    if pack_index <= parts.len() {
+        parts.insert(pack_index, pack);
+    } else {
+        parts.push(pack);
+    }
+    Some(subscript_of(&sub.value, parts))
+}
+
+/// what `sub` is written as in python, or `None` when it is already python
+pub(crate) fn lowered<'a>(
+    sub: &'a ExprSubscript,
+    types: &dyn TypeInfo,
+    min_version: PythonVersion,
+) -> Option<Vec<Piece<'a>>> {
+    // subscripting a function is a *type* specialization, not a runtime
+    // keyword subscript: an erased generic has its whole `[…]` stripped by
+    // `generic_call`, and a reified one routes the fields through the
+    // `generic` wrapper's `__getitem__`, which takes them as keywords
+    if let Expr::Name(name) = sub.value.as_ref()
+        && types.is_function(name)
+    {
+        return (types.is_reified_function(name, min_version)
+            && subscript_elements(sub)
+                .iter()
+                .any(|element| is_keyword_field(element)))
+        .then(|| getitem_call(sub));
+    }
+    if let Some(pack_index) = types.class_keyword_pack_index(&sub.value)
+        && let Some(pieces) = keyword_pack_subscript(sub, pack_index)
+    {
+        return Some(pieces);
+    }
+    // single keyword arg, e.g. `A[T=int]` (no surrounding tuple).
+    // for a multi-typevar class with declared defaults, expand to a
+    // positional list filling unbound slots with their declared defaults
+    // (`A[R=int]` with `class A[T=int, R=str]` → `A[int, int]`).
+    // single-typevar class drops the kw name
+    if let Expr::Named(n) = sub.slice.as_ref()
+        && let Some(target) = n.label()
+    {
+        let drop_name = || subscript_of(&sub.value, vec![vec![Piece::Value(&n.value)]]);
+        if let Some(typevars) = types
+            .class_typevars(&sub.value)
+            .filter(|typevars| typevars.len() > 1)
+        {
+            let mut parts = Vec::with_capacity(typevars.len());
+            for (tv_name, tv_default) in &typevars {
+                if tv_name == target.id.as_str() {
+                    parts.push(vec![Piece::Value(&n.value)]);
+                } else if let Some(default) = tv_default {
+                    parts.push(vec![Piece::Text(default.clone())]);
+                } else {
+                    // typevar has no default and no kw arg — fall back
+                    // to drop-name behavior; ty's diagnostics will catch
+                    // the missing-arg case
+                    return Some(drop_name());
+                }
+            }
+            return Some(subscript_of(&sub.value, parts));
+        }
+        // a class the subscript specializes erases the keyword with the rest
+        // of its type arguments. anything else — an instance, a `Mapping`
+        // whose `__getitem__` takes keywords — is a runtime call, the same
+        // reading the tuple form below takes and the one ty checks. a value
+        // ty could not resolve counts as a class: the keyword form spells type
+        // arguments in practice, and rewriting an annotation into a call is the
+        // more damaging of the two guesses
+        if !types.subscript_is_getitem_call(&sub.value) {
+            return Some(drop_name());
+        }
+        return Some(getitem_call(sub));
+    }
+    let Expr::Tuple(t) = sub.slice.as_ref() else {
+        return None;
+    };
+    if t.parenthesized || !t.elts.iter().any(is_keyword_field) {
+        return None;
+    }
+    // when the value is a known generic class, reorder by typevar declaration and emit a
+    // positional subscript. positional arguments fill the leading typevars in source order,
+    // keyword arguments bind by name, and any remaining typevar falls back to its declared
+    // default (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]` with
+    // `B`'s default → `C[int, <B default>, bytes]`)
+    if let Some(typevars) = types.class_typevars(&sub.value) {
+        let mut by_name: std::collections::HashMap<&str, &Expr> = std::collections::HashMap::new();
+        let mut positional: Vec<&Expr> = Vec::new();
+        for elt in &t.elts {
+            if let Expr::Named(n) = elt
+                && let Some(target) = n.label()
+            {
+                by_name.insert(target.id.as_str(), n.value.as_ref());
+            } else {
+                positional.push(elt);
+            }
+        }
+        let mut positional_iter = positional.iter();
+        let mut parts = Vec::with_capacity(typevars.len());
+        let mut filled_all = true;
+        for (tv_name, tv_default) in &typevars {
+            if let Some(value_expr) = by_name.get(tv_name.as_str()) {
+                parts.push(vec![Piece::Value(value_expr)]);
+            } else if let Some(value_expr) = positional_iter.next() {
+                parts.push(vec![Piece::Value(value_expr)]);
+            } else if let Some(default) = tv_default {
+                parts.push(vec![Piece::Text(default.clone())]);
+            } else {
+                filled_all = false;
+                break;
+            }
+        }
+        // a leftover positional argument means the source over-specified the class; leave it
+        // for the generic form below so ty's diagnostic is the authority on the arity
+        if filled_all && positional_iter.next().is_none() {
+            return Some(subscript_of(&sub.value, parts));
+        }
+        // missing typevar without default — fall through to the
+        // generic `value.__getitem__(name=value, ...)` form so the
+        // output is at least syntactically valid Python
+    }
+    Some(getitem_call(sub))
+}
+
+pub(crate) struct KwSubscriptPass {
     min_version: PythonVersion,
 }
 
-impl<'src> KwSubscriptPass<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        min_version: PythonVersion,
-    ) -> Self {
-        Self {
-            source,
-            written,
-            min_version,
-        }
+impl KwSubscriptPass {
+    pub(crate) fn new(min_version: PythonVersion) -> Self {
+        Self { min_version }
     }
 }
 
-impl TypeAwarePass for KwSubscriptPass<'_> {
-    /// the value of a keyword subscript it rewrites is printed with its `T?` and its literal
-    /// types lowered
-    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[
-            super::ast_driver::Lowering::OptionalType,
-            super::ast_driver::Lowering::LiteralType,
-        ]
+impl TypeAwarePass for KwSubscriptPass {
+    fn lowering(&self) -> Option<Lowering> {
+        Some(Lowering::KwSubscript)
+    }
+
+    /// a value is passed through with whatever lowers inside it, and one that is printed in
+    /// place of the subscript, inside a type a wider edit writes, is printed lowered
+    fn subsumes(&self) -> &'static [Lowering] {
+        super::callable::TYPE_EXPRESSION
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = KwSubscript::new(self.source, self.written, Some(types), self.min_version);
+        let mut inner = KwSubscript {
+            types,
+            min_version: self.min_version,
+            ctx,
+        };
         for stmt in stmts {
             inner.visit_stmt(stmt);
-        }
-        if inner.needs_literal_import {
-            ctx.required_imports
-                .push(self.written.import_from("typing", &["Literal"]));
-        }
-        for fix in inner.edits {
-            for edit in fix.edits() {
-                let range = edit.range();
-                let repl = edit.content().unwrap_or_default().to_owned();
-                ctx.text_edits.push((range, repl));
-            }
         }
     }
 }
 
-impl<'ast> Visitor<'ast> for KwSubscript<'_> {
-    fn visit_annotation(&mut self, expr: &'ast Expr) {
-        let in_annotation = std::mem::replace(&mut self.in_annotation, true);
-        self.visit_expr(expr);
-        self.in_annotation = in_annotation;
-    }
+struct KwSubscript<'a> {
+    types: &'a dyn TypeInfo,
+    min_version: PythonVersion,
+    ctx: &'a mut PassContext,
+}
 
+impl<'ast> Visitor<'ast> for KwSubscript<'_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Subscript(s) = expr {
-            self.rewrite_subscript(s);
+        if let Expr::Subscript(sub) = expr
+            && let Some(pieces) = lowered(sub, self.types, self.min_version)
+        {
+            let fragments = pieces
+                .into_iter()
+                .map(|piece| match piece {
+                    Piece::Text(text) => Fragment::Lit(text),
+                    Piece::Value(value) => Fragment::Src(value.range()),
+                })
+                .collect();
+            self.ctx.template_edits.push((sub.range(), fragments));
         }
         walk_expr(self, expr);
     }
@@ -523,6 +405,95 @@ mod tests {
             );
         }
 
+        /// what `form` is written as in the type argument of a class with no keywords involved
+        fn as_a_type_argument(form: &str) -> String {
+            let output = transpiled(&format!("x: list[{form}]\n"));
+            let line = output.lines().find(|line| line.starts_with("x: ")).unwrap();
+            line.strip_prefix("x: list[")
+                .and_then(|line| line.strip_suffix(']'))
+                .unwrap()
+                .to_owned()
+        }
+
+        /// a keyword names a position and says nothing about the type written at it
+        #[test]
+        fn a_field_lowers_as_any_other_type_argument() {
+            for form in [
+                "1",
+                "1?",
+                "1??",
+                "(1 | 2)?",
+                "list[1]?",
+                "int?",
+                "int & str",
+                "dynamic",
+                "int or str",
+                "not int",
+                "float",
+                "complex",
+                "1.5",
+                "(int, str)",
+                "(1?, int)",
+                "(1, \"a\")",
+                "list[(int, str)]",
+                "(int) -> str",
+                "(int) -> 1?",
+                "literal str",
+                "list[literal str]",
+                "final int",
+            ] {
+                let lowered = as_a_type_argument(form);
+                let output = transpiled(&format!(
+                    "class M[**Kwargs]: ...\nclass N[T]: ...\nclass A[T, U = int]: ...\n\n\
+                     m: M[a={form}, b=str]\nn: N[T={form}]\na: A[U={form}, T=str]\n"
+                ));
+                for written in [
+                    format!("m: M[[{lowered}, str]]"),
+                    format!("n: N[{lowered}]"),
+                    format!("a: A[str, {lowered}]"),
+                ] {
+                    assert!(
+                        output.lines().any(|line| line == written),
+                        "{form}: expected `{written}` in:\n{output}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_field_holding_a_keyword_subscript_lowers_too() {
+            let output = transpiled(
+                "class M[**Kwargs]: ...\nclass N[T]: ...\n\nx: M[a=N[T=1?], b=M[c=int?]]\n",
+            );
+            assert!(
+                output.contains("x: M[[N[Literal[1] | None], M[[int | None]]]]"),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn a_keyword_subscript_inside_another_type_form_lowers() {
+            let output = transpiled(
+                "class M[**Kwargs]: ...\n\nx: (M[a=1?], int)\ny: (int) -> M[a=1?]\nz: M[a=1?]?\n",
+            );
+            for written in [
+                "x: tuple[M[[Literal[1] | None]], int]",
+                "y: Callable[[int], M[[Literal[1] | None]]]",
+                "z: M[[Literal[1] | None]] | None",
+            ] {
+                assert!(output.contains(written), "{written}:\n{output}");
+            }
+        }
+
+        #[test]
+        fn a_field_read_as_a_value_is_written_through_the_literal_helper() {
+            let output = transpiled("class M[**Kwargs]: ...\n\ny = M[a=1?]\n");
+            assert!(
+                output.contains("y = M[[_by_lit(1) | None]]"),
+                "unexpected output:\n{output}"
+            );
+        }
+
         #[test]
         fn empty_pack_lowers_to_an_empty_list() {
             let output = transpiled("class A[**Kwargs]: ...\n\ndef f(a: A[()]): ...\n");
@@ -564,7 +535,7 @@ mod tests {
                 "class C[A, B = str, D = bytes]: ...\n\ndef f(c: C[int, D=complex]): ...\n",
             );
             assert!(
-                output.contains("def f(c: C[int, str, complex]): ..."),
+                output.contains("def f(c: C[int, str, JustComplex]): ..."),
                 "unexpected output:\n{output}"
             );
         }

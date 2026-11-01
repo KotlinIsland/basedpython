@@ -274,6 +274,7 @@ impl TypeAwarePass for CheckedCastPass<'_> {
             super::ast_driver::Lowering::DynamicKeyword,
             super::ast_driver::Lowering::FloatConst,
             super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::KwSubscript,
             super::ast_driver::Lowering::LiteralString,
             super::ast_driver::Lowering::LiteralType,
             super::ast_driver::Lowering::OptionalType,

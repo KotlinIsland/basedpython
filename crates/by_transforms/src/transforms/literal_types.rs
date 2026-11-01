@@ -22,10 +22,9 @@ use ty_python_semantic::RuntimeSpelling;
 
 use crate::config::{Config, FloatLiteralLowering};
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
-use crate::transforms::optional_type::collect_edits;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
-    Recurse, RootKind, TypeExprVisitor, TypePos, walk_type_positions_skipping,
+    Recurse, RootKind, TypeExprVisitor, TypePos, keyword_field_value, walk_type_positions_skipping,
 };
 use crate::type_info::{TypeInfo, trailing_name};
 
@@ -217,13 +216,16 @@ impl<'src> LiteralType<'src> {
             match s.slice.as_ref() {
                 Expr::Tuple(t) if !t.parenthesized => {
                     for e in &t.elts {
+                        let e = keyword_field_value(e);
                         if specializes || !matches!(e, Expr::StringLiteral(_)) {
                             self.emit_type_argument_edits(e);
                         }
                     }
                 }
-                Expr::StringLiteral(_) if !specializes => {}
-                slice => self.emit_type_argument_edits(slice),
+                slice => match keyword_field_value(slice) {
+                    Expr::StringLiteral(_) if !specializes => {}
+                    argument => self.emit_type_argument_edits(argument),
+                },
             }
         }
     }
@@ -318,53 +320,6 @@ impl<'src> LiteralType<'src> {
         // trailing None stays as-is; flush final group
         flush_group!();
     }
-}
-
-/// where a type a lowering writes whole is read, which decides how a literal in it is written
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LiteralReading {
-    Annotation,
-    Application,
-}
-
-/// `expr`, a type expression a lowering is writing whole, with the literals it holds written as
-/// [`LiteralType`] would have and the `?`s around them lowered, and whether that needs
-/// `typing.Literal`. `None` when it holds no literal
-pub(crate) fn lower_literals(
-    source: &str,
-    written: WrittenNames,
-    types: &dyn TypeInfo,
-    expr: &Expr,
-    reading: LiteralReading,
-    min_version: PythonVersion,
-) -> Option<(String, bool)> {
-    let mut inner = LiteralType::new(source, written, types, FloatLiteralLowering::default());
-    inner.in_application = reading == LiteralReading::Application;
-    inner.emit_type_edits(expr, false);
-    let mut edits: Vec<_> = inner
-        .edits
-        .iter()
-        .flat_map(|fix| fix.edits().iter().cloned())
-        .collect();
-    if edits.is_empty() {
-        return None;
-    }
-    edits.extend(
-        collect_edits(source, written, expr, min_version)
-            .into_iter()
-            .map(|(range, lowered)| Edit::range_replacement(lowered, range)),
-    );
-    // an insertion at an offset goes ahead of a replacement starting there
-    edits.sort_by_key(|edit| (edit.start(), edit.end()));
-    let mut lowered = String::new();
-    let mut at = expr.start();
-    for edit in edits {
-        lowered.push_str(&source[TextRange::new(at, edit.start())]);
-        lowered.push_str(edit.content().unwrap_or_default());
-        at = edit.end();
-    }
-    lowered.push_str(&source[TextRange::new(at, expr.end())]);
-    Some((lowered, inner.needs_literal_import))
 }
 
 /// every string in `stmts` that the lowering writes as a literal type, because the checker reads

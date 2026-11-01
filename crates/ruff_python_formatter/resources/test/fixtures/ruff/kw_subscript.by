@@ -15,3 +15,7 @@ d = f[int, foo=str]()
 e: A[foo=Two[bytes, bar=int]]
 g = (walrus := 1)
 h: SomeVeryLongGenericClassName[foo=SomeExtremelyLongTypeNameHere, bar=AnotherPrettyLongName]
+i: B[T=literal str]
+j: A[foo=final int, bar=list[literal str]]
+k: A[foo=(int, str)?, bar=(int) -> str]
+l: A[foo=int & str, bar=not int]

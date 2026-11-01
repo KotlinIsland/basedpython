@@ -27,6 +27,45 @@ def f(x: B[T=int]) -> None:
     reveal_type(x)  # revealed: B[int]
 ```
 
+## a keyword argument holds any type form
+
+a keyword names a position and says nothing about the type written at it, so a value is a type
+expression like any other type argument, and is lowered like one
+
+```by
+class B[T]: ...
+
+class Pack[**Kwargs]: ...
+
+def each(
+    optional: B[T=1?],
+    modifier: B[T=literal str],
+    intersection: B[T=int & str],
+    negation: B[T=not int],
+    tuple_type: B[T=(int, str)],
+    tuple_optional: B[T=(1?, int)],
+    arrow: B[T=(int) -> str],
+    dynamic_type: B[T=dynamic],
+    keyword_union: B[T=int or str],
+    nested: B[T=B[T=1?]],
+    pack: Pack[a=int & str, b=(int, str)],
+):
+    reveal_type(optional)  # revealed: B[1 | None]
+    reveal_type(modifier)  # revealed: B[LiteralString]
+    reveal_type(intersection)  # revealed: B[Never]
+    reveal_type(negation)  # revealed: B[not int]
+    reveal_type(tuple_type)  # revealed: B[(int, str)]
+    reveal_type(tuple_optional)  # revealed: B[(1 | None, int)]
+    reveal_type(arrow)  # revealed: B[(int, /) -> str]
+    reveal_type(dynamic_type)  # revealed: B[Any]
+    reveal_type(keyword_union)  # revealed: B[int | str]
+    reveal_type(nested)  # revealed: B[B[1 | None]]
+
+made = B[T=1?]()  # no diagnostic
+inside_a_tuple: (B[T=1?], int) | None = None  # no diagnostic
+inside_an_arrow: ((int) -> B[T=1?]) | None = None  # no diagnostic
+```
+
 ## a keyword argument is not a parameter field
 
 a keyword argument shares its encoding with the labelled field of a parameter list and of an
