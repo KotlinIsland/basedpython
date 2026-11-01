@@ -53,6 +53,7 @@ pub(crate) const CLASS_BODY: &[Lowering] = &[
     Lowering::AnonNamedTuple,
     Lowering::ProtocolType,
     Lowering::TypedDictLiteral,
+    Lowering::KwSubscript,
 ];
 
 /// which kind of class a synthesized type lowers to

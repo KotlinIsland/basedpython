@@ -345,12 +345,12 @@ impl TypePosWalker<'_> {
         if let Expr::Tuple(t) = slice {
             if !t.parenthesized {
                 for e in &t.elts {
-                    self.visit_type_expr(e, TypePos::Nested);
+                    self.visit_type_expr(keyword_field_value(e), TypePos::Nested);
                 }
                 return;
             }
         }
-        self.visit_type_expr(slice, TypePos::Nested);
+        self.visit_type_expr(keyword_field_value(slice), TypePos::Nested);
     }
 
     /// whether `value` is `Callable`: the checker's answer where the walk has one, and the
@@ -596,6 +596,14 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
             return;
         }
         walk_expr(self, expr);
+    }
+}
+
+/// the type written in an argument of a subscript: `int` for `T=int` as for `int`
+pub(crate) fn keyword_field_value(argument: &Expr) -> &Expr {
+    match argument {
+        Expr::Named(named) if named.label().is_some() => &named.value,
+        argument => argument,
     }
 }
 

@@ -202,53 +202,6 @@ impl<'src> OptionalTypePass<'src> {
     }
 }
 
-/// Collect the optional-lowering text edits for a single type-expression
-/// subtree. Used by the shared `just_float::rewrite_type_expr_with_imports`
-/// composer so a
-/// `T?` nested inside a type constructor (tuple type, kw-subscript, …) is
-/// lowered when that constructor renders its nested types. The runtime
-/// `Optional[...]` import for nested `T??` is handled by [`OptionalTypePass`],
-/// which independently walks every type position.
-pub(crate) fn collect_edits(
-    source: &str,
-    written: WrittenNames,
-    expr: &Expr,
-    min_version: PythonVersion,
-) -> Vec<(TextRange, String)> {
-    let mut lower = OptionalLower::new(source, written, min_version);
-    lower.visit_expr(expr);
-    lower.edits
-}
-
-/// Lower the optionals in a single type-expression subtree to a string, or
-/// `None` if it contains no optional. Used by type constructors (tuple type,
-/// kw-subscript) to lower a nested `T?` when they splice their element types.
-pub(crate) fn rewrite_type_expr(
-    source: &str,
-    written: WrittenNames,
-    expr: &Expr,
-    min_version: PythonVersion,
-) -> Option<String> {
-    let mut edits = collect_edits(source, written, expr, min_version);
-    if edits.is_empty() {
-        return None;
-    }
-    edits.sort_by_key(|(range, _)| range.start());
-    let range = expr.range();
-    let mut result = String::new();
-    let mut pos = range.start();
-    for (r, replacement) in &edits {
-        if r.start() < pos {
-            continue;
-        }
-        result.push_str(&source[usize::from(pos)..usize::from(r.start())]);
-        result.push_str(replacement);
-        pos = r.end();
-    }
-    result.push_str(&source[usize::from(pos)..usize::from(range.end())]);
-    Some(result)
-}
-
 impl TypeAwarePass for OptionalTypePass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::OptionalType)

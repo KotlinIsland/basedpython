@@ -35,6 +35,7 @@ use ty_python_semantic::RuntimeSpelling;
 use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
+use super::kw_subscript;
 use super::quotes::WrittenQuotes;
 use super::repeated_underscore::{WrittenNames, lowered_callable_parameters};
 use super::type_expr_walker::RootKind;
@@ -57,6 +58,7 @@ pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::AnonNamedTuple,
     Lowering::ProtocolType,
     Lowering::TypedDictLiteral,
+    Lowering::KwSubscript,
 ];
 
 #[expect(
@@ -902,6 +904,23 @@ impl<'src> CallableSyntax<'src> {
                 Some(self.rewrite_or_leaf(inner))
             }
 
+            Expr::Subscript(s)
+                if let Some(pieces) = self
+                    .types
+                    .and_then(|types| kw_subscript::lowered(s, types, self.min_version)) =>
+            {
+                let mut text = String::new();
+                for piece in pieces {
+                    match piece {
+                        kw_subscript::Piece::Text(written) => text.push_str(&written),
+                        kw_subscript::Piece::Value(value) => {
+                            text.push_str(&self.rewrite_or_leaf(value));
+                        }
+                    }
+                }
+                Some(text)
+            }
+
             Expr::Subscript(s) => {
                 // `Annotated[T, meta…]` — only the first slice element is a type
                 // position; the rest is arbitrary metadata and must stay verbatim
@@ -1310,6 +1329,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::LiteralString,
             Lowering::ClassSubscript,
             Lowering::RuntimeVariance,
+            Lowering::KwSubscript,
         ]
     }
 

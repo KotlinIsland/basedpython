@@ -1934,8 +1934,9 @@ impl<'src> Parser<'src> {
             let mut target_name = self.parse_name(ExpressionContext::default());
             target_name.ctx = ExprContext::Invalid;
             self.expect(TokenKind::Equal);
-            let inner =
-                self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+            let inner = self.parse_conditional_expression_or_higher_impl(
+                ExpressionContext::default().with_in_type_expression(),
+            );
             let field_range = self.node_range(field_start);
             Expr::Named(ast::ExprNamed {
                 is_let: false,
@@ -2005,8 +2006,9 @@ impl<'src> Parser<'src> {
                     let mut target_name = parser.parse_name(ExpressionContext::default());
                     target_name.ctx = ExprContext::Invalid;
                     parser.expect(TokenKind::Equal);
-                    let inner = parser
-                        .parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                    let inner = parser.parse_conditional_expression_or_higher_impl(
+                        ExpressionContext::default().with_in_type_expression(),
+                    );
                     let field_range = parser.node_range(field_start);
                     parser.expr_scratch.push(Expr::Named(ast::ExprNamed {
                         is_let: false,

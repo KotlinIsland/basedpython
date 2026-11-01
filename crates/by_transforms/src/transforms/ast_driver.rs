@@ -269,6 +269,7 @@ pub(crate) enum Lowering {
     DynamicKeyword,
     FloatConst,
     GenericPolyfill,
+    KwSubscript,
     InferredAnnotation,
     JustFloat,
     /// the whitespace the keyword blanking collapses. only spacing is at stake, so any
@@ -1574,8 +1575,7 @@ pub(crate) fn run_against_source<'a>(
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass;
     let just_float_pass = just_float::JustFloatPass::new(written);
     let float_const_pass = float_const::FloatConstPass::new();
-    let kw_subscript_pass =
-        kw_subscript::KwSubscriptPass::new(source_ref, written, config.min_version);
+    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(config.min_version);
     let generic_call_pass = generic_call::GenericCallStripPass::new(config.min_version);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, written, config.min_version);
@@ -2871,11 +2871,6 @@ mod subsumed_lowerings {
             "a_parameter_modifier_leaves_the_overloads_as_they_were",
         ),
         (
-            "KwSubscriptPass",
-            Lowering::OptionalType,
-            "getitem_kw_value_optional_lowers",
-        ),
-        (
             "MatchTypePass",
             Lowering::Unpack,
             "polyfilled_match_type_lowers_to_object",
@@ -3001,6 +2996,12 @@ mod subsumed_lowerings {
                 "LiteralString",
                 Some("literal "),
             ),
+            (
+                Lowering::KwSubscript,
+                "Keyworded[T=1]",
+                "Keyworded[Literal[1]]",
+                Some("T=1"),
+            ),
         ];
         leaves
             .into_iter()
@@ -3008,7 +3009,7 @@ mod subsumed_lowerings {
             .map(|(lowering, leaf, lowered, unwritten)| Case {
                 pass,
                 lowerings: vec![lowering],
-                source: format!("y = 1\n{}\n", wrap(leaf)),
+                source: format!("y = 1\nclass Keyworded[T]: ...\n{}\n", wrap(leaf)),
                 written: vec![show(lowered)],
                 unwritten: unwritten.map(str::to_owned).into_iter().collect(),
             })
@@ -3058,6 +3059,12 @@ mod subsumed_lowerings {
             |leaf| format!("def f(x: ({leaf}) -> str) -> None: ..."),
             |lowered| format!("Callable[[{lowered}], str]"),
         ));
+        cases.extend(leaves(
+            "KwSubscriptPass",
+            super::super::callable::TYPE_EXPRESSION,
+            |leaf| format!("def f(x: Keyworded[T={leaf}]) -> None: ..."),
+            |lowered| format!("Keyworded[{lowered}]"),
+        ));
         let fields = [
             Lowering::Callable,
             Lowering::OptionalType,
@@ -3068,12 +3075,13 @@ mod subsumed_lowerings {
             Lowering::Typeof,
             Lowering::SymbolicTypeOp,
             Lowering::LiteralString,
+            Lowering::KwSubscript,
         ];
         // the class is hoisted ahead of the module's own bindings, so a field reading one —
         // the `y` a `typeof` names — is written as a forward reference
         let (reads_binding, reads_none): (Vec<Lowering>, Vec<Lowering>) = fields
             .iter()
-            .partition(|lowering| **lowering == Lowering::Typeof);
+            .partition(|lowering| matches!(lowering, Lowering::Typeof | Lowering::KwSubscript));
         cases.extend(leaves(
             "AnonNamedTuplePass",
             &reads_none,
@@ -3144,6 +3152,19 @@ mod subsumed_lowerings {
             &unwritten,
         ));
         cases.push(case(
+            "KwSubscriptPass",
+            &synthesized,
+            "class Keyworded[T]: ...\n\n\
+             def f(x: Keyworded[T=(p: int)], y: Keyworded[T=protocol(n: int)], \
+             z: Keyworded[T={\"k\": int}]) -> None: ...\n",
+            &[
+                "x: Keyworded[_AnonNamedTuple_",
+                "y: Keyworded[_Protocol_",
+                "z: Keyworded[_TypedDict_",
+            ],
+            &unwritten,
+        ));
+        cases.push(case(
             "CallableSyntaxPass",
             &[Lowering::AnonNamedTuple, Lowering::TypedDictLiteral],
             "def f(x: ((p: int), {\"k\": int}) -> str) -> None: ...\n",
@@ -3188,13 +3209,6 @@ mod subsumed_lowerings {
                 &["_by_subscript(zip"],
             ),
             case(
-                "KwSubscriptPass",
-                &[Lowering::LiteralType],
-                "class A[X, Y]: ...\na = A[1, Y=2]\n",
-                &["a = A[_by_lit(1), _by_lit(2)]"],
-                &[],
-            ),
-            case(
                 "ParametricIsPass",
                 &[Lowering::TupleLiteralType],
                 "class A[T]: ...\ndef f(x: object):\n    return x is A[(1, \"a\")]\n",
@@ -3207,6 +3221,21 @@ mod subsumed_lowerings {
                 "from collections.abc import Sequence\nclass A[T]:\n    t: T\ndef f(x: object):\n    return x is A[Sequence[int]]\n",
                 &["_parametric_is(x, A[Sequence[int]], (0,))"],
                 &[],
+            ),
+            case(
+                "GenericPolyfillPass",
+                &[Lowering::KwSubscript],
+                "class Pair[A, B = int]: ...\nclass C[T = Pair[int, B=str]]: ...\n",
+                &["default=Pair[int, str]"],
+                &["B=str"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::KwSubscript],
+                "class Pair[A, B = int]: ...\n\
+                 def f(x: object):\n    return x is Pair[int, B=str]\n",
+                &["Pair[int, str]"],
+                &["B=str"],
             ),
             case(
                 "GenericPolyfillPass",
@@ -3447,6 +3476,7 @@ mod subsumed_lowerings {
         "ProtocolTypePass",
         "TypedDictLiteralPass",
         "CheckedCastPass",
+        "KwSubscriptPass",
     ];
 
     fn check_type_expressions_of(pass: &str) {
@@ -3461,6 +3491,11 @@ mod subsumed_lowerings {
     #[test]
     fn a_type_expression_a_tuple_literal_type_moves_is_written_lowered() {
         check_type_expressions_of("TupleLiteralTypePass");
+    }
+
+    #[test]
+    fn a_type_expression_a_keyword_subscript_moves_is_written_lowered() {
+        check_type_expressions_of("KwSubscriptPass");
     }
 
     #[test]
