@@ -449,6 +449,97 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 
 ---
 
+### `lexical-return-callable-typevars`
+
+Whether a type variable that only appears in a function's returned callable stays bound to
+the function, as it is written.
+
+```python
+def counter[T]() -> Callable[[T], T]:
+    state: list[T] = []
+
+    def remember(t: T) -> T:
+        if state:
+            return state[0]
+        state.append(t)
+        return t
+
+    return remember
+```
+
+`T` belongs to `counter`: one call of `counter` makes one `remember`, and every call of that
+`remember` shares the one `state`. By default, `T` is instead moved onto the returned
+callable, which then reads as the generic `[T](T) -> T`. That is the reading mypy and ty
+give it, and it is unsound here: it accepts `remember(1)` followed by
+`remember("a") + "b"`, where the second call returns the `int` the first one stored.
+
+When set to `true`, `T` stays on `counter` as it is written. This applies to `.py` and
+`.by` files alike.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Keep a type variable that only a returned callable mentions on the function
+    lexical-return-callable-typevars = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Keep a type variable that only a returned callable mentions on the function
+    lexical-return-callable-typevars = true
+    ```
+
+---
+
+### `lexical-return-callable-typevars-in-typeshed`
+
+Whether [`lexical-return-callable-typevars`](#lexical-return-callable-typevars) also applies
+to the standard library's stubs.
+
+typeshed is written for the reading that moves the type variable onto the returned
+callable. `unittest.skip(reason)` is declared to return a `Callable[[F], F]` that relies on
+it, so under the lexical reading a function decorated with `@unittest.skip("...")` would
+lose its type. A stub resolved from the standard library search path — the bundled
+typeshed or a custom one set with `environment.typeshed` — therefore keeps that reading
+unless this is set to `true`.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Read typeshed's returned callables lexically too
+    lexical-return-callable-typevars-in-typeshed = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Read typeshed's returned callables lexically too
+    lexical-return-callable-typevars-in-typeshed = true
+    ```
+
+---
+
 ### `overlapping-condition-assume-truthy-instances`
 
 Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
@@ -2187,6 +2278,109 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
     [overrides.analysis]
     # Leave an unannotated function gradual
     infer-unannotated-signatures = false
+    ```
+
+---
+
+#### `lexical-return-callable-typevars`
+
+Whether a type variable that only appears in a function's returned callable stays bound to
+the function, as it is written.
+
+```python
+def counter[T]() -> Callable[[T], T]:
+    state: list[T] = []
+
+    def remember(t: T) -> T:
+        if state:
+            return state[0]
+        state.append(t)
+        return t
+
+    return remember
+```
+
+`T` belongs to `counter`: one call of `counter` makes one `remember`, and every call of that
+`remember` shares the one `state`. By default, `T` is instead moved onto the returned
+callable, which then reads as the generic `[T](T) -> T`. That is the reading mypy and ty
+give it, and it is unsound here: it accepts `remember(1)` followed by
+`remember("a") + "b"`, where the second call returns the `int` the first one stored.
+
+When set to `true`, `T` stays on `counter` as it is written. This applies to `.py` and
+`.by` files alike.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    # Keep a type variable that only a returned callable mentions on the function
+    lexical-return-callable-typevars = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    # Keep a type variable that only a returned callable mentions on the function
+    lexical-return-callable-typevars = true
+    ```
+
+---
+
+#### `lexical-return-callable-typevars-in-typeshed`
+
+Whether [`lexical-return-callable-typevars`](#lexical-return-callable-typevars) also applies
+to the standard library's stubs.
+
+typeshed is written for the reading that moves the type variable onto the returned
+callable. `unittest.skip(reason)` is declared to return a `Callable[[F], F]` that relies on
+it, so under the lexical reading a function decorated with `@unittest.skip("...")` would
+lose its type. A stub resolved from the standard library search path — the bundled
+typeshed or a custom one set with `environment.typeshed` — therefore keeps that reading
+unless this is set to `true`.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    # Read typeshed's returned callables lexically too
+    lexical-return-callable-typevars-in-typeshed = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    # Read typeshed's returned callables lexically too
+    lexical-return-callable-typevars-in-typeshed = true
     ```
 
 ---

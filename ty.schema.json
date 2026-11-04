@@ -226,6 +226,20 @@
             "null"
           ]
         },
+        "lexical-return-callable-typevars": {
+          "description": "Whether a type variable that only appears in a function's returned callable stays bound to\nthe function, as it is written.\n\n```python\ndef counter[T]() -> Callable[[T], T]:\n    state: list[T] = []\n\n    def remember(t: T) -> T:\n        if state:\n            return state[0]\n        state.append(t)\n        return t\n\n    return remember\n```\n\n`T` belongs to `counter`: one call of `counter` makes one `remember`, and every call of that\n`remember` shares the one `state`. By default, `T` is instead moved onto the returned\ncallable, which then reads as the generic `[T](T) -> T`. That is the reading mypy and ty\ngive it, and it is unsound here: it accepts `remember(1)` followed by\n`remember(\"a\") + \"b\"`, where the second call returns the `int` the first one stored.\n\nWhen set to `true`, `T` stays on `counter` as it is written. This applies to `.py` and\n`.by` files alike.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lexical-return-callable-typevars-in-typeshed": {
+          "description": "Whether [`lexical-return-callable-typevars`](#lexical-return-callable-typevars) also applies\nto the standard library's stubs.\n\ntypeshed is written for the reading that moves the type variable onto the returned\ncallable. `unittest.skip(reason)` is declared to return a `Callable[[F], F]` that relies on\nit, so under the lexical reading a function decorated with `@unittest.skip(\"...\")` would\nlose its type. A stub resolved from the standard library search path — the bundled\ntypeshed or a custom one set with `environment.typeshed` — therefore keeps that reading\nunless this is set to `true`.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "overlapping-condition-assume-truthy-instances": {
           "description": "Whether an instance with no `__bool__` and no `__len__` counts as always truthy when\nlooking for an [`overlapping-condition`](rules.md#overlapping-condition).\n\nSuch an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by\ndefault it is a falsy member of `if not x` just as `False` is. Enabling this assumes the\nclass means what it looks like it means, which drops the reports for `if not x` over an\ninstance or a `False` sentinel. (`truthiness-test-of-none-union`, which reports a `None`\nsentinel, always makes this assumption.)\n\nDefaults to `false`.",
           "type": [

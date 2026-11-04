@@ -2586,6 +2586,65 @@ pub struct AnalysisOptions {
     )]
     pub precise_unsolved_typevars: Option<bool>,
 
+    /// Whether a type variable that only appears in a function's returned callable stays bound to
+    /// the function, as it is written.
+    ///
+    /// ```python
+    /// def counter[T]() -> Callable[[T], T]:
+    ///     state: list[T] = []
+    ///
+    ///     def remember(t: T) -> T:
+    ///         if state:
+    ///             return state[0]
+    ///         state.append(t)
+    ///         return t
+    ///
+    ///     return remember
+    /// ```
+    ///
+    /// `T` belongs to `counter`: one call of `counter` makes one `remember`, and every call of that
+    /// `remember` shares the one `state`. By default, `T` is instead moved onto the returned
+    /// callable, which then reads as the generic `[T](T) -> T`. That is the reading mypy and ty
+    /// give it, and it is unsound here: it accepts `remember(1)` followed by
+    /// `remember("a") + "b"`, where the second call returns the `int` the first one stored.
+    ///
+    /// When set to `true`, `T` stays on `counter` as it is written. This applies to `.py` and
+    /// `.by` files alike.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+        # Keep a type variable that only a returned callable mentions on the function
+        lexical-return-callable-typevars = true
+        "#
+    )]
+    pub lexical_return_callable_typevars: Option<bool>,
+
+    /// Whether [`lexical-return-callable-typevars`](#lexical-return-callable-typevars) also applies
+    /// to the standard library's stubs.
+    ///
+    /// typeshed is written for the reading that moves the type variable onto the returned
+    /// callable. `unittest.skip(reason)` is declared to return a `Callable[[F], F]` that relies on
+    /// it, so under the lexical reading a function decorated with `@unittest.skip("...")` would
+    /// lose its type. A stub resolved from the standard library search path — the bundled
+    /// typeshed or a custom one set with `environment.typeshed` — therefore keeps that reading
+    /// unless this is set to `true`.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+        # Read typeshed's returned callables lexically too
+        lexical-return-callable-typevars-in-typeshed = true
+        "#
+    )]
+    pub lexical_return_callable_typevars_in_typeshed: Option<bool>,
+
     /// A list of classes whose values do not count as a distinct member of an
     /// [`overlapping-condition`](rules.md#overlapping-condition).
     ///
@@ -2803,6 +2862,8 @@ impl AnalysisOptions {
             infer_unannotated_signatures,
             bivariant_private_attributes,
             precise_unsolved_typevars,
+            lexical_return_callable_typevars,
+            lexical_return_callable_typevars_in_typeshed,
             overlapping_condition_exempt_types,
             overlapping_condition_assume_truthy_instances,
             implicit_object_repr_exempt_types,
@@ -2826,6 +2887,9 @@ impl AnalysisOptions {
             infer_unannotated_signatures: infer_unannotated_signatures_default,
             bivariant_private_attributes: bivariant_private_attributes_default,
             precise_unsolved_typevars: precise_unsolved_typevars_default,
+            lexical_return_callable_typevars: lexical_return_callable_typevars_default,
+            lexical_return_callable_typevars_in_typeshed:
+                lexical_return_callable_typevars_in_typeshed_default,
             overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
             overlapping_condition_assume_truthy_instances:
                 overlapping_condition_assume_truthy_instances_default,
@@ -2880,6 +2944,11 @@ impl AnalysisOptions {
                 .unwrap_or(bivariant_private_attributes_default),
             precise_unsolved_typevars: precise_unsolved_typevars
                 .unwrap_or(precise_unsolved_typevars_default),
+            lexical_return_callable_typevars: lexical_return_callable_typevars
+                .unwrap_or(lexical_return_callable_typevars_default),
+            lexical_return_callable_typevars_in_typeshed:
+                lexical_return_callable_typevars_in_typeshed
+                    .unwrap_or(lexical_return_callable_typevars_in_typeshed_default),
             overlapping_condition_exempt_types: overlapping_condition_exempt_types
                 .as_ref()
                 .map(|types| {

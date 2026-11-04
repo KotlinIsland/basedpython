@@ -406,6 +406,9 @@ fn mdtest_analysis_settings(
         infer_unannotated_signatures: infer_unannotated_signatures_default,
         bivariant_private_attributes: bivariant_private_attributes_default,
         precise_unsolved_typevars: precise_unsolved_typevars_default,
+        lexical_return_callable_typevars: lexical_return_callable_typevars_default,
+        lexical_return_callable_typevars_in_typeshed:
+            lexical_return_callable_typevars_in_typeshed_default,
         overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
         overlapping_condition_assume_truthy_instances:
             overlapping_condition_assume_truthy_instances_default,
@@ -474,6 +477,12 @@ fn mdtest_analysis_settings(
         precise_unsolved_typevars: options
             .precise_unsolved_typevars
             .unwrap_or(precise_unsolved_typevars_default),
+        lexical_return_callable_typevars: options
+            .lexical_return_callable_typevars
+            .unwrap_or(lexical_return_callable_typevars_default),
+        lexical_return_callable_typevars_in_typeshed: options
+            .lexical_return_callable_typevars_in_typeshed
+            .unwrap_or(lexical_return_callable_typevars_in_typeshed_default),
         overlapping_condition_exempt_types: options
             .overlapping_condition_exempt_types
             .as_deref()
