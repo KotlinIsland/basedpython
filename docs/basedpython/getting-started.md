@@ -9,12 +9,10 @@ basedpython ships as the `basedpython` package, which installs two executables:
 `by`, the type checker and transpiler, and `buff`, the linter and formatter
 
 ```sh
-uv add --dev "basedpython>=0.0.1b2"
+uv add --dev "basedpython>=0.0.1"
 ```
 
-name the version: basedpython has only published pre-releases, and without one in the requirement
-uv installs `0.0.0`, an empty placeholder with no executables. a directory that has no
-`pyproject.toml` yet needs `uv init --bare` first
+a directory that has no `pyproject.toml` yet needs `uv init --bare` first
 
 verify it works:
 
