@@ -4848,9 +4848,13 @@ impl<'db> Type<'db> {
                 .type_argument(db)
                 .recursive_type_normalized_impl(db, env, div, true)
                 .map(|ty| OverlappingType::from_type_expression(db, ty)),
+            // `final T` and `literal T` narrow which values fit without changing what a value is,
+            // so the modifier is not a level of nesting: a top-level `final list[Divergent]`
+            // keeps its shape like `list[Divergent]` does, rather than collapsing to the bare
+            // marker a union then drops, which made the two alternate between rounds
             Type::Restricted(restricted) => restricted
                 .type_argument(db)
-                .recursive_type_normalized_impl(db, env, div, true)
+                .recursive_type_normalized_impl(db, env, div, nested)
                 .map(|ty| {
                     RestrictedType::from_type_expression(db, env, restricted.modifier(db), ty)
                 }),

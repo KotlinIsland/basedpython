@@ -1442,6 +1442,23 @@ def run(flag: int):
         reveal_type(t)  # revealed: 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6
 ```
 
+## an exactly constructed value a loop stores back into the list it was copied from
+
+in basedpython a constructor call infers its class exactly, so `list(m[0])` is a `final list[...]`.
+storing it back into `m` makes `m`'s element type depend on that value, so the value is computed
+from itself. the `final` wrapper does not count as a level of nesting while the cycle is recovered:
+a `final list[...]` that mentions the cycle keeps its shape, like a plain `list[...]` does
+
+```by
+m = []
+if len(m):
+    pass
+while m:
+    p = list(m[0])
+    p.append(1)
+    m[0] = p
+```
+
 ## a first-party module that shadows the home of a known class
 
 The `collections.abc` ABCs really live in `_collections_abc`, so a project carrying a file of that
