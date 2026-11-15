@@ -117,6 +117,8 @@ jobs:
             ':pyproject.toml' \
             ':.github/workflows/build-binaries.yml' \
             ':scripts/build_ruff_pgo.py' \
+            ':scripts/archive_release_binaries.sh' \
+            ':dist-workspace.toml' \
           ; then
               echo "changed=false" >> "$GITHUB_OUTPUT"
           else

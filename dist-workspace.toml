@@ -1,14 +1,19 @@
 [workspace]
 # include the (workspace-excluded) basedpython dist crate so cargo-dist derives
-# the release tag from basedpython's version (e.g. 0.0.1a1) rather than the ruff
-# crate's. NOTE: validate on a dry-run — if `dist plan` can't resolve the
-# excluded crate, fall back to `packages = ["ruff"]` (tag won't match the wheel)
+# the release from the `version` in `crates/basedpython/Cargo.toml`
+# rather than the ruff crate's, and plans one `basedpython-<target>` archive per target
+# carrying that crate's two binaries, `by` and `buff`
 members = ["cargo:.", "cargo:./crates/basedpython"]
 packages = ["basedpython"]
 
 # Config for 'dist'
 [dist]
-# We customize installation of `cargo-dist` in `release.yml` to avoid `curl | sh`
+# `.github/workflows/release.yml` is maintained by hand, as upstream's is, so dist must
+# neither check nor regenerate it: `dist generate` would drop upstream's release gate, signing
+# stage and checksummed `dist` install (it installs with `curl | sh`), and interpolate
+# expressions straight into scripts. the settings below that describe the workflow (the job
+# lists, their permissions, the runners) are kept in step with `release.yml` by hand, using a
+# scratch `dist generate --mode=ci` only as a reference for which jobs a change adds or drops
 allow-dirty = ["ci"]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
@@ -16,9 +21,9 @@ cargo-dist-version = "0.31.0"
 dist = false
 # CI backends to support
 ci = "github"
-# basedpython publishes wheels only; no standalone-binary installers (they'd need
-# the per-platform binary archives, which are dropped — see build-binaries.yml)
-installers = []
+# The installers to generate for each app: each installs both `by` and `buff` from the
+# `basedpython-<target>` archive that build-binaries.yml packs
+installers = ["shell", "powershell"]
 # The archive format to use for windows builds (defaults .zip)
 windows-archive = ".zip"
 # The archive format to use for non-windows builds (defaults .tar.xz)
@@ -65,16 +70,16 @@ github-attestations-phase = "announce"
 github-attestations-filters = ["*.json", "*.sh", "*.ps1", "*.zip", "*.tar.gz"]
 # Whether CI should include auto-generated code to build local artifacts
 build-local-artifacts = false
-# docker dropped (it was wired to the old `ruff` binary); build-docker.yml is also
-# gated to skip so this is consistent even before `release.yml` is regenerated
+# Local artifacts jobs to run in CI. upstream's docker image is dropped: it is built from the
+# old `ruff` binary
 local-artifacts-jobs = ["./build-binaries", "./build-wasm"]
-# Publish jobs to run in CI
+# Publish jobs to run in CI. upstream's crates.io publish is dropped
 publish-jobs = ["./publish-pypi", "./publish-wasm"]
-# the upstream post-announce jobs are astral infra (docs / mirror / playground /
-# versions) that don't apply to the fork; cleared (takes effect on `dist generate`)
+# upstream's post-announce jobs (docs, mirror, playground, versions, notifying dependents)
+# publish to astral's infrastructure, so the fork runs none
 post-announce-jobs = []
 # Custom permissions for GitHub Jobs
-github-custom-job-permissions = { "build-binaries" = { contents = "read" }, "build-docker" = { packages = "write", contents = "read", id-token = "write", attestations = "write" }, "build-wasm" = { contents = "read" }, "publish-wasm" = { contents = "read", id-token = "write", packages = "write" }, "publish-crates" = { contents = "read" }, "publish-playground" = { contents = "read" }, "notify-dependents" = { id-token = "write" }, "publish-docs" = { contents = "read", id-token = "write" }, "publish-versions" = { contents = "read", id-token = "write" }, "publish-mirror" = { contents = "read" } }
+github-custom-job-permissions = { "build-binaries" = { contents = "read" }, "build-wasm" = { contents = "read" }, "publish-wasm" = { contents = "read", id-token = "write", packages = "write" } }
 # Whether to install an updater program
 install-updater = false
 # Path that installers should place binaries in
@@ -88,12 +93,6 @@ hosting = ["github"]
 # per-platform wheel builds run in build-binaries.yml on standard runners. use
 # github-hosted runners so the release works without a depot account
 global = "ubuntu-latest"
-
-# two edits to the generated `.github/workflows/release.yml` cannot be expressed here, so
-# `dist generate` reverts them. reapply both after regenerating:
-#   - `custom-publish-pypi`'s `if:` carries `always() && needs.host.result == 'success' &&
-#     needs.release-gate.result == 'success'`, so the release gate still holds
-#   - its `uses:` is the local `./.github/workflows/publish-pypi.yml`, not cargo-dist's `$/` form
 
 [dist.github-action-commits]
 "actions/checkout" = "de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2

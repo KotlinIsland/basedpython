@@ -1,11 +1,10 @@
-# Build basedpython wheels on all platforms.
+# build basedpython's wheels and standalone binary archives on all platforms
 #
-# Builds the combined `basedpython` wheels (each containing both the `by` and
-# `buff` binaries) for PyPI. basedpython publishes wheels only — the standalone
-# per-platform binary archives, install-tests, and docker image that upstream
-# ruff ships are intentionally dropped (they were wired to the old `ruff` binary
-# name; re-enable them by shipping `by`/`buff` once that work is done — see
-# ROADMAP).
+# each job builds the combined `basedpython` wheel (carrying both the `by` and `buff`
+# binaries) for pypi, then packs that same build's binaries into the `basedpython-<target>`
+# archive (a `.tar.gz`, or a `.zip` on windows, with a `.sha256` sidecar) that cargo-dist
+# lists on the github release, so every target in `dist-workspace.toml` needs a job here.
+# upstream ruff's install tests and docker image are dropped
 #
 # Assumed to run as a subworkflow of .github/workflows/release.yml; specifically, as a local
 # artifacts job within `cargo-dist`.
@@ -24,6 +23,9 @@ on:
       # And when we change this workflow itself...
       - .github/workflows/build-binaries.yml
       - scripts/build_ruff_pgo.py
+      # and when the archives change, or the set of targets they are built for
+      - scripts/archive_release_binaries.sh
+      - dist-workspace.toml
 
 concurrency:
   group: build-binaries-${{ github.ref }}
@@ -103,6 +105,19 @@ jobs:
           name: wheels-macos-x86_64
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: x86_64-apple-darwin
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-x86_64-apple-darwin
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
   macos-aarch64:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -149,6 +164,19 @@ jobs:
           name: wheels-aarch64-apple-darwin
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: aarch64-apple-darwin
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-aarch64-apple-darwin
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
   windows:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -204,21 +232,37 @@ jobs:
         shell: bash
         run: |
           LLVM_READOBJ="$(rustc --print sysroot)/lib/rustlib/${{ matrix.platform.target }}/bin/llvm-readobj.exe"
-          IMPORTS_FILE="$RUNNER_TEMP/ruff-coff-imports.txt"
           # the wheel is built from `crates/basedpython`, which is its own cargo workspace, so
-          # its binaries land beside that manifest rather than in the repository's `target`
-          "$LLVM_READOBJ" --coff-imports "crates/basedpython/target/${{ matrix.platform.target }}/release/buff.exe" > "$IMPORTS_FILE"
+          # its binaries land beside that manifest rather than in the repository's `target`.
+          # both ship standalone in the release archive as well as in the wheel
+          for binary in by buff; do
+            IMPORTS_FILE="$RUNNER_TEMP/$binary-coff-imports.txt"
+            "$LLVM_READOBJ" --coff-imports "crates/basedpython/target/${{ matrix.platform.target }}/release/$binary.exe" > "$IMPORTS_FILE"
 
-          if grep -Eiq 'vcruntime[[:digit:]_]*\.dll|api-ms-win-crt-' "$IMPORTS_FILE"; then
-            echo "Ruff must not dynamically link the Visual C++ runtime" >&2
-            exit 1
-          fi
+            if grep -Eiq 'vcruntime[[:digit:]_]*\.dll|api-ms-win-crt-' "$IMPORTS_FILE"; then
+              echo "$binary.exe must not dynamically link the Visual C++ runtime" >&2
+              exit 1
+            fi
+          done
       - name: "Upload wheels"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.platform.target }}
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-${{ matrix.platform.target }}
+          compression-level: 0
+          path: |
+            *.zip
+            *.sha256
 
   linux:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -266,77 +310,77 @@ jobs:
           name: wheels-${{ matrix.target }}
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-${{ matrix.target }}
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
-  # `linux-aarch64` is new from upstream and is the one job with no runner the fork can
-  # reach: it asks for depot's ARM machines, which basedpython does not have, so it sits
-  # queued forever rather than failing. Disabled until there is an ARM runner to give it.
-  # It also carries the binary-archive steps this workflow's header says the fork drops.
-  #  linux-aarch64:
-  #    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
-  #    runs-on: depot-ubuntu-24.04-arm-8
-  #    env:
-  #      # see https://github.com/astral-sh/ruff/issues/3791
-  #      # and https://github.com/gnzlbg/jemallocator/issues/170#issuecomment-1503228963
-  #      JEMALLOC_SYS_WITH_LG_PAGE: "16"
-  #    steps:
-  #      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  #        with:
-  #          submodules: recursive
-  #          persist-credentials: false
-  #      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-  #        with:
-  #          python-version: ${{ env.PYTHON_VERSION }}
-  #      - name: "Install LLVM profiling tools"
-  #        run: rustup component add llvm-tools-preview
-  #      - name: "Train PGO Ruff"
-  #        run: |
-  #          python scripts/build_ruff_pgo.py \
-  #            --target aarch64-unknown-linux-gnu \
-  #            --target-dir "${{ github.workspace }}/target/ruff-pgo" \
-  #            --train-only
-  #
-  #          echo "RUSTFLAGS=${RUSTFLAGS:+${RUSTFLAGS} }-Cprofile-use=${{ github.workspace }}/target/ruff-pgo/ruff.profdata" >> "$GITHUB_ENV"
-  #      - name: "Prep README.md"
-  #        run: python scripts/transform_readme.py --target pypi
-  #      - name: "Build wheels"
-  #        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-  #        with:
-  #          maturin-version: v1.14.1
-  #          target: aarch64-unknown-linux-gnu
-  #          manylinux: 2_17
-  #          docker-options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
-  #          args: --release --locked --out dist --compatibility pypi
-  #      - name: "Test wheel"
-  #        run: |
-  #          pip install dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
-  #          "${MODULE_NAME}" --help
-  #          python -m "${MODULE_NAME}" --help
-  #      - name: "Upload wheels"
-  #        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-  #        with:
-  #          name: wheels-aarch64-unknown-linux-gnu
-  #          path: dist
-  #      - name: "Archive binary"
-  #        shell: bash
-  #        run: |
-  #          set -euo pipefail
-  #
-  #          TARGET=aarch64-unknown-linux-gnu
-  #          ARCHIVE_NAME=ruff-$TARGET
-  #          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
-  #
-  #          mkdir -p $ARCHIVE_NAME
-  #          # `crates/basedpython` is its own cargo workspace, so the wheel's binaries are there
-  #          cp crates/basedpython/target/$TARGET/release/buff $ARCHIVE_NAME/buff
-  #          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
-  #          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
-  #      - name: "Upload binary"
-  #        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-  #        with:
-  #          name: artifacts-aarch64-unknown-linux-gnu
-  #          path: |
-  #            *.tar.gz
-  #            *.sha256
+  linux-aarch64:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
+    # basedpython has no depot account; github's own arm runner is free for public repositories
+    runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-24.04-arm-8' || 'ubuntu-24.04-arm' }}
+    env:
+      # see https://github.com/astral-sh/ruff/issues/3791
+      # and https://github.com/gnzlbg/jemallocator/issues/170#issuecomment-1503228963
+      JEMALLOC_SYS_WITH_LG_PAGE: "16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Install LLVM profiling tools"
+        run: rustup component add llvm-tools-preview
+      - name: "Train PGO Ruff"
+        run: |
+          python scripts/build_ruff_pgo.py \
+            --target aarch64-unknown-linux-gnu \
+            --target-dir "${{ github.workspace }}/target/ruff-pgo" \
+            --train-only
+
+          echo "RUSTFLAGS=${RUSTFLAGS:+${RUSTFLAGS} }-Cprofile-use=${{ github.workspace }}/target/ruff-pgo/ruff.profdata" >> "$GITHUB_ENV"
+      - name: "Prep README.md"
+        run: python scripts/transform_readme.py --target pypi
+      - name: "Build wheels"
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          sccache: false
+          maturin-version: v1.15.0
+          target: aarch64-unknown-linux-gnu
+          manylinux: 2_17
+          docker-options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Upload wheels"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-aarch64-unknown-linux-gnu
+          compression-level: 0
+          path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: aarch64-unknown-linux-gnu
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-aarch64-unknown-linux-gnu
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
   linux-cross:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -394,6 +438,19 @@ jobs:
           name: wheels-${{ matrix.platform.target }}
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-${{ matrix.platform.target }}
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
   musllinux:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -429,6 +486,19 @@ jobs:
           name: wheels-${{ matrix.target }}
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-${{ matrix.target }}
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
 
   musllinux-cross:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
@@ -468,3 +538,16 @@ jobs:
           name: wheels-${{ matrix.platform.target }}
           compression-level: 0
           path: dist
+      - name: "Archive binaries"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: bash scripts/archive_release_binaries.sh "$TARGET"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-${{ matrix.platform.target }}
+          compression-level: 0
+          path: |
+            *.tar.gz
+            *.sha256
