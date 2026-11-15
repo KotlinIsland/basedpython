@@ -135,12 +135,12 @@ pub(crate) fn verbatim_destination(
     out: &Path,
     path: &Path,
 ) -> Option<PathBuf> {
-    let wanted = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let wanted = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     verbatim_files(db, root, roots, out)
         .into_iter()
         .find(|file| {
             file.source == wanted
-                || std::fs::canonicalize(&file.source).is_ok_and(|source| source == wanted)
+                || dunce::canonicalize(&file.source).is_ok_and(|source| source == wanted)
         })
         .map(|file| file.relative)
 }

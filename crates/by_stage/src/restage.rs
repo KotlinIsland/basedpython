@@ -225,7 +225,7 @@ pub fn restage(
     let mut seen = HashSet::new();
     let files: Vec<&Path> = files
         .iter()
-        .filter(|file| seen.insert(std::fs::canonicalize(file).unwrap_or_else(|_| (*file).clone())))
+        .filter(|file| seen.insert(dunce::canonicalize(file).unwrap_or_else(|_| (*file).clone())))
         .map(PathBuf::as_path)
         .collect();
 
@@ -252,7 +252,7 @@ pub fn restage(
         sources: project_sources(db, BY_SOURCES, &record.project_root, Some(build_directory))
             .into_iter()
             .map(|(path, file)| {
-                let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let resolved = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
                 (path, file, resolved)
             })
             .collect(),
@@ -322,7 +322,7 @@ fn restage_transpiled(
     let db = tree.db;
     // the build's own file set, so a source the project excludes is refused here
     // rather than transpiled into a slot the build never wrote
-    let wanted = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let wanted = dunce::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
     let Some((source, source_file, _)) = tree
         .sources
         .iter()

@@ -1318,11 +1318,11 @@ fn output_dir(cwd: &Path, out: Option<&Path>) -> anyhow::Result<PathBuf> {
 /// two paths naming this directory compare equal.
 fn settled_output_dir(cwd: &Path, out: &Path) -> PathBuf {
     let out = cwd.join(out);
-    if let Ok(canonical) = fs::canonicalize(&out) {
+    if let Ok(canonical) = dunce::canonicalize(&out) {
         return canonical;
     }
     match (out.parent(), out.file_name()) {
-        (Some(parent), Some(name)) => match fs::canonicalize(parent) {
+        (Some(parent), Some(name)) => match dunce::canonicalize(parent) {
             Ok(canonical) => canonical.join(name),
             Err(_) => out,
         },
@@ -1439,14 +1439,14 @@ pub(crate) fn cmd_compile(
                 cwd.join(source)
             }
         })
-        .map(|source| source.canonicalize().unwrap_or(source))
+        .map(|source| dunce::canonicalize(&source).unwrap_or(source))
         .collect();
     let handles: Vec<_> = project
         .iter()
         .filter(|(path, _)| {
             files.is_empty()
                 || requested.iter().any(|wanted| {
-                    *wanted == **path || path.canonicalize().is_ok_and(|p| p == *wanted)
+                    *wanted == **path || dunce::canonicalize(path).is_ok_and(|p| p == *wanted)
                 })
         })
         .cloned()
@@ -1594,7 +1594,7 @@ pub(crate) fn cmd_compile(
                 options.lowering(),
             );
             // the real path, so a `#line` in the generated C resolves for a debugger
-            let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            let absolute = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
             lowered.lines = Some(by_ir::function::LineTable::new(
                 absolute.display().to_string(),
                 &source,
@@ -1791,7 +1791,7 @@ pub(crate) fn cmd_transpile(
         // are displayed but non-fatal — many basedpython type forms
         // (literal-type promotion, `&` intersection, etc.) look like
         // type errors to ty but are valid in `.by` source
-        let abs = std::fs::canonicalize(p).with_context(|| format!("{}", p.display()))?;
+        let abs = dunce::canonicalize(p).with_context(|| format!("{}", p.display()))?;
         let sys_path = SystemPath::from_std_path(&abs)
             .with_context(|| format!("non-utf8 path: {}", abs.display()))?;
         let project_root = sys_path.parent().unwrap_or(sys_path);

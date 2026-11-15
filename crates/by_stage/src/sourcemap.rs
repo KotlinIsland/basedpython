@@ -75,7 +75,7 @@ pub fn stage_module(
 pub(crate) fn describe_module(emitted: &Transpiled<'_>) -> TracebackEntry {
     TracebackEntry {
         py_path: PathBuf::new(),
-        by_path: std::fs::canonicalize(emitted.by_path)
+        by_path: dunce::canonicalize(emitted.by_path)
             .unwrap_or_else(|_| emitted.by_path.to_path_buf()),
         line_map: emitted.line_map.to_vec(),
         columns: emitted.columns.to_vec(),
@@ -400,8 +400,10 @@ fn py_str_literal(s: &str) -> String {
 mod tests {
     use super::{
         BY_SOURCEMAP_FILENAME, OwnCode, RewriteRefusal, TracebackEntry, content_digest,
-        py_str_literal, render_sourcemap_module, rewrite_sourcemap_entry, write_sourcemap_module,
+        describe_module, py_str_literal, render_sourcemap_module, rewrite_sourcemap_entry,
+        write_sourcemap_module,
     };
+    use crate::emit::Transpiled;
     use by_transforms::columns::{ColumnOrigin, Segment};
     use std::path::{Path, PathBuf};
 
@@ -432,6 +434,33 @@ mod tests {
             content_digest(b"abc"),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    /// a traceback, and a debugger matching a breakpoint, see the `.by` under the spelling a
+    /// user types. on windows `std::fs::canonicalize` answers with the verbatim `\\?\C:\…`
+    /// form, which is what this hands in there
+    #[test]
+    fn a_described_module_names_its_source_without_the_verbatim_prefix() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let source = dir.path().join("demo.by");
+        std::fs::write(&source, "x = 1\n")?;
+        let resolved = std::fs::canonicalize(&source)?;
+
+        let described = describe_module(&Transpiled {
+            by_path: &resolved,
+            by_source: "x = 1\n",
+            python: "x = 1\n",
+            line_map: &[Some(0)],
+            columns: &[Vec::new()],
+        });
+
+        assert_eq!(described.by_path, dunce::simplified(&resolved));
+        assert!(
+            !described.by_path.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            described.by_path.display()
+        );
+        Ok(())
     }
 
     /// `DIGESTS` is a second table keyed exactly as `SOURCEMAP` is — additive,

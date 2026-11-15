@@ -62,7 +62,7 @@ pub(crate) fn write_report(
     // python reports a file under its real path, and a temporary directory is
     // reached through a symlink on macos, so the tree is recognised either way
     let trees: Vec<PathBuf> = std::iter::once(tree.to_path_buf())
-        .chain(fs::canonicalize(tree).ok())
+        .chain(dunce::canonicalize(tree).ok())
         .collect();
     let covered = project_files(measured, &trees, carried);
     if let Some(parent) = report

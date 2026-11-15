@@ -1455,8 +1455,8 @@ fn run_runs_in_the_directory_it_was_started_in() {
     );
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
-        Path::new(lines[0]).canonicalize().ok(),
-        elsewhere.canonicalize().ok(),
+        dunce::canonicalize(lines[0]).ok(),
+        dunce::canonicalize(&elsewhere).ok(),
         "ran in {} rather than where it was started:\n{stdout}",
         lines[0]
     );
@@ -1492,13 +1492,13 @@ fn run_in_build_runs_in_the_tree_it_staged() {
     );
     let lines: Vec<&str> = stdout.lines().collect();
     assert_ne!(
-        Path::new(lines[0]).canonicalize().ok(),
-        elsewhere.canonicalize().ok(),
+        dunce::canonicalize(lines[0]).ok(),
+        dunce::canonicalize(&elsewhere).ok(),
         "ran where it was started rather than in the staged tree:\n{stdout}"
     );
     assert_ne!(
-        Path::new(lines[0]).canonicalize().ok(),
-        dir.path().canonicalize().ok(),
+        dunce::canonicalize(lines[0]).ok(),
+        dunce::canonicalize(dir.path()).ok(),
         "ran in the project rather than in the staged tree:\n{stdout}"
     );
     assert_eq!(
@@ -1587,6 +1587,12 @@ fn project_with_partly_covered_modules(dir: &Path) {
     .unwrap();
 }
 
+/// `relative`, written with `/`, as a path under `root` that uses the platform's separator,
+/// which is how `by` names a project file
+fn project_file(root: &Path, relative: &str) -> PathBuf {
+    root.join(relative.split('/').collect::<PathBuf>())
+}
+
 /// The `DA:` lines of `file`'s record in an LCOV `report`, or `None` when it has
 /// no record.
 fn lcov_lines<'a>(report: &'a str, file: &Path) -> Option<Vec<&'a str>> {
@@ -1615,7 +1621,7 @@ fn run_coverage_reports_by_lines_and_project_files() {
     let (python, importable) = coverage_interpreter();
     let dir = tempfile::tempdir().expect("tempdir");
     project_with_partly_covered_modules(dir.path());
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -1653,7 +1659,7 @@ fn run_coverage_reports_by_lines_and_project_files() {
     let report = fs::read_to_string(dir.path().join("out/report.lcov")).expect("a report");
 
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/calc.by")),
+        lcov_lines(&report, &project_file(&project, "pkg/calc.by")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
         "calc.by is reported on its own lines:\n{report}"
     );
@@ -1663,7 +1669,7 @@ fn run_coverage_reports_by_lines_and_project_files() {
         "{report}"
     );
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/plain.py")),
+        lcov_lines(&report, &project_file(&project, "pkg/plain.py")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
         "the staged copy is reported as the project file:\n{report}"
     );
@@ -1704,7 +1710,7 @@ fn run_coverage_does_not_count_a_synthesized_class_as_its_types_line() {
          def main():\n    print(\"ok\")\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let report = coverage_report(dir.path(), &python, "ok\n");
     let lines = lcov_lines(&report, &project.join("main.by")).expect("main.by is reported");
@@ -1755,7 +1761,7 @@ fn run_coverage_applies_the_configuration_to_project_files() {
     }
     let dir = tempfile::tempdir().expect("tempdir");
     project_with_partly_covered_modules(dir.path());
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     fs::write(
         dir.path().join("pyproject.toml"),
@@ -1764,7 +1770,7 @@ fn run_coverage_applies_the_configuration_to_project_files() {
     .unwrap();
     let report = coverage_report(dir.path(), &python, "4\n");
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/plain.py")),
+        lcov_lines(&report, &project_file(&project, "pkg/plain.py")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
         "{report}"
     );
@@ -1781,12 +1787,12 @@ fn run_coverage_applies_the_configuration_to_project_files() {
     .unwrap();
     let report = coverage_report(dir.path(), &python, "4\n");
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/plain.py")),
+        lcov_lines(&report, &project_file(&project, "pkg/plain.py")),
         None,
         "pkg/plain.py is omitted:\n{report}"
     );
     assert!(
-        lcov_lines(&report, &project.join("pkg/calc.by")).is_some(),
+        lcov_lines(&report, &project_file(&project, "pkg/calc.by")).is_some(),
         "{report}"
     );
 }
@@ -1816,7 +1822,7 @@ fn run_coverage_reports_a_by_module_that_never_ran() {
         "[tool.coverage.run]\nsource = [\"pkg\"]\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let cores = coverage_cores(&python);
     assert!(
@@ -1846,7 +1852,7 @@ fn run_coverage_reports_a_by_module_that_never_ran() {
         );
         let report = fs::read_to_string(dir.path().join("report.lcov")).expect("a report");
         assert_eq!(
-            lcov_lines(&report, &project.join("pkg/unused.by")),
+            lcov_lines(&report, &project_file(&project, "pkg/unused.by")),
             Some(vec!["DA:1,0", "DA:2,0"]),
             "{core}: {report}"
         );
@@ -1859,7 +1865,7 @@ fn run_coverage_reports_a_by_module_that_never_ran() {
     .unwrap();
     let report = coverage_report(dir.path(), &python, "4\n");
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/unused.by")),
+        lcov_lines(&report, &project_file(&project, "pkg/unused.by")),
         None,
         "pkg/unused.by is omitted:\n{report}"
     );
@@ -1885,7 +1891,7 @@ fn run_coverage_in_build_applies_the_configuration_to_project_files() {
         "[tool.coverage.run]\nsource = [\"pkg\"]\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -1902,12 +1908,12 @@ fn run_coverage_in_build_applies_the_configuration_to_project_files() {
     );
     let report = fs::read_to_string(project.join("report.lcov")).expect("a report");
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/calc.by")),
+        lcov_lines(&report, &project_file(&project, "pkg/calc.by")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
         "{report}"
     );
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/plain.py")),
+        lcov_lines(&report, &project_file(&project, "pkg/plain.py")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:5,1", "DA:6,0"]),
         "{report}"
     );
@@ -1928,7 +1934,7 @@ fn run_names_a_hand_written_module_s_project_file_in_a_traceback() {
         "import helper\n\nprint(helper.where)\nhelper.fail()\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
     let helper = project.join("helper.py");
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
@@ -1940,7 +1946,7 @@ fn run_names_a_hand_written_module_s_project_file_in_a_traceback() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        Path::new(stdout.trim()).canonicalize().ok(),
+        dunce::canonicalize(stdout.trim()).ok(),
         Some(helper.clone()),
         "`__file__` names a staged copy:\n{stdout}\n{stderr}"
     );
@@ -1951,7 +1957,7 @@ fn run_names_a_hand_written_module_s_project_file_in_a_traceback() {
         .next_back()
         .expect("a traceback");
     assert_eq!(
-        Path::new(raised_in).canonicalize().ok(),
+        dunce::canonicalize(raised_in).ok(),
         Some(helper),
         "the traceback names a staged copy:\n{stderr}"
     );
@@ -1977,11 +1983,11 @@ fn run_coverage_reports_lines_when_branches_are_measured() {
         "[tool.coverage.run]\nbranch = true\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let report = coverage_report(dir.path(), &python, "4\n");
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/calc.by")),
+        lcov_lines(&report, &project_file(&project, "pkg/calc.by")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:3,0", "DA:4,1"]),
         "{report}"
     );
@@ -2006,7 +2012,7 @@ fn run_coverage_measures_threads_and_exit_handlers() {
         "import atexit\nimport threading\nimport time\n\ndef late():\n    time.sleep(0.2)\n    print(\"late\")\n\ndef bye():\n    print(\"bye\")\n\natexit.register(bye)\nthreading.Thread(target=late).start()\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let report = coverage_report(dir.path(), &python, "late\nbye\n");
     let lines = lcov_lines(&report, &project.join("main.by")).expect("main.by is reported");
@@ -2038,7 +2044,7 @@ fn run_coverage_maps_a_module_a_test_runner_compiled() {
         "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\ndef test_big():\n    assert add(1000, 2) == -1\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
     let report = project.join("report.lcov");
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
@@ -2058,12 +2064,12 @@ fn run_coverage_maps_a_module_a_test_runner_compiled() {
     );
     let report = fs::read_to_string(&report).expect("a report");
     assert_eq!(
-        lcov_lines(&report, &project.join("tests/test_calc.by")),
+        lcov_lines(&report, &project_file(&project, "tests/test_calc.by")),
         Some(vec!["DA:1,1", "DA:4,1", "DA:5,1", "DA:8,1", "DA:9,1"]),
         "{report}"
     );
     assert_eq!(
-        lcov_lines(&report, &project.join("pkg/calc.by")),
+        lcov_lines(&report, &project_file(&project, "pkg/calc.by")),
         Some(vec!["DA:1,1", "DA:2,1", "DA:3,1", "DA:4,1"]),
         "{report}"
     );
@@ -2146,8 +2152,8 @@ fn run_profile_names_functions_by_their_project_files() {
         "from pkg.calc import fib\nfrom pkg.plain import helper\n\n\nclass Worker:\n    def work(self, n: int) -> int:\n        return fib(n) + helper()\n\n\nprint(Worker().work(10))\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
-    let file = |relative: &str| project.join(relative).display().to_string();
+    let project = dunce::canonicalize(dir.path()).unwrap();
+    let file = |relative: &str| project_file(&project, relative).display().to_string();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -2239,7 +2245,7 @@ fn run_profile_names_the_runtime_s_helpers_by_the_runtime() {
         "from pkg.util import twice\n\n\ndef first(xs: list[int] | None) -> int:\n    return xs!![0]\n\n\nprint(twice(first([3])))\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
     let main = project.join("main.by").display().to_string();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
@@ -2358,7 +2364,7 @@ fn run_profile_leaves_out_by_s_own_machinery() {
         "from pkg.calc import double\n\n\nprint(double(2))\nraise ValueError('done')\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -2371,7 +2377,7 @@ fn run_profile_leaves_out_by_s_own_machinery() {
     assert!(stderr.contains("ValueError: done"), "{stderr}");
     let functions = profiled_functions(&python, &dir.path().join("run.pstat"));
 
-    let calc = project.join("pkg/calc.by").display().to_string();
+    let calc = project_file(&project, "pkg/calc.by").display().to_string();
     assert!(
         functions
             .iter()
@@ -2413,7 +2419,7 @@ fn run_profile_maps_a_module_a_test_runner_compiled() {
     let Some(python) = pytest_project(dir.path()) else {
         return;
     };
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
     let snapshot = project.join("tests.pstat");
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
@@ -2433,7 +2439,9 @@ fn run_profile_maps_a_module_a_test_runner_compiled() {
         String::from_utf8_lossy(&output.stderr)
     );
     let functions = profiled_functions(&python, &snapshot);
-    let test_module = project.join("tests/test_calc.by").display().to_string();
+    let test_module = project_file(&project, "tests/test_calc.by")
+        .display()
+        .to_string();
     for name in ["<module>", "test_sum"] {
         assert!(
             functions
@@ -2541,11 +2549,7 @@ fn repl_reports_an_exception_at_the_inputs_lines() {
     );
     assert_eq!(status, Some(0), "{stderr}");
     assert_eq!(stdout, "'still here'\n", "{stderr}");
-    let calc = dir
-        .path()
-        .canonicalize()
-        .unwrap()
-        .join("pkg/calc.by")
+    let calc = project_file(&dunce::canonicalize(dir.path()).unwrap(), "pkg/calc.by")
         .display()
         .to_string();
     assert!(
@@ -3178,7 +3182,7 @@ fn run_pytest_reports_an_error_importing_a_test_module_at_the_by_line() {
         "import importlib\n\nlet name = \"missing_module\"\nlet _ = importlib.import_module(name)\n\n\ndef test_never():\n    pass\n",
     )
     .unwrap();
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let stdout = run_pytest(dir.path(), &python, &[]);
     for (file, line, quoted, error) in [
@@ -3234,7 +3238,7 @@ fn run_pytest_runs_all_of_a_test_module_at_its_by_lines() {
     )
     .unwrap();
     let out = dir.path().join("where.txt");
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
 
     let stdout = run_pytest(
         dir.path(),
@@ -3268,7 +3272,7 @@ fn run_pytest_reports_teamcity_messages() {
     let Some(python) = pytest_project(dir.path()) else {
         return;
     };
-    let project = dir.path().canonicalize().unwrap();
+    let project = dunce::canonicalize(dir.path()).unwrap();
     let test_file = project.join("tests").join("test_calc.by");
     let url = format!("file://{}", test_file.display());
 
@@ -3585,7 +3589,7 @@ fn run_reports_the_call_of_main_at_the_line_main_is_defined_on() {
         "let numbers: dict[str, int] = {}\n\n\ndef main():\n    print(numbers[\"missing\"])\n",
     )
     .unwrap();
-    let main = dir.path().canonicalize().unwrap().join("main.by");
+    let main = dunce::canonicalize(dir.path()).unwrap().join("main.by");
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -10154,7 +10158,7 @@ fn init_names_a_by_run_by_a_relative_path_absolutely() {
     let driver = git_in(&project, &["config", "--get", "merge.by.driver"]);
     let driver = String::from_utf8_lossy(&driver.stdout);
     // the directory `by` was run in, as the process sees it, links and all resolved
-    let by = dir.path().canonicalize().unwrap().join("bin/by");
+    let by = dunce::canonicalize(dir.path()).unwrap().join("bin/by");
     assert!(
         driver.starts_with(&format!("'{}' merge-driver", by.display())),
         "{driver}"

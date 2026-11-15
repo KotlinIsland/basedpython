@@ -102,8 +102,8 @@ pub fn build_output(db: &ProjectDatabase, path: &Path) -> BuildOutput {
 /// On Windows resolving answers with a verbatim `\\?\C:\…` path, which is dropped back to the
 /// `C:\…` spelling a client sends and a client can open.
 fn canonical(path: &Path) -> PathBuf {
-    if let Ok(resolved) = std::fs::canonicalize(path) {
-        return dunce::simplified(&resolved).to_path_buf();
+    if let Ok(resolved) = dunce::canonicalize(path) {
+        return resolved;
     }
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(name)) => canonical(parent).join(name),

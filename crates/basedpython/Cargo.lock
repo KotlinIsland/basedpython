@@ -3694,6 +3694,7 @@ dependencies = [
  "colored",
  "crossbeam",
  "ctrlc",
+ "dunce",
  "indicatif",
  "jiff",
  "libc",

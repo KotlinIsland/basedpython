@@ -151,7 +151,7 @@ impl Rebuilder {
 ///
 /// The root is handed back rather than re-derived by each caller: `canonicalize`
 /// and `current_dir` do not agree on every platform — on windows the first
-/// returns the `\\?\` verbatim form and the second does not — so a caller that
+/// expands a short (`RUNNER~1`) component the second keeps — so a caller that
 /// re-derived it would find none of the db's paths under it.
 pub type ProjectBuild = (
     FrozenProjectDatabase,
@@ -330,9 +330,14 @@ pub fn build_project_db_for(
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
     // (e.g. `subclass-of-sealed-class`) misfire. this bites on windows, where
-    // `canonicalize` rewrites files to the `\\?\` long-path form while an
-    // un-canonicalized root keeps its short (`RUNNER~1`) components
-    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    // `canonicalize` expands the short (`RUNNER~1`) components an
+    // un-canonicalized root keeps. `dunce` drops the `\\?\` verbatim prefix
+    // `std::fs::canonicalize` adds there whenever the path means the same thing
+    // without it, so the paths in the db, and those a traceback or sourcemap
+    // later shows, are spelled as a user spells them. a path that needs the
+    // prefix (one longer than 260 characters, or naming a reserved device or
+    // ending in a dot) keeps it
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let sys_cwd = SystemPath::from_std_path(&canonical_cwd)
         .with_context(|| format!("non-utf8 path: {}", canonical_cwd.display()))?;
     let system = OsSystem::new(sys_cwd);
@@ -353,7 +358,7 @@ pub fn build_project_db_for(
     // `tests/` and nothing else, and then cannot find the module it was asked to
     // run — the same mistake as looking for `.venv` beside the caller rather than
     // beside the project
-    let canonical_root = std::fs::canonicalize(project_metadata.root().as_std_path())
+    let canonical_root = dunce::canonicalize(project_metadata.root().as_std_path())
         .unwrap_or_else(|_| PathBuf::from(project_metadata.root().as_str()));
     let sys_root = SystemPath::from_std_path(&canonical_root)
         .with_context(|| format!("non-utf8 path: {}", canonical_root.display()))?;
