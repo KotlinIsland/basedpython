@@ -9,10 +9,6 @@ def get_user() -> {"name": str, "age": int}: ...
 shape identity ignores key order — `{"a": int, "b": str}` and
 `{"b": str, "a": int}` are the same type
 
-`typing_extensions` is a runtime requirement of any module that contains a
-typed-dict-literal annotation (the generated type uses PEP 728
-`closed`/`extra_items` features that aren't yet in `typing.TypedDict`)
-
 ## closed by default, `**: T` for extra items
 
 dict literal types are closed by default, so extra keys are rejected. a
@@ -70,6 +66,20 @@ class _TypedDict_<hash>(TypedDict, closed=True):
     name: "str"
     age: "int"
 ```
+
+`closed=` and `extra_items=` are PEP 728, which `typing.TypedDict` takes from python 3.15, and a
+module for 3.15 declares its classes on it. a module for an older python needs no
+`typing_extensions` for them: its classes are made by `typing.TypedDict` all the same, so
+`typing.is_typeddict` and `typing.get_type_hints` read them as they would any other, and they
+record what 3.15 would:
+
+- `__closed__` is `True` for a closed class and `None` for one with `**: T`
+- `__extra_items__` is `T` for one with `**: T`. a closed class has none, since the
+    `NoExtraItems` 3.15 gives it does not exist before 3.15
+- `__readonly_keys__` is empty and `__mutable_keys__` holds every key, below 3.13 too
+
+a checker reading the generated python for an older python, or a generated stub for one, reads
+the base as `typing_extensions.TypedDict`
 
 a field naming a type parameter of the generic the literal was written in reads that parameter
 from module scope, where `typing.get_type_hints` resolves it, and a field whose type is another

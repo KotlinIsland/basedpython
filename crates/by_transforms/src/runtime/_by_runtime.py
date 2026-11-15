@@ -26,6 +26,46 @@ def _by_sealed_member(_cls):
             ) + (_cls,)
 
 
+# --- typed dict literals --------------------------------------------------
+# a dict literal type is a `TypedDict` closed to every key it does not name, or open to more of
+# one type, which a class says with `closed=` or `extra_items=`. `typing.TypedDict` takes those
+# from 3.15 (PEP 728), and a module for an older python makes its classes on `_ByTypedDict`
+# instead. the class is still made by `typing.TypedDict`, so whatever tells a `TypedDict` by its
+# metaclass, `typing.is_typeddict` among them, still does, and its instances are plain dicts. it
+# is then given what 3.15 records: `__closed__`, true for a closed class and None otherwise, and
+# `__extra_items__` where extra items were given a type. a closed class has no
+# `__extra_items__`, since the `NoExtraItems` 3.15 gives it is no such thing before 3.15. below
+# 3.13, which records which keys are read-only, it is given that none is, since a dict literal
+# type has no way to say one is
+
+
+class _ByTypedDictMeta(type):
+    def __new__(cls, name, bases, namespace, closed=None, **options):
+        import types
+        import typing
+
+        if not bases:
+            return super().__new__(cls, name, bases, namespace)
+        extra = {"__extra_items__": options.pop("extra_items")} if "extra_items" in options else {}
+        made = types.new_class(
+            name,
+            tuple(typing.TypedDict if isinstance(base, cls) else base for base in bases),
+            options,
+            lambda body: body.update(namespace),
+        )
+        made.__closed__ = closed
+        for attribute, value in extra.items():
+            setattr(made, attribute, value)
+        if "__readonly_keys__" not in vars(made):
+            made.__readonly_keys__ = frozenset()
+            made.__mutable_keys__ = made.__required_keys__ | made.__optional_keys__
+        return made
+
+
+class _ByTypedDict(metaclass=_ByTypedDictMeta):
+    pass
+
+
 # --- runtime type-soundness checks ---------------------------------------
 # inserted where ty accepts a value on an annotation-level claim it cannot
 # verify: a generic call's result, a projection out of a specialized container,

@@ -904,6 +904,42 @@ fn run_executes_module() {
     );
 }
 
+/// a typed dict literal's class says it is closed, which only 3.15's `typing.TypedDict` can say.
+/// declared on `typing_extensions`'s instead, the program checked clean and then raised
+/// `ModuleNotFoundError` wherever that was not installed, which `by run` has no way to install
+#[test]
+fn run_needs_no_typing_extensions_for_a_typed_dict_literal() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "x: {\"p\": int}\ndef main():\n    print(\"ok\")\n",
+    )
+    .unwrap();
+    // a module of that name ahead of every installed package, which fails to import as an
+    // uninstalled one does, whatever the interpreter has installed
+    let missing = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        missing.path().join("typing_extensions.py"),
+        "raise ModuleNotFoundError(\"No module named 'typing_extensions'\", name=__name__)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("PYTHONPATH", missing.path())
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
 /// a program is checked against the packages of the python `--python` names to run it on, not
 /// against the environment the project would have found, so a package only that python has
 /// resolves rather than failing the check that comes before the run
@@ -1645,6 +1681,36 @@ fn run_coverage_reports_by_lines_and_project_files() {
         !dir.path().join(".coverage").exists(),
         "coverage.py left a data file of its own beside the project"
     );
+}
+
+/// the class a typed dict literal lowers to is made as the module starts, not where the type is
+/// written, so a function that never ran is reported as never having run, the line its
+/// annotation is on included
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_coverage_does_not_count_a_synthesized_class_as_its_types_line() {
+    let (python, importable) = coverage_interpreter();
+    if !importable {
+        eprintln!("skipping: {python} cannot import coverage");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def never():\n    print(\"never\")\n    y: {\"p\": int} = {\"p\": 1}\n    print(y)\n\n\
+         def main():\n    print(\"ok\")\n",
+    )
+    .unwrap();
+    let project = dir.path().canonicalize().unwrap();
+
+    let report = coverage_report(dir.path(), &python, "ok\n");
+    let lines = lcov_lines(&report, &project.join("main.by")).expect("main.by is reported");
+    for line in ["DA:2,0", "DA:3,0", "DA:4,0"] {
+        assert!(lines.contains(&line), "`{line}` is missing:\n{report}");
+    }
 }
 
 /// The report of a `by run --coverage main` of `dir` with `python`, which can

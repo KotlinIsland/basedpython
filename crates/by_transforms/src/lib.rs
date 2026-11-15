@@ -4385,6 +4385,39 @@ mod leftover_surface_syntax {
         assert_eq!(spells(&lowered), None, "{lowered}");
     }
 
+    /// a round names the types it lowers with the names the module's own source leaves free,
+    /// as the lowering before it did, so a typed dict literal inside a leftover anonymous named
+    /// tuple reads the `TypedDict` base and the class that lowering already declared, rather
+    /// than declaring them a second time under names of their own
+    #[test]
+    fn a_round_reuses_the_typed_dict_declarations_already_written() {
+        let config = Config {
+            runtime_module: Some("pkg._by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        let source = "a: {\"k\": int}\ndef f(p: (q: {\"k\": int})) -> None: ...\n";
+        let lowered = crate::transpile("a: {\"k\": int}\n", &config).expect("transpile");
+        let leftover = format!("{lowered}def f(p: (q: {{\"k\": int}})) -> None: ...\n");
+        let quotes = WrittenQuotes::default();
+        let CleanupRound::Lowered(cleaned, _) =
+            run_cleanup_round(&leftover, WrittenNames::new(source), &quotes, &config)
+                .expect("the round should succeed")
+        else {
+            panic!("the leftover anonymous named tuple was not lowered:\n{leftover}");
+        };
+        assert_eq!(spells(&cleaned), None, "{cleaned}");
+        assert_eq!(
+            cleaned.matches("    _TypedDict = _ByTypedDict\n").count(),
+            1,
+            "{cleaned}"
+        );
+        assert_eq!(cleaned.matches("class _TypedDict_").count(), 1, "{cleaned}");
+        assert!(
+            cleaned.contains("    q: _TypedDict_") && !cleaned.contains("_TypedDict2"),
+            "{cleaned}"
+        );
+    }
+
     /// whether the db reads `file` as spelling an anonymous named tuple anywhere
     fn spells_anonymous_named_tuple(db: &ty_project::TestDb, file: File) -> bool {
         let module = ruff_db::parsed::parsed_module(

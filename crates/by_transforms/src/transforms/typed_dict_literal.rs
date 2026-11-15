@@ -1,5 +1,5 @@
 //! Lowers basedpython typed-dict literal type expressions
-//! `{"key": T, ...}` to a synthesized `typing.TypedDict` subclass.
+//! `{"key": T, ...}` to a synthesized `TypedDict` subclass.
 //!
 //! Each unique shape (sorted-key + field-type-source pairs, plus any
 //! `**: T` extra-items type) is hoisted to a single class definition and
@@ -12,9 +12,9 @@
 //! b: {"name": str, **: str}
 //! ```
 //!
-//! Lowers to:
+//! Lowers to, on a python whose `typing.TypedDict` takes `closed` and `extra_items`:
 //! ```python
-//! from typing_extensions import TypedDict
+//! from typing import TypedDict
 //!
 //! class _TypedDict_<hash1>(TypedDict, closed=True):
 //!     name: "str"
@@ -27,7 +27,8 @@
 //! b: _TypedDict_<hash2>
 //! ```
 //!
-//! field types are emitted as forward references — see `Shape::class_def`
+//! and on an older one to the same classes on the runtime's `_ByTypedDict` (see
+//! [`TypedDictBase`]). field types are emitted as forward references — see `Shape::class_def`
 
 use std::fmt::Write as _;
 use std::hash::Hash;
@@ -40,6 +41,35 @@ use super::ast_driver::{AstPass, PassContext};
 use super::quotes::WrittenQuotes;
 use super::repeated_underscore::WrittenNames;
 use super::synthesized_types::{Namer, SynthesizedKind};
+use crate::config::Config;
+
+/// where the class of a typed dict literal takes its `TypedDict` base from
+///
+/// the class says whether it is closed with PEP 728's `closed=` and `extra_items=`, which
+/// `typing.TypedDict` takes from 3.15. a stub is only ever read, by a checker that brings
+/// its own `typing_extensions`, so one for an older python takes `TypedDict` from there. a
+/// module for an older python is run, and nothing says `typing_extensions` is installed
+/// where it runs, so its classes are made by the runtime's `_ByTypedDict`, which makes them
+/// with `typing.TypedDict` and records what 3.15 would. a checker reading that module is
+/// told the class is `typing_extensions`'s, which says the same thing to it
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TypedDictBase {
+    Typing,
+    TypingExtensions,
+    Runtime,
+}
+
+impl TypedDictBase {
+    pub(crate) fn of(config: &Config) -> Self {
+        if config.min_version >= ruff_python_ast::PythonVersion::PY315 {
+            Self::Typing
+        } else if config.is_stub {
+            Self::TypingExtensions
+        } else {
+            Self::Runtime
+        }
+    }
+}
 
 /// Sorted list of `(field_name, type_source)` pairs identifying a unique
 /// shape. Sorted so that `{"a": int, "b": str}` and `{"b": str, "a": int}`
@@ -58,8 +88,8 @@ impl Shape {
         written.synthesized_class("_TypedDict_", self)
     }
 
-    /// the class declaring this shape as `name`, `typing_extensions.TypedDict` written as
-    /// `typed_dict`
+    /// the class declaring this shape as `name`, its `TypedDict` base ([`TypedDictBase`])
+    /// written as `typed_dict`
     ///
     /// every field type is written as a string. the hoisted classes are emitted in the
     /// preamble, ahead of everything the module defines, and a shape can name a class declared
@@ -371,16 +401,148 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("from typing_extensions import TypedDict"),
-            "got: {out}"
-        );
-        assert!(
-            out.contains("(TypedDict, closed=True):"),
+            out.contains("(_TypedDict, closed=True):"),
             "dict literal types should be closed by default, got: {out}"
         );
         assert!(out.contains("    name: \"str\"\n"), "got: {out}");
         assert!(out.contains("    age: \"int\"\n"), "got: {out}");
         assert!(out.contains("a: _TypedDict_"), "got: {out}");
+    }
+
+    fn at(min_version: crate::PythonVersion) -> Config {
+        Config {
+            min_version,
+            runtime_module: Some("pkg._by_runtime".to_owned()),
+            ..Config::test_default()
+        }
+    }
+
+    /// `typing.TypedDict` takes `closed=` and `extra_items=` from 3.15, so a module for 3.15
+    /// declares its classes on it
+    #[test]
+    fn from_315_the_class_is_a_typing_typed_dict() {
+        assert_eq!(
+            transpile(
+                "a: {\"p\": int}\nb: {\"p\": int, **: str}\n",
+                &at(crate::PythonVersion::PY315)
+            )
+            .unwrap(),
+            indoc! {r#"
+                from typing import TypedDict
+                class _TypedDict_d898ce09(TypedDict, closed=True):
+                    p: "int"
+
+                class _TypedDict_9d5bd66d(TypedDict, extra_items="str"):
+                    p: "int"
+
+                a: _TypedDict_d898ce09
+                b: _TypedDict_9d5bd66d
+            "#}
+        );
+    }
+
+    /// nothing says `typing_extensions` is installed where a module for an older python runs,
+    /// so its classes are made by the runtime, while a checker reading the module is told the
+    /// base is `typing_extensions`'s
+    #[test]
+    fn below_315_the_class_is_made_by_the_runtime() {
+        assert_eq!(
+            transpile(
+                "a: {\"p\": int}\nb: {\"p\": int, **: str}\n",
+                &at(crate::PythonVersion::PY310)
+            )
+            .unwrap(),
+            indoc! {r#"
+                from typing import TYPE_CHECKING
+                from pkg._by_runtime import _ByTypedDict
+                if TYPE_CHECKING:
+                    from typing_extensions import TypedDict as _TypedDict
+                else:
+                    _TypedDict = _ByTypedDict
+
+                class _TypedDict_d898ce09(_TypedDict, closed=True):
+                    p: "int"
+
+                class _TypedDict_9d5bd66d(_TypedDict, extra_items="str"):
+                    p: "int"
+
+                a: _TypedDict_d898ce09
+                b: _TypedDict_9d5bd66d
+            "#}
+        );
+    }
+
+    /// a stub is only read, by a checker that brings its own `typing_extensions`
+    #[test]
+    fn a_stub_below_315_takes_typing_extensions_typed_dict() {
+        let config = Config {
+            is_stub: true,
+            ..at(crate::PythonVersion::PY310)
+        };
+        assert_eq!(
+            transpile("a: {\"p\": int}\n", &config).unwrap(),
+            indoc! {r#"
+                from typing_extensions import TypedDict
+                class _TypedDict_d898ce09(TypedDict, closed=True):
+                    p: "int"
+
+                a: _TypedDict_d898ce09
+            "#}
+        );
+    }
+
+    /// the runtime's base is bound under a name the module does not spell, so a module that
+    /// imports `typing_extensions.TypedDict` for a use of its own keeps it
+    #[test]
+    fn the_runtime_base_leaves_the_modules_typed_dict_alone() {
+        let out = transpile(
+            indoc! {r#"
+                from typing_extensions import TypedDict
+                a: {"p": int}
+                M = TypedDict("M", {"q": int})
+            "#},
+            &at(crate::PythonVersion::PY310),
+        )
+        .unwrap();
+        assert!(
+            out.contains("    from typing_extensions import TypedDict as _TypedDict\n")
+                && out.contains("    _TypedDict = _ByTypedDict\n")
+                && out.contains("(_TypedDict, closed=True):")
+                && out.contains("\nfrom typing_extensions import TypedDict\n")
+                && !out
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("TypedDict =")),
+            "got:\n{out}"
+        );
+    }
+
+    /// the class is made as the module starts, not where the type is written, which may be in a
+    /// function that never runs. python keeps one line table for both: the line a traceback
+    /// would name is the line coverage counts as run and a breakpoint stops at, so the class is
+    /// charged to no `.by` line
+    #[test]
+    fn the_class_is_charged_to_no_line() {
+        let source = indoc! {r#"
+            print(1)
+            def f():
+                a: {"p": int}
+        "#};
+        let (db, file) = crate::make_in_memory_db(source);
+        let (output, line_map) =
+            crate::transpile_typed_with_map(&db, file, &Config::test_default(), None).unwrap();
+        let charged = |needle: &str| {
+            let index = output
+                .lines()
+                .position(|line| line == needle)
+                .unwrap_or_else(|| panic!("`{needle}` is missing from:\n{output}"));
+            line_map.get(index).copied().flatten()
+        };
+        assert_eq!(
+            charged("class _TypedDict_d898ce09(_TypedDict, closed=True):"),
+            None
+        );
+        assert_eq!(charged("    p: \"int\""), None);
+        assert_eq!(charged("print(1)"), Some(0));
     }
 
     /// a field's type is read when the class's hints are, so the name it reads is imported
@@ -406,11 +568,7 @@ mod tests {
     fn extra_items_marker() {
         let out = transpile("b: {\"key\": int, **: str}\n", &Config::test_default()).unwrap();
         assert!(
-            out.contains("from typing_extensions import TypedDict"),
-            "got: {out}"
-        );
-        assert!(
-            out.contains("(TypedDict, extra_items=\"str\"):"),
+            out.contains("(_TypedDict, extra_items=\"str\"):"),
             "`**: T` should lower to extra_items=T, got: {out}"
         );
         assert!(out.contains("    key: \"int\"\n"), "got: {out}");
@@ -443,7 +601,7 @@ mod tests {
     fn extra_items_only() {
         let out = transpile("c: {**: int}\n", &Config::test_default()).unwrap();
         assert!(
-            out.contains("(TypedDict, extra_items=\"int\"):"),
+            out.contains("(_TypedDict, extra_items=\"int\"):"),
             "got: {out}"
         );
         assert!(
@@ -466,7 +624,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("(TypedDict, extra_items=\"object\"):"),
+            out.contains("(_TypedDict, extra_items=\"object\"):"),
             "got: {out}"
         );
         assert!(out.contains("    tag: \"int\"\n"), "got: {out}");
@@ -504,7 +662,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("(TypedDict, extra_items=\"str\"):"),
+            out.contains("(_TypedDict, extra_items=\"str\"):"),
             "got: {out}"
         );
         assert!(out.contains("    s: \"LiteralString\"\n"), "got: {out}");
@@ -632,7 +790,7 @@ mod tests {
         let out = transpile("a: {}\n", &Config::test_default()).unwrap();
         assert!(out.contains("_TypedDict_"), "got: {out}");
         assert!(
-            out.contains("(TypedDict, closed=True):"),
+            out.contains("(_TypedDict, closed=True):"),
             "expected closed-typed-dict base, got: {out}"
         );
         // body is just `pass`; no field lines

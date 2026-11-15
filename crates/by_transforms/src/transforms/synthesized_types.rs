@@ -16,6 +16,7 @@
 //! written as its class wherever it stands.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
 
 use indexmap::IndexMap;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -195,6 +196,7 @@ pub(crate) struct Namer<'src> {
     pub(crate) imports: BTreeSet<(&'static str, &'static str)>,
     /// set when a class body spells a nested optional `T??` with the runtime `Optional`
     pub(crate) needs_optional_runtime: bool,
+    typed_dict_base: typed_dict_literal::TypedDictBase,
 }
 
 impl<'src> Namer<'src> {
@@ -221,6 +223,7 @@ impl<'src> Namer<'src> {
             errors: Vec::new(),
             imports: BTreeSet::new(),
             needs_optional_runtime: false,
+            typed_dict_base: typed_dict_literal::TypedDictBase::of(config),
         }
     }
 
@@ -296,16 +299,22 @@ impl<'src> Namer<'src> {
         let written = self.written;
         let mut declarations = self.callable.class_defs().to_owned();
         let mut kinds = BTreeSet::new();
+        let mut helpers_needed = Vec::new();
+        let mut typed_dict: Option<String> = None;
         let mut named_tuples = IndexMap::new();
         for (shape, name) in &self.classes {
             let declaration = match shape {
                 ClassShape::TypedDict(shape) => {
-                    kinds.insert(("typing_extensions", "TypedDict"));
-                    shape.class_def(
-                        name,
-                        &written.imported("typing_extensions", "TypedDict"),
-                        self.quotes,
-                    )
+                    let base = typed_dict.get_or_insert_with(|| {
+                        typed_dict_base(
+                            self.typed_dict_base,
+                            written,
+                            &mut kinds,
+                            &mut helpers_needed,
+                            &mut declarations,
+                        )
+                    });
+                    shape.class_def(name, base, self.quotes)
                 }
                 ClassShape::NamedTuple(shape) => {
                     kinds.insert(("typing", "NamedTuple"));
@@ -327,6 +336,7 @@ impl<'src> Namer<'src> {
                 .chain(self.imports.iter().copied())
                 .map(|(module, name)| written.import_from(module, &[name])),
         );
+        helpers.extend(helpers_needed);
         if self.needs_optional_runtime {
             helpers.push(crate::runtime::OPTIONAL);
         }
@@ -338,6 +348,44 @@ impl<'src> Namer<'src> {
             imports,
             helpers,
             errors: self.errors,
+        }
+    }
+}
+
+/// the name the classes of typed dict literals read their `TypedDict` base by, recording the
+/// import, the helper or the declaration that binds it
+///
+/// the runtime's `_ByTypedDict` is read under a name of the lowering's own, which a checker is
+/// told is `typing_extensions.TypedDict` ([`typed_dict_literal::TypedDictBase`]). the module may
+/// import that `TypedDict` itself, for a use of its own the runtime's would not serve, so it is
+/// never the module's name that is bound
+fn typed_dict_base(
+    base: typed_dict_literal::TypedDictBase,
+    written: WrittenNames,
+    kinds: &mut BTreeSet<(&'static str, &'static str)>,
+    helpers: &mut Vec<crate::runtime::Helper>,
+    declarations: &mut String,
+) -> String {
+    match base {
+        typed_dict_literal::TypedDictBase::Typing => {
+            kinds.insert(("typing", "TypedDict"));
+            written.imported("typing", "TypedDict")
+        }
+        typed_dict_literal::TypedDictBase::TypingExtensions => {
+            kinds.insert(("typing_extensions", "TypedDict"));
+            written.imported("typing_extensions", "TypedDict")
+        }
+        typed_dict_literal::TypedDictBase::Runtime => {
+            kinds.insert(("typing", "TYPE_CHECKING"));
+            helpers.push(crate::runtime::TYPED_DICT);
+            let local = written.fresh("_TypedDict");
+            let _ = write!(
+                declarations,
+                "if {}:\n    from typing_extensions import TypedDict as {local}\nelse:\n    {local} = {}\n\n",
+                written.imported("typing", "TYPE_CHECKING"),
+                written.helper(crate::runtime::TYPED_DICT),
+            );
+            local
         }
     }
 }

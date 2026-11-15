@@ -26,6 +26,12 @@ a correct sourcemap is the single primitive all of these share
 - `source_map::line_table(source, edits)` — builds a forward, **line-level**
     table (output line → input line, `None` for generated lines) for one
     edit-application pass
+- a class a type expression lowers to (a typed dict literal, an anonymous named
+    tuple, an inline protocol) is declared in the preamble, and like the rest of
+    the preamble is charged to no `.by` line. it is made as the module starts, not
+    where the type is written, and python keeps one line table per code object: the
+    line a traceback names is the line coverage counts as run, a trace event
+    reports and a breakpoint stops at
 - `transpile_typed_with_map` composes a whole-pipeline line table by lifting the
     phase-0 table over the count of generated preamble lines (valid because phase
     1 applies no body edits and later phases only prepend). consumed by `by run`
