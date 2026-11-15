@@ -319,7 +319,7 @@ pub(crate) fn stage_run(
     // configuration would emit different code in exactly the case that matters
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, module.clone(), compiled, &layout, &config),
+        &BuildRecord::new(&root, &roots, module.clone(), compiled, &layout, &config)?,
     )?;
     // the project file behind each copy in the tree, for the runner to run it as
     // and a coverage report to name: the copy is deleted with the tree when the
@@ -1233,7 +1233,7 @@ pub(crate) fn cmd_build(
     // `run` tree does. no entry module: a build is not pointed at one
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, None, false, &layout, &config),
+        &BuildRecord::new(&root, &roots, None, false, &layout, &config)?,
     )?;
     if print_manifest {
         print_build_manifest(&staging, &roots, &root, &requirements)?;
@@ -1684,7 +1684,7 @@ pub(crate) fn cmd_compile(
         let holds_extensions = !emit_c_only && compiled > 0;
         if let Err(error) = stage_build_record(
             &mut staging,
-            &BuildRecord::new(&root, &roots, None, holds_extensions, &layout, &tree_config),
+            &BuildRecord::new(&root, &roots, None, holds_extensions, &layout, &tree_config)?,
         ) {
             break 'compiling Err(error);
         }

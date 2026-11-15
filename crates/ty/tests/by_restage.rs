@@ -346,6 +346,105 @@ fn a_tree_built_by_another_by_is_refused() {
 
     assert!(!ok);
     assert!(answer.refused().contains("rebuild"), "{answer}");
+    assert!(
+        answer.refused().contains("by 0.0.0+somethingelse"),
+        "the refusal names the build that wrote the tree: {answer}"
+    );
+}
+
+/// The map names the build that wrote it, as the record does. A tree whose map came from another
+/// build than its record holds entries this `by` did not write, which it cannot move, so the
+/// restage is refused naming both builds rather than failing partway through the map.
+#[test]
+fn a_map_written_by_another_build_is_refused_naming_both() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project(dir.path());
+    build(dir.path());
+
+    let map_path = dir.path().join("build/_by_sourcemap.py");
+    let map = std::fs::read_to_string(&map_path).unwrap();
+    let ours = map
+        .lines()
+        .find_map(|line| line.strip_prefix("BY_BUILD = "))
+        .unwrap_or_else(|| panic!("the map names its build:\n{map}"))
+        .to_owned();
+    std::fs::write(
+        &map_path,
+        map.replace(
+            &format!("BY_BUILD = {ours}"),
+            "BY_BUILD = \"0.0.0+somethingelse\"",
+        ),
+    )
+    .unwrap();
+
+    let (ok, answer) = restage(dir.path(), "main.by");
+
+    assert!(!ok);
+    let refused = answer.refused();
+    assert!(refused.contains("by 0.0.0+somethingelse"), "{answer}");
+    assert!(
+        refused.contains(&format!("by {}", ours.trim_matches('"'))),
+        "{answer}"
+    );
+    assert!(refused.contains("rebuild"), "{answer}");
+}
+
+/// A map from before the map named its build is refused the same way, rather than met partway
+/// through by an entry it does not hold in every table.
+#[test]
+fn a_map_that_names_no_build_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project(dir.path());
+    build(dir.path());
+
+    let map_path = dir.path().join("build/_by_sourcemap.py");
+    let map = std::fs::read_to_string(&map_path).unwrap();
+    let unnamed: String = map
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("BY_BUILD = "))
+        .collect();
+    assert_ne!(unnamed, map, "the map names its build:\n{map}");
+    std::fs::write(&map_path, unnamed).unwrap();
+
+    let (ok, answer) = restage(dir.path(), "main.by");
+
+    assert!(!ok);
+    assert!(answer.refused().contains("names no build"), "{answer}");
+}
+
+/// The map names this build, so an entry missing from one of its tables was edited in afterwards.
+/// That is refused for the file, not reported as a failure of `by restage` itself.
+#[test]
+fn a_map_entry_missing_from_a_table_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project(dir.path());
+    build(dir.path());
+
+    let map_path = dir.path().join("build/_by_sourcemap.py");
+    let map = std::fs::read_to_string(&map_path).unwrap();
+    let mut table = "";
+    let edited: String = map
+        .split_inclusive('\n')
+        .filter(|line| {
+            if !line.starts_with("    ") {
+                table = line;
+            }
+            !(table.starts_with("DIGESTS = {") && line.starts_with("    \""))
+        })
+        .collect();
+    assert_ne!(edited, map, "the map has a digests table:\n{map}");
+    std::fs::write(&map_path, edited).unwrap();
+
+    let (ok, answer) = restage(dir.path(), "main.by");
+
+    assert!(!ok);
+    assert!(answer.refused().contains("missing from"), "{answer}");
+    assert!(
+        answer.0["refusals"][0]["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("main.by")),
+        "the refusal names the file: {answer}"
+    );
 }
 
 /// A project with two `.by` modules, so one edit can touch both.

@@ -70,6 +70,9 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
+    // before anything else can run long enough for a rebuild to replace the executable, so that
+    // a build tree this process writes or reloads into names the binary it is actually running
+    by_stage::record::pin_executable();
     setup_rayon();
     ruff_db::set_program_version(crate::version::version().to_string()).unwrap();
 

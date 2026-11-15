@@ -44,10 +44,10 @@ use ty_project::ProjectDatabase;
 
 use crate::emit::{CheckGate, Emit, Transpiled, check_and_transpile};
 use crate::project::{BY_SOURCES, Rebuilder, project_sources};
-use crate::record::{BuildRecord, build_identity};
+use crate::record::{BY_BUILD_FILENAME, BuildRecord, build_identity};
 use crate::sourcemap::{
-    BY_SOURCEMAP_FILENAME, content_digest, describe_module, rewrite_sourcemap_entry,
-    sourcemap_key_for,
+    BY_SOURCEMAP_FILENAME, RewriteRefusal, content_digest, describe_module,
+    rewrite_sourcemap_entry, sourcemap_build, sourcemap_key_for,
 };
 use crate::staging::transpiled_destination;
 use crate::verbatim::verbatim_destination;
@@ -198,12 +198,21 @@ pub fn restage(
     // the transpiler is the thing that has to reproduce the build's bytes, and the
     // only handle on the transpiler is which build of `by` is running. a tree
     // written by another one may have been written by another transpiler
-    if record.by_version != build_identity() {
+    let identity = match build_identity() {
+        Ok(identity) => identity,
+        Err(reason) => {
+            return Ok(Restage::refuse(format!(
+                "nothing says whether this `by` is the one that built `{}`: {reason}",
+                build_directory.display(),
+            )));
+        }
+    };
+    if record.by_version != identity {
         return Ok(Restage::refuse(format!(
-            "`{}` was built by by {}, and this is by {} — rebuild it before reloading into it",
+            "`{}` was built by by {}, and this is by {identity} — rebuild it before reloading \
+             into it",
             build_directory.display(),
             record.by_version,
-            build_identity(),
         )));
     }
     // a native extension has no `__code__` to assign, so there is no replacement
@@ -245,6 +254,26 @@ pub fn restage(
     } else {
         None
     };
+    // the record and the map are written by one build, and only that build's map is one
+    // whose entries this `by` knows how to move. a tree holding the map of one build and the
+    // record of another was written into twice, and its map describes modules the record's
+    // build did not write
+    if let Some(existing) = &existing_map {
+        let map_build = sourcemap_build(existing);
+        if map_build.as_deref() != Some(record.by_version.as_str()) {
+            return Ok(Restage::refuse(format!(
+                "`{}` has a {BY_SOURCEMAP_FILENAME} written by {} and a {BY_BUILD_FILENAME} \
+                 written by by {}, so it is not one build's tree — rebuild it before reloading \
+                 into it",
+                build_directory.display(),
+                map_build.map_or_else(
+                    || "a by that names no build".to_owned(),
+                    |build| format!("by {build}")
+                ),
+                record.by_version,
+            )));
+        }
+    }
 
     let tree = Tree {
         db,
@@ -440,11 +469,25 @@ fn restage_transpiled(
     // lines that had to move and in nothing else
     entry.py_path = key;
 
-    *map = rewrite_sourcemap_entry(map, &entry).map_err(|refusal| {
-        anyhow::anyhow!(
-            "the sourcemap entry vanished between being found and being written: {refusal:?}"
-        )
-    })?;
+    // the map names this build, so every entry it holds is in all of its tables. one that is
+    // not was edited after the build wrote it
+    *map = match rewrite_sourcemap_entry(map, &entry) {
+        Ok(rewritten) => rewritten,
+        Err(RewriteRefusal::NotInTheMap) => {
+            return Ok(Err(refuse_file(
+                file,
+                format!(
+                    "`{}`'s {BY_SOURCEMAP_FILENAME} has an entry for `{}` that is missing from \
+                     some of its tables, so it is not the map by {} wrote — rebuild it before \
+                     reloading into it",
+                    tree.directory.display(),
+                    file.display(),
+                    tree.record.by_version,
+                ),
+                Vec::new(),
+            )));
+        }
+    };
 
     let generated = tree.directory.join(&relative);
     Ok(Ok(Restaged {

@@ -257,6 +257,22 @@ symlinks resolves these too
 a re-stage rewrites only the lines of the entry it re-staged, so what the map
 says about by's own code stays as the build wrote it
 
+last, the map names the build of `by` that wrote it, as `_by_build.json` names it:
+
+```python
+BY_BUILD = "3f9a0c41d27be865"
+```
+
+a build is named by a hash of the `by` executable that wrote it. the same binary
+names the same build wherever it is installed, and any rebuild names a new one, so
+two binaries built apart from the same sources usually name different builds. a
+running `by` opens its executable when it starts and hashes that, so a language
+server that outlives a rebuild of `by` still names the binary it is running
+
+a re-stage moves entries only in a map that names the build the tree's
+`_by_build.json` names, and only when that build is the one running: a tree
+whose map and record name different builds is refused, naming both
+
 ## goals
 
 1. **byte-accurate** — map arbitrary `.by` byte offsets ↔ `.py` byte offsets,

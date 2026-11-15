@@ -20,7 +20,13 @@
 //! deriving anything.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::hash::Hasher as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use seahash::SeaHasher;
 
 use by_transforms::SoundnessPositions;
 use by_transforms::config::FloatLiteralLowering;
@@ -30,17 +36,93 @@ use crate::runtime::RuntimeLayout;
 use crate::staging::Staging;
 
 /// The name of the record, at the root of the output tree.
-const BY_BUILD_FILENAME: &str = "_by_build.json";
+pub(crate) const BY_BUILD_FILENAME: &str = "_by_build.json";
 
-/// Which build of `by` wrote this tree.
+/// which build of `by` is running, as the record and the map name it: a hash of the running
+/// executable's contents, or why it cannot be had
 ///
-/// The package version, the commit, and whether the worktree was dirty when the
-/// crate was compiled — see this crate's `build.rs` for why the last of those is
-/// load-bearing. It is a constant of the crate `by` and `by server` share, so two
-/// binaries built together always agree and two built either side of a change
-/// never do.
-pub(crate) fn build_identity() -> &'static str {
-    env!("BY_BUILD_IDENTITY")
+/// a re-stage asks whether the running `by` is the one that wrote a tree, and the executable
+/// is the exact answer. the same binary, wherever it is installed, names the same build, and a
+/// rebuild names a new one, whatever it changed. two binaries built apart from the same sources
+/// usually differ in their bytes, and a re-stage across them is refused, which costs a rebuild
+/// rather than reloading code the running `by` would not have written
+///
+/// taken the first time it is asked for, and kept for the life of the process
+pub(crate) fn build_identity() -> Result<&'static str, &'static str> {
+    static IDENTITY: OnceLock<Result<String, String>> = OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            identify_executable(
+                EXECUTABLE.get_or_init(open_executable).as_ref(),
+                std::env::current_exe(),
+            )
+        })
+        .as_deref()
+        .map_err(String::as_str)
+}
+
+/// the running executable, opened when the program starts, or `None` if it could not be
+///
+/// the identity is taken through this rather than through the executable's path, because a
+/// rebuild replaces the file at that path while a program started from the old one keeps
+/// running: a language server outlives many rebuilds of `by`, and naming itself after the new
+/// file would claim a build whose code it is not running. replacing or deleting the file does
+/// not touch a file already open. holding it open never stops either: on unix nothing does, and
+/// on windows the standard library opens a file sharing it for deletion and renaming
+static EXECUTABLE: OnceLock<Option<File>> = OnceLock::new();
+
+/// Open the running executable now, so that the build a tree's record and map name is the
+/// binary this process is running even if another build replaces it on disk later. A program
+/// calls it first thing.
+///
+/// It never fails the program: an executable that cannot be opened now is opened when the
+/// identity is first asked for, and if that fails too, it is said where a record or map is
+/// written or compared.
+pub fn pin_executable() {
+    EXECUTABLE.get_or_init(open_executable);
+}
+
+fn open_executable() -> Option<File> {
+    File::open(std::env::current_exe().ok()?).ok()
+}
+
+/// a hash of the executable's contents, read through `pinned` when the program opened it at
+/// startup, and through `path` when it did not
+fn identify_executable(
+    pinned: Option<&File>,
+    path: std::io::Result<PathBuf>,
+) -> Result<String, String> {
+    let read = |mut reader: &File| {
+        let mut hasher = SeaHasher::new();
+        let mut buffer = vec![0; 1 << 20];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => return Ok(hasher.finish()),
+                Ok(read) => hasher.write(&buffer[..read]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    };
+    let hash = match pinned {
+        Some(file) => read(file).map_err(|error| {
+            format!("the running `by` could not read its own executable: {error}")
+        })?,
+        None => {
+            let path = path.map_err(|error| {
+                format!("the running `by` could not find its own executable: {error}")
+            })?;
+            File::open(&path)
+                .and_then(|file| read(&file))
+                .map_err(|error| {
+                    format!(
+                        "the running `by` could not read its own executable `{}`: {error}",
+                        path.display()
+                    )
+                })?
+        }
+    };
+    Ok(format!("{hash:016x}"))
 }
 
 /// The transpile config a build ran under, in the record's own spelling.
@@ -109,6 +191,8 @@ pub struct BuildRecord {
 
 impl BuildRecord {
     /// Describe a build that is about to be written, laying the runtime out as `runtime`.
+    ///
+    /// An error when the running `by` cannot name its own build, which the record exists to say.
     pub fn new(
         project_root: &Path,
         module_roots: &[PathBuf],
@@ -116,9 +200,12 @@ impl BuildRecord {
         compiled: bool,
         runtime: &RuntimeLayout,
         config: &Config,
-    ) -> Self {
-        Self {
-            by_version: build_identity().to_owned(),
+    ) -> anyhow::Result<Self> {
+        let by_version = build_identity().map_err(|reason| {
+            anyhow::anyhow!("could not record which build of `by` writes this tree: {reason}")
+        })?;
+        Ok(Self {
+            by_version: by_version.to_owned(),
             project_root: project_root.to_path_buf(),
             module_roots: module_roots.to_vec(),
             entry_module,
@@ -132,7 +219,7 @@ impl BuildRecord {
                 float_literals: spell_float_literals(config.float_literals),
                 stamps: config.stamps.clone(),
             },
-        }
+        })
     }
 
     /// The record as it is written into the tree: pretty-printed, newline
@@ -295,11 +382,82 @@ pub(crate) fn spell_soundness(positions: SoundnessPositions) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{BuildRecord, ConfigRecord, parse_soundness, spell_soundness};
+    use super::{
+        BuildRecord, ConfigRecord, build_identity, identify_executable, parse_soundness,
+        spell_soundness,
+    };
     use crate::runtime::RuntimeLayout;
     use by_transforms::SoundnessPositions;
     use by_transforms::config::{Config, FloatLiteralLowering};
+    use std::fs::File;
     use std::path::{Path, PathBuf};
+
+    /// the identity is a hash of the running executable, the same each time it is asked
+    #[test]
+    fn the_build_identity_names_the_running_executable() {
+        let identity = build_identity().expect("the test binary can read itself");
+        assert!(
+            identity.len() == 16 && identity.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{identity}"
+        );
+        assert_eq!(build_identity(), Ok(identity));
+        let executable = std::env::current_exe().expect("the test knows where it is");
+        assert_eq!(
+            identify_executable(None, Ok(executable)).as_deref(),
+            Ok(identity),
+            "read through its path, the same binary names the same build"
+        );
+    }
+
+    fn write_executable(path: &Path, contents: &[u8]) {
+        std::fs::write(path, contents).expect("the file is written");
+    }
+
+    /// a rebuild that replaces the executable on disk while a program started from it still
+    /// runs leaves that program naming the binary it is running, not the new one. holding the
+    /// file open does not stop the replacement, nor a deletion, on any platform
+    #[test]
+    fn a_binary_replaced_on_disk_keeps_the_identity_it_started_with() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("by");
+        write_executable(&path, b"the binary that started");
+        let started = identify_executable(None, Ok(path.clone())).expect("it reads");
+        let pinned = File::open(&path).expect("it opens");
+
+        let rebuilt = dir.path().join("by.new");
+        write_executable(&rebuilt, b"the binary a rebuild wrote");
+        std::fs::rename(&rebuilt, &path).expect("the open file is replaced");
+
+        assert_eq!(
+            identify_executable(Some(&pinned), Ok(path.clone())).as_deref(),
+            Ok(started.as_str()),
+            "the program that pinned the old binary names it"
+        );
+        let replaced = identify_executable(None, Ok(path.clone())).expect("it reads");
+        assert_ne!(
+            replaced, started,
+            "a program started now names the new binary"
+        );
+
+        let pinned = File::open(&path).expect("it opens");
+        std::fs::remove_file(&path).expect("the open file is deleted");
+        assert_eq!(
+            identify_executable(Some(&pinned), Ok(path)).as_deref(),
+            Ok(replaced.as_str())
+        );
+    }
+
+    /// an executable that cannot be read is said, naming it, where the identity is asked for
+    #[test]
+    fn an_unreadable_executable_is_said() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("gone");
+        let reason = identify_executable(None, Ok(path.clone())).expect_err("there is no file");
+        assert!(reason.contains(&path.display().to_string()), "{reason}");
+        let reason = identify_executable(None, Err(std::io::Error::other("nowhere")))
+            .expect_err("there is no path");
+        assert!(reason.contains("nowhere"), "{reason}");
+    }
 
     /// the wire form, exactly as the plugin and `bpd` read it. nothing else here
     /// exercises the field names, and a serde attribute that renamed one would be
@@ -313,7 +471,8 @@ mod tests {
             false,
             &RuntimeLayout::unshipped(),
             &Config::default(),
-        );
+        )
+        .expect("the running `by` names its build");
         let json: serde_json::Value =
             serde_json::from_str(&record.render()).expect("the record is plain data");
 
@@ -366,7 +525,8 @@ mod tests {
             false,
             &RuntimeLayout::shipped(),
             &Config::default(),
-        );
+        )
+        .expect("the running `by` names its build");
         let json: serde_json::Value =
             serde_json::from_str(&record.render()).expect("the record is plain data");
         assert!(json.get("entryModule").is_some(), "the key stays: {json}");
@@ -395,7 +555,8 @@ mod tests {
             false,
             &RuntimeLayout::shipped(),
             &config,
-        );
+        )
+        .expect("the running `by` names its build");
         let parsed: BuildRecord = serde_json::from_str(&record.render())?;
         let recovered = parsed.config()?;
 
@@ -448,7 +609,8 @@ mod tests {
                 false,
                 &layout,
                 &Config::default(),
-            );
+            )
+            .expect("the running `by` names its build");
             let read: BuildRecord =
                 serde_json::from_str(&record.render()).expect("the record reads back");
             assert_eq!(
@@ -472,6 +634,7 @@ mod tests {
                 &RuntimeLayout::unshipped(),
                 &Config::default(),
             )
+            .expect("the running `by` names its build")
             .render(),
         )
         .expect("the record is plain data");
