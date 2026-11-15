@@ -1,263 +1,171 @@
 # Changelog
 
-## 0.17.2
-
-Released on 2026-10-22.
-
-### Preview features
-
-- \[`complexity`\] Add `unnecessary-regular-expression-compile` ([#25533](https://github.com/astral-sh/ruff/pull/25533))
-
-### Bug fixes
-
-- Avoid syntax errors for type variables with starred constraints (`UP040`, `UP046`, `UP047`, `RUF053`) ([#28362](https://github.com/astral-sh/ruff/pull/28362))
-- \[`pydocstyle`\] Treat backslash-escaped `*args` and `**kwargs` as documented (`D417`) ([#29536](https://github.com/astral-sh/ruff/pull/29536))
-- \[`pylint`\] Avoid false positive on starred elements (`PLE0643`) ([#29483](https://github.com/astral-sh/ruff/pull/29483))
-- \[`pylint`\] Mark fixes unsafe when deleting comments (`PLR5501`, `PLW0120`) ([#29414](https://github.com/astral-sh/ruff/pull/29414))
-- \[`pyupgrade`\] Mark fix unsafe when deleting comments (`UP035`) ([#29413](https://github.com/astral-sh/ruff/pull/29413))
-
-### Performance
-
-- Avoid intermediate names in lint name resolution ([#29506](https://github.com/astral-sh/ruff/pull/29506))
-- Prefilter bidirectional Unicode checks by UTF-8 leading bytes ([#29561](https://github.com/astral-sh/ruff/pull/29561))
-- Share postfix parsing and reduce expression copies ([#29480](https://github.com/astral-sh/ruff/pull/29480))
-
-### Configuration
-
-- \[`pylint`\] Add a configurable allowlist for `magic-value-comparison` (`PLR2004`) ([#18961](https://github.com/astral-sh/ruff/pull/18961))
-
-### Documentation
-
-- Clarify documentation and correct stale guidance ([#29374](https://github.com/astral-sh/ruff/pull/29374))
-- \[`pyupgrade`\] Remove mentions of variance related to fix safety (`UP040`, `UP047`) ([#29592](https://github.com/astral-sh/ruff/pull/29592))
-
-### Contributors
-
-- [@fixfon](https://github.com/fixfon)
-- [@MichaReiser](https://github.com/MichaReiser)
-- [@zaniebot](https://github.com/zaniebot)
-- [@FrancescoPezzella](https://github.com/FrancescoPezzella)
-- [@anishgirianish](https://github.com/anishgirianish)
-- [@rajveer3x](https://github.com/rajveer3x)
-- [@charliermarsh](https://github.com/charliermarsh)
-- [@LckyLike](https://github.com/LckyLke)
-- [@DaniBodor](https://github.com/DaniBodor)
-
-## 0.17.1
-
-Released on 2026-10-15.
-
-### Preview features
-
-- \[`pycodestyle`\] Don't treat `None`, `True`, or `False` as keywords (`E271`-`E274`) ([#29322](https://github.com/astral-sh/ruff/pull/29322))
-
-### Bug fixes
-
-- Fix dedent with multiple leading comments ([#29382](https://github.com/astral-sh/ruff/pull/29382))
-- \[`flake8-pyi`\] Detect legacy positional-only parameters in `__new__` methods (`PYI063`) ([#28502](https://github.com/astral-sh/ruff/pull/28502))
-- \[`flake8-pyi`\] Fix false positives on quoted annotations (`PYI036`) ([#29274](https://github.com/astral-sh/ruff/pull/29274))
-- \[`perflint`\] Avoid invalid comprehension suggestions (`PERF401`, `PERF403`) ([#29366](https://github.com/astral-sh/ruff/pull/29366))
-
-### Rule changes
-
-- Treat more `collections` and `weakref` containers as mutable ([#29213](https://github.com/astral-sh/ruff/pull/29213))
-
-### Documentation
-
-- \[`flake8-import-conventions`\] Update default and example `aliases` ([#29333](https://github.com/astral-sh/ruff/pull/29333))
-
-### Contributors
-
-- [@fixfon](https://github.com/fixfon)
-- [@mmaxjr](https://github.com/mmaxjr)
-- [@joshuavetos](https://github.com/joshuavetos)
-- [@nekomario28](https://github.com/nekomario28)
-- [@ntBre](https://github.com/ntBre)
-- [@shan3520](https://github.com/shan3520)
-
-## 0.17.0
-
-Released on 2026-10-09.
-
-The executables in our macOS and Windows release archives and `ruff` wheels are now code-signed.
-macOS executables are signed with an Apple Developer ID certificate and notarized by Apple. Windows
-executables have timestamped Authenticode signatures from Azure Artifact Signing. This enables
-verification of the release publisher and binary integrity, supports publisher-based allowlisting,
-and should reduce security warnings and antivirus false positives.
-
-### Breaking changes
-
-- Update the default and latest Python versions for 3.15 ([#28792](https://github.com/astral-sh/ruff/pull/28792))
-
-    Ruff now defaults to Python 3.11 instead of 3.10 when no Python version is configured through
-    [`target-version`](https://docs.astral.sh/ruff/settings/#target-version) or
-    [`requires-python`](https://docs.astral.sh/ruff/configuration/#inferring-the-python-version). When
-    checking for syntax errors without a configured Python version, Ruff now defaults to Python 3.15
-    instead of 3.14.
-
-- Update the default rule set ([#28786](https://github.com/astral-sh/ruff/pull/28786))
-
-    Several of the `flake8-datetimez` rules
-    ([`DTZ001`](https://docs.astral.sh/ruff/rules/call-datetime-without-tzinfo/),
-    [`DTZ005`](https://docs.astral.sh/ruff/rules/call-datetime-now-without-tzinfo/),
-    [`DTZ006`](https://docs.astral.sh/ruff/rules/call-datetime-fromtimestamp/),
-    [`DTZ007`](https://docs.astral.sh/ruff/rules/call-datetime-strptime-without-zone/),
-    [`DTZ011`](https://docs.astral.sh/ruff/rules/call-date-today/),
-    [`DTZ012`](https://docs.astral.sh/ruff/rules/call-date-fromtimestamp/), and
-    [`DTZ901`](https://docs.astral.sh/ruff/rules/datetime-min-max/)) are no longer enabled by default,
-    while [`undefined-local-with-nested-import-star-usage`](https://docs.astral.sh/ruff/rules/undefined-local-with-nested-import-star-usage/)
-    (`F406`), which corresponds to a syntax error, is now enabled by default.
-
-- Update Rust crate quick-junit to 0.8.0 ([#27295](https://github.com/astral-sh/ruff/pull/27295))
-
-    JUnit output now uses a `skipped` attribute instead of `disabled` on `<testsuite>` elements and
-    includes a `skipped` attribute on the root `<testsuites>` element.
-
-- \[`flake8-import-conventions`\] Add `datetime as dt` as a conventional alias (`ICN001`) ([#28790](https://github.com/astral-sh/ruff/pull/28790))
-
-- Support Unicode dummy variable names ([#28722](https://github.com/astral-sh/ruff/pull/28722))
-
-    The default [`lint.dummy-variable-rgx`](https://docs.astral.sh/ruff/settings/#lint_dummy-variable-rgx)
-    now recognizes underscore-prefixed Unicode names, such as `_次`, as dummy variables.
-
-- Update to Unicode 17 ([#21229](https://github.com/astral-sh/ruff/pull/21229), [#28784](https://github.com/astral-sh/ruff/pull/28784))
-
-    Ruff now uses Unicode 17 data for identifier normalization and named character escapes (`"\N{...}"`).
-
-- Always show unsafe and display-only fixes in the CLI ([#27810](https://github.com/astral-sh/ruff/pull/27810))
-
-    The default `full` output format now shows unsafe fixes and suggestions requiring manual review,
-    regardless of the [`unsafe-fixes`](https://docs.astral.sh/ruff/settings/#unsafe-fixes) setting.
-    Actually applying unsafe fixes still requires explicit opt-in.
-
-- Remove the Python dependency from conda-forge builds ([conda-forge/ruff-feedstock#361](https://github.com/conda-forge/ruff-feedstock/pull/361))
-
-    The conda-forge build no longer depends on Python, now supports linux-riscv64, win-arm64, and
-    linux-ppc64le platforms, and now includes shell completions. However, no longer depending on
-    Python means that `python -m ruff` and `import ruff` will no longer work. Use `ruff` directly from
-    `PATH` instead. PyPI installations and those from the standalone installer are unaffected.
-
-- Remove support for ruff-lsp ([#28750](https://github.com/astral-sh/ruff/pull/28750))
-
-    Support for `ruff-lsp`, the legacy Python language server [deprecated in Ruff
-    v0.9.5](https://github.com/astral-sh/ruff/releases/tag/0.9.5), has been removed. The Ruff VS Code
-    extension now always uses the native language server; `ruff.nativeServer` is deprecated and
-    ignored. See the [migration guide](https://docs.astral.sh/ruff/editors/migration/).
-
-### Stabilization
-
-The following rules have been stabilized and are no longer in preview:
-
-- [`lazy-import-mismatch`](https://docs.astral.sh/ruff/rules/lazy-import-mismatch) (`TID254`)
-- [`lazy-import-immediately-resolved`](https://docs.astral.sh/ruff/rules/lazy-import-immediately-resolved)
-    (`TID255`)
-- [`os-path-commonprefix`](https://docs.astral.sh/ruff/rules/os-path-commonprefix) (`RUF071`)
-
-The following behaviors have been stabilized:
-
-- The formatter, [`unsorted-imports`](https://docs.astral.sh/ruff/rules/unsorted-imports/) (`I001`),
-    [`line-too-long`](https://docs.astral.sh/ruff/rules/line-too-long/) (`E501`), and
-    [`doc-line-too-long`](https://docs.astral.sh/ruff/rules/doc-line-too-long/) (`W505`) now
-    consistently ignore trailing pragma comments when computing line length. This resolved several
-    bugs involving interactions between these rules
-    ([#27313](https://github.com/astral-sh/ruff/pull/27313)) but may also cause existing imports to be
-    reformatted and was thus classified as a breaking change.
-
-### Preview features
-
-- \[`flake8-bugbear`\] Report the method name and a more precise range (`B005`) ([#27050](https://github.com/astral-sh/ruff/pull/27050))
-- \[`refurb`\] Mark fix unsafe and move to `suspicious` (`FURB152`) ([#28405](https://github.com/astral-sh/ruff/pull/28405))
-- \[`ruff`\] Allow docstrings in strict mode (`RUF067`) ([#28679](https://github.com/astral-sh/ruff/pull/28679))
-
-### Bug fixes
-
-- \[`flake8-builtins`\] Expand checks in class scopes (`A001`) ([#29076](https://github.com/astral-sh/ruff/pull/29076))
-- \[`flake8-self`\] Allow private access on `object.__new__(cls)` instances (`SLF001`) ([#29001](https://github.com/astral-sh/ruff/pull/29001))
-- \[`flake8-tidy-imports`\] Skip `lazy-import-mismatch` in stubs (`TID254`) ([#29095](https://github.com/astral-sh/ruff/pull/29095))
-- \[`flake8-type-checking`\] Add the notion of runtime-ambiguous references ([#26508](https://github.com/astral-sh/ruff/pull/26508))
-- \[`flake8-type-checking`\] Never flag annotations in function scopes ([#29183](https://github.com/astral-sh/ruff/pull/29183))
-- \[`pyflakes`\] Mark the fix as unsafe when it creates a docstring (`F541`) ([#28258](https://github.com/astral-sh/ruff/pull/28258))
-- \[`pylint`\] Preserve trailing comments in `useless-return` fix (`PLR1711`) ([#29180](https://github.com/astral-sh/ruff/pull/29180))
-- \[`ruff`\] Avoid false positive when `pytest.raises` is used in a `with` statement (`RUF061`) ([#28186](https://github.com/astral-sh/ruff/pull/28186))
-
-### Rule changes
-
-- \[`pyupgrade`\] Suggest `typing.TypeForm` on Python 3.15 (`UP035`) ([#29084](https://github.com/astral-sh/ruff/pull/29084))
-
-### Contributors
-
-- [@DeviousCardi](https://github.com/DeviousCardi)
-- [@hugehoo](https://github.com/hugehoo)
-- [@nekomario28](https://github.com/nekomario28)
-- [@Daverball](https://github.com/Daverball)
-- [@Viicos](https://github.com/Viicos)
-- [@DebadityaHait](https://github.com/DebadityaHait)
-- [@saberoueslati](https://github.com/saberoueslati)
-- [@baltasarblanco](https://github.com/baltasarblanco)
-- [@yxshee](https://github.com/yxshee)
-- [@lognd](https://github.com/lognd)
-- [@dor-sr](https://github.com/dor-sr)
-
-## 0.16.x
-
-See [changelogs/0.16.x](./changelogs/0.16.x.md)
-
-## 0.15.x
-
-See [changelogs/0.15.x](./changelogs/0.15.x.md)
-
-## 0.14.x
-
-See [changelogs/0.14.x](./changelogs/0.14.x.md)
-
-## 0.13.x
-
-See [changelogs/0.13.x](./changelogs/0.13.x.md)
-
-## 0.12.x
-
-See [changelogs/0.12.x](./changelogs/0.12.x.md)
-
-## 0.11.x
-
-See [changelogs/0.11.x](./changelogs/0.11.x.md)
-
-## 0.10.x
-
-See [changelogs/0.10.x](./changelogs/0.10.x.md)
-
-## 0.9.x
-
-See [changelogs/0.9.x](./changelogs/0.9.x.md)
-
-## 0.8.x
-
-See [changelogs/0.8.x](./changelogs/0.8.x.md)
-
-## 0.7.x
-
-See [changelogs/0.7.x](./changelogs/0.7.x.md)
-
-## 0.6.x
-
-See [changelogs/0.6.x](./changelogs/0.6.x.md)
-
-## 0.5.x
-
-See [changelogs/0.5.x](./changelogs/0.5.x.md)
-
-## 0.4.x
-
-See [changelogs/0.4.x](./changelogs/0.4.x.md)
-
-## 0.3.x
-
-See [changelogs/0.3.x](./changelogs/0.3.x.md)
-
-## 0.2.x
-
-See [changelogs/0.2.x](./changelogs/0.2.x.md)
-
-## 0.1.x
-
-See [changelogs/0.1.x](./changelogs/0.1.x.md)
+ruff's changelog, from before basedpython forked it, is in [`changelogs/`](https://github.com/KotlinIsland/basedpython/tree/main/changelogs)
+
+## 0.0.1
+
+the first stable release of basedpython: a python-like language with sum types, extensions,
+optional chaining and a type system that knows what your code means, transpiled to plain python
+any python tool can read. it ships as the `basedpython` package, with two executables: `by`, the
+type checker, transpiler and project driver, and `buff`, the linter and formatter
+
+```sh
+uv add --dev "basedpython>=0.0.1"
+```
+
+[getting started](https://kotlinisland.github.io/basedpython/getting-started/) takes about five minutes. the
+[feature reference](https://kotlinisland.github.io/basedpython/features/) has a page for everything below
+
+### why try it
+
+- **plain python out the other end**: `by build` writes ordinary `.py` files, so pytest, mypy,
+    ruff and the rest of your stack keep working
+- **write for the newest python, ship for the oldest**: [polyfills](https://kotlinisland.github.io/basedpython/features/polyfills/)
+    lower new syntax to run on the interpreters your users have
+- **a type checker that is useful on plain python too**: built on ty, with
+    [sound types](https://kotlinisland.github.io/basedpython/features/sound-types/) in place of gradual ones and
+    [framework support](https://kotlinisland.github.io/basedpython/frameworks/) for pydantic, sqlalchemy, pytest and
+    django
+- **native speed when you want it**: [`by compile`](https://kotlinisland.github.io/basedpython/features/compilation/) builds
+    the same source into CPython extension modules
+- **tooling from day one**: a language server, a formatter, a linter and an
+    [intellij plugin](https://kotlinisland.github.io/basedpython/features/intellij-plugin/)
+
+### the language
+
+`.by` keeps almost all of python's meaning; [differences from python](https://kotlinisland.github.io/basedpython/features/differences-from-python/)
+lists every place it does not
+
+- **data and variants**: [`enum class`](https://kotlinisland.github.io/basedpython/features/enums/) sum types with payloads,
+    [sealed classes](https://kotlinisland.github.io/basedpython/features/sealed-classes/) with exhaustive `match`, and
+    [`sentinel`](https://kotlinisland.github.io/basedpython/features/sentinel/) declarations
+- **expressions**: [optional chaining](https://kotlinisland.github.io/basedpython/features/optional-chaining/) (`?.`),
+    [none-coalesce](https://kotlinisland.github.io/basedpython/features/none-coalesce/) (`??`),
+    [statement expressions](https://kotlinisland.github.io/basedpython/features/statement-expressions/)
+    (`x = match y:`), [destructuring](https://kotlinisland.github.io/basedpython/features/destructuring/) and
+    [`if let`](https://kotlinisland.github.io/basedpython/features/if-let/),
+    [trailing lambda blocks](https://kotlinisland.github.io/basedpython/features/trailing-lambdas/), and
+    [checked casts](https://kotlinisland.github.io/basedpython/features/checked-cast/)
+- **declarations**: [modifiers and visibility](https://kotlinisland.github.io/basedpython/features/modifiers/),
+    [block scoping](https://kotlinisland.github.io/basedpython/features/block-scoping/),
+    [properties](https://kotlinisland.github.io/basedpython/features/properties/) that read like declarations, an
+    [init method shorthand](https://kotlinisland.github.io/basedpython/features/init-method/), and a
+    [`main` function](https://kotlinisland.github.io/basedpython/features/main-function/) whose parameters are its command
+    line
+- **extending what exists**: [extensions](https://kotlinisland.github.io/basedpython/features/extensions/) add members to
+    an existing type and declare its conformance to a protocol, and
+    [conversions](https://kotlinisland.github.io/basedpython/features/conversions/) (`__from__`, `__into__`, `__of__`) say
+    how one type becomes another
+- **effects**: [exception tracking](https://kotlinisland.github.io/basedpython/features/exceptions/) (`raises`),
+    [local lifetimes](https://kotlinisland.github.io/basedpython/features/local-lifetimes/) (`local`, `once`) and
+    [context parameters](https://kotlinisland.github.io/basedpython/features/context-parameters/)
+- **imports and resources**: [lazy imports](https://kotlinisland.github.io/basedpython/features/lazy-imports/),
+    [`from x export y`](https://kotlinisland.github.io/basedpython/features/export-imports/) and
+    [static resources](https://kotlinisland.github.io/basedpython/features/static-resources/)
+    (`import "config.yaml" as config`)
+
+### the type system
+
+- **types that say more**: [intersections](https://kotlinisland.github.io/basedpython/features/intersection/),
+    [negations](https://kotlinisland.github.io/basedpython/features/not-type/), [tuple](https://kotlinisland.github.io/basedpython/features/tuple-types/)
+    and [callable](https://kotlinisland.github.io/basedpython/features/callable/) type literals,
+    [typed dict literals](https://kotlinisland.github.io/basedpython/features/typed-dict-literal/),
+    [template literal types](https://kotlinisland.github.io/basedpython/features/template-literal-types/) and
+    [inline protocols](https://kotlinisland.github.io/basedpython/features/inline-protocol/)
+- **computation in types**: [match types](https://kotlinisland.github.io/basedpython/features/match-types/),
+    [`type def` type functions](https://kotlinisland.github.io/basedpython/features/type-def/) and
+    [symbolic arithmetic](https://kotlinisland.github.io/basedpython/features/symbolic-type-ops/) in type parameters
+- **generics**: [bound ranges](https://kotlinisland.github.io/basedpython/features/bound-ranges/),
+    [type mappings](https://kotlinisland.github.io/basedpython/features/type-mappings/),
+    [safe variance](https://kotlinisland.github.io/basedpython/features/safe-variance/), and type parameters that survive
+    to runtime through [reified generics](https://kotlinisland.github.io/basedpython/features/reified-generics/)
+- **inference that narrows instead of shrugging**: [sound types](https://kotlinisland.github.io/basedpython/features/sound-types/),
+    [precise unsolved type variables](https://kotlinisland.github.io/basedpython/features/precise-unsolved-typevars/),
+    [inherited parameter types](https://kotlinisland.github.io/basedpython/features/inherited-parameter-types/) and
+    [narrowing predicates](https://kotlinisland.github.io/basedpython/features/type-is/)
+- **checks that work on `.py` as well**: [regex group types](https://kotlinisland.github.io/basedpython/features/regex-groups/),
+    [boolean conditions](https://kotlinisland.github.io/basedpython/features/conditions/),
+    [refutable unpacking](https://kotlinisland.github.io/basedpython/features/refutable-unpacking/),
+    [unused return values](https://kotlinisland.github.io/basedpython/features/unused-return-value/) and
+    [string formatting](https://kotlinisland.github.io/basedpython/features/string-formatting/)
+- **a more honest standard library**: [typeshed improvements](https://kotlinisland.github.io/basedpython/features/typeshed/)
+    such as covariant mapping keys and precise `functools.cache`
+- **two presets**: `strict` and `ty-compatible`, chosen with
+    [`type-checking-preset`](https://kotlinisland.github.io/basedpython/configuration/#the-preset)
+
+### transpiling and running
+
+- [`by build`](https://kotlinisland.github.io/basedpython/cli-reference/#by-build) transpiles a project to python, and
+    [`by run`](https://kotlinisland.github.io/basedpython/cli-reference/#by-run) transpiles and runs a module in one step
+- [runtime soundness checks](https://kotlinisland.github.io/basedpython/features/soundness/) guard each place an unchecked
+    value enters a typed slot
+- [`by repl`](https://kotlinisland.github.io/basedpython/features/repl/) is an interactive session in basedpython, and
+    [debugging](https://kotlinisland.github.io/basedpython/features/debugger/) stops and steps at `.by` lines
+- [`by transpile --reverse`](https://kotlinisland.github.io/basedpython/getting-started/#converting-python-to-basedpython)
+    rewrites existing python into basedpython
+
+### native compilation
+
+[`by compile`](https://kotlinisland.github.io/basedpython/features/compilation/) builds modules into native CPython
+extension modules for python 3.11 to 3.14, including the free-threaded builds. a function it cannot
+compile keeps its interpreted definition, and `--verbose` says which and why
+
+### editors
+
+- the [language server](https://kotlinisland.github.io/basedpython/features/editor/) gives completions, inlay hints, hover,
+    an outline and [refactorings](https://kotlinisland.github.io/basedpython/features/editor/#refactorings) such as moving a
+    definition, extracting a superclass and changing a signature
+- the [intellij plugin](https://kotlinisland.github.io/basedpython/features/intellij-plugin/) makes `.by` a first-class
+    language in PyCharm and IntelliJ IDEA, with `by`, `buff` and the debugger bundled
+- [`by check`](https://kotlinisland.github.io/basedpython/features/project-server/) answers from a running language server's
+    warm state when there is one
+- [`buff`](https://kotlinisland.github.io/basedpython/features/linter/) lints and formats `.by` with ruff's rules plus the
+    `BY` rules, and [aligns consecutive assignments](https://kotlinisland.github.io/basedpython/features/assignment-alignment/)
+
+### frameworks
+
+[pydantic](https://kotlinisland.github.io/basedpython/frameworks/pydantic/), [sqlalchemy](https://kotlinisland.github.io/basedpython/frameworks/sqlalchemy/),
+[pytest](https://kotlinisland.github.io/basedpython/frameworks/pytest/) and [django](https://kotlinisland.github.io/basedpython/frameworks/django/)
+are modelled directly, so synthesized constructors, mapped columns and injected fixtures check like
+ordinary code. the language server also understands
+[django templates](https://kotlinisland.github.io/basedpython/frameworks/django-templates/), and
+[basedpython-ui](https://kotlinisland.github.io/basedpython/frameworks/basedpython-ui/) is a compose-style ui library the
+type checker knows
+
+### packaging
+
+- a project [builds into an ordinary wheel](https://kotlinisland.github.io/basedpython/packaging/) with `basedpython` as
+    its build backend, or into [one wheel for each python](https://kotlinisland.github.io/basedpython/packaging/#a-wheel-for-each-python)
+    it supports
+- [`api.lock`](https://kotlinisland.github.io/basedpython/features/api-lock/) records a project's public api as a reviewable
+    diff, and [declared dependencies](https://kotlinisland.github.io/basedpython/features/dependencies/) checks imports against
+    `pyproject.toml`
+- [`by init`](https://kotlinisland.github.io/basedpython/cli-reference/#by-init) starts an application or library, and sets
+    up [git merges](https://kotlinisland.github.io/basedpython/cli-reference/#by-merge-driver) of the files `by` generates
+
+### installing without python
+
+each release on github carries a `basedpython-<target>` archive of `by` and `buff` for 17 targets,
+with shell and powershell installers
+
+### since 0.0.1b2
+
+- `raise` can be [written as an expression](https://kotlinisland.github.io/basedpython/features/statement-expressions/#the-diverging-forms)
+    anywhere a value can, as in `table.get(key) ?? raise KeyError(key)`
+- a `match` over a sealed class's subclasses is exhaustive, closed over the
+    [workspace](https://kotlinisland.github.io/basedpython/features/sealed-classes/#workspace-boundary)
+- an unannotated parameter of an override takes its type from every method it
+    [overrides](https://kotlinisland.github.io/basedpython/features/inherited-parameter-types/)
+- a call to a function that asserts a variable of an enclosing scope narrows that variable
+- reified type parameters are tested by the same subtype relation the checker uses, at every depth,
+    and a type parameter reads as a type form, so `T()` without an `isinstance(T, type)` is an error
+- an annotation written as a literal, `x: 1`, is the same type as `Literal[1]`
+- the editor reports what stops a module that checks clean from transpiling, and offers an
+    "invert boolean" refactoring and renames of the overrides, parameters and modules tied to a
+    renamed symbol
+- `by run` and `by repl` pass the signals that end a process on to the program
+- a PEP 723 script's own `type-checking-preset` applies when a project override names the script
+- `api.lock` is the same whatever order modules are found in
+- windows paths in tracebacks and sourcemaps read `C:\...` rather than `\\?\C:\...`
+- `by --version` reports basedpython's version
+- the standalone archives and installers are published on the github release page
