@@ -1653,6 +1653,23 @@ assert Box().kinds[U=int]() == (bytes, int)
 assert Box().second[U=int, T=str]("a", 1) == 1
 ```
 
+## a method reached through `?.`
+
+A subscript in an optional chain is only reached when nothing before it is `None`, so it specializes
+the method the chain reaches then:
+
+```by
+class Box:
+    def kinds[T = bytes, U = str](self) -> object:
+        return (T, U)
+
+def kinds(box: Box?) -> object:
+    return box?.kinds[U=int]()
+
+assert kinds(Box()) == (bytes, int)
+assert kinds(None) is None
+```
+
 ## reified and erased are distinct
 
 A reified generic is structurally a two-step callable (`f[...]` then `(...)`). A plain callable has

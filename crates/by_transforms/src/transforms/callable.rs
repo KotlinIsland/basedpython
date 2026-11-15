@@ -912,7 +912,7 @@ impl<'src> CallableSyntax<'src> {
                     .types
                     .and_then(|types| kw_subscript::lowered(s, types, self.min_version)) =>
             {
-                let mut text = String::new();
+                let mut text = self.rewrite_or_leaf(&s.value);
                 for piece in pieces {
                     match piece {
                         kw_subscript::Piece::Text(written) => text.push_str(&written),

@@ -13,7 +13,8 @@
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, ExprSubscript, PythonVersion, Stmt, TypeParamKind};
-use ruff_text_size::Ranged;
+use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::runtime::{self, Helper};
 use crate::transforms::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
@@ -39,15 +40,16 @@ fn joined<'a>(arguments: Vec<Vec<Piece<'a>>>, separator: &str) -> Vec<Piece<'a>>
     pieces
 }
 
-/// `value[arguments]`
-fn subscript_of<'a>(value: &'a Expr, arguments: Vec<Vec<Piece<'a>>>) -> Vec<Piece<'a>> {
-    let mut pieces = vec![Piece::Value(value), Piece::Text("[".to_owned())];
+/// `[arguments]`
+fn subscript_of(arguments: Vec<Vec<Piece<'_>>>) -> Vec<Piece<'_>> {
+    let mut pieces = vec![Piece::Text("[".to_owned())];
     pieces.extend(joined(arguments, ", "));
     pieces.push(Piece::Text("]".to_owned()));
     pieces
 }
 
-/// `sub` as a call of `__getitem__`, its keyword fields passed as `name=value`
+/// `sub`'s slice as the arguments of a `__getitem__` call, its keyword fields passed as
+/// `name=value`
 fn getitem_call(sub: &ExprSubscript) -> Vec<Piece<'_>> {
     let arguments = subscript_elements(sub)
         .into_iter()
@@ -63,10 +65,7 @@ fn getitem_call(sub: &ExprSubscript) -> Vec<Piece<'_>> {
             vec![Piece::Value(element)]
         })
         .collect();
-    let mut pieces = vec![
-        Piece::Value(&sub.value),
-        Piece::Text(".__getitem__(".to_owned()),
-    ];
+    let mut pieces = vec![Piece::Text(".__getitem__(".to_owned())];
     pieces.extend(joined(arguments, ", "));
     pieces.push(Piece::Text(")".to_owned()));
     pieces
@@ -124,7 +123,7 @@ fn keyword_pack_subscript(sub: &ExprSubscript, pack_index: usize) -> Option<Vec<
     } else {
         parts.push(pack);
     }
-    Some(subscript_of(&sub.value, parts))
+    Some(subscript_of(parts))
 }
 
 /// the type argument a keyword subscript gives one type parameter, once its keywords are resolved
@@ -215,12 +214,9 @@ fn arguments_of<'a>(slot: Slot<'a>, default: Option<Piece<'a>>) -> Option<Vec<Ve
     })
 }
 
-/// a class's `value[slots]`, every type argument at the position of its parameter, a default it is
+/// a class's `[slots]`, every type argument at the position of its parameter, a default it is
 /// given nothing for spelled out
-fn class_specialization<'a>(
-    value: &'a Expr,
-    slots: Vec<(&SubscriptTypeParam, Slot<'a>)>,
-) -> Option<Vec<Piece<'a>>> {
+fn class_specialization<'a>(slots: Vec<(&SubscriptTypeParam, Slot<'a>)>) -> Option<Vec<Piece<'a>>> {
     let mut arguments = Vec::new();
     for (param, slot) in slots {
         arguments.extend(arguments_of(
@@ -228,7 +224,7 @@ fn class_specialization<'a>(
             param.spelled_default.clone().map(Piece::Text),
         )?);
     }
-    Some(subscript_of(value, arguments))
+    Some(subscript_of(arguments))
 }
 
 /// a reified function's specialization: what is given a parameter that may be given by position
@@ -236,10 +232,7 @@ fn class_specialization<'a>(
 /// reaches, and what is given a keyword-only one by name, through the `generic` wrapper's
 /// `__getitem__`. a keyword-only one given nothing is left out, and the wrapper reads its default
 /// by name
-fn function_specialization<'a>(
-    value: &'a Expr,
-    slots: Vec<(&SubscriptTypeParam, Slot<'a>)>,
-) -> Vec<Piece<'a>> {
+fn function_specialization<'a>(slots: Vec<(&SubscriptTypeParam, Slot<'a>)>) -> Vec<Piece<'a>> {
     let mut positional = Vec::new();
     let mut keywords = Vec::new();
     for (param, slot) in slots {
@@ -255,16 +248,18 @@ fn function_specialization<'a>(
         }
     }
     if keywords.is_empty() {
-        return subscript_of(value, positional);
+        return subscript_of(positional);
     }
     positional.extend(keywords);
-    let mut pieces = vec![Piece::Value(value), Piece::Text(".__getitem__(".to_owned())];
+    let mut pieces = vec![Piece::Text(".__getitem__(".to_owned())];
     pieces.extend(joined(positional, ", "));
     pieces.push(Piece::Text(")".to_owned()));
     pieces
 }
 
-/// what `sub` is written as in python, or `None` when it is already python
+/// what follows `sub`'s value when `sub` is written in python, or `None` when it is already
+/// python. the value is left to be written by whatever writes it, a `?.` chain it ends in
+/// among them
 pub(crate) fn lowered<'a>(
     sub: &'a ExprSubscript,
     types: &dyn TypeInfo,
@@ -288,7 +283,7 @@ pub(crate) fn lowered<'a>(
                 .as_deref()
                 .and_then(|params| by_position(params, &elements))
             {
-                Some(slots) => function_specialization(&sub.value, slots),
+                Some(slots) => function_specialization(slots),
                 None => getitem_call(sub),
             },
         );
@@ -309,8 +304,7 @@ pub(crate) fn lowered<'a>(
     // for spelled out (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]`
     // with `B`'s default → `C[int, <B default>, bytes]`)
     if let Some(params) = &params
-        && let Some(pieces) =
-            by_position(params, &elements).and_then(|slots| class_specialization(&sub.value, slots))
+        && let Some(pieces) = by_position(params, &elements).and_then(class_specialization)
     {
         return Some(pieces);
     }
@@ -323,22 +317,26 @@ pub(crate) fn lowered<'a>(
         && n.label().is_some()
         && !types.subscript_is_getitem_call(&sub.value)
     {
-        return Some(subscript_of(&sub.value, vec![vec![Piece::Value(&n.value)]]));
+        return Some(subscript_of(vec![vec![Piece::Value(&n.value)]]));
     }
     Some(getitem_call(sub))
 }
 
-pub(crate) struct KwSubscriptPass {
+pub(crate) struct KwSubscriptPass<'src> {
+    source: &'src str,
     min_version: PythonVersion,
 }
 
-impl KwSubscriptPass {
-    pub(crate) fn new(min_version: PythonVersion) -> Self {
-        Self { min_version }
+impl<'src> KwSubscriptPass<'src> {
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+        Self {
+            source,
+            min_version,
+        }
     }
 }
 
-impl TypeAwarePass for KwSubscriptPass {
+impl TypeAwarePass for KwSubscriptPass<'_> {
     fn lowering(&self) -> Option<Lowering> {
         Some(Lowering::KwSubscript)
     }
@@ -351,6 +349,7 @@ impl TypeAwarePass for KwSubscriptPass {
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = KwSubscript {
+            source: self.source,
             types,
             min_version: self.min_version,
             ctx,
@@ -362,6 +361,7 @@ impl TypeAwarePass for KwSubscriptPass {
 }
 
 struct KwSubscript<'a> {
+    source: &'a str,
     types: &'a dyn TypeInfo,
     min_version: PythonVersion,
     ctx: &'a mut PassContext,
@@ -383,7 +383,15 @@ impl<'ast> Visitor<'ast> for KwSubscript<'_> {
                     }
                 })
                 .collect();
-            self.ctx.template_edits.push((sub.range(), fragments));
+            // what follows the value opens at its `[`, past the `)` of a value written in
+            // parentheses
+            let open = SimpleTokenizer::starts_at(sub.value.end(), self.source)
+                .skip_trivia()
+                .find(|token| token.kind() == SimpleTokenKind::LBracket)
+                .map_or(sub.value.end(), |token| token.start());
+            self.ctx
+                .template_edits
+                .push((TextRange::new(open, sub.end()), fragments));
         }
         walk_expr(self, expr);
     }
@@ -441,6 +449,11 @@ mod tests {
     #[test]
     fn no_kwargs_unchanged() {
         check("x[a, b]\n", "x[a, b]\n");
+    }
+
+    #[test]
+    fn a_parenthesized_value_is_called_with_its_keywords() {
+        check("y = (x)[a, z=1]\n", "y = (x).__getitem__(a, z=1)\n");
     }
 
     #[test]
@@ -600,6 +613,19 @@ mod tests {
             );
         }
 
+        /// the chain writes the value, and the subscript what follows it, against the method
+        /// the chain reaches when nothing in it is `None`
+        #[test]
+        fn a_method_reached_through_an_optional_chain() {
+            writes(
+                &transpiled(
+                    "class D:\n    def m[T = bytes, U = str](self):\n        return (T, U)\n\n\
+                     def f(d: D?):\n    return d?.m[U=int]()\n",
+                ),
+                &["    return (None if d is None else d.m[_ByTypeDefault, int]())"],
+            );
+        }
+
         /// an override matches a keyword-only parameter by name, so it is given by name, and one
         /// given nothing is left to the default the wrapper reads by name
         #[test]
@@ -624,6 +650,17 @@ mod tests {
                     PythonVersion::PY312,
                 ),
                 &["print(f[int, str]())"],
+            );
+        }
+
+        /// what follows the value opens at its `[`, past the parentheses around it
+        #[test]
+        fn a_parenthesized_function() {
+            writes(
+                &transpiled(
+                    "def g[T, U = str]():\n    return (T, U)\n\nprint((g)[U=int, T=bytes]())\n",
+                ),
+                &["print((g)[bytes, int]())"],
             );
         }
 
@@ -778,6 +815,15 @@ mod tests {
             );
             assert!(
                 !output.contains("__getitem__"),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn a_parenthesized_class() {
+            let output = transpiled("class M[R, S = int]: ...\n\nx: (M)[S=bytes, R=str]\n");
+            assert!(
+                output.contains("x: (M)[str, bytes]"),
                 "unexpected output:\n{output}"
             );
         }

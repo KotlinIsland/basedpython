@@ -1575,7 +1575,7 @@ pub(crate) fn run_against_source<'a>(
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass;
     let just_float_pass = just_float::JustFloatPass::new(written);
     let float_const_pass = float_const::FloatConstPass::new();
-    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(config.min_version);
+    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref, config.min_version);
     let generic_call_pass = generic_call::GenericCallStripPass::new(config.min_version);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, written, config.min_version);

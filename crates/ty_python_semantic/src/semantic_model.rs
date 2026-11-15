@@ -2627,13 +2627,25 @@ impl<'db> LoweringModel<'db> {
                 && function.can_forward_at(self.db, min_version))
     }
 
+    /// basedpython: the type a subscript of `value` is looked up against: `value`'s own, less
+    /// the `None` an optional chain it is a link of short-circuits with, since the chain never
+    /// reaches the subscript then (`d?.m` in `d?.m[int]`)
+    fn subscripted_type(&self, value: &ast::Expr) -> Option<Type<'db>> {
+        let ty = value.inferred_type(self)?;
+        Some(if crate::types::receivers::spine_has_optional(value) {
+            crate::types::receivers::strip_none(self.db, &self.program_environment(), ty)
+        } else {
+            ty
+        })
+    }
+
     /// basedpython: the function a subscript of `value` specializes: a function, or a method
     /// bound to its receiver
     pub fn subscripted_function(
         &self,
         value: &ast::Expr,
     ) -> Option<crate::types::function::FunctionType<'db>> {
-        match value.inferred_type(self)? {
+        match self.subscripted_type(value)? {
             Type::FunctionLiteral(function) => Some(function),
             Type::BoundMethod(method) => method.function(self.db),
             _ => None,
@@ -2644,7 +2656,7 @@ impl<'db> LoweringModel<'db> {
     /// its type arguments against them: a generic class's, a function's, or the ones a bound
     /// method has left once its receiver gave `Self` its argument
     pub fn subscript_generic_context(&self, value: &ast::Expr) -> Option<GenericContext<'db>> {
-        match value.inferred_type(self)? {
+        match self.subscripted_type(value)? {
             Type::ClassLiteral(class) => class.generic_context(self.db),
             Type::FunctionLiteral(function) => function.explicit_specialization_context(self.db),
             Type::BoundMethod(method) => method.explicit_specialization_context(self.db),
