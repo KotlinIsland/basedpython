@@ -103,6 +103,7 @@ helpers! {
     SUFFIX = "_by_suffix",
     GENERIC = "generic",
     SPECIALIZED = "_by_specialized",
+    TYPE_DEFAULT = "_ByTypeDefault",
     SUBSCRIPT = "_by_subscript",
     SPECIALIZATION = "_by_specialization",
     GENERIC_CLASS = "generic_class",

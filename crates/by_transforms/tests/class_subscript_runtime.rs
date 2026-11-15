@@ -325,6 +325,35 @@ fn a_reified_function_is_subscripted_as_itself() {
     );
 }
 
+/// a type argument given by name is written at its position, bound against the signature the
+/// call is checked against, so it reaches an override that renamed the parameter
+#[test]
+fn a_reified_function_given_a_type_argument_by_name_is_subscripted_by_position() {
+    prints(
+        indoc::indoc! {"
+            def r[T, U]() -> object:
+                return (T, U)
+            print(r[U=int, T=str]())
+            print(r[int, U=str]())
+
+            class A:
+                def f[T](self) -> object:
+                    return T
+            class C(A):
+                override def f[X](self) -> object:
+                    return X
+            def use(a: A) -> object:
+                return a.f[T=int]()
+            print(use(C()))
+        "},
+        &[
+            "(<class 'str'>, <class 'int'>)",
+            "(<class 'int'>, <class 'str'>)",
+            "<class 'int'>",
+        ],
+    );
+}
+
 const DEFAULTED: &str = "class O[T = int]:\n    v: T\n    def __init__(self, v: T):\n        self.v = v\ndef chk[T](x: object) -> bool:\n    return x is T\n";
 
 /// a generic class left bare as a type argument is the specialization its defaults solve, as the

@@ -31,6 +31,7 @@ use crate::place_load::{
     resolve_place_load,
 };
 use crate::types::AnonNamedTupleClass;
+use crate::types::GenericContext;
 use crate::types::TypeExpressionFlags;
 use crate::types::check_order::{InferredInCheckOrder, infer_file_in_check_order};
 use crate::types::ide_support::{
@@ -2616,7 +2617,7 @@ impl<'db> LoweringModel<'db> {
     /// basedpython: whether a function called `function` here is given its type arguments at
     /// `min_version`, rather than having them erased: it reifies them, or its body forwards
     /// them and the target can hold them
-    pub fn takes_type_arguments_at(
+    fn takes_type_arguments_at(
         &self,
         function: crate::types::function::FunctionType<'db>,
         min_version: PythonVersion,
@@ -2626,6 +2627,43 @@ impl<'db> LoweringModel<'db> {
                 && function.can_forward_at(self.db, min_version))
     }
 
+    /// basedpython: the function a subscript of `value` specializes: a function, or a method
+    /// bound to its receiver
+    pub fn subscripted_function(
+        &self,
+        value: &ast::Expr,
+    ) -> Option<crate::types::function::FunctionType<'db>> {
+        match value.inferred_type(self)? {
+            Type::FunctionLiteral(function) => Some(function),
+            Type::BoundMethod(method) => method.function(self.db),
+            _ => None,
+        }
+    }
+
+    /// basedpython: the type parameters a subscript of `value` specializes, as the checker binds
+    /// its type arguments against them: a generic class's, a function's, or the ones a bound
+    /// method has left once its receiver gave `Self` its argument
+    pub fn subscript_generic_context(&self, value: &ast::Expr) -> Option<GenericContext<'db>> {
+        match value.inferred_type(self)? {
+            Type::ClassLiteral(class) => class.generic_context(self.db),
+            Type::FunctionLiteral(function) => function.explicit_specialization_context(self.db),
+            Type::BoundMethod(method) => method.explicit_specialization_context(self.db),
+            _ => None,
+        }
+    }
+
+    /// basedpython: whether a subscript of `value` specializes a function that is given its
+    /// type arguments at `min_version`, rather than having them erased: it reifies them, or its
+    /// body forwards them and the target can hold them
+    pub fn subscript_takes_type_arguments(
+        &self,
+        value: &ast::Expr,
+        min_version: PythonVersion,
+    ) -> bool {
+        self.subscripted_function(value)
+            .is_some_and(|function| self.takes_type_arguments_at(function, min_version))
+    }
+
     /// basedpython: whether `value` is a generic function that erases its type arguments at
     /// `min_version`, so that a subscript of it has nothing to evaluate at runtime
     pub fn subscript_erases_type_arguments(
@@ -2633,17 +2671,8 @@ impl<'db> LoweringModel<'db> {
         value: &ast::Expr,
         min_version: PythonVersion,
     ) -> bool {
-        let function = match value.inferred_type(self) {
-            Some(Type::FunctionLiteral(function)) => Some(function),
-            Some(Type::BoundMethod(method)) => method.function(self.db),
-            _ => None,
-        };
-        function.is_some_and(|function| {
-            function
-                .signature(self.db)
-                .overloads
-                .first()
-                .is_some_and(|signature| signature.generic_context.is_some())
+        self.subscripted_function(value).is_some_and(|function| {
+            self.subscript_generic_context(value).is_some()
                 && !self.takes_type_arguments_at(function, min_version)
         })
     }

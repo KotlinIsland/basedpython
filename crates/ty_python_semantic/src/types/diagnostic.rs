@@ -8896,6 +8896,12 @@ pub(crate) fn report_invalid_reified_override<'db>(
                 base_admissible.display(db, env),
             ));
         }
+        ReifiedOverrideError::Unnamed(name) => {
+            diagnostic.info(format_args!(
+                "a specialization through `{overridden_method}` gives `{name}` by name, and the \
+                 override has no type parameter `{name}` it can be given by name"
+            ));
+        }
         ReifiedOverrideError::Reordered => {
             diagnostic.info(format_args!(
                 "a specialization through `{overridden_method}` fills the override's type \

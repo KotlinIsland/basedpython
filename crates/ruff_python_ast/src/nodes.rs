@@ -4586,6 +4586,37 @@ impl TypeParamSeparators {
     pub const fn is_empty(self) -> bool {
         self.positional_only_count.is_none() && self.keyword_only_start.is_none()
     }
+
+    /// The separators of the list left when only the type parameters at the indices `kept`
+    /// answers `true` for remain, in their order
+    #[must_use]
+    pub fn retaining(self, kept: impl Fn(usize) -> bool) -> Self {
+        let kept_before = |end: u32| {
+            let count = (0..end as usize).filter(|&index| kept(index)).count();
+            u32::try_from(count).unwrap_or(u32::MAX)
+        };
+        Self {
+            positional_only_count: self.positional_only_count.map(kept_before),
+            keyword_only_start: self.keyword_only_start.map(kept_before),
+            ..self
+        }
+    }
+
+    /// The separators of this list with `count` type parameters written in front of it, before
+    /// any separator
+    #[must_use]
+    pub fn after(self, count: usize) -> Self {
+        let count = u32::try_from(count).unwrap_or(u32::MAX);
+        Self {
+            positional_only_count: self
+                .positional_only_count
+                .map(|end| end.saturating_add(count)),
+            keyword_only_start: self
+                .keyword_only_start
+                .map(|start| start.saturating_add(count)),
+            ..self
+        }
+    }
 }
 
 /// basedpython: how a type parameter may be given at a specialization site.

@@ -175,3 +175,31 @@ type Alias[T: int] = list[T]
 # error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T`"
 def f(x: Alias[T=str]) -> None: ...
 ```
+
+## a keyword is given once
+
+as in a call, a keyword names what it gives a value to, so naming it twice is an error, whether it
+names a type parameter, a field of a keyword-variadic pack or a keyword of `__getitem__`
+
+```by
+class M[T]: ...
+
+class Pack[**Kwargs]: ...
+
+class A:
+    def __getitem__(self, *, unit: str) -> int:
+        return 1
+
+def g[T]() -> object:
+    return T
+
+# error: [invalid-syntax] "Duplicate keyword argument `T`"
+x: M[T=int, T=bytes]
+# error: [invalid-syntax] "Duplicate keyword argument `a`"
+y: Pack[a=int, a=str]
+# error: [invalid-syntax] "Duplicate keyword argument `T`"
+g[T=int, T=bytes]()
+
+def f(a: A) -> None:
+    a[unit="px", unit="em"]  # error: [invalid-syntax] "Duplicate keyword argument `unit`"
+```

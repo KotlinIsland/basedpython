@@ -29,6 +29,19 @@ C[int, str]       # error: `B` is keyword-only
 C[int, B=str]     # ok
 ```
 
+a generic function's and method's type parameters are restricted the same way:
+
+```by
+def f[A, *, B]() -> None: ...
+
+f[int, str]()     # error: `B` is keyword-only
+f[int, B=str]()   # ok
+```
+
+a keyword-only type parameter of a [reified](reified-generics.md) method is matched to an
+override's by name, as a keyword-only value parameter is, so an override may declare it anywhere
+after its `*`, or take it either way
+
 ## a variadic is not a separator
 
 a `*Ts` [type variable tuple](generics.md) is a parameter, not a separator. unlike `*args`, it does
@@ -60,7 +73,9 @@ separators are a `.by` reading only. python's own type-parameter grammar has no 
 ## lowering
 
 python type parameter lists cannot carry separators, so they are erased. the positional-only /
-keyword-only meaning is checked against the `.by` source, not the emitted python:
+keyword-only meaning is checked against the `.by` source, not the emitted python. a reified
+function, whose type arguments are given at runtime, is told which of its parameters are
+keyword-only:
 
 ```by
 class C[A, /, B, *, D]: ...

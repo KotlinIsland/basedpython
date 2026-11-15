@@ -12,6 +12,7 @@ use crate::{
         callable::CallableTypeKind,
         constraints::ConstraintSet,
         function::FunctionType,
+        generics::GenericContext,
         known_instance::InternedConstraintSet,
         relation::TypeRelationChecker,
         signatures::CallableSignature,
@@ -311,6 +312,24 @@ impl<'db> BoundMethodType<'db> {
     /// function no longer says it is a classmethod; the binding is what records it
     pub(crate) fn binds_classmethod(self, db: &'db dyn Db) -> bool {
         self.class_method(db)
+    }
+
+    /// basedpython: the type parameters a subscript of this bound method specializes
+    /// (`obj.m[int]`), as a free function's are, whether its body reads them or not. the
+    /// receiver already gave `Self` its argument, so they are the parameters left. a reified
+    /// classmethod has none: its binding is opaque at runtime (reported at the def site by
+    /// `reified-classmethod`)
+    pub(crate) fn explicit_specialization_context(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<GenericContext<'db>> {
+        let function = self.function(db)?;
+        if function.is_reified(db) && self.binds_classmethod(db) {
+            return None;
+        }
+        function
+            .explicit_specialization_context(db)?
+            .remove_self(db, None)
     }
 
     pub(crate) fn bound_signatures(self, db: &'db dyn Db) -> Option<&'db CallableSignature<'db>> {

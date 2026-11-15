@@ -44,6 +44,29 @@ class B[T]: ...
 b: B[T=int]     # → b: B[int]
 ```
 
+## generic functions
+
+a generic function or method takes its type arguments by name the same way,
+binding each keyword to the type parameter it names. positional arguments fill
+the parameters no keyword named, a parameter given nothing takes its default,
+and one without a default has to be given:
+
+```by
+def pair[T, U = str]() -> object:
+    return (T, U)
+
+pair[U=int, T=bytes]()   # T is bytes, U is int
+pair[T=bytes]()          # T is bytes, U is str
+```
+
+a name binds against the signature the call is checked against. an override
+may rename its type parameters, so through the base class a type argument
+reaches the override at the position it named in the base. a
+[keyword-only](type-param-separators.md) one reaches it by name
+
+with a [keyword-variadic pack](keyword-variadic.md) in the list, every keyword
+is one of the pack's fields instead
+
 ## scope
 
 the rewrite fires for any subscription containing at least one keyword binding.

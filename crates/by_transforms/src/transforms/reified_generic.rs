@@ -41,7 +41,7 @@
 //! a parameter that is only *forwarded* — the body hands it to a construction or
 //! a call that needs its value, `A(t)` becoming `A[T](t)` — is reified the same
 //! way, by ty's answer rather than the syntax. a call may leave one out unless
-//! something reads it, so its wrapper is `@generic.forwarding("T")`, and a target
+//! something reads it, so its wrapper is `@generic.declared(optional=("T",))`, and a target
 //! that cannot keep the native list leaves the function erased instead of erroring
 //!
 //! the decorator is inserted *innermost* — directly above the `def` header,
@@ -154,20 +154,48 @@ impl<'src> ReifiedGeneric<'src> {
         let name_start = function.name.range().start();
         let indent = line_indent(self.source, name_start);
         let anchor = line_start(self.source, name_start) + TextSize::of(indent);
-        let optional = forwarded
-            .optional()
-            .map(|name| format!("\"{name}\""))
-            .collect::<Vec<_>>();
-        let wrapper = if optional.is_empty() {
+        // what the runtime type-parameter list doesn't say: the parameters a call may leave
+        // out, and the ones written after a bare `*`, which a call only gives by name
+        let optional: Vec<String> = forwarded.optional().map(ToString::to_string).collect();
+        let keyword_only: Vec<String> = function
+            .type_params
+            .as_deref()
+            .and_then(|type_params| {
+                let start = usize::try_from(type_params.separators.keyword_only_start?).ok()?;
+                Some(
+                    type_params
+                        .type_params
+                        .get(start..)?
+                        .iter()
+                        .map(|param| param.name().id.to_string())
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
+        let declarations: Vec<String> = [("optional", optional), ("keyword_only", keyword_only)]
+            .into_iter()
+            .filter(|(_, names)| !names.is_empty())
+            .map(|(declaration, names)| format!("{declaration}={}", names_tuple(&names)))
+            .collect();
+        let wrapper = if declarations.is_empty() {
             "@generic".to_owned()
         } else {
-            format!("@generic.forwarding({})", optional.join(", "))
+            format!("@generic.declared({})", declarations.join(", "))
         };
         self.edits.push((
             TextRange::empty(anchor),
             format!("{wrapper}{REIFIED_MARKER}\n{indent}"),
         ));
         self.used = true;
+    }
+}
+
+/// `names` as a python tuple of strings
+fn names_tuple(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+    match quoted.as_slice() {
+        [one] => format!("({one},)"),
+        _ => format!("({})", quoted.join(", ")),
     }
 }
 
@@ -429,7 +457,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "@generic.forwarding(\"T\")  # basedpython: reified\n\
+                "@generic.declared(optional=(\"T\",))  # basedpython: reified\n\
                  def f[T](t: T) -> object:\n    return Box[T](t)\nf[_by_lit(1)](1)\n"
             ),
             "{out}"
@@ -457,7 +485,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "@generic.forwarding(\"U\")  # basedpython: reified\n\
+                "@generic.declared(optional=(\"U\",))  # basedpython: reified\n\
                  def g[U](u: U) -> object:\n    return f[U](u)\ng[_by_lit(1)](1)\n"
             ),
             "{out}"
@@ -575,7 +603,7 @@ mod tests {
             err.contains("`f` forwards its type parameters") && err.contains("python 3.13"),
             "{err}"
         );
-        assert!(out_at(&source, PythonVersion::PY313).contains("generic.forwarding"));
+        assert!(out_at(&source, PythonVersion::PY313).contains("generic.declared"));
     }
 
     #[test]
@@ -610,7 +638,7 @@ mod tests {
             &format!("{BOX}def f[T](T: T) -> object:\n    return Box(T)\n"),
             PythonVersion::PY312,
         );
-        assert!(!out.contains("generic.forwarding"), "{out}");
+        assert!(!out.contains("generic.declared"), "{out}");
     }
 
     #[test]
@@ -932,6 +960,26 @@ mod tests {
                 "    @staticmethod\n    @generic  # basedpython: reified\n    def f[T]() -> None:"
             ),
             "wrapper should be innermost: {out}"
+        );
+    }
+
+    /// the runtime type-parameter list doesn't say which parameters are keyword-only, so the
+    /// wrapper is told
+    #[test]
+    fn wrapper_declares_its_keyword_only_parameters() {
+        let out = transpile(
+            "def f[T, *, B, C]() -> None:\n    print(T, B, C)\n",
+            &Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "@generic.declared(keyword_only=(\"B\", \"C\"))  # basedpython: reified\ndef f[T, B, C]() -> None:"
+            ),
+            "{out}"
         );
     }
 

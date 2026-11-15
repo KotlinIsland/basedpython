@@ -61,6 +61,29 @@ pub(crate) enum UnpackedKwargsLowering {
     Protocol(Vec<(String, String)>),
 }
 
+/// basedpython: one type parameter a subscript binds a type argument to
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SubscriptTypeParam {
+    pub(crate) name: String,
+    pub(crate) kind: SubscriptTypeParamKind,
+    /// whether a `/` or bare `*` restricts it to position or to name
+    pub(crate) given: ruff_python_ast::TypeParamKind,
+    pub(crate) has_default: bool,
+    /// the declared default, spelled for the emitted file, for a class, whose specialization
+    /// writes it out
+    pub(crate) spelled_default: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubscriptTypeParamKind {
+    /// takes one type argument
+    Single,
+    /// a `*Ts`, which takes a run of positional type arguments
+    Variadic,
+    /// a `**Kwargs`, which takes every keyword type argument as one of its fields
+    KeywordVariadic,
+}
+
 /// basedpython: one inferred argument of a base's subscript, spelled for the emitted file
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpelledBaseArgument {
@@ -338,7 +361,9 @@ pub(crate) trait TypeInfo {
     /// `A and B or C` evaluates to `C`
     fn call_type_expression_arguments<'ast>(&self, call: &'ast ExprCall) -> Vec<&'ast Expr>;
 
-    fn is_function(&self, name: &ExprName) -> bool;
+    /// whether a subscript of `value` specializes a function: a function, or a method bound to
+    /// its receiver
+    fn subscripts_a_function(&self, value: &Expr) -> bool;
 
     /// basedpython: how many entries the class pattern's class lists in
     /// `__match_args__`, which is what places the subpatterns written after a
@@ -378,14 +403,13 @@ pub(crate) trait TypeInfo {
     /// them at runtime, so a decorator naming one is erased
     fn is_return_value_marker(&self, name: &ExprName) -> bool;
 
-    /// whether `name` resolves to a basedpython *reified* generic function (a
-    /// pep 695 type parameter referenced in a value position). these are
-    /// wrapped in the `generic` polyfill, so their specialized call sites
-    /// (`f[int](…)`) must NOT have their `[…]` stripped — they route through
-    /// `generic.__getitem__`
-    fn is_reified_function(
+    /// whether a subscript of `value` specializes a basedpython *reified* generic function (a
+    /// pep 695 type parameter referenced in a value position), or a method bound to one. these
+    /// are wrapped in the `generic` polyfill, so their specialized call sites (`f[int](…)`) must
+    /// NOT have their `[…]` stripped — they route through `generic.__getitem__`
+    fn subscript_takes_type_arguments(
         &self,
-        name: &ExprName,
+        value: &Expr,
         min_version: ruff_python_ast::PythonVersion,
     ) -> bool;
 
@@ -741,11 +765,10 @@ pub(crate) trait TypeInfo {
     /// at all; either way the annotation widens to `str`
     fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>>;
 
-    /// names + rendered default types of the type parameters of the class
-    /// referenced by `expr`. element is `(name, Some(default))` if the
-    /// typevar has a declared default, `(name, None)` otherwise. returns
-    /// `None` if `expr` is not a generic class
-    fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>>;
+    /// the type parameters a subscript of `value` binds its type arguments to, in declaration
+    /// order, as the checker reads them: a generic class's, a function's, or a bound method's.
+    /// `None` when `value` is none of those, or is not generic
+    fn subscript_type_params(&self, value: &Expr) -> Option<Vec<SubscriptTypeParam>>;
 
     /// whether subscripting `expr` is a runtime `__getitem__` call rather than
     /// a type specialization, which decides what a keyword subscript on it
@@ -762,11 +785,6 @@ pub(crate) trait TypeInfo {
     /// type checker uses so the lowering can't disagree with it. `None` when `X` is an
     /// ordinary type, which makes the `**` an untyped-keyword catch-all
     fn unpacked_kwargs(&self, expr: &Expr) -> Option<UnpackedKwargsLowering>;
-
-    /// position of the keyword-variadic pack among the type parameters of the
-    /// class referenced by `expr` (`class A[T, **Kwargs]` → `Some(1)`).
-    /// `None` when `expr` is not a generic class or declares no pack
-    fn class_keyword_pack_index(&self, expr: &Expr) -> Option<usize>;
 
     /// classify the "absent" arm of `expr`'s type for `^` / `!` propagation.
     /// returns [`AbsentTest::Result`] when any arm of the (possibly union)
@@ -1101,9 +1119,8 @@ impl TypeInfo for LoweringModel<'_> {
             .unwrap_or_default()
     }
 
-    fn is_function(&self, name: &ExprName) -> bool {
-        name.inferred_type(self)
-            .is_some_and(|ty| ty.as_function_literal().is_some())
+    fn subscripts_a_function(&self, value: &Expr) -> bool {
+        self.subscripted_function(value).is_some()
     }
 
     fn class_pattern_positional_count(&self, cls: &Expr) -> Option<usize> {
@@ -1152,14 +1169,12 @@ impl TypeInfo for LoweringModel<'_> {
             .is_some_and(|function| function.is_return_value_marker(self.db()))
     }
 
-    fn is_reified_function(
+    fn subscript_takes_type_arguments(
         &self,
-        name: &ExprName,
+        value: &Expr,
         min_version: ruff_python_ast::PythonVersion,
     ) -> bool {
-        name.inferred_type(self)
-            .and_then(Type::as_function_literal)
-            .is_some_and(|function| self.takes_type_arguments_at(function, min_version))
+        LoweringModel::subscript_takes_type_arguments(self, value, min_version)
     }
 
     fn reified_call_specialization(
@@ -1581,18 +1596,28 @@ impl TypeInfo for LoweringModel<'_> {
         )
     }
 
-    fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>> {
-        let ty = expr.inferred_type(self)?;
-        let class = ty.as_class_literal()?;
-        let ctx = class.generic_context(self.db())?;
+    fn subscript_type_params(&self, value: &Expr) -> Option<Vec<SubscriptTypeParam>> {
+        let db = self.db();
+        let context = self.subscript_generic_context(value)?;
+        let spells_defaults = !self.subscripts_a_function(value);
         Some(
-            ctx.variables(self.db())
-                .map(|tv| {
-                    let name = tv.name(self.db()).to_string();
-                    let default = tv
-                        .default_type(self.db())
-                        .map(|d| display_for_python(self.db(), &self.program_environment(), d));
-                    (name, default)
+            context
+                .variables(db)
+                .enumerate()
+                .map(|(index, typevar)| SubscriptTypeParam {
+                    name: typevar.name(db).to_string(),
+                    given: context.type_param_kind(db, index),
+                    kind: if typevar.is_typevartuple(db) {
+                        SubscriptTypeParamKind::Variadic
+                    } else if typevar.is_keyword_variadic(db) {
+                        SubscriptTypeParamKind::KeywordVariadic
+                    } else {
+                        SubscriptTypeParamKind::Single
+                    },
+                    has_default: typevar.default_type(db).is_some(),
+                    spelled_default: typevar.default_type(db).filter(|_| spells_defaults).map(
+                        |default| display_for_python(db, &self.program_environment(), default),
+                    ),
                 })
                 .collect(),
         )
@@ -1641,14 +1666,6 @@ impl TypeInfo for LoweringModel<'_> {
         ctx.variables(self.db())
             .next()
             .is_some_and(|tv| tv.is_paramspec(self.db()))
-    }
-
-    fn class_keyword_pack_index(&self, expr: &Expr) -> Option<usize> {
-        let ty = expr.inferred_type(self)?;
-        let class = ty.as_class_literal()?;
-        let ctx = class.generic_context(self.db())?;
-        ctx.variables(self.db())
-            .position(|tv| tv.is_keyword_variadic(self.db()))
     }
 
     fn propagate_absent_test(&self, expr: &Expr) -> Option<AbsentTest> {

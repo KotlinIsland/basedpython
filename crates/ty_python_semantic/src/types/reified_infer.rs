@@ -702,6 +702,8 @@ fn resolved_parameters<'db>(
             name: typevar.name(db),
             value: solution.or_else(|| typevar.default_type(db, env)),
             kind,
+            keyword_only: generic_context.type_param_kind(db, index)
+                == ast::TypeParamKind::KeywordOnly,
         });
     }
 
@@ -762,6 +764,16 @@ fn rendered_type_arguments<'db>(
             {
                 return Err(ReifiedInferenceError::NotAtRuntime(name, binding));
             }
+            // a keyword-only parameter is given by name, which an override keeps where it may
+            // move it
+            if parameter.keyword_only && !text.is_empty() {
+                let mut named = RuntimeSpelling::text(format!("{}=", parameter.name));
+                named.push(&text);
+                return Ok(TypeArgument {
+                    text: named,
+                    keyword: true,
+                });
+            }
             Ok(TypeArgument {
                 text,
                 keyword: parameter.kind == ParameterKind::KeywordPack,
@@ -787,6 +799,8 @@ struct ResolvedParameter<'db, 'name> {
     name: &'name Name,
     value: Option<Type<'db>>,
     kind: ParameterKind,
+    /// written after a bare `*`, so it is given by name
+    keyword_only: bool,
 }
 
 /// how many arguments a type parameter stands for, and how they are spelled
@@ -3765,6 +3779,9 @@ pub(crate) enum ReifiedOverrideError<'db> {
         base_admissible: Type<'db>,
         sub_admissible: Type<'db>,
     },
+    /// a specialization through the base gives a type argument by name, after a bare `*`, and
+    /// the override has no type parameter of that name to take it
+    Unnamed(Name),
     /// a specialization through the base fills the override's type parameters by position,
     /// and the override's are in another order than the base's
     Reordered,
@@ -3800,25 +3817,46 @@ pub(crate) fn reified_override_error<'db>(
         (true, true) => {
             let base_interface = type_param_interface(db, env, base)?;
             let sub_interface = type_param_interface(db, env, sub)?;
-            if sub_interface.required > base_interface.required
-                || sub_interface.params.len() < base_interface.params.len()
-            {
-                return Some(ReifiedOverrideError::Arity {
-                    base_required: base_interface.required,
-                    base_total: base_interface.params.len(),
-                    sub_required: sub_interface.required,
-                    sub_total: sub_interface.params.len(),
-                });
+            let reached = reached_parameters(&base_interface.params, &sub_interface.params);
+            let arity = || ReifiedOverrideError::Arity {
+                base_required: base_interface.required(),
+                base_total: base_interface.params.len(),
+                sub_required: sub_interface.required(),
+                sub_total: sub_interface.params.len(),
+            };
+            for (base_param, reached) in base_interface.params.iter().zip(&reached) {
+                if reached.is_none() {
+                    return Some(if base_param.given == ast::TypeParamKind::KeywordOnly {
+                        ReifiedOverrideError::Unnamed(base_param.name.clone())
+                    } else {
+                        arity()
+                    });
+                }
             }
-            for ((base_name, base_admissible), (sub_name, sub_admissible)) in
-                base_interface.params.iter().zip(&sub_interface.params)
+            // a parameter of the override no specialization through the base reaches has to
+            // be able to go without
+            if sub_interface
+                .params
+                .iter()
+                .enumerate()
+                .any(|(index, param)| !param.has_default && !reached.contains(&Some(index)))
             {
-                if !base_admissible.is_assignable_to(db, env, *sub_admissible) {
+                return Some(arity());
+            }
+            for (base_param, reached) in base_interface.params.iter().zip(&reached) {
+                let Some(sub_param) = reached.and_then(|index| sub_interface.params.get(index))
+                else {
+                    continue;
+                };
+                if !base_param
+                    .admissible
+                    .is_assignable_to(db, env, sub_param.admissible)
+                {
                     return Some(ReifiedOverrideError::Bound {
-                        base_name: base_name.clone(),
-                        sub_name: sub_name.clone(),
-                        base_admissible: *base_admissible,
-                        sub_admissible: *sub_admissible,
+                        base_name: base_param.name.clone(),
+                        sub_name: sub_param.name.clone(),
+                        base_admissible: base_param.admissible,
+                        sub_admissible: sub_param.admissible,
                     });
                 }
             }
@@ -3877,11 +3915,46 @@ fn type_params_line_up<'db>(
     else {
         return true;
     };
-    let base_params: Vec<Type<'db>> = base_context.variables(db).map(Type::TypeVar).collect();
-    if base_params.len() < 2 || base_params.len() != sub_context.variables(db).count() {
+    if base_context.len(db) < 2 || base_context.len(db) != sub_context.len(db) {
         return true;
     }
-    let in_base_order = sub_context.specialize(db, base_params);
+    // the base's parameter each of the override's is reached from, by name: `Self` is `Self`
+    let (Some(base_interface), Some(sub_interface)) = (
+        type_param_interface(db, env, base),
+        type_param_interface(db, env, sub),
+    ) else {
+        return true;
+    };
+    let reached = reached_parameters(&base_interface.params, &sub_interface.params);
+    let reached_from = |sub_name: &Name| {
+        let index = sub_interface
+            .params
+            .iter()
+            .position(|param| param.name == *sub_name)?;
+        let base_index = reached.iter().position(|reached| *reached == Some(index))?;
+        Some(&base_interface.params.get(base_index)?.name)
+    };
+    let in_base_order: Option<Vec<Type<'db>>> = sub_context
+        .variables(db)
+        .map(|sub_variable| {
+            let sub_typevar = sub_variable.typevar(db);
+            base_context
+                .variables(db)
+                .find(|base_variable| {
+                    let base_typevar = base_variable.typevar(db);
+                    if sub_typevar.is_self(db) {
+                        base_typevar.is_self(db)
+                    } else {
+                        reached_from(sub_typevar.name(db)) == Some(base_typevar.name(db))
+                    }
+                })
+                .map(Type::TypeVar)
+        })
+        .collect();
+    let Some(in_base_order) = in_base_order else {
+        return true;
+    };
+    let in_base_order = sub_context.specialize(db, in_base_order);
     let as_callable = |signature: &Signature<'db>| {
         let mut bound = signature.bind_self(db, env, None);
         bound.generic_context = None;
@@ -3894,13 +3967,59 @@ fn type_params_line_up<'db>(
     )
 }
 
-/// the positional type-parameter interface of a reified generic: one
-/// `(name, admissible types)` entry per parameter, in declaration order, plus
-/// how many have no default. `None` when the shape is outside this check —
-/// overloaded functions, or `*Ts` / `**P` in the list (never reified)
+/// the type-parameter interface of a reified generic: one entry per parameter, in declaration
+/// order. `None` when the shape is outside this check — overloaded functions, or `*Ts` / `**P` in
+/// the list (never reified)
 struct TypeParamInterface<'db> {
-    required: usize,
-    params: Vec<(Name, Type<'db>)>,
+    params: Vec<InterfaceParam<'db>>,
+}
+
+impl TypeParamInterface<'_> {
+    fn required(&self) -> usize {
+        self.params
+            .iter()
+            .filter(|param| !param.has_default)
+            .count()
+    }
+}
+
+struct InterfaceParam<'db> {
+    name: Name,
+    /// the types a specialization may give it: the bound, the union of the constraints, or
+    /// `object`
+    admissible: Type<'db>,
+    /// whether a `/` or bare `*` restricts it to position or to name
+    given: ast::TypeParamKind,
+    has_default: bool,
+}
+
+/// the index of the override's parameter a specialization through the base gives each of the
+/// base's, the way a call's value arguments reach an override's parameters: by position among the
+/// override's parameters that take one, or by name for one written after a bare `*`. `None` for
+/// a base parameter the override has no place for
+fn reached_parameters(
+    base: &[InterfaceParam<'_>],
+    sub: &[InterfaceParam<'_>],
+) -> Vec<Option<usize>> {
+    let mut by_position = sub
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| param.given != ast::TypeParamKind::KeywordOnly)
+        .map(|(index, _)| index);
+    let mut reached: Vec<Option<usize>> = Vec::with_capacity(base.len());
+    for param in base {
+        let index = if param.given == ast::TypeParamKind::KeywordOnly {
+            sub.iter().enumerate().position(|(index, sub_param)| {
+                sub_param.name == param.name
+                    && sub_param.given != ast::TypeParamKind::PositionalOnly
+                    && !reached.contains(&Some(index))
+            })
+        } else {
+            by_position.next()
+        };
+        reached.push(index);
+    }
+    reached
 }
 
 fn type_param_interface<'db>(
@@ -3937,20 +4056,20 @@ fn type_param_interface<'db>(
         .node(&module);
     let type_params = node.type_params.as_deref()?;
 
-    let mut required = 0;
     let mut params = Vec::with_capacity(type_params.type_params.len());
-    for type_param in &type_params.type_params {
+    for (index, type_param) in type_params.type_params.iter().enumerate() {
         let ast::TypeParam::TypeVar(typevar) = type_param else {
             return None;
         };
-        if typevar.default.is_none() {
-            required += 1;
-        }
-        let admissible = admissible_by_name
-            .get(&typevar.name.id)
-            .copied()
-            .unwrap_or_else(Type::object);
-        params.push((typevar.name.id.clone(), admissible));
+        params.push(InterfaceParam {
+            name: typevar.name.id.clone(),
+            admissible: admissible_by_name
+                .get(&typevar.name.id)
+                .copied()
+                .unwrap_or_else(Type::object),
+            given: type_params.separators.kind_at(index),
+            has_default: typevar.default.is_some(),
+        });
     }
-    Some(TypeParamInterface { required, params })
+    Some(TypeParamInterface { params })
 }

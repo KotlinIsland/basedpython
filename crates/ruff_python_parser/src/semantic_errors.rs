@@ -1166,7 +1166,39 @@ impl SemanticSyntaxChecker {
             Expr::Call(ast::ExprCall { arguments, .. }) => {
                 Self::duplicate_keyword_args(arguments, ctx);
             }
+            Expr::Subscript(subscript) => {
+                Self::duplicate_keyword_fields(subscript, ctx);
+            }
             _ => {}
+        }
+    }
+
+    /// basedpython: a keyword field of a subscript (`A[T=int]`) names a type parameter or a
+    /// keyword argument of `__getitem__`, so naming one twice is the error it is in a call. the
+    /// fields are those of an unparenthesized slice: a parenthesized one is a single parameter
+    /// list or named tuple, whose labels are its own
+    fn duplicate_keyword_fields<Ctx: SemanticSyntaxContext>(
+        subscript: &ast::ExprSubscript,
+        ctx: &Ctx,
+    ) {
+        let Expr::Tuple(tuple) = subscript.slice.as_ref() else {
+            return;
+        };
+        if tuple.parenthesized {
+            return;
+        }
+        let mut names = FxHashSet::with_capacity_and_hasher(tuple.elts.len(), FxBuildHasher);
+        for element in &tuple.elts {
+            if let Expr::Named(named) = element
+                && let Some(label) = named.label()
+                && !names.insert(label.id.as_str())
+            {
+                Self::add_error(
+                    ctx,
+                    SemanticSyntaxErrorKind::DuplicateKeywordArgument(label.id.to_string()),
+                    named.range,
+                );
+            }
         }
     }
 

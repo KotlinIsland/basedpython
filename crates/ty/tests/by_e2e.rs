@@ -6407,6 +6407,101 @@ a.f()
     );
 }
 
+#[test]
+fn reified_function_binds_a_type_argument_given_by_name() {
+    // a keyword names the type parameter it binds, the way the checker reads it, whatever
+    // order the keywords are written in: against the receiver's declared class, whose method an
+    // override may rename, and through a module attribute. a keyword-variadic pack still takes
+    // them all
+    let Some(python) = python_at_least(13, "a type-parameter default needs") else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("helpers.by"),
+        "\
+def pick[T, U]():
+    return (T, U)
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import helpers
+
+def g[T]():
+    return T
+
+def h[T, U = str]():
+    return (T, U)
+
+def p[**Kwargs]():
+    return Kwargs
+
+class D:
+    def m[T = bytes, U = str](self):
+        return (T, U)
+
+class E(D):
+    override def m[U = bytes, T = str](self):
+        return (U, T)
+
+def through(d: D):
+    return d.m[U=int]()
+
+def main():
+    print(g[T=int]())
+    print(h[U=int, T=str]())
+    print(p[a=int, b=str]())
+    print(D().m[U=int]())
+    print(through(E()))
+    print(helpers.pick[U=int, T=str]())
+",
+    )
+    .unwrap();
+
+    let check = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["check"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        check.status.success(),
+        "by check failed:\n{}",
+        String::from_utf8_lossy(&check.stdout)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "<class 'int'>",
+            "(<class 'str'>, <class 'int'>)",
+            "{'a': <class 'int'>, 'b': <class 'str'>}",
+            "(<class 'bytes'>, <class 'int'>)",
+            "(<class 'bytes'>, <class 'int'>)",
+            "(<class 'str'>, <class 'int'>)",
+        ]
+    );
+}
+
 /// below 3.12 python has no native type-parameter list for a reified generic to keep, so
 /// `by run` refuses the program rather than run one that cannot read its type argument. a 3.11
 /// interpreter makes 3.11 the target, as `--min-version 3.11` does here on any interpreter

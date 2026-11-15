@@ -316,12 +316,12 @@ class _by_guarded_generic:
     def __get__(self, _obj, _objtype=None):
         return _by_guarded_generic(self._by_inner.__get__(_obj, _objtype), self._by_wrap)
 
-    def __getitem__(self, *_items, **_fields):
+    def __getitem__(self, /, *_items, **_fields):
         return _by_guarded_generic(
             self._by_inner.__getitem__(*_items, **_fields), self._by_wrap
         )
 
-    def __call__(self, *_args, **_kwargs):
+    def __call__(self, /, *_args, **_kwargs):
         # the wrapper's shape comes from the function this specialization holds,
         # so it is built once for it rather than once per call
         if self._by_call is None:
@@ -563,23 +563,35 @@ def _by_suffix(_text, _n):
 #
 # a `TypeVarTuple` takes, as a tuple, the whole run of positional arguments
 # the fixed parameters around it don't claim, so `[int, str, bool]` on
-# `[T, *Args]` binds `T = int` and `Args = (str, bool)`; a keyword-variadic
-# `**Kwargs` sits outside the positional slots entirely and binds the mapping
-# of the keyword fields (`f[foo=int]` → `Kwargs = {'foo': int}`, spelled
-# `f.__getitem__(foo=int)` in the lowered python, since subscripts take no
-# keywords). an omitted slot is filled from its pep 696 default, read off the
-# parameter list itself; an unfilled `TypeVarTuple` or `**Kwargs` binds empty,
-# and any other slot is simply left out for the caller to answer for.
-# over-specializing a parameter list with no variadic raises
-def _bind_type_params(params, supplied, fields, owner):
+# `[T, *Args]` binds `T = int` and `Args = (str, bool)`. a type argument is
+# given by name to a parameter a call through a base reaches by name, one the
+# base wrote after a bare `*`, or as a field of a keyword-variadic `**Kwargs`,
+# which takes every keyword when there is one and binds their mapping
+# (`f[foo=int]` → `Kwargs = {'foo': int}`). either way it is spelled
+# `f.__getitem__(...)` in the lowered python, since subscripts take no
+# keywords, and it occupies no positional slot. neither does a parameter
+# written after a bare `*`, which `keyword_only` names since `__type_params__`
+# doesn't say. a type argument the source gave a positional parameter by name
+# is written at its position by the transpiler. an omitted slot, or one given `_ByTypeDefault`, is filled from
+# its pep 696 default, read off the parameter list itself; an unfilled
+# `TypeVarTuple` or `**Kwargs` binds empty, and any other slot is simply left
+# out for the caller to answer for. over-specializing a parameter list with no
+# variadic raises
+def _bind_type_params(params, supplied, fields, owner, keyword_only=()):
     from typing import ParamSpec, TypeVarTuple
     pack = next((p for p in params if isinstance(p, ParamSpec)), None)
-    if pack is None and fields:
-        raise TypeError(
-            f"{owner} has no keyword-variadic type parameter for "
-            f"{', '.join(fields)}"
-        )
-    slots = [p for p in params if p is not pack]
+    named = {}
+    if pack is None:
+        by_name = {p.__name__: p for p in params}
+        for name, value in fields.items():
+            if isinstance(by_name.get(name), (type(None), TypeVarTuple)):
+                raise TypeError(f"{owner} has no type parameter {name!r} to give by name")
+            named[name] = value
+    slots = [
+        p
+        for p in params
+        if p is not pack and p.__name__ not in named and p.__name__ not in keyword_only
+    ]
     variadic = next(
         (i for i, p in enumerate(slots) if isinstance(p, TypeVarTuple)), None
     )
@@ -602,7 +614,9 @@ def _bind_type_params(params, supplied, fields, owner):
                 supplied[variadic + len(packed):],
             )
         )
-    if fields:
+    bound.update(named)
+    bound = {name: value for name, value in bound.items() if value is not _ByTypeDefault}
+    if pack is not None and fields:
         bound[pack.__name__] = dict(fields)
     for param in params:
         name = param.__name__
@@ -642,9 +656,12 @@ class _by_static_property:
 # `self` like an ordinary method. attribute access falls through to the
 # wrapped function, keeping introspection (`f.__name__`, `f.__doc__`) working
 #
-# `forwarding` is for a parameter the body only writes into a specialization it
-# records (`A[T](t)`). a call the transpiler has no spelling for is still legal
-# there, so the slot is left alone and the cell keeps the `TypeVar` itself
+# `declared` gives what the type-parameter list can't say at runtime. `optional`
+# names a parameter the body only writes into a specialization it records
+# (`A[T](t)`): a call the transpiler has no spelling for is still legal there,
+# so the slot is left alone and the cell keeps the `TypeVar` itself.
+# `keyword_only` names the parameters written after a bare `*`, which are only
+# ever given by name
 class generic:
     # what tells another lowering's wrapper that this is a reified generic and
     # not the plain function it forwards to — the `raises` guard has to keep the
@@ -652,16 +669,21 @@ class generic:
     __by_generic__ = True
     __doc__ = property(lambda self: self.fn.__doc__)
 
-    def __init__(self, fn, args=None, instance=None, fields=None, optional=()):
+    def __init__(self, fn, args=None, instance=None, fields=None, optional=(), keyword_only=()):
         self.fn = fn
         self.args = args
         self.instance = instance
         self.fields = fields
         self.optional = optional
+        self.keyword_only = keyword_only
 
     @classmethod
-    def forwarding(cls, *optional):
-        return lambda fn: cls(fn, optional=optional)
+    def declared(cls, *, optional=(), keyword_only=()):
+        return lambda fn: cls(fn, optional=optional, keyword_only=keyword_only)
+
+    # a copy of this wrapper holding `args`, `instance` and `fields`
+    def _with(self, args, instance, fields):
+        return generic(self.fn, args, instance, fields, self.optional, self.keyword_only)
 
     def __repr__(self):
         return f"<generic {self.fn!r}>"
@@ -678,35 +700,42 @@ class generic:
         items = self.args
         return (
             _by_generic_named,
-            (*place, self.instance, None if items is None else tuple(map(_by_pickled, items)), self.fields),
+            (
+                *place,
+                self.instance,
+                None if items is None else tuple(map(_by_pickled, items)),
+                None if self.fields is None else {name: _by_pickled(t) for name, t in self.fields.items()},
+            ),
         )
 
     def __getattr__(self, name):
-        if name == "fn":
+        if name in ("fn", "optional", "keyword_only"):
             raise AttributeError(name)
         return getattr(self.fn, name)
 
     def __get__(self, obj, objtype=None):
         if obj is None:
             return self
-        return generic(self.fn, self.args, obj, self.fields, self.optional)
+        return self._with(self.args, obj, self.fields)
 
-    def __getitem__(self, *items, **fields):
+    def __getitem__(self, /, *items, **fields):
         if self.args is not None or self.fields is not None:
             raise TypeError("type arguments already specified")
         if len(items) == 1 and isinstance(items[0], tuple):
             items = items[0]
         # reject a bad arity here, not at the call
-        _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
-        return generic(self.fn, items, self.instance, fields, self.optional)
+        _bind_type_params(
+            self.fn.__type_params__, items, fields, self.fn.__name__, self.keyword_only
+        )
+        return self._with(items, self.instance, fields)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, /, *args, **kwargs):
         from types import CellType, FunctionType
 
         fn = self.fn
         code = fn.__code__
         values = _bind_type_params(
-            fn.__type_params__, self.args or (), self.fields or {}, fn.__name__
+            fn.__type_params__, self.args or (), self.fields or {}, fn.__name__, self.keyword_only
         )
         for param in fn.__type_params__:
             name = param.__name__
@@ -747,6 +776,13 @@ def _by_generic_named(module, qualified, instance=None, items=None, fields=None)
     return found
 
 
+# a type argument written at the position of a parameter the source gave nothing, which takes
+# that parameter's default: `f[U=int]` on `def f[T = bytes, U = str]` is `f[_ByTypeDefault, int]`.
+# the default is read off the function the call reaches, as an omitted trailing one is
+class _ByTypeDefault:
+    pass
+
+
 # what the cell of a forwarded type parameter holds when the call supplied nothing for it. a
 # value built with it, `Box[_ByNotRecorded](t)`, records nothing, and being a module-level class
 # it can still be pickled, which the `TypeVar` left in the cell could not be
@@ -774,7 +810,7 @@ def _by_specialization(origin, *args):
 
 # a bare call of a method that only forwards its type parameters. an override may
 # forward none, which makes it a plain method with no specialization to take
-def _by_specialized(callee, *items, **fields):
+def _by_specialized(callee, /, *items, **fields):
     if getattr(callee, "__by_generic__", False):
         return callee.__getitem__(*items, **fields)
     return callee

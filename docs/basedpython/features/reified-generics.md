@@ -426,6 +426,25 @@ f()         # prints int — default supplies the reified value
 f[str]()    # prints str
 ```
 
+## a type argument given by name
+
+a type argument can be [given by name](kw-subscript.md#generic-functions), as
+it can for a class. the positional ones fill the parameters no keyword named,
+and a parameter given nothing takes its default:
+
+```by
+def pair[T, U = str]() -> object:
+    return (T, U)
+
+pair[U=int, T=bytes]()  # T is bytes, U is int
+pair[T=bytes]()         # T is bytes, U is str
+```
+
+a name binds against the signature the call is checked against, so through a
+base class it reaches an override at the position it named in the base, whatever
+the override calls that parameter. a [keyword-only](type-param-separators.md)
+parameter is the exception: it reaches the override's parameter of the same name
+
 ## a type parameter the body forwards
 
 a body that only ever hands a type parameter on still needs its value when what

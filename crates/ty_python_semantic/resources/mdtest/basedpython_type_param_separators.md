@@ -111,6 +111,26 @@ class C[A: int, /, B: str]: ...
 def f(c: C[bytes, int]): ...
 ```
 
+## a function's and a method's separators hold too
+
+a function's type arguments are given the way a class's are, and a method's are the ones its
+receiver leaves, its implicit `Self` aside
+
+```by
+def f[A, /, B, *, D]() -> None: ...
+
+class K:
+    def m[A, /, B, *, D](self) -> None: ...
+
+f[int, B=str, D=bytes]()  # no diagnostic
+K().m[int, str, D=bytes]()  # no diagnostic
+
+# error: [invalid-type-arguments] "Type variable `A` is positional-only"
+f[A=int, B=str, D=bytes]()
+# error: [invalid-type-arguments] "Type variable `D` is keyword-only"
+K().m[int, str, bytes]()
+```
+
 ## the separators only apply in `.by`
 
 the same class written in a `.py` file has no separators — `/` there is a syntax error, so this is a

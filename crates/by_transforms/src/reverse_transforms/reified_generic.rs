@@ -1,7 +1,7 @@
 //! reverse of `crate::transforms::reified_generic` and
 //! `crate::transforms::reified_class`:
 //!   `@generic  # basedpython: reified\ndef f[T]: …` → `def f[T]: …`
-//!   `@generic.forwarding("T")  # basedpython: reified\ndef f[T]: …` → `def f[T]: …`
+//!   `@generic.declared(optional=("T",))  # basedpython: reified\ndef f[T]: …` → `def f[T]: …`
 //!   `@generic_class  # basedpython: reified\nclass A[T]: …` → `class A[T]: …`
 //!
 //! the forward transforms tag the decorator line they synthesize with the
@@ -41,10 +41,10 @@ impl<'src> ReifiedGenericReverse<'src> {
     /// AST), so it is matched against the source slice from the decorator's end
     /// to the end of its physical line
     fn is_marked(&self, decorator: &Decorator, wrapper: &str) -> bool {
-        // `@generic.forwarding("T")` is the wrapper too, for a parameter only forwarded
+        // `@generic.declared(...)` is the wrapper too, saying what its parameter list can't
         let name = match &decorator.expression {
             Expr::Call(call) => match call.func.as_ref() {
-                Expr::Attribute(attribute) if attribute.attr.as_str() == "forwarding" => {
+                Expr::Attribute(attribute) if attribute.attr.as_str() == "declared" => {
                     attribute.value.as_ref()
                 }
                 _ => return false,
@@ -177,9 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn marked_forwarding_generic_is_unwrapped() {
-        let src =
-            format!("@generic.forwarding(\"T\"){REIFIED_MARKER}\ndef f[T]():\n    print(T)\n");
+    fn marked_declared_generic_is_unwrapped() {
+        let src = format!(
+            "@generic.declared(optional=(\"T\",)){REIFIED_MARKER}\ndef f[T]():\n    print(T)\n"
+        );
         let out = rev(&src);
         assert!(
             !out.contains("@generic"),
@@ -189,9 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn unmarked_forwarding_generic_is_left_alone() {
-        let out = rev("@generic.forwarding(\"T\")\ndef f[T]():\n    print(T)\n");
-        assert!(out.contains("@generic.forwarding"), "{out}");
+    fn unmarked_declared_generic_is_left_alone() {
+        let out = rev("@generic.declared(optional=(\"T\",))\ndef f[T]():\n    print(T)\n");
+        assert!(out.contains("@generic.declared"), "{out}");
     }
 
     #[test]

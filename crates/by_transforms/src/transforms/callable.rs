@@ -104,6 +104,8 @@ pub(crate) struct CallableSyntax<'src> {
     needs_annotated_import: bool,
     needs_type_is_import: bool,
     needs_optional_runtime: bool,
+    /// the other runtime helpers what was written calls
+    helpers: Vec<crate::runtime::Helper>,
     /// shape → synthesized class name. used to dedupe identical
     /// non-denotable callable shapes
     protocol_shapes: HashMap<ProtocolShape, String>,
@@ -168,6 +170,7 @@ impl<'src> CallableSyntax<'src> {
             needs_annotated_import: false,
             needs_type_is_import: false,
             needs_optional_runtime: false,
+            helpers: Vec::new(),
             protocol_shapes: HashMap::new(),
             protocol_class_defs: String::new(),
             extra_imports: Vec::new(),
@@ -267,7 +270,7 @@ impl<'src> CallableSyntax<'src> {
             }
         }
         lines.append(&mut self.extra_imports);
-        let mut helpers = Vec::new();
+        let mut helpers = std::mem::take(&mut self.helpers);
         if self.needs_optional_runtime {
             helpers.push(crate::runtime::OPTIONAL);
         }
@@ -915,6 +918,10 @@ impl<'src> CallableSyntax<'src> {
                         kw_subscript::Piece::Text(written) => text.push_str(&written),
                         kw_subscript::Piece::Value(value) => {
                             text.push_str(&self.rewrite_or_leaf(value));
+                        }
+                        kw_subscript::Piece::Helper(helper) => {
+                            self.helpers.push(helper);
+                            text.push_str(helper.name());
                         }
                     }
                 }

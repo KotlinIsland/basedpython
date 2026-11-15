@@ -2675,6 +2675,14 @@ pub(super) fn walk_function_type<'db, V: super::visitor::TypeVisitor<'db> + ?Siz
 
 #[salsa::tracked]
 impl<'db> FunctionType<'db> {
+    /// basedpython: the type parameters a subscript of this function specializes (`f[int]`)
+    pub(crate) fn explicit_specialization_context(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<GenericContext<'db>> {
+        self.signature(db).overloads.first()?.generic_context
+    }
+
     /// basedpython: the specializations applied to this function — see
     /// [`UpdatedFunctionSignatures::specializations`].
     pub(crate) fn applied_specializations(self, db: &'db dyn Db) -> &'db [Specialization<'db>] {

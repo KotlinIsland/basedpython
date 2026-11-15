@@ -453,9 +453,9 @@ pub struct GenericContext<'db> {
     /// basedpython: how the `/` and bare `*` separators of the declaring type parameter list
     /// split these variables.
     ///
-    /// Only a context built straight from a type parameter list carries them — anything derived
-    /// (merged, filtered, freshened) renumbers the variables, so it falls back to the unseparated
-    /// split where every variable may be given either way.
+    /// A context derived from one by removing variables, or by putting unseparated ones in front
+    /// of it (a method's implicit `Self`), carries them renumbered. Anything else derived from
+    /// one falls back to the unseparated split where every variable may be given either way.
     #[returns(copy)]
     separators: ast::TypeParamSeparators,
 }
@@ -598,17 +598,51 @@ impl<'db> GenericContext<'db> {
         program: Program<'db>,
         type_params: impl IntoIterator<Item = BoundTypeVarInstance<'db>>,
     ) -> Self {
+        Self::from_separated_typevar_instances(
+            db,
+            program,
+            type_params,
+            ast::TypeParamSeparators::default(),
+        )
+    }
+
+    fn from_separated_typevar_instances(
+        db: &'db dyn Db,
+        program: Program<'db>,
+        type_params: impl IntoIterator<Item = BoundTypeVarInstance<'db>>,
+        separators: ast::TypeParamSeparators,
+    ) -> Self {
         let mut variables = type_params
             .into_iter()
             .map(|variable| (variable.identity(db), variable))
             .collect::<FxOrderMap<_, _>>();
         assert!(!variables.is_empty(), "a generic context must be nonempty");
         variables.shrink_to_fit();
-        Self::new_internal(db, program, variables, ast::TypeParamSeparators::default())
+        Self::new_internal(db, program, variables, separators)
+    }
+
+    /// basedpython: this context with only the variables `keep` answers `true` for, its `/` and
+    /// `*` separators renumbered to match. `None` when none are kept
+    fn retaining(
+        self,
+        db: &'db dyn Db,
+        keep: impl Fn(BoundTypeVarInstance<'db>) -> bool,
+    ) -> Option<Self> {
+        let kept: Vec<bool> = self.variables(db).map(&keep).collect();
+        if !kept.contains(&true) {
+            return None;
+        }
+        Some(Self::from_separated_typevar_instances(
+            db,
+            self.program(db),
+            self.variables(db).filter(|variable| keep(*variable)),
+            self.separators(db)
+                .retaining(|index| kept.get(index).copied().unwrap_or(false)),
+        ))
     }
 
     /// basedpython: the [`ast::TypeParamKind`] of the type parameter at `index`.
-    pub(crate) fn type_param_kind(self, db: &'db dyn Db, index: usize) -> ast::TypeParamKind {
+    pub fn type_param_kind(self, db: &'db dyn Db, index: usize) -> ast::TypeParamKind {
         self.separators(db).kind_at(index)
     }
 
@@ -622,13 +656,25 @@ impl<'db> GenericContext<'db> {
     pub(crate) fn merge(self, db: &'db dyn Db, other: Self) -> Self {
         let program = self.program(db);
         debug_assert_eq!(program, other.program(db));
-        Self::from_typevar_instances_in_program(
+        // basedpython: the split carries over when the variables put around a separated list
+        // fall outside every section they could change: in front of it, or after one with no
+        // keyword-only section
+        let (front, back) = (self.separators(db), other.separators(db));
+        let separators = if front.is_empty() {
+            back.after(self.len(db))
+        } else if back.is_empty() && front.keyword_only_start.is_none() {
+            front
+        } else {
+            ast::TypeParamSeparators::default()
+        };
+        Self::from_separated_typevar_instances(
             db,
             program,
             self.variables_inner(db)
                 .values()
                 .chain(other.variables_inner(db).values())
                 .copied(),
+            separators,
         )
     }
 
@@ -655,16 +701,12 @@ impl<'db> GenericContext<'db> {
             generic_context: GenericContext<'db>,
             binding_context: Option<BindingContext<'db>>,
         ) -> Option<GenericContext<'db>> {
-            GenericContext::try_from_typevar_instances_in_program(
-                db,
-                generic_context.program(db),
-                generic_context.variables(db).filter(|bound_typevar| {
-                    !(bound_typevar.typevar(db).is_self(db)
-                        && binding_context.is_none_or(|binding_context| {
-                            bound_typevar.binding_context(db) == binding_context
-                        }))
-                }),
-            )
+            generic_context.retaining(db, |bound_typevar| {
+                !(bound_typevar.typevar(db).is_self(db)
+                    && binding_context.is_none_or(|binding_context| {
+                        bound_typevar.binding_context(db) == binding_context
+                    }))
+            })
         }
 
         remove_self_inner(db, self, binding_context)
@@ -1044,10 +1086,9 @@ impl<'db> GenericContext<'db> {
             return_type.apply_type_mapping(db, &env, &type_mapping, TypeContext::default());
 
         // And lastly remove those typevars from the function's generic context.
-        let kept_typevars = generic_context
-            .variables(db)
-            .filter(|bound_typevar| !found_only_inside_callable_return.contains(bound_typevar));
-        let generic_context = GenericContext::try_from_typevar_instances(db, &env, kept_typevars);
+        let generic_context = generic_context.retaining(db, |bound_typevar| {
+            !found_only_inside_callable_return.contains(&bound_typevar)
+        });
 
         (generic_context, return_type)
     }

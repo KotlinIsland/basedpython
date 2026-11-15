@@ -1562,6 +1562,48 @@ f[int]()  # ok
 f()
 ```
 
+## a type argument given by name
+
+A keyword names the type parameter it binds, as it does for a class:
+
+```by
+def f[T]() -> object:
+    return T
+
+assert f[T=int]() == int
+```
+
+The positional type arguments fill the parameters no keyword named, in order, and a parameter left
+out takes its default:
+
+```by
+def pair[T, U = str]() -> object:
+    return (T, U)
+
+assert pair[U=int, T=bytes]() == (bytes, int)
+assert pair[T=bytes]() == (bytes, str)
+
+def triple[T, U = str, V = bytes]() -> object:
+    return (T, U, V)
+
+assert triple[int, V=bool]() == (int, str, bool)
+```
+
+A `*Ts` cannot be given by name, but a parameter beside one can. The variadic takes the run of
+positional arguments the parameters no keyword named leave:
+
+```by
+def before[*Ts, T]() -> object:
+    return (Ts, T)
+
+assert before[int, str, T=bytes]() == ((int, str), bytes)
+
+def around[T, *Ts, U]() -> object:
+    return (T, Ts, U)
+
+assert around[int, U=str]() == (int, (), str)
+```
+
 ## a reified method
 
 A method whose type parameter is used in a value position reifies the same way. The receiver binds
@@ -1577,6 +1619,23 @@ class Box:
 reveal_type(Box().kind[int]())  # revealed: object
 # error: [unspecialized-reified-generic] "Cannot call reified generic function `kind` without explicit specialization"
 Box().kind()
+```
+
+## a method's type argument given by name
+
+A method takes its type arguments by name as a function does, whether it reifies them or erases
+them:
+
+```by
+class Box:
+    def kinds[T = bytes, U = str](self) -> object:
+        return (T, U)
+
+    def second[T, U](self, t: T, u: U) -> U:
+        return u
+
+assert Box().kinds[U=int]() == (bytes, int)
+assert Box().second[U=int, T=str]("a", 1) == 1
 ```
 
 ## reified and erased are distinct
@@ -1707,6 +1766,99 @@ class Reifies(Plain):
 class ReifiesWithDefault(Plain):
     def g[T = int](self, t: T) -> None:  # ok — a bare call falls back to the default
         print(T)
+```
+
+## a type argument given by name to an override
+
+A name binds against the signature the call is checked against, and an override may rename its type
+parameters, so the argument reaches the override at the position it named in the base:
+
+```by
+class A:
+    def f[T](self) -> object:
+        return T
+
+class C(A):
+    def f[X](self) -> object:
+        return X
+
+def use(a: A) -> object:
+    return a.f[T=int]()
+
+assert use(C()) == int
+```
+
+A parameter given nothing takes the default of the method the call reaches, as it does when a
+trailing one is left out:
+
+```by
+class B:
+    def f[T = int, U = str](self) -> object:
+        return (T, U)
+
+class D(B):
+    def f[U = int, T = str](self) -> object:
+        return (U, T)
+
+def use(b: B) -> object:
+    return b.f[U=bytes]()
+
+assert use(D()) == (int, bytes)
+```
+
+## a keyword-only type argument reaches an override by name
+
+A parameter after a bare `*` is only given by name, so an override is matched to it by name, as it
+is for a keyword-only value parameter, and may declare it anywhere or take it either way:
+
+```by
+class A:
+    def f[*, B, C](self, b: B, c: C) -> object:
+        return (B, C)
+
+class D(A):
+    def f[*, C, B](self, b: B, c: C) -> object:
+        return (B, C)
+
+class E(A):
+    def f[B, C](self, b: B, c: C) -> object:
+        return (B, C)
+
+def use(a: A) -> object:
+    return a.f[C=str, B=int](1, "")
+
+assert use(D()) == (int, str)
+assert use(E()) == (int, str)
+```
+
+A bare call is given its keyword-only type arguments by name too:
+
+```by
+class F:
+    def f[*, B, C](self, b: B, c: C) -> object:
+        return (B, C)
+
+class G(F):
+    def f[*, C, B](self, b: B, c: C) -> object:
+        return (B, C)
+
+def bare(f: F) -> object:
+    return f.f(int(1), str(""))
+
+assert bare(G()) == (int, str)
+```
+
+An override with nothing of that name to take it isn't one:
+
+```by
+class H:
+    def f[*, B](self) -> object:
+        return B
+
+class I(H):
+    # error: [invalid-method-override]
+    def f[*, X](self) -> object:
+        return X
 ```
 
 ## `is` composes with reification
@@ -1905,6 +2057,18 @@ def f[T, **Kwargs]() -> None:
     assert Kwargs == {"foo": str}
 
 f[int, foo=str]()
+```
+
+## with a pack, every keyword is one of its fields
+
+A keyword spelled like another type parameter is still a field, and so is one spelled like a
+parameter of the wrapper that binds them:
+
+```by
+def f[T, **Kwargs]() -> object:
+    return (T, Kwargs)
+
+assert f[int, T=str, self=bytes]() == (int, {"T": str, "self": bytes})
 ```
 
 ## a variadic and a pack in one list

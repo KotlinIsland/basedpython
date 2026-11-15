@@ -12,16 +12,19 @@
 //! expression renders it.
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ExprSubscript, PythonVersion, Stmt};
+use ruff_python_ast::{Expr, ExprSubscript, PythonVersion, Stmt, TypeParamKind};
 use ruff_text_size::Ranged;
 
+use crate::runtime::{self, Helper};
 use crate::transforms::ast_driver::{Fragment, Lowering, PassContext, TypeAwarePass};
-use crate::type_info::TypeInfo;
+use crate::type_info::{SubscriptTypeParam, SubscriptTypeParamKind, TypeInfo};
 
 /// one part of what a keyword subscript is written as
 pub(crate) enum Piece<'a> {
     Text(String),
     Value(&'a Expr),
+    /// the name of a runtime helper, which the module has to be given
+    Helper(Helper),
 }
 
 /// `arguments` with `separator` between them
@@ -124,116 +127,203 @@ fn keyword_pack_subscript(sub: &ExprSubscript, pack_index: usize) -> Option<Vec<
     Some(subscript_of(&sub.value, parts))
 }
 
+/// the type argument a keyword subscript gives one type parameter, once its keywords are resolved
+/// to positions
+enum Slot<'a> {
+    /// written for it, by name or by position
+    Given(&'a Expr),
+    /// the run of positional arguments a `*Ts` takes, which may be empty
+    Run(Vec<&'a Expr>),
+    /// nothing, so it takes its declared default
+    Default,
+}
+
+/// the type argument each of `params` takes from `elements`, in declaration order, bound the way
+/// the checker binds a keyword subscript: a keyword names the parameter it binds, the positional
+/// arguments fill the parameters no keyword named in order, a `*Ts` takes the run of them the
+/// parameters after it leave, and a parameter given nothing takes its default. a parameter after
+/// a bare `*` is only ever given by name, and one before a `/` only by position
+///
+/// `None` for a subscript the checker reports: a keyword naming no parameter, a `*Ts` or a
+/// positional-only one, an argument left over, or a parameter without a default given nothing
+/// `None` too when `params` has a keyword-variadic pack, whose fields every keyword is
+fn by_position<'a, 'p>(
+    params: &'p [SubscriptTypeParam],
+    elements: &[&'a Expr],
+) -> Option<Vec<(&'p SubscriptTypeParam, Slot<'a>)>> {
+    let mut by_name: Vec<(&str, &'a Expr)> = Vec::new();
+    let mut positional: Vec<&'a Expr> = Vec::new();
+    for element in elements {
+        if let Expr::Named(n) = element
+            && let Some(target) = n.label()
+        {
+            by_name.push((target.id.as_str(), &n.value));
+        } else {
+            positional.push(element);
+        }
+    }
+    let named = |by_name: &[(&str, &Expr)], param: &SubscriptTypeParam| {
+        by_name.iter().position(|(name, _)| *name == param.name)
+    };
+    let mut positional = positional.into_iter();
+    let mut slots = Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        if let Some(at) = named(&by_name, param) {
+            if param.kind != SubscriptTypeParamKind::Single
+                || param.given == TypeParamKind::PositionalOnly
+            {
+                return None;
+            }
+            slots.push((param, Slot::Given(by_name.remove(at).1)));
+            continue;
+        }
+        let slot = match param.kind {
+            SubscriptTypeParamKind::KeywordVariadic => return None,
+            SubscriptTypeParamKind::Variadic => {
+                let claimed_after = params[index + 1..]
+                    .iter()
+                    .filter(|later| {
+                        later.given != TypeParamKind::KeywordOnly
+                            && named(&by_name, later).is_none()
+                    })
+                    .count();
+                let run = positional.len().saturating_sub(claimed_after);
+                Slot::Run(positional.by_ref().take(run).collect())
+            }
+            SubscriptTypeParamKind::Single => match positional.next() {
+                Some(value) if param.given != TypeParamKind::KeywordOnly => Slot::Given(value),
+                Some(_) => return None,
+                None if param.has_default => Slot::Default,
+                None => return None,
+            },
+        };
+        slots.push((param, slot));
+    }
+    (by_name.is_empty() && positional.next().is_none()).then_some(slots)
+}
+
+/// the positional arguments `slot` is written as, one given nothing written as `default` makes
+/// it, `None` when there is no `default` to write
+fn arguments_of<'a>(slot: Slot<'a>, default: Option<Piece<'a>>) -> Option<Vec<Vec<Piece<'a>>>> {
+    Some(match slot {
+        Slot::Given(given) => vec![vec![Piece::Value(given)]],
+        Slot::Run(run) => run
+            .into_iter()
+            .map(|given| vec![Piece::Value(given)])
+            .collect(),
+        Slot::Default => vec![vec![default?]],
+    })
+}
+
+/// a class's `value[slots]`, every type argument at the position of its parameter, a default it is
+/// given nothing for spelled out
+fn class_specialization<'a>(
+    value: &'a Expr,
+    slots: Vec<(&SubscriptTypeParam, Slot<'a>)>,
+) -> Option<Vec<Piece<'a>>> {
+    let mut arguments = Vec::new();
+    for (param, slot) in slots {
+        arguments.extend(arguments_of(
+            slot,
+            param.spelled_default.clone().map(Piece::Text),
+        )?);
+    }
+    Some(subscript_of(value, arguments))
+}
+
+/// a reified function's specialization: what is given a parameter that may be given by position
+/// at that position, a parameter given nothing told to take the default of the function the call
+/// reaches, and what is given a keyword-only one by name, through the `generic` wrapper's
+/// `__getitem__`. a keyword-only one given nothing is left out, and the wrapper reads its default
+/// by name
+fn function_specialization<'a>(
+    value: &'a Expr,
+    slots: Vec<(&SubscriptTypeParam, Slot<'a>)>,
+) -> Vec<Piece<'a>> {
+    let mut positional = Vec::new();
+    let mut keywords = Vec::new();
+    for (param, slot) in slots {
+        if param.given != TypeParamKind::KeywordOnly {
+            positional.extend(
+                arguments_of(slot, Some(Piece::Helper(runtime::TYPE_DEFAULT))).unwrap_or_default(),
+            );
+        } else if let Slot::Given(given) = slot {
+            keywords.push(vec![
+                Piece::Text(format!("{}=", param.name)),
+                Piece::Value(given),
+            ]);
+        }
+    }
+    if keywords.is_empty() {
+        return subscript_of(value, positional);
+    }
+    positional.extend(keywords);
+    let mut pieces = vec![Piece::Value(value), Piece::Text(".__getitem__(".to_owned())];
+    pieces.extend(joined(positional, ", "));
+    pieces.push(Piece::Text(")".to_owned()));
+    pieces
+}
+
 /// what `sub` is written as in python, or `None` when it is already python
 pub(crate) fn lowered<'a>(
     sub: &'a ExprSubscript,
     types: &dyn TypeInfo,
     min_version: PythonVersion,
 ) -> Option<Vec<Piece<'a>>> {
-    // subscripting a function is a *type* specialization, not a runtime
-    // keyword subscript: an erased generic has its whole `[…]` stripped by
-    // `generic_call`, and a reified one routes the fields through the
-    // `generic` wrapper's `__getitem__`, which takes them as keywords
-    if let Expr::Name(name) = sub.value.as_ref()
-        && types.is_function(name)
-    {
-        return (types.is_reified_function(name, min_version)
-            && subscript_elements(sub)
-                .iter()
-                .any(|element| is_keyword_field(element)))
-        .then(|| getitem_call(sub));
+    let elements = subscript_elements(sub);
+    let has_keyword = elements.iter().any(|element| is_keyword_field(element));
+    // subscripting a function or a bound method is a *type* specialization, not a runtime
+    // keyword subscript. an erased generic has its whole `[…]` stripped by `generic_call`. a
+    // reified one is given its type arguments the way an override is matched to what it
+    // overrides, so that they bind as the checker bound them against the static signature: by
+    // position, which an override may rename, and by name after a bare `*`. a keyword-variadic
+    // pack's fields reach the `generic` wrapper as keywords too
+    if types.subscripts_a_function(&sub.value) {
+        if !has_keyword || !types.subscript_takes_type_arguments(&sub.value, min_version) {
+            return None;
+        }
+        let params = types.subscript_type_params(&sub.value);
+        return Some(
+            match params
+                .as_deref()
+                .and_then(|params| by_position(params, &elements))
+            {
+                Some(slots) => function_specialization(&sub.value, slots),
+                None => getitem_call(sub),
+            },
+        );
     }
-    if let Some(pack_index) = types.class_keyword_pack_index(&sub.value)
-        && let Some(pieces) = keyword_pack_subscript(sub, pack_index)
+    let params = types.subscript_type_params(&sub.value);
+    if let Some(pack_index) = params.as_deref().and_then(|params| {
+        params
+            .iter()
+            .position(|param| param.kind == SubscriptTypeParamKind::KeywordVariadic)
+    }) && let Some(pieces) = keyword_pack_subscript(sub, pack_index)
     {
         return Some(pieces);
     }
-    // single keyword arg, e.g. `A[T=int]` (no surrounding tuple).
-    // for a multi-typevar class with declared defaults, expand to a
-    // positional list filling unbound slots with their declared defaults
-    // (`A[R=int]` with `class A[T=int, R=str]` → `A[int, int]`).
-    // single-typevar class drops the kw name
-    if let Expr::Named(n) = sub.slice.as_ref()
-        && let Some(target) = n.label()
+    if !has_keyword {
+        return None;
+    }
+    // a generic class's type arguments are written by position, a default it is given nothing
+    // for spelled out (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]`
+    // with `B`'s default → `C[int, <B default>, bytes]`)
+    if let Some(params) = &params
+        && let Some(pieces) =
+            by_position(params, &elements).and_then(|slots| class_specialization(&sub.value, slots))
     {
-        let drop_name = || subscript_of(&sub.value, vec![vec![Piece::Value(&n.value)]]);
-        if let Some(typevars) = types
-            .class_typevars(&sub.value)
-            .filter(|typevars| typevars.len() > 1)
-        {
-            let mut parts = Vec::with_capacity(typevars.len());
-            for (tv_name, tv_default) in &typevars {
-                if tv_name == target.id.as_str() {
-                    parts.push(vec![Piece::Value(&n.value)]);
-                } else if let Some(default) = tv_default {
-                    parts.push(vec![Piece::Text(default.clone())]);
-                } else {
-                    // typevar has no default and no kw arg — fall back
-                    // to drop-name behavior; ty's diagnostics will catch
-                    // the missing-arg case
-                    return Some(drop_name());
-                }
-            }
-            return Some(subscript_of(&sub.value, parts));
-        }
-        // a class the subscript specializes erases the keyword with the rest
-        // of its type arguments. anything else — an instance, a `Mapping`
-        // whose `__getitem__` takes keywords — is a runtime call, the same
-        // reading the tuple form below takes and the one ty checks. a value
-        // ty could not resolve counts as a class: the keyword form spells type
-        // arguments in practice, and rewriting an annotation into a call is the
-        // more damaging of the two guesses
-        if !types.subscript_is_getitem_call(&sub.value) {
-            return Some(drop_name());
-        }
-        return Some(getitem_call(sub));
+        return Some(pieces);
     }
-    let Expr::Tuple(t) = sub.slice.as_ref() else {
-        return None;
-    };
-    if t.parenthesized || !t.elts.iter().any(is_keyword_field) {
-        return None;
-    }
-    // when the value is a known generic class, reorder by typevar declaration and emit a
-    // positional subscript. positional arguments fill the leading typevars in source order,
-    // keyword arguments bind by name, and any remaining typevar falls back to its declared
-    // default (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]` with
-    // `B`'s default → `C[int, <B default>, bytes]`)
-    if let Some(typevars) = types.class_typevars(&sub.value) {
-        let mut by_name: std::collections::HashMap<&str, &Expr> = std::collections::HashMap::new();
-        let mut positional: Vec<&Expr> = Vec::new();
-        for elt in &t.elts {
-            if let Expr::Named(n) = elt
-                && let Some(target) = n.label()
-            {
-                by_name.insert(target.id.as_str(), n.value.as_ref());
-            } else {
-                positional.push(elt);
-            }
-        }
-        let mut positional_iter = positional.iter();
-        let mut parts = Vec::with_capacity(typevars.len());
-        let mut filled_all = true;
-        for (tv_name, tv_default) in &typevars {
-            if let Some(value_expr) = by_name.get(tv_name.as_str()) {
-                parts.push(vec![Piece::Value(value_expr)]);
-            } else if let Some(value_expr) = positional_iter.next() {
-                parts.push(vec![Piece::Value(value_expr)]);
-            } else if let Some(default) = tv_default {
-                parts.push(vec![Piece::Text(default.clone())]);
-            } else {
-                filled_all = false;
-                break;
-            }
-        }
-        // a leftover positional argument means the source over-specified the class; leave it
-        // for the generic form below so ty's diagnostic is the authority on the arity
-        if filled_all && positional_iter.next().is_none() {
-            return Some(subscript_of(&sub.value, parts));
-        }
-        // missing typevar without default — fall through to the
-        // generic `value.__getitem__(name=value, ...)` form so the
-        // output is at least syntactically valid Python
+    // a class the subscript specializes erases a single keyword with the rest of its type
+    // arguments, even one ty reports. anything else — an instance, a `Mapping` whose
+    // `__getitem__` takes keywords — is a runtime call, the reading ty checks. a value ty could
+    // not resolve counts as a class: the keyword form spells type arguments in practice, and
+    // rewriting an annotation into a call is the more damaging of the two guesses
+    if let Expr::Named(n) = sub.slice.as_ref()
+        && n.label().is_some()
+        && !types.subscript_is_getitem_call(&sub.value)
+    {
+        return Some(subscript_of(&sub.value, vec![vec![Piece::Value(&n.value)]]));
     }
     Some(getitem_call(sub))
 }
@@ -287,6 +377,10 @@ impl<'ast> Visitor<'ast> for KwSubscript<'_> {
                 .map(|piece| match piece {
                     Piece::Text(text) => Fragment::Lit(text),
                     Piece::Value(value) => Fragment::Src(value.range()),
+                    Piece::Helper(helper) => {
+                        self.ctx.runtime.insert(helper);
+                        Fragment::Lit(helper.name().to_owned())
+                    }
                 })
                 .collect();
             self.ctx.template_edits.push((sub.range(), fragments));
@@ -301,8 +395,25 @@ impl<'ast> Visitor<'ast> for KwSubscript<'_> {
 
 #[cfg(test)]
 mod tests {
+    use ruff_db::files::system_path_to_file;
+    use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
+    use ty_project::{ProjectMetadata, TestDb};
+
     use crate::python_passthrough::unchanged;
-    use crate::{Config, transpile};
+    use crate::{Config, transpile, transpile_typed};
+
+    /// `source`, a `main.by` of a project, transpiled with what the checker read of it
+    fn typed_transpile(source: &str, config: &Config) -> String {
+        let mut db = TestDb::new(ProjectMetadata::new(
+            ruff_python_ast::name::Name::new_static(""),
+            SystemPathBuf::from("/proj"),
+        ));
+        db.write_file("/proj/main.by", source)
+            .expect("write file failed");
+        db.init_program().expect("program init failed");
+        let file = system_path_to_file(&db, "/proj/main.by").expect("file not in db");
+        transpile_typed(&db, file, config, None).expect("transpile failed")
+    }
 
     fn check(input: &str, expected: &str) {
         assert_eq!(
@@ -374,25 +485,167 @@ mod tests {
         unchanged("x[a, b]\n");
     }
 
+    /// a reified function is given its type arguments the way an override is matched to what
+    /// it overrides, against the signature the checker read, and an erased one has nothing to
+    /// subscript
+    mod function {
+        use ruff_python_ast::PythonVersion;
+
+        use crate::Config;
+
+        fn transpiled_at(source: &str, min_version: PythonVersion) -> String {
+            super::typed_transpile(
+                source,
+                &Config {
+                    min_version,
+                    ..Config::test_default()
+                },
+            )
+        }
+
+        /// reification keeps python's own type parameter syntax, and a default in it needs 3.13
+        fn transpiled(source: &str) -> String {
+            transpiled_at(source, PythonVersion::PY313)
+        }
+
+        #[track_caller]
+        fn writes(output: &str, written: &[&str]) {
+            for line in written {
+                assert!(
+                    output.lines().any(|output_line| output_line == *line),
+                    "`{line}` in:\n{output}"
+                );
+            }
+        }
+
+        #[test]
+        fn keywords_are_written_at_their_positions() {
+            writes(
+                &transpiled_at(
+                    "def g[T, U]():\n    return (T, U)\n\nprint(g[U=int, T=bytes]())\n\
+                     print(g[int, U=str]())\n",
+                    PythonVersion::PY312,
+                ),
+                &["print(g[bytes, int]())", "print(g[int, str]())"],
+            );
+        }
+
+        /// the wrapper fills it from the function the call reaches
+        #[test]
+        fn a_parameter_given_nothing_is_told_to_take_its_default() {
+            writes(
+                &transpiled(
+                    "def g[T, U = str, V = bytes]():\n    return (T, U, V)\n\n\
+                     print(g[T=int, V=bool]())\nprint(g[T=int]())\n",
+                ),
+                &[
+                    "print(g[int, _ByTypeDefault, bool]())",
+                    "print(g[int, _ByTypeDefault, _ByTypeDefault]())",
+                ],
+            );
+        }
+
+        #[test]
+        fn a_variadic_takes_the_run_the_named_parameters_leave() {
+            writes(
+                &transpiled_at(
+                    "def f[*Ts, T]():\n    return (Ts, T)\n\ndef g[T, *Ts, U]():\n    \
+                     return (T, Ts, U)\n\nprint(f[int, str, T=bytes]())\nprint(g[int, U=str]())\n",
+                    PythonVersion::PY312,
+                ),
+                &["print(f[int, str, bytes]())", "print(g[int, str]())"],
+            );
+        }
+
+        /// every keyword is a field of the pack, which only the wrapper can take by name
+        #[test]
+        fn a_pack_takes_its_keywords_in_the_wrapper_call() {
+            writes(
+                &transpiled_at(
+                    "def f[T, **Kwargs]():\n    return (T, Kwargs)\n\nprint(f[int, T=str]())\n",
+                    PythonVersion::PY312,
+                ),
+                &["print(f.__getitem__(int, T=str)())"],
+            );
+        }
+
+        /// a single keyword on a method is not a class's to drop, which would have bound the
+        /// first type parameter
+        #[test]
+        fn a_reified_method_is_given_its_keywords_by_position() {
+            writes(
+                &transpiled(
+                    "class D:\n    def m[T = bytes, U = str](self):\n        return (T, U)\n\n\
+                     print(D().m[U=int]())\nprint(D().m[U=int, T=str]())\n",
+                ),
+                &[
+                    "print(D().m[_ByTypeDefault, int]())",
+                    "print(D().m[str, int]())",
+                ],
+            );
+        }
+
+        /// an override may rename its type parameters, so a name is read off the receiver's
+        /// declared class
+        #[test]
+        fn a_name_binds_against_the_static_receiver() {
+            writes(
+                &transpiled_at(
+                    "class A:\n    def f[T, U](self):\n        return (T, U)\n\n\
+                     class C(A):\n    def f[U, T](self):\n        return (U, T)\n\n\
+                     def use(a: A):\n    return a.f[U=int, T=str]()\n",
+                    PythonVersion::PY312,
+                ),
+                &["    return a.f[str, int]()"],
+            );
+        }
+
+        /// an override matches a keyword-only parameter by name, so it is given by name, and one
+        /// given nothing is left to the default the wrapper reads by name
+        #[test]
+        fn a_keyword_only_parameter_is_given_by_name() {
+            writes(
+                &transpiled(
+                    "def f[T, *, B, C = str]():\n    return (T, B, C)\n\n\
+                     print(f[C=bytes, B=int, T=str]())\nprint(f[int, B=str]())\n",
+                ),
+                &[
+                    "print(f.__getitem__(str, B=int, C=bytes)())",
+                    "print(f.__getitem__(int, B=str)())",
+                ],
+            );
+        }
+
+        #[test]
+        fn a_positional_parameter_beside_a_positional_only_one_is_written_at_its_position() {
+            writes(
+                &transpiled_at(
+                    "def f[A, /, B]():\n    return (A, B)\n\nprint(f[int, B=str]())\n",
+                    PythonVersion::PY312,
+                ),
+                &["print(f[int, str]())"],
+            );
+        }
+
+        #[test]
+        fn an_erased_method_drops_its_keywords() {
+            writes(
+                &transpiled(
+                    "class F:\n    def m[T, U](self, t: T, u: U) -> U:\n        return u\n\n\
+                     print(F().m[U=int, T=str](\"a\", 1))\n",
+                ),
+                &["print(F().m(\"a\", 1))"],
+            );
+        }
+    }
+
     /// a keyword-variadic pack is a `ParamSpec` at runtime, so its fields lower to the
     /// `ParamSpec` list form. needs type info to know the class declares a pack
     mod keyword_pack {
-        use ruff_db::files::system_path_to_file;
-        use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
-        use ty_project::{ProjectMetadata, TestDb};
-
-        use crate::{Config, transpile_typed};
+        use crate::Config;
 
         fn transpiled(source: &str) -> String {
-            let mut db = TestDb::new(ProjectMetadata::new(
-                ruff_python_ast::name::Name::new_static(""),
-                SystemPathBuf::from("/proj"),
-            ));
-            db.write_file("/proj/main.by", source)
-                .expect("write file failed");
-            db.init_program().expect("program init failed");
-            let file = system_path_to_file(&db, "/proj/main.by").expect("file not in db");
-            transpile_typed(&db, file, &Config::test_default(), None).expect("transpile failed")
+            super::typed_transpile(source, &Config::test_default())
         }
 
         #[test]
@@ -525,6 +778,16 @@ mod tests {
             );
             assert!(
                 !output.contains("__getitem__"),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        /// a variadic takes the run of positional arguments the named parameters leave
+        #[test]
+        fn a_parameter_after_a_variadic_named_by_keyword() {
+            let output = transpiled("class C[*Ts, T]: ...\n\nx: C[int, str, T=bytes]\n");
+            assert!(
+                output.contains("x: C[int, str, bytes]"),
                 "unexpected output:\n{output}"
             );
         }
