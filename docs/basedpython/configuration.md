@@ -189,3 +189,19 @@ the block is a layer, not a replacement: every rule it does not mention is
 whatever the project says. it beats the project's top-level `rules` and
 `analysis`, and loses to an `[[overrides]]` entry that matches the file and to
 anything given on the command line
+
+unlike an override, the block can also choose the preset the script's `rules`
+and `analysis` start from:
+
+```by
+# /// script
+# [tool.basedpython]
+# type-checking-preset = "ty-compatible"
+# ///
+```
+
+the script's preset replaces the project's for that script alone. every rule
+and analysis option the block, the project or an override sets explicitly still
+wins over it, as it would over the project's preset. a preset also decides which
+rules exist, so a rule the script's preset leaves out, set anywhere, is reported
+as an `unknown-rule` and does not apply to the script

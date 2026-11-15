@@ -16,7 +16,7 @@ use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings, UseDef
 use ty_python_semantic::PythonVersionWithSource;
 use ty_python_semantic::dependency::DependencyMetadata;
 
-use crate::metadata::options::{EnvironmentOptions, InnerOverrideOptions, Options, OptionsContext};
+use crate::metadata::options::{EnvironmentOptions, Options, OptionsContext, ScriptLayer};
 use crate::metadata::pyproject::Tool;
 use crate::metadata::settings::Settings;
 use crate::metadata::value::RelativePathBuf;
@@ -56,14 +56,16 @@ pub(crate) struct Script<'db> {
     #[returns(deref)]
     pub(crate) settings_diagnostics: Box<[Diagnostic]>,
 
-    /// The script's own `[tool.ty]` block, as a layer the project's `[[overrides]]` sit on top of.
+    /// the preset, rules and analysis the script's own `[tool.ty]` block sets, as a configuration
+    /// layer of its own
     ///
-    /// `settings` already has this folded in, but a file the project's `[[overrides]]` name is
-    /// resolved by replaying the layers in precedence order, so that path needs the block on its
-    /// own. `None` when the block configures nothing, or when an explicit `--config` outranks it.
+    /// `settings` already has the block folded in, but a script the project's `[[overrides]]`
+    /// name is resolved by replaying the configuration layers in precedence order, with the
+    /// overrides on top, and that needs the block apart from the project's layers. `None` when
+    /// the block sets none of the three, or when an explicit `--config` outranks it
     #[tracked]
     #[returns(ref)]
-    pub(crate) override_layer: Option<Arc<InnerOverrideOptions>>,
+    pub(crate) own_layer: Option<Arc<ScriptLayer>>,
 }
 
 #[salsa::tracked]
@@ -135,7 +137,7 @@ pub(crate) fn script(db: &dyn Db, file: File) -> Option<Script<'_>> {
 
     let project_metadata = db.project().metadata(db);
 
-    let (options, override_layer) = resolve_script_options(
+    let (options, own_layer) = resolve_script_options(
         project_metadata,
         &metadata,
         uv_metadata,
@@ -164,7 +166,7 @@ pub(crate) fn script(db: &dyn Db, file: File) -> Option<Script<'_>> {
         program_settings.python_version,
         !diagnostics.has_invalid_settings,
         diagnostics.diagnostics.into_boxed_slice(),
-        override_layer,
+        own_layer,
     ))
 }
 
@@ -236,7 +238,7 @@ fn resolve_script_options(
     uv_metadata: Option<&UvMetadata>,
     file: File,
     diagnostics: &mut ScriptConfigurationDiagnostics,
-) -> (Options, Option<Arc<InnerOverrideOptions>>) {
+) -> (Options, Option<Arc<ScriptLayer>>) {
     // a script's own metadata block is one more configuration layer for that single
     // file — the highest-precedence one — and not a replacement for the project's
     // configuration. a script that says nothing about a rule is held to whatever the
@@ -299,16 +301,12 @@ fn resolve_script_options(
 
     // the block only becomes a layer if it actually configures something, so a script that
     // merely declares dependencies does not displace anything
-    let override_layer = script_layer
+    let own_layer = script_layer
         .as_ref()
-        .map(|layer| InnerOverrideOptions {
-            rules: layer.rules.clone(),
-            analysis: layer.analysis.clone(),
-        })
-        .filter(|layer| layer.rules.is_some() || layer.analysis.is_some())
+        .and_then(ScriptLayer::from_options)
         .map(Arc::new);
 
-    (options, override_layer)
+    (options, own_layer)
 }
 
 fn resolve_script_settings(

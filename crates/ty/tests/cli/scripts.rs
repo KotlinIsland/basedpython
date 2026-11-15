@@ -190,6 +190,348 @@ fn project_settings_fill_in_what_the_script_does_not_state() -> anyhow::Result<(
     Ok(())
 }
 
+/// a script's own `type-checking-preset` replaces the project's for that script alone. the
+/// project's other file is still checked under the project's preset
+#[test]
+fn script_preset_overrides_the_project_preset() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty]
+            type-checking-preset = "strict"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "ty-compatible"
+            # ///
+
+            a: int = True
+            "#,
+        ),
+        ("module.py", "a: int = True\n"),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[bool-as-int]: `Literal[True]` is implicitly used as `int`
+     --> module.py:1:10
+      |
+    1 | a: int = True
+      |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// a project override that names the script varies the rules on top of the script's preset,
+/// not the project's
+#[test]
+fn script_preset_holds_under_a_project_override() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty]
+            type-checking-preset = "strict"
+
+            [[tool.ty.overrides]]
+            include = ["script.py"]
+
+            [tool.ty.overrides.rules]
+            division-by-zero = "error"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "ty-compatible"
+            # ///
+
+            a: int = True
+            print(1 / 0)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[division-by-zero]: Cannot divide object of type `Literal[1]` by zero
+     --> script.py:8:7
+      |
+    8 | print(1 / 0)
+      |       ^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// the script's preset is the base its own settings layer onto: a rule only the script's preset
+/// has can be configured by the script, and the script's explicit level wins over the preset's
+#[test]
+fn script_settings_apply_over_the_script_preset() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty]
+            type-checking-preset = "ty-compatible"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "strict"
+            #
+            # [tool.ty.rules]
+            # bool-as-int = "error"
+            # ///
+
+            a: int = True
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[bool-as-int]: `Literal[True]` is implicitly used as `int`
+      --> script.py:10:10
+       |
+    10 | a: int = True
+       |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// the same, for a script a project override names
+#[test]
+fn script_settings_apply_over_the_script_preset_under_a_project_override() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty]
+            type-checking-preset = "ty-compatible"
+
+            [[tool.ty.overrides]]
+            include = ["script.py"]
+
+            [tool.ty.overrides.rules]
+            division-by-zero = "error"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "strict"
+            #
+            # [tool.ty.rules]
+            # bool-as-int = "error"
+            # ///
+
+            a: int = True
+            print(1 / 0)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[bool-as-int]: `Literal[True]` is implicitly used as `int`
+      --> script.py:10:10
+       |
+    10 | a: int = True
+       |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    error[division-by-zero]: Cannot divide object of type `Literal[1]` by zero
+      --> script.py:11:7
+       |
+    11 | print(1 / 0)
+       |       ^^^^^
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// a preset decides which rules exist, so a rule a project override sets for the script, and
+/// the script's preset leaves out, is reported as unknown and does not apply to the script
+#[test]
+fn override_rule_the_script_preset_leaves_out_is_unknown() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [[tool.ty.overrides]]
+            include = ["script.py"]
+
+            [tool.ty.overrides.rules]
+            bool-as-int = "error"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "ty-compatible"
+            # ///
+
+            a: int = True
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[unknown-rule]: Rule `bool-as-int` is a basedpython rule, which the `ty-compatible` type checking preset does not include
+     --> pyproject.toml:6:1
+      |
+    6 | bool-as-int = "error"
+      | ^^^^^^^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    "#);
+
+    Ok(())
+}
+
+/// the command line outranks a script's block, its preset included, whether or not a project
+/// override names the script
+#[test]
+fn command_line_preset_overrides_the_script_preset() -> anyhow::Result<()> {
+    let script = r#"
+        # /// script
+        # [tool.ty]
+        # type-checking-preset = "ty-compatible"
+        # ///
+
+        a: int = True
+        "#;
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [[tool.ty.overrides]]
+            include = ["named.py"]
+
+            [tool.ty.overrides.rules]
+            division-by-zero = "error"
+            "#,
+        ),
+        ("named.py", script),
+        ("unnamed.py", script),
+    ])?;
+
+    assert_cmd_snapshot!(case.command().arg("--type-checking-preset").arg("strict"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[bool-as-int]: `Literal[True]` is implicitly used as `int`
+     --> named.py:7:10
+      |
+    7 | a: int = True
+      |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    warning[bool-as-int]: `Literal[True]` is implicitly used as `int`
+     --> unnamed.py:7:10
+      |
+    7 | a: int = True
+      |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// an explicit `--config-file` replaces a script's block, its preset included
+#[test]
+fn explicit_config_replaces_the_script_preset() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "explicit.toml",
+            r#"
+            type-checking-preset = "strict"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty]
+            # type-checking-preset = "ty-compatible"
+            # ///
+
+            a: int = True
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command().arg("--config-file").arg("explicit.toml"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[bool-as-int]: `Literal[True]` is implicitly used as `int`
+     --> script.py:7:10
+      |
+    7 | a: int = True
+      |          ^^^^
+    help: Write `int(...)` if the number is meant, or annotate `bool` if the flag is
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// script metadata configures the file through `[tool.basedpython]` as well
 #[test]
 fn basedpython_metadata_applies() -> anyhow::Result<()> {

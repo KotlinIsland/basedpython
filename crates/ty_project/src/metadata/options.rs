@@ -3369,6 +3369,44 @@ pub(crate) struct InnerOverrideOptions {
     pub(crate) analysis: Option<AnalysisOptions>,
 }
 
+/// a script's own `[tool.ty]` block, as far as it decides how the script is checked: the preset
+/// and the `rules` and `analysis` that start from it
+///
+/// a script's settings already have the block folded in, but a script the project's
+/// `[[overrides]]` name is resolved by replaying the configuration layers in precedence order,
+/// and that needs the block as a layer of its own. unlike an override, the block is a whole
+/// configuration layer, so it can choose the preset too
+#[derive(Debug, Clone, PartialEq, Eq, Hash, get_size2::GetSize)]
+pub(crate) struct ScriptLayer {
+    type_checking_preset: Option<RangedValue<TypeCheckingPreset>>,
+    rules: Option<Rules>,
+    analysis: Option<AnalysisOptions>,
+}
+
+impl ScriptLayer {
+    /// the layer a script's block amounts to, or `None` when it decides nothing about how the
+    /// script is checked
+    pub(crate) fn from_options(options: &Options) -> Option<Self> {
+        let layer = Self {
+            type_checking_preset: options.type_checking_preset.clone(),
+            rules: options.rules.clone(),
+            analysis: options.analysis.clone(),
+        };
+        (layer.type_checking_preset.is_some() || layer.rules.is_some() || layer.analysis.is_some())
+            .then_some(layer)
+    }
+
+    /// the layer as options, to replay among the project's
+    pub(crate) fn to_options(&self) -> Options {
+        Options {
+            type_checking_preset: self.type_checking_preset.clone(),
+            rules: self.rules.clone(),
+            analysis: self.analysis.clone(),
+            ..Options::default()
+        }
+    }
+}
+
 /// A failure to resolve a project's or standalone script's program settings.
 #[derive(Debug, Error)]
 pub enum ToProgramSettingsError {

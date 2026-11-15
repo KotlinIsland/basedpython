@@ -6,7 +6,7 @@ use ty_combine::Combine;
 use ty_python_semantic::lint::RuleSelection;
 use ty_python_semantic::{AnalysisSettings, ExperimentalSettings};
 
-use crate::metadata::options::{InnerOverrideOptions, Options, OutputFormat};
+use crate::metadata::options::{InnerOverrideOptions, Options, OutputFormat, ScriptLayer};
 use crate::script::Script;
 
 use crate::glob::{GlobFilterCheckMode, IncludeResult};
@@ -257,7 +257,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
     // the script's settings supply the base and the overrides matching its path apply on top.
     let script = Script::for_file(db, file);
     let script_settings = script.map(|script| script.settings(db));
-    let script_layer = script.and_then(|script| script.override_layer(db).clone());
+    let script_layer = script.and_then(|script| script.own_layer(db).clone());
     let own_settings = || {
         script_settings.map_or(FileSettings::Global, |settings| {
             FileSettings::File(Arc::new(OverrideSettings {
@@ -332,7 +332,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
 fn merge_overrides(
     db: &dyn Db,
     overrides: Vec<Arc<InnerOverrideOptions>>,
-    script: Option<Arc<InnerOverrideOptions>>,
+    script: Option<Arc<ScriptLayer>>,
 ) -> FileSettings {
     let mut overrides = overrides.into_iter().rev();
     let mut merged = overrides.next().map_or(
@@ -348,38 +348,41 @@ fn merge_overrides(
     }
 
     let metadata = db.project().metadata(db);
-    let script = script.map(|script| Options {
-        rules: script.rules.clone(),
-        analysis: script.analysis.clone(),
-        ..Options::default()
-    });
+    let script = script.map(|script| script.to_options());
+    let layers = || {
+        metadata.options_in_precedence_order_with_script(
+            metadata.options(),
+            script.as_ref(),
+            metadata.uv_workspace_options.as_deref(),
+        )
+    };
 
-    // An override varies `rules` and `analysis`, never the preset those start from.
-    let preset = metadata
-        .options_in_precedence_order(metadata.options(), metadata.uv_workspace_options.as_deref())
-        .find_map(crate::metadata::options::Options::configured_type_checking_preset)
+    // an override varies `rules` and `analysis`, never the preset those start from. a script's
+    // own block is a configuration layer rather than an override, so its preset is the one the
+    // script's rules and analysis start from
+    let preset = layers()
+        .find_map(Options::configured_type_checking_preset)
         .unwrap_or_default();
 
     // Merge with the project level options by replaying the individual options
     // in the correct precedence order.
-    for options in metadata.options_in_precedence_order_with_script(
-        metadata.options(),
-        script.as_ref(),
-        metadata.uv_workspace_options.as_deref(),
-    ) {
+    for options in layers() {
         merged.rules.combine_with(options.rules.clone());
         merged.analysis.combine_with(options.analysis.clone());
     }
 
-    if merged.rules.is_none() && merged.analysis.is_none() {
+    // the project's own settings stand only for a file no script layer speaks for: a script's
+    // preset alone already makes its settings differ from the project's
+    if merged.rules.is_none() && merged.analysis.is_none() && script.is_none() {
         return FileSettings::Global;
     }
 
     let rules = merged.rules.unwrap_or_default();
     let analysis = merged.analysis.unwrap_or_default();
 
-    // It's okay to ignore the errors here because the rules are eagerly validated
-    // during `overrides.to_settings()`.
+    // the diagnostics are reported where each layer is resolved on its own: the project's
+    // settings validate its rules and overrides under the project's preset, and a script's
+    // settings validate the same layers, folded with its own block, under the script's preset
     let rules = rules.to_rule_selection(db, preset, &mut Vec::new());
     let analysis = analysis.to_settings(db, preset, &mut Vec::new());
 
