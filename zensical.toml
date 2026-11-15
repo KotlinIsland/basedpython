@@ -233,6 +233,7 @@ features = [
 
 [[project.nav]]
 development = [
+  { "error traces" = "development/error-traces.md" },
   { "how transpilation works" = "development/how-transpilation-works.md" },
   { "module api enforcement" = "development/module-api-design.md" },
   { "reverse transforms" = "development/reverse-transforms.md" },
