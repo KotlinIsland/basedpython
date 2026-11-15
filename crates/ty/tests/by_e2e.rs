@@ -5967,25 +5967,62 @@ fn sourcemap_table_for(source: &str) -> (Vec<Option<u32>>, String) {
     let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
     let generated = fs::read_to_string(out.join("main.py")).expect("generated module");
 
-    // the one entry's list, read out of the rendered table rather than rebuilt:
-    // this is the text a debugger imports, so it is the text worth asserting on
+    // the one entry's line table, read out of the rendered table rather than rebuilt:
+    // this is the text a debugger reads, so it is the text worth asserting on. it is the
+    // entry's last string, packed as the map's comment describes
     let (_, body) = map
         .split_once("SOURCEMAP = {\n")
         .expect("a SOURCEMAP table");
     let entry = body.lines().next().expect("an entry");
-    let list = entry
-        .split_once('[')
-        .and_then(|(_, rest)| rest.split_once(']'))
+    let packed = entry
+        .strip_suffix("\"),")
+        .and_then(|rest| rest.rsplit_once(", \""))
         .unwrap_or_else(|| panic!("no line table in {entry}:\n{map}"))
-        .0;
-    let table = list
-        .split(", ")
-        .map(|item| match item {
-            "None" => None,
-            n => Some(n.parse::<u32>().unwrap_or_else(|e| panic!("{n}: {e}"))),
-        })
-        .collect();
+        .1;
+    // the empty string is a table of no lines, which `split` would read as one empty element
+    let table = if packed.is_empty() {
+        Vec::new()
+    } else {
+        packed
+            .split(',')
+            .map(|item| match item {
+                "-" => None,
+                n => Some(n.parse::<u32>().unwrap_or_else(|e| panic!("{n}: {e}"))),
+            })
+            .collect()
+    };
     (table, generated)
+}
+
+/// An empty `.by` is an entry whose line table and columns are both empty strings: a table of no
+/// lines, which a run unpacks when it imports the module, and past which it maps the frames of
+/// the module that imported it.
+#[test]
+fn an_empty_module_maps_to_a_table_of_no_lines_and_runs() {
+    let (table, generated) = sourcemap_table_for("");
+    assert_eq!(table.len(), generated.lines().count(), "{generated:?}");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("empty.by"), "").unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "import empty\n\ndef boom() -> None:\n    raise ValueError(\"bang\")\n\nboom()\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected the program to raise");
+    assert!(
+        stderr.contains("main.by\", line 6, in <module>")
+            && stderr.contains("main.by\", line 4, in boom")
+            && stderr.contains("ValueError: bang"),
+        "{stderr}"
+    );
 }
 
 /// **The last line of a file that ends without a newline is still a line.**
@@ -10941,6 +10978,74 @@ def locate():
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
         ["1", "1", "2", "1", "[]"],
+        "{stdout}"
+    );
+}
+
+/// a module's line table is unpacked from the map when the module is first located, and a module
+/// the program never imports is never unpacked: the import of the map costs the same however
+/// large the project is
+///
+/// read off the runner's cache of unpacked tables, since nothing the program can see tells an
+/// unpacking from none but the time it takes
+#[test]
+fn run_unpacks_only_the_line_tables_of_the_modules_it_locates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0\"\nrequires-python = \">=3.11\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("idle.by"),
+        "def unused() -> int:\n    return 1\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("shapes.by"),
+        "def area(width: int, height: int) -> int:\n    return width * height\n",
+    )
+    .unwrap();
+    // python rather than basedpython: the runner it reaches into has no types to check it against
+    fs::write(
+        dir.path().join("probe.py"),
+        "\
+import importlib
+import os
+
+def unpacked():
+    runner = importlib.import_module(\"_by_runner\")
+    return sorted(os.path.basename(key) for key in runner._LINE_TABLES)
+
+def locate():
+    print(unpacked())
+    import shapes
+    print(unpacked())
+    print(shapes.area(2, 3))
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from probe import locate\n\nlocate()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["['main.py']", "['main.py', 'shapes.py']", "6"],
         "{stdout}"
     );
 }

@@ -43,6 +43,13 @@ a correct sourcemap is the single primitive all of these share
     generated line are the `.by`'s text (see [columns](#columns)). `by build` writes it into `build/` beside the
     python it describes, and `by run` into the temporary tree it executes — where
     it lives only as long as that run. see [staleness](#staleness) below
+- a line table is packed into one string: the zero-based `.by` line of each
+    generated line, or `-` for a line the transpiler wrote on its own, joined by
+    `,`. `"-,0,1,1,3"` is a five line file whose first line is the transpiler's.
+    `by run` imports the map in a tree it has just staged, so python compiles it
+    every time, and a string is one constant where a list is a constant for every
+    line of the project. a reader unpacks a module's table the first time it is
+    asked about that module
 
 ### limitations to remove
 
@@ -177,18 +184,19 @@ the other two are:
 
 ```python
 COLUMNS = {
-    "/tmp/.tmpXXXX/main.py": [
-        [],
-        [(0, 12, 7, 0), (12, 21, None, None), (21, 32, 7, 12)],
-    ],
+    "/tmp/.tmpXXXX/main.py": ";0 12 7 0,12 21,21 32 7 12;",
 }
 ```
 
-each line of the generated file, in order, is a list of runs `(start, end, by_line, by_column)`: columns `start` to `end` of the generated line are the
-`.by`'s text from `by_column` of `by_line`, both zero-based. a run `(start, end, None, None)` is a qualifier the transpiler wrote in front of the author's name
-to say where the name lives, `_by_lazy.`, which reads the object the name did.
-every column in no run is the transpiler's. columns are byte offsets, as
-python's own code positions are
+each line of the generated file, in order, is its runs joined by `,` and ended by
+`;`, so a line with no runs is a bare `;`. a run `start end by_line by_column` says
+columns `start` to `end` of the generated line are the `.by`'s text from
+`by_column` of `by_line`, both zero-based. a run `start end` is a qualifier the
+transpiler wrote in front of the author's name to say where the name lives,
+`_by_lazy.`, which reads the object the name did. every column in no run is the
+transpiler's. columns are byte offsets, as python's own code positions are. the
+entry is packed into one string for the reason a line table is, and unpacked when
+its module is first located
 
 every step of the transpile describes its output against its input, and the
 descriptions are composed. a step that rewrites a line without saying where its

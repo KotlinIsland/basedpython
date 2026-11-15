@@ -284,9 +284,9 @@ fn stale_build(server: &TestServer, build: &SystemPath) -> Result<SystemPathBuf>
         let generated = literal(&build.join(format!("{module}.py")));
         let source = literal(&project.join(format!("{module}.by")));
         (
-            format!("    \"{generated}\": (\"{source}\", [None]),\n"),
+            format!("    \"{generated}\": (\"{source}\", \"-\"),\n"),
             format!("    \"{generated}\": {{\"by\": \"sha256:00\", \"py\": \"sha256:00\"}},\n"),
-            format!("    \"{generated}\": [[]],\n"),
+            format!("    \"{generated}\": \";\",\n"),
         )
     };
     let (main_map, main_digests, main_columns) = entry("main");

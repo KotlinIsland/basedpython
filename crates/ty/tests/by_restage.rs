@@ -238,13 +238,16 @@ fn a_source_saved_without_a_trailing_newline_re_stages_a_whole_line_table() {
             .as_str()
             .expect("bytes to write")
             .to_owned();
-        let (_, rest) = map
-            .split_once('[')
-            .unwrap_or_else(|| panic!("no line table:\n{map}"));
-        let (list, _) = rest
-            .split_once(']')
-            .unwrap_or_else(|| panic!("no line table:\n{map}"));
-        (list.to_owned(), content)
+        // the entry's line table is the last string of its `SOURCEMAP` line, packed as the
+        // map's comment describes
+        let table = map
+            .lines()
+            .find(|line| line.contains("main.py\": ("))
+            .and_then(|line| line.strip_suffix("\"),"))
+            .and_then(|line| line.rsplit_once(", \""))
+            .unwrap_or_else(|| panic!("no line table:\n{map}"))
+            .1;
+        (table.to_owned(), content)
     };
 
     let (without, content) = table_of(body);
@@ -255,9 +258,9 @@ fn a_source_saved_without_a_trailing_newline_re_stages_a_whole_line_table() {
         "the terminator closes the last line, it does not add one"
     );
     assert_eq!(
-        without.split(", ").count(),
+        without.split(',').count(),
         content.lines().count(),
-        "one entry per generated line:\n[{without}]\n{content}"
+        "one entry per generated line:\n{without}\n{content}"
     );
 }
 

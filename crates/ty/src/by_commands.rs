@@ -2860,6 +2860,10 @@ const RUNTIME_LINES_PLACEHOLDER: &str = "_RUNTIME_LINES = {}\n";
 /// [`runner_source`] fills in
 const MACHINERY_FILES_PLACEHOLDER: &str = "_MACHINERY_FILES = []\n";
 
+/// the line [`BY_RUNNER_SRC`] holds for the python that unpacks a module's entry of the map,
+/// which [`runner_source`] fills in
+const UNPACK_PLACEHOLDER: &str = "# the unpacking of the map's entries\n";
+
 /// the python `by` writes into the tree to run the program, none of which is the program's:
 /// what a traceback and a profile leave out
 const MACHINERY_FILES: [&str; 4] = [
@@ -2870,8 +2874,8 @@ const MACHINERY_FILES: [&str; 4] = [
 ];
 
 /// the runner shim, with the line of `_by_runtime.py` each of the runtime's definitions starts
-/// on, by the names it binds — what a profile names the runtime's code by — and the files of
-/// by's own python beside it
+/// on, by the names it binds — what a profile names the runtime's code by — the files of
+/// by's own python beside it, and the unpacking of the map's entries
 fn runner_source() -> anyhow::Result<String> {
     anyhow::ensure!(
         BY_RUNNER_SRC.contains(RUNTIME_LINES_PLACEHOLDER),
@@ -2880,6 +2884,10 @@ fn runner_source() -> anyhow::Result<String> {
     anyhow::ensure!(
         BY_RUNNER_SRC.contains(MACHINERY_FILES_PLACEHOLDER),
         "the runner has no place for the files of by's own python"
+    );
+    anyhow::ensure!(
+        BY_RUNNER_SRC.contains(UNPACK_PLACEHOLDER),
+        "the runner has no place for the unpacking of the map's entries"
     );
     // a json object of strings and integers is a python dict literal, and a json array of
     // strings a python list literal
@@ -2894,6 +2902,11 @@ fn runner_source() -> anyhow::Result<String> {
         .replacen(
             MACHINERY_FILES_PLACEHOLDER,
             &format!("_MACHINERY_FILES = {machinery}\n"),
+            1,
+        )
+        .replacen(
+            UNPACK_PLACEHOLDER,
+            &format!("{}\n\n", by_stage::sourcemap::UNPACK_SRC),
             1,
         ))
 }
@@ -2923,6 +2936,21 @@ _BY_MAP = {os.path.realpath(py): (py, info) for py, info in SOURCEMAP.items()}
 # the .by files themselves, which a module compiled by `_by_code` names in its frames,
 # with the key of the entry each was transpiled under
 _BY_SOURCES = {os.path.realpath(info[0]): py for py, info in SOURCEMAP.items()}
+
+
+# the unpacking of the map's entries
+# each entry's line table, by its key, unpacked the first time a location in its module is
+# asked about. the map packs it into one string: it is imported fresh by every run, and
+# compiling a literal list for every line of a large project took longer than the program
+_LINE_TABLES = {}
+
+
+def _line_table(key):
+    lines = _LINE_TABLES.get(key)
+    if lines is None:
+        lines = _LINE_TABLES[key] = _unpack_lines(SOURCEMAP[key][1])
+    return lines
+
 
 # the line of `_by_runtime.py`, as `by` writes it, each of the runtime's definitions starts
 # on, by the names it binds. `by run` fills it in
@@ -3048,7 +3076,7 @@ def _rewrite(frames):
             # its line is one of the file that was transpiled, which is gone. the
             # generated line it came from is named instead when it is the only one
             # that `.by` line was written as, and no line at all when it is not
-            _, generated = SOURCEMAP[compiled_from]
+            generated = _line_table(compiled_from)
             written_as = [
                 index + 1
                 for index, line in enumerate(generated)
@@ -3061,7 +3089,8 @@ def _rewrite(frames):
             continue
         entry = _BY_MAP.get(os.path.realpath(f.filename))
         if entry is not None and f.lineno is not None:
-            key, (by_path, lines) = entry
+            key, (by_path, _) = entry
+            lines = _line_table(key)
             idx = f.lineno - 1
             mapped = lines[idx] if 0 <= idx < len(lines) else None
             if mapped is not None and _is_current(key, by_path):
@@ -3344,11 +3373,12 @@ def _by_lines(origin):
     entry = _BY_MAP.get(os.path.realpath(origin)) if origin else None
     if entry is None:
         return None
-    key, (by_path, lines) = entry
+    key, (by_path, _) = entry
     if key in _LINES:
         return _LINES[key]
     if not _is_current(key, by_path):
         return None
+    lines = _line_table(key)
     with open(by_path, "rb") as handle:
         widths = [len(line.rstrip(b"\r\n")) for line in handle]
 
@@ -3359,7 +3389,7 @@ def _by_lines(origin):
     def width(line):
         return widths[line - 1] if 0 < line <= len(widths) else 0
 
-    columns = COLUMNS.get(key, ())
+    columns = _unpack_columns(COLUMNS.get(key, ""), len(lines))
     with open(origin, "rb") as handle:
         generated_widths = [len(line.rstrip(b"\r\n")) for line in handle]
 
@@ -3896,7 +3926,7 @@ def _write_coverage(measurement, report):
         if real in _BY_SOURCES:
             key = _BY_SOURCES[real]
             by_lines = set(lines)
-            generated = SOURCEMAP[key][1]
+            generated = _line_table(key)
             ran.setdefault(key, set()).update(
                 index + 1
                 for index, line in enumerate(generated)
@@ -3913,7 +3943,8 @@ def _write_coverage(measurement, report):
             # its `.by` was saved over during the run, so no line of it is the line
             # this ran as
             continue
-        by_path, generated = SOURCEMAP[key]
+        by_path = SOURCEMAP[key][0]
+        generated = _line_table(key)
         analysed = _generated_analysis(measurement, key, lines)
         if analysed is None:
             continue
@@ -4154,7 +4185,7 @@ def _runtime_line(path, line, name, parsed):
     # runtime's, and is the module's all the same
     if entry is None or not line or name == "<module>":
         return None
-    _, (_, lines) = entry
+    lines = _line_table(entry[0])
     if real not in parsed:
         with open(real, "rb") as handle:
             parsed[real] = ast.parse(handle.read()).body
