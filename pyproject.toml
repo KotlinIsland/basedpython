@@ -246,6 +246,13 @@ build-constraint-dependencies = [
     ] },
 ]
 exclude-newer = "P7D"
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/*.rs" },
+    { file = "python/**/*.py" },
+]
 
 [tool.uv.exclude-newer-package]
 astral-dev-toolchain-cargo-deny = "2026-09-15T19:10:00Z"
