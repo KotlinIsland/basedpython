@@ -18,7 +18,9 @@ use ruff_source_file::LineIndex;
 use ruff_text_size::{TextRange, TextSize};
 use ty_project::api_lock::{api_lock_target, read_api_lock};
 use ty_project::{Db as _, ProjectDatabase};
-use ty_python_semantic::api_lockfile::{ApiLockTarget, first_stale_line};
+use ty_python_semantic::api_lockfile::{
+    ApiLockTarget, FORMAT_VERSION, first_stale_line, format_version,
+};
 
 use crate::DIAGNOSTIC_NAME;
 use crate::PositionEncoding;
@@ -204,14 +206,23 @@ fn api_lock_diagnostics(db: &ProjectDatabase, encoding: PositionEncoding) -> Vec
             let (Some(committed), Some(line)) = (&state.committed, state.stale_line()) else {
                 return Vec::new();
             };
-            (
-                lsp_line_range(committed, line, encoding),
-                STALE_API_LOCK,
-                format!(
+            let message = match format_version(committed) {
+                // a lockfile in another format is stale from its first line whatever its api
+                // says, so the warning there says why
+                Some(format) if format != FORMAT_VERSION => format!(
+                    "`api.lock` is stale: it is written in format `v={format}`, and this by \
+                    writes `v={FORMAT_VERSION}`"
+                ),
+                _ => format!(
                     "`api.lock` is stale: the api of the project, for python `{}`, differs from \
                     here",
                     state.target
                 ),
+            };
+            (
+                lsp_line_range(committed, line, encoding),
+                STALE_API_LOCK,
+                message,
             )
         }
         Err(UnreadableApiLock::Unreadable { error, .. }) => (

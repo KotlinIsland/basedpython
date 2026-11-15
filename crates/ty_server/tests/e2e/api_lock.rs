@@ -267,6 +267,33 @@ fn an_unsaved_edit_makes_the_lockfile_stale_until_it_is_regenerated() -> Result<
     Ok(())
 }
 
+/// a lockfile in a format other than the one this `by` writes is stale at its first line, and
+/// the warning says it is the format that differs
+#[test]
+fn a_lockfile_in_another_format_is_stale_at_its_format() -> Result<()> {
+    let lock =
+        "#api-lock:v=0\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file(SystemPath::new("project/main.py"), "X: int = 1\n")?
+        .with_file(SystemPath::new("project/api.lock"), lock)?
+        .enable_pull_diagnostics(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as("project/api.lock", lock, 1, LanguageKind::new("plaintext"));
+    let stale = diagnostics(&mut server, "project/api.lock");
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!(
+        stale[0].range,
+        Range::new(Position::new(0, 0), Position::new(0, 13))
+    );
+    assert_eq!(
+        stale[0].message,
+        "`api.lock` is stale: it is written in format `v=0`, and this by writes `v=1`".into()
+    );
+    Ok(())
+}
+
 /// a client that does not act on `interFileDependencies` is asked to pull every document's
 /// diagnostics again after a run of edits, and then finds the lockfile stale. that the run asks
 /// once is `DiagnosticRefresh`'s to show: how far apart the edits arrive is not this test's to say

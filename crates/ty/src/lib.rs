@@ -51,7 +51,7 @@ use ty_project::{
     UvSyncProgress, UvWorkspace, watch,
 };
 use ty_project::{ProjectDatabase, ProjectMetadata, ProjectReloadResult};
-use ty_python_semantic::api_lockfile::ApiLockTarget;
+use ty_python_semantic::api_lockfile::{ApiLockTarget, FORMAT_VERSION, format_version};
 use ty_python_semantic::{fix_all_diagnostics, suppress_all_diagnostics};
 use ty_static::EnvVars;
 
@@ -345,24 +345,40 @@ fn run_generate_api_file(
         ),
         None => db.project().api_lock_path(&db),
     };
-    let target = match python_version {
+    let existing = read_api_lock(ruff_db::Db::system(&db), &output_path);
+    let (target, existing) = match python_version {
         // the project's settings are already at `--python-version`, which the header names
-        Some(version) => ApiLockTarget::Version(ruff_python_ast::PythonVersion::from(
-            SupportedPythonVersion::from(version),
-        )),
+        Some(version) => (
+            ApiLockTarget::Version(ruff_python_ast::PythonVersion::from(
+                SupportedPythonVersion::from(version),
+            )),
+            existing.ok().flatten(),
+        ),
         None => {
-            let existing =
-                read_api_lock(ruff_db::Db::system(&db), &output_path).with_context(|| {
-                    format!(
-                        "Failed to read `{output_path}`, whose `#python:` header names the \
-                        python to generate it for; pass `--python-version` to name one"
-                    )
-                })?;
-            api_lock_target(existing.as_deref())
-                .with_context(|| format!("`{output_path}` names a python version by cannot read"))?
+            let existing = existing.with_context(|| {
+                format!(
+                    "Failed to read `{output_path}`, whose `#python:` header names the \
+                    python to generate it for; pass `--python-version` to name one"
+                )
+            })?;
+            let target = api_lock_target(existing.as_deref()).with_context(|| {
+                format!("`{output_path}` names a python version by cannot read")
+            })?;
+            (target, existing)
         }
     };
     let lockfile = db.project().api_lock(&db, target);
+    // a lockfile in another format differs from the first line whatever the api says, so the
+    // diff a reviewer reads is explained here
+    if let Some(format) = existing.as_deref().and_then(format_version)
+        && format != FORMAT_VERSION
+    {
+        writeln!(
+            std::io::stderr().lock(),
+            "`{output_path}` is written in format `v={format}`, and this by writes \
+            `v={FORMAT_VERSION}`, which records the api differently"
+        )?;
+    }
 
     if stdout {
         let mut out = std::io::stdout().lock();

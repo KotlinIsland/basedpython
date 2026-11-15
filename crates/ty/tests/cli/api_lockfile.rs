@@ -600,6 +600,31 @@ fn regenerates_for_the_python_the_existing_lockfile_names() -> anyhow::Result<()
     Ok(())
 }
 
+/// a lockfile in another format is regenerated in this one, saying why every line differs
+#[test]
+fn says_when_the_lockfile_it_regenerates_is_in_another_format() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        ("main.py", "X: int = 1\n"),
+        (
+            "api.lock",
+            "#api-lock:v=0\n#tool:by=0.0.0\n#python:default\n#modules:1\nmain.X:v=builtins.int\n",
+        ),
+    ])?;
+
+    let output = api_lockfile_command(&case).output()?;
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("is written in format `v=0`, and this by writes `v=1`"),
+        "{stderr}"
+    );
+    assert!(std::fs::read_to_string(case.root().join("api.lock"))?.starts_with("#api-lock:v=1\n"));
+
+    let output = api_lockfile_command(&case).output()?;
+    assert!(output.stderr.is_empty(), "{output:?}");
+    Ok(())
+}
+
 /// a lockfile whose python is not known is not regenerated for a guess
 #[test]
 fn refuses_a_lockfile_whose_python_it_cannot_read() -> anyhow::Result<()> {
