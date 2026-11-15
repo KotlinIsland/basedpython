@@ -56,12 +56,13 @@
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, PySourceType, PythonVersion, Stmt, StmtFunctionDef};
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_python_trivia::SimpleTokenizer;
+use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::reified::{has_classmethod_binding, reified_type_param_names};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
-use super::source_util::{line_indent, line_start};
+use super::source_util::line_indent;
 use crate::type_info::TypeInfo;
 
 /// marker comment appended to the synthesized `@generic` decorator line. the
@@ -149,11 +150,20 @@ impl<'src> ReifiedGeneric<'src> {
             return;
         }
         // the decorator goes on its own line directly above the `def`/`async`
-        // header — innermost, below any user decorators — sharing the header's
-        // indentation. anchored via the function name, whose line is the header
+        // keyword — innermost, below any user decorators and below what a
+        // modifier written on the header line (`static def`) is lowered to —
+        // sharing the header's indentation. the keyword is the first token after
+        // the decorators, modifiers among them
         let name_start = function.name.range().start();
         let indent = line_indent(self.source, name_start);
-        let anchor = line_start(self.source, name_start) + TextSize::of(indent);
+        let after_decorators = function
+            .decorator_list
+            .last()
+            .map_or(function.range().start(), Ranged::end);
+        let anchor = SimpleTokenizer::starts_at(after_decorators, self.source)
+            .skip_trivia()
+            .next()
+            .map_or(after_decorators, |keyword| keyword.start());
         // what the runtime type-parameter list doesn't say: the parameters a call may leave
         // out, and the ones written after a bare `*`, which a call only gives by name
         let optional: Vec<String> = forwarded.optional().map(ToString::to_string).collect();
@@ -981,6 +991,33 @@ mod tests {
             ),
             "{out}"
         );
+    }
+
+    /// a modifier written on the header is lowered to a decorator above the wrapper, as one
+    /// written on its own line is
+    #[test]
+    fn wrapper_goes_innermost_below_header_modifiers() {
+        let out = transpile(
+            indoc! {"
+                class C:
+                    static def f[T]() -> None:
+                        print(T)
+
+                    static async def g[T]() -> None:
+                        print(T)
+            "},
+            &Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        for written in [
+            "    @staticmethod\n    @generic  # basedpython: reified\n    def f[T]() -> None:",
+            "    @staticmethod\n    @generic  # basedpython: reified\n    async def g[T]() -> None:",
+        ] {
+            assert!(out.contains(written), "wrapper should be innermost: {out}");
+        }
     }
 
     #[test]

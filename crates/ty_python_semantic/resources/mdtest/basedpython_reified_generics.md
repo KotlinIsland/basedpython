@@ -1621,6 +1621,21 @@ reveal_type(Box().kind[int]())  # revealed: object
 Box().kind()
 ```
 
+## a reified static method
+
+A `static def` is written as a `staticmethod` of the reified function, which passes the function
+through, so it is specialized the same way through the class or an instance:
+
+```by
+class Box:
+    static def kind[T = int]() -> object:
+        return T
+
+assert Box.kind[str]() == str
+assert Box().kind[T=bytes]() == bytes
+assert Box.kind() == int
+```
+
 ## a method's type argument given by name
 
 A method takes its type arguments by name as a function does, whether it reifies them or erases
