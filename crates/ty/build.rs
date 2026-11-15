@@ -5,60 +5,23 @@ use std::{
 };
 
 fn main() {
-    // The workspace root directory is not available without walking up the tree
-    // https://github.com/rust-lang/cargo/issues/3946
-    let ruff_workspace_root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+    // the repository root, which cargo does not give a build script
+    // (https://github.com/rust-lang/cargo/issues/3946)
+    let repository_root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("..")
         .join("..");
-    let ty_workspace_root = ruff_workspace_root.join("..");
 
-    version_info(&ty_workspace_root);
-
-    // An independent ty checkout has its own dist-workspace.toml. Without one, a parent Git
-    // repository is unrelated, so use the nested Ruff checkout's commit information instead.
-    let git_dir = ty_workspace_root.join(".git");
-    if ty_workspace_root.join("dist-workspace.toml").is_file() && git_dir.exists() {
-        commit_info(&git_dir, &ty_workspace_root, false);
-    } else {
-        // Try if we're inside the ruff repository and, if so, use that commit hash.
-        let git_dir = ruff_workspace_root.join(".git");
-
-        if git_dir.exists() {
-            commit_info(&git_dir, &ruff_workspace_root, true);
-        }
+    let git_dir = repository_root.join(".git");
+    if git_dir.exists() {
+        commit_info(&git_dir, &repository_root);
     }
 
     let target = std::env::var("TARGET").unwrap();
     println!("cargo::rustc-env=RUST_HOST_TARGET={target}");
 }
 
-/// Retrieve the version from the `dist-workspace.toml` file and set `TY_VERSION`.
-fn version_info(workspace_root: &Path) {
-    let dist_file = workspace_root.join("dist-workspace.toml");
-    if !dist_file.exists() {
-        return;
-    }
-
-    println!("cargo:rerun-if-changed={}", dist_file.display());
-
-    let dist_file = fs::read_to_string(dist_file);
-    if let Ok(dist_file) = dist_file {
-        let lines = dist_file.lines();
-        for line in lines {
-            if line.starts_with("version =") {
-                let (_key, version) = line.split_once('=').unwrap();
-                println!(
-                    "cargo::rustc-env=TY_VERSION={}",
-                    version.trim().trim_matches('"')
-                );
-                break;
-            }
-        }
-    }
-}
-
 /// Retrieve commit information from the Git repository.
-fn commit_info(git_dir: &Path, workspace_root: &Path, is_ruff: bool) {
+fn commit_info(git_dir: &Path, workspace_root: &Path) {
     if let Some(git_head_path) = git_head(git_dir) {
         println!("cargo:rerun-if-changed={}", git_head_path.display());
 
@@ -82,7 +45,7 @@ fn commit_info(git_dir: &Path, workspace_root: &Path, is_ruff: bool) {
         .arg("-1")
         .arg("--date=short")
         .arg("--abbrev=9")
-        .arg("--format=%H %h %cd %(describe:tags)")
+        .arg("--format=%H %h %cd")
         .current_dir(workspace_root)
         .output()
     {
@@ -95,24 +58,6 @@ fn commit_info(git_dir: &Path, workspace_root: &Path, is_ruff: bool) {
     println!("cargo::rustc-env=TY_COMMIT_HASH={}", next());
     println!("cargo::rustc-env=TY_COMMIT_SHORT_HASH={}", next());
     println!("cargo::rustc-env=TY_COMMIT_DATE={}", next());
-
-    // Describe can fail for some commits
-    // https://git-scm.com/docs/pretty-formats#Documentation/pretty-formats.txt-emdescribeoptionsem
-    if let Some(describe) = parts.next() {
-        let mut describe_parts = describe.split('-');
-        let last_tag = describe_parts.next().unwrap();
-
-        println!(
-            "cargo::rustc-env=TY_LAST_TAG={ruff}{last_tag}",
-            ruff = if is_ruff { "ruff/" } else { "" }
-        );
-
-        // If this is the tagged commit, this component will be missing
-        println!(
-            "cargo::rustc-env=TY_LAST_TAG_DISTANCE={}",
-            describe_parts.next().unwrap_or("0")
-        );
-    }
 }
 
 fn git_head(git_dir: &Path) -> Option<PathBuf> {

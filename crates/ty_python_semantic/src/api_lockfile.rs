@@ -149,7 +149,7 @@ pub fn generate_api_lockfile<'db, I>(
     program: Program<'db>,
     files: I,
     target: ApiLockTarget,
-) -> String
+) -> ApiLockfile
 where
     I: IntoIterator<Item = File>,
 {
@@ -196,14 +196,34 @@ where
     lines.sort();
     lines.dedup();
 
-    let mut out = String::new();
-    let _ = writeln!(out, "{FORMAT_HEADER_PREFIX}{FORMAT_VERSION}");
-    let _ = writeln!(out, "{TOOL_HEADER_PREFIX}by={}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(out, "{PYTHON_HEADER_PREFIX}{target}");
-    let _ = writeln!(out, "#modules:{}", modules.len());
-    out.push_str(&lines.join("\n"));
-    out.push('\n');
-    out
+    let mut after_tool = String::new();
+    let _ = writeln!(after_tool, "{PYTHON_HEADER_PREFIX}{target}");
+    let _ = writeln!(after_tool, "#modules:{}", modules.len());
+    after_tool.push_str(&lines.join("\n"));
+    after_tool.push('\n');
+    ApiLockfile {
+        after_tool: after_tool.into_boxed_str(),
+    }
+}
+
+/// a generated lockfile, short of the version of `by` its `#tool:` header names
+///
+/// the version is given when the lockfile is rendered, by the program that writes it, so that
+/// what a lockfile records never depends on which version of `by` generated it
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub struct ApiLockfile {
+    /// every line after the `#tool:` header
+    after_tool: Box<str>,
+}
+
+impl ApiLockfile {
+    /// the text of the lockfile, its `#tool:` header naming `by` at `by_version`
+    pub fn render(&self, by_version: &str) -> String {
+        format!(
+            "{FORMAT_HEADER_PREFIX}{FORMAT_VERSION}\n{TOOL_HEADER_PREFIX}by={by_version}\n{}",
+            self.after_tool
+        )
+    }
 }
 
 /// the version of the format `lockfile` is written in, as its first line names it, `None` where
@@ -1262,7 +1282,10 @@ mod tests {
 
         let lockfiles: Vec<String> = permutations(&files)
             .into_iter()
-            .map(|order| generate_api_lockfile(&db, db.program(), order, ApiLockTarget::Project))
+            .map(|order| {
+                generate_api_lockfile(&db, db.program(), order, ApiLockTarget::Project)
+                    .render("0.0.0")
+            })
             .collect();
         for lockfile in &lockfiles[1..] {
             assert_eq!(lockfile, &lockfiles[0]);
@@ -1557,7 +1580,8 @@ class Outer:
             )
             .build()?;
         let file = system_path_to_file(&db, "/src/m.py")?;
-        let lockfile = generate_api_lockfile(&db, db.program(), [file], ApiLockTarget::Project);
+        let lockfile = generate_api_lockfile(&db, db.program(), [file], ApiLockTarget::Project)
+            .render("0.0.0");
         insta::assert_snapshot!(without_tool_header(&lockfile), @"
         #api-lock:v=1
         #python:default

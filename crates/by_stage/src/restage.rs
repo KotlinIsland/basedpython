@@ -207,12 +207,12 @@ pub fn restage(
             )));
         }
     };
-    if record.by_version != identity {
+    if record.by_build != identity {
         return Ok(Restage::refuse(format!(
             "`{}` was built by by {}, and this is by {identity} — rebuild it before reloading \
              into it",
             build_directory.display(),
-            record.by_version,
+            record.by_build,
         )));
     }
     // a native extension has no `__code__` to assign, so there is no replacement
@@ -260,7 +260,7 @@ pub fn restage(
     // build did not write
     if let Some(existing) = &existing_map {
         let map_build = sourcemap_build(existing);
-        if map_build.as_deref() != Some(record.by_version.as_str()) {
+        if map_build.as_deref() != Some(record.by_build.as_str()) {
             return Ok(Restage::refuse(format!(
                 "`{}` has a {BY_SOURCEMAP_FILENAME} written by {} and a {BY_BUILD_FILENAME} \
                  written by by {}, so it is not one build's tree — rebuild it before reloading \
@@ -270,7 +270,7 @@ pub fn restage(
                     || "a by that names no build".to_owned(),
                     |build| format!("by {build}")
                 ),
-                record.by_version,
+                record.by_build,
             )));
         }
     }
@@ -482,7 +482,7 @@ fn restage_transpiled(
                      reloading into it",
                     tree.directory.display(),
                     file.display(),
-                    tree.record.by_version,
+                    tree.record.by_build,
                 ),
                 Vec::new(),
             )));

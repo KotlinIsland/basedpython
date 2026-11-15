@@ -225,7 +225,7 @@ fn render_pyproject(
     // the backend a new project builds with needs a floor: without one, a future
     // release that changes how a project is built would change how *this* project
     // is built, without the project having said anything
-    let backend_version = env!("CARGO_PKG_VERSION");
+    let backend_version = by_version::VERSION;
     let entry_point = match kind {
         ProjectKind::Application => {
             format!("\n[tool.basedpython.run]\nmain = \"{package}.main\"\n")
@@ -324,7 +324,7 @@ mod tests {
         assert!(
             rendered.contains(&format!(
                 "requires = [\"basedpython>={}\"]",
-                env!("CARGO_PKG_VERSION")
+                by_version::VERSION
             )),
             "{rendered}"
         );

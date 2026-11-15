@@ -370,7 +370,10 @@ fn run_generate_api_file(
             (target, existing)
         }
     };
-    let lockfile = db.project().api_lock(&db, target);
+    let lockfile = db
+        .project()
+        .api_lock(&db, target)
+        .render(by_version::VERSION);
     // a lockfile in another format differs from the first line whatever the api says, so the
     // diff a reviewer reads is explained here
     if let Some(format) = existing.as_deref().and_then(format_version)

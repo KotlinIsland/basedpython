@@ -14,6 +14,7 @@ mod scripts;
 mod server;
 mod type_checking_preset;
 mod uv_workspace;
+mod version;
 
 #[path = "../common/mod.rs"]
 pub mod common;

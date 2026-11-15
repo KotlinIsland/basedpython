@@ -292,7 +292,7 @@ fn stale_build(server: &TestServer, build: &SystemPath) -> Result<SystemPathBuf>
     let (main_map, main_digests, main_columns) = entry("main");
     let (other_map, other_digests, other_columns) = entry("other");
     // the map names the build that wrote it, which is the one the record names
-    let identity = serde_json::to_value(&record)?["byVersion"].clone();
+    let identity = serde_json::to_value(&record)?["byBuild"].clone();
     std::fs::write(
         build.join("_by_sourcemap.py").as_std_path(),
         format!(

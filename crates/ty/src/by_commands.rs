@@ -4381,10 +4381,12 @@ fn declined_diagnostic(
 
 #[allow(clippy::print_stdout)]
 pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStatus {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::version::version();
     match output_format {
         crate::args::HelpFormat::Text => println!("by {version}"),
-        crate::args::HelpFormat::Json => println!("{{\"version\":\"{version}\"}}"),
+        crate::args::HelpFormat::Json => {
+            println!("{}", serde_json::json!({ "version": version.number() }));
+        }
     }
     ExitStatus::Success
 }

@@ -26,6 +26,7 @@ by_resource = { path = "crates/by_resource" }
 by_rt = { path = "crates/by_rt" }
 by_stage = { path = "crates/by_stage" }
 by_transforms = { path = "crates/by_transforms" }
+by_version = { path = "crates/by_version" }
 char_str = { version = "0.0.4", default-features = false, features = ["std"] }
 ruff = { version = "0.17.2", path = "crates/ruff" }
 ruff_annotate_snippets = { version = "0.0.19", path = "crates/ruff_annotate_snippets" }

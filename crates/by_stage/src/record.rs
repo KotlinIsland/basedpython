@@ -156,7 +156,7 @@ pub struct ConfigRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildRecord {
     /// [`build_identity`] of the `by` that wrote the tree
-    pub(crate) by_version: String,
+    pub(crate) by_build: String,
     /// the project the tree was built from, absolute and canonical
     pub(crate) project_root: PathBuf,
     /// the module roots the tree's layout was derived from, deepest first —
@@ -201,11 +201,11 @@ impl BuildRecord {
         runtime: &RuntimeLayout,
         config: &Config,
     ) -> anyhow::Result<Self> {
-        let by_version = build_identity().map_err(|reason| {
+        let by_build = build_identity().map_err(|reason| {
             anyhow::anyhow!("could not record which build of `by` writes this tree: {reason}")
         })?;
         Ok(Self {
-            by_version: by_version.to_owned(),
+            by_build: by_build.to_owned(),
             project_root: project_root.to_path_buf(),
             module_roots: module_roots.to_vec(),
             entry_module,
@@ -240,8 +240,20 @@ impl BuildRecord {
                 build_directory.display(),
             )
         })?;
-        serde_json::from_str(&contents)
-            .map_err(|error| anyhow::anyhow!("`{}` could not be read: {error}", path.display()))
+        serde_json::from_str(&contents).map_err(|error| match error.classify() {
+            // well-formed, but not the record this `by` writes: the one a build of `by` writes
+            // is always the one it reads, so another build wrote it
+            serde_json::error::Category::Data => anyhow::anyhow!(
+                "`{}` was built by another by, whose {BY_BUILD_FILENAME} this one cannot read \
+                 ({error}) — rebuild it before reloading into it",
+                build_directory.display(),
+            ),
+            serde_json::error::Category::Io
+            | serde_json::error::Category::Syntax
+            | serde_json::error::Category::Eof => {
+                anyhow::anyhow!("`{}` could not be read: {error}", path.display())
+            }
+        })
     }
 
     /// The runtime layout this build wrote, with nothing recorded in it yet.
@@ -476,7 +488,7 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&record.render()).expect("the record is plain data");
 
-        assert!(json["byVersion"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(json["byBuild"].as_str().is_some_and(|v| !v.is_empty()));
         assert_eq!(json["projectRoot"], "/p");
         assert_eq!(json["moduleRoots"][0], "/p/src");
         assert_eq!(json["entryModule"], "main");
@@ -587,7 +599,7 @@ mod tests {
     #[test]
     fn a_record_with_an_unknown_field_is_refused() {
         let json = r#"{
-            "byVersion": "x", "projectRoot": "/p", "moduleRoots": [],
+            "byBuild": "x", "projectRoot": "/p", "moduleRoots": [],
             "entryModule": null, "compiled": false,
             "config": {"minVersion": "3.13", "soundness": "none",
                        "runtimeRaisesChecks": false, "uniqueLoopBindings": true,
@@ -648,7 +660,7 @@ mod tests {
     #[test]
     fn a_version_the_record_names_that_this_by_cannot_target_is_refused() {
         let record = BuildRecord {
-            by_version: "x".to_owned(),
+            by_build: "x".to_owned(),
             project_root: PathBuf::from("/p"),
             module_roots: Vec::new(),
             entry_module: None,

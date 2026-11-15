@@ -37,6 +37,7 @@ by_ir = { workspace = true }
 by_irbuild = { workspace = true }
 by_stage = { workspace = true }
 by_transforms = { workspace = true }
+by_version = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_combine = { workspace = true }
 ty_module_resolver = { workspace = true }

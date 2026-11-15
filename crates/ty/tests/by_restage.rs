@@ -342,7 +342,7 @@ fn a_tree_built_by_another_by_is_refused() {
     let record = dir.path().join("build/_by_build.json");
     let mut parsed: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
-    parsed["byVersion"] = serde_json::Value::String("0.0.0+somethingelse".to_owned());
+    parsed["byBuild"] = serde_json::Value::String("0.0.0+somethingelse".to_owned());
     std::fs::write(&record, serde_json::to_string_pretty(&parsed).unwrap()).unwrap();
 
     let (ok, answer) = restage(dir.path(), "main.by");
@@ -353,6 +353,34 @@ fn a_tree_built_by_another_by_is_refused() {
         answer.refused().contains("by 0.0.0+somethingelse"),
         "the refusal names the build that wrote the tree: {answer}"
     );
+}
+
+/// A record this `by` cannot read, here one naming its build `byVersion` as builds before the
+/// field was renamed did, was written by another build, and is refused as one.
+#[test]
+fn a_record_another_by_wrote_in_another_shape_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project(dir.path());
+    build(dir.path());
+
+    let record = dir.path().join("build/_by_build.json");
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+    let build = parsed
+        .as_object_mut()
+        .and_then(|fields| fields.remove("byBuild"))
+        .expect("the record names its build");
+    parsed["byVersion"] = build;
+    std::fs::write(&record, serde_json::to_string_pretty(&parsed).unwrap()).unwrap();
+
+    let (ok, answer) = restage(dir.path(), "main.by");
+
+    assert!(!ok);
+    assert!(
+        answer.refused().contains("was built by another by"),
+        "{answer}"
+    );
+    assert!(answer.refused().contains("rebuild"), "{answer}");
 }
 
 /// The map names the build that wrote it, as the record does. A tree whose map came from another

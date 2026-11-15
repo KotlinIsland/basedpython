@@ -6,7 +6,7 @@
 use ruff_db::files::{File, FilePath};
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_python_ast::PythonVersionDeserializationError;
-use ty_python_semantic::api_lockfile::{ApiLockTarget, generate_api_lockfile};
+use ty_python_semantic::api_lockfile::{ApiLockTarget, ApiLockfile, generate_api_lockfile};
 
 use crate::{Db, Project};
 
@@ -24,10 +24,9 @@ impl Project {
     ///
     /// a query, since a language server asks for it again after every edit: an edit that
     /// changes nothing it says leaves it as it was, rather than generating it again
-    #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
-    pub fn api_lock(self, db: &dyn Db, target: ApiLockTarget) -> Box<str> {
+    #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+    pub fn api_lock(self, db: &dyn Db, target: ApiLockTarget) -> ApiLockfile {
         generate_api_lockfile(db, self.program(db), api_lock_files(db, self), target)
-            .into_boxed_str()
     }
 }
 
@@ -86,7 +85,7 @@ mod tests {
         let lockfile = db
             .project()
             .api_lock(db, ApiLockTarget::Project)
-            .to_string();
+            .render("0.0.0");
         let events = db.take_salsa_events();
         let generated =
             find_will_execute_event_by_name(db, "Project::api_lock_", None, &events).is_some();

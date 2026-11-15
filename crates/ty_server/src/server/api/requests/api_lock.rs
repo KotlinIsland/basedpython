@@ -113,7 +113,7 @@ impl BackgroundRequestHandler for ApiLockHandler {
             python: state.target.to_string(),
             exists: state.committed.is_some(),
             stale_line: state.stale_line(),
-            text: state.generated.to_string(),
+            text: state.generated,
         }))
     }
 }
@@ -121,18 +121,19 @@ impl BackgroundRequestHandler for ApiLockHandler {
 impl RetriableRequestHandler for ApiLockHandler {}
 
 /// a project's `api.lock` as the server reads it, beside the lockfile the server generates for it
-struct ApiLockState<'db> {
+struct ApiLockState {
     path: SystemPathBuf,
     /// the lockfile the project has, `None` where it has none
     committed: Option<String>,
     target: ApiLockTarget,
-    generated: &'db str,
+    /// the lockfile the server generates, its `#tool:` header naming this `by`
+    generated: String,
 }
 
-impl<'db> ApiLockState<'db> {
+impl ApiLockState {
     /// refused where the project's lockfile cannot be read, or names a python version `by`
     /// cannot read: what it is to be generated for is not known
-    fn of(db: &'db ProjectDatabase) -> Result<Self, UnreadableApiLock> {
+    fn of(db: &ProjectDatabase) -> Result<Self, UnreadableApiLock> {
         let path = db.project().api_lock_path(db);
         let committed =
             read_api_lock(db.system(), &path).map_err(|error| UnreadableApiLock::Unreadable {
@@ -149,7 +150,10 @@ impl<'db> ApiLockState<'db> {
                 });
             }
         };
-        let generated = db.project().api_lock(db, target);
+        let generated = db
+            .project()
+            .api_lock(db, target)
+            .render(by_version::VERSION);
         Ok(Self {
             path,
             committed,
@@ -159,7 +163,7 @@ impl<'db> ApiLockState<'db> {
     }
 
     fn stale_line(&self) -> Option<usize> {
-        first_stale_line(self.committed.as_deref()?, self.generated)
+        first_stale_line(self.committed.as_deref()?, &self.generated)
     }
 }
 
@@ -275,7 +279,7 @@ pub(crate) fn regenerate_api_lock(
         REGENERATE,
         TextEdit {
             range,
-            new_text: state.generated.to_string(),
+            new_text: state.generated,
         },
     ))
 }

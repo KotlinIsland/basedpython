@@ -353,6 +353,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "by_version"
+version = "0.0.0"
+dependencies = [
+ "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
 name = "bytecheck"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3689,6 +3696,7 @@ dependencies = [
  "by_irbuild",
  "by_stage",
  "by_transforms",
+ "by_version",
  "clap",
  "clap_complete_command",
  "clearscreen",
@@ -3946,6 +3954,7 @@ dependencies = [
  "bitflags",
  "by_stage",
  "by_transforms",
+ "by_version",
  "crossbeam",
  "gen-lsp-types",
  "indexmap",

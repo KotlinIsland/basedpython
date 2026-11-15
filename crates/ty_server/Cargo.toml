@@ -16,6 +16,7 @@ doctest = false
 [dependencies]
 by_stage = { workspace = true }
 by_transforms = { workspace = true }
+by_version = { workspace = true }
 ruff_db = { workspace = true, features = ["os"] }
 ruff_diagnostics = { workspace = true }
 ruff_macros = { workspace = true }

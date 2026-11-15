@@ -54,6 +54,11 @@ impl CliTest {
             r#"The system cannot find the file specified."#,
             "No such file or directory",
         );
+        // an api lockfile's header names the `by` that wrote it, which moves with every release
+        settings.add_filter(
+            &regex::escape(&format!("#tool:by={}", by_version::VERSION)),
+            "#tool:by=[VERSION]",
+        );
 
         let settings_scope = settings.bind_to_scope();
 
