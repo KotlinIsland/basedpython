@@ -738,8 +738,11 @@ struct UseDefMapExtra {
 /// A body whose assertion is recovered rather than written uses the merged state instead.
 #[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
 struct ReturnExit {
-    /// The range of the `return` statement.
+    /// The range of the `return` statement, or of the `raise` or `assert` statement.
     range: TextRange,
+    /// Whether this is where the body raises rather than returns: a `raise`, or an `assert`
+    /// whose test fails. Only an operator dunder of a `.py` class records these.
+    raises: bool,
     /// Whether the `return` can be reached at all.
     reachability: ScopedReachabilityConstraintId,
     /// Whether a `finally` suite can run after this `return`, so that what the caller sees is
@@ -1115,15 +1118,30 @@ impl<'db> UseDefMap<'db> {
             .flatten()
     }
 
-    /// basedpython: each `return` recorded in this scope, with its range, whether it is reachable,
-    /// and whether a `finally` suite can run after it, in the order
-    /// [`Self::return_exit_bindings`] indexes them.
+    /// basedpython: each `return` recorded in this scope, with the index
+    /// [`Self::return_exit_bindings`] reads it by, its range, whether it is reachable, and whether
+    /// a `finally` suite can run after it.
     pub fn return_exits(
         &self,
-    ) -> impl Iterator<Item = (TextRange, ScopedReachabilityConstraintId, bool)> + '_ {
+    ) -> impl Iterator<Item = (usize, TextRange, ScopedReachabilityConstraintId, bool)> + '_ {
         self.return_exit_records()
             .iter()
-            .map(|exit| (exit.range, exit.reachability, exit.through_finally))
+            .enumerate()
+            .filter(|(_, exit)| !exit.raises)
+            .map(|(index, exit)| (index, exit.range, exit.reachability, exit.through_finally))
+    }
+
+    /// basedpython: each `raise`, and each `assert` whose test can fail, recorded in this scope,
+    /// with the index [`Self::return_exit_bindings`] reads it by, its range, and whether it is
+    /// reachable.
+    pub fn raise_exits(
+        &self,
+    ) -> impl Iterator<Item = (usize, TextRange, ScopedReachabilityConstraintId)> + '_ {
+        self.return_exit_records()
+            .iter()
+            .enumerate()
+            .filter(|(_, exit)| exit.raises)
+            .map(|(index, exit)| (index, exit.range, exit.reachability))
     }
 
     /// basedpython: whether this scope is a function body whose assertion is recovered from it.
@@ -3135,12 +3153,14 @@ impl<'db> UseDefMapBuilder<'db> {
     pub(super) fn record_return_exit(
         &mut self,
         range: TextRange,
+        raises: bool,
         through_finally: bool,
         places: impl Iterator<Item = ScopedPlaceId>,
     ) {
         let places = self.current_place_bindings(places);
         self.return_exits.push(ReturnExit {
             range,
+            raises,
             reachability: self.reachability,
             through_finally,
             places,

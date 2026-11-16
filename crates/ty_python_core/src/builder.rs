@@ -129,6 +129,10 @@ struct ScopeInfo<'ast> {
     /// the top of a nested function belongs to no block at all — least of all to
     /// whichever block the `def` happened to sit in.
     open_blocks: Vec<OpenBlock>,
+    /// basedpython: whether the enclosing scope was inside a `try` with a `finally` suite,
+    /// restored on `pop_scope`. A `return` in a function defined there returns from that
+    /// function, which no `finally` of the enclosing scope runs after
+    in_finally_statement: bool,
     /// `global` and `nonlocal` declarations from scopes nested under this one. This is used for:
     ///
     /// 1. Visibility of nested writes. A nested function that binds a variable might affect the
@@ -687,11 +691,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         // TODO: Cross-scope alias narrowing is not supported yet.
         let saved_aliases = std::mem::take(&mut self.narrowing_aliases);
         let saved_open_blocks = std::mem::take(&mut self.open_blocks);
+        let saved_in_finally_statement = std::mem::take(&mut self.in_finally_statement);
         self.scope_stack.push(ScopeInfo {
             file_scope_id,
             current_loop: None,
             narrowing_aliases: saved_aliases,
             open_blocks: saved_open_blocks,
+            in_finally_statement: saved_in_finally_statement,
             nested_global_or_nonlocal_declarations: FxHashMap::default(),
             this_scope_global_or_nonlocal_declarations: FxHashMap::default(),
             pending_captures: FxHashMap::default(),
@@ -1073,6 +1079,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             file_scope_id: popped_scope_id,
             narrowing_aliases,
             open_blocks,
+            in_finally_statement,
             mut nested_global_or_nonlocal_declarations,
             this_scope_global_or_nonlocal_declarations,
             pending_captures,
@@ -1083,6 +1090,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .expect("Root scope should be present");
         self.narrowing_aliases = narrowing_aliases;
         self.open_blocks = open_blocks;
+        self.in_finally_statement = in_finally_statement;
 
         let children_end = self.scopes.next_index();
 
@@ -1725,16 +1733,51 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         scope: FileScopeId,
         function: &ast::StmtFunctionDef,
     ) {
+        self.record_exit_state(stmt.range(), false, scope, function);
+    }
+
+    fn record_exit_state(
+        &mut self,
+        range: TextRange,
+        raises: bool,
+        scope: FileScopeId,
+        function: &ast::StmtFunctionDef,
+    ) {
         let places = self.parameter_places(scope, function);
         if places.is_empty() {
             return;
         }
         let in_finally_statement = self.in_finally_statement;
         self.use_def_maps[scope].record_return_exit(
-            stmt.range(),
+            range,
+            raises,
             in_finally_statement,
             places.into_iter(),
         );
+    }
+
+    /// basedpython: in an operator dunder of a `.py` class, note the state of its parameters
+    /// where `range`, a `raise` or a failing `assert`, raises: python stops there rather than
+    /// moving on to the other operand. See `ty_python_semantic::types::passed_operand`
+    fn record_raise_exit(&mut self, range: TextRange) {
+        let scope = self.current_scope();
+        let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
+            return;
+        };
+        let function = function.node(self.module);
+        if self.is_passed_operands(scope, function) {
+            self.record_exit_state(range, true, scope, function);
+        }
+    }
+
+    /// basedpython: whether the current scope is the body of an operator dunder of a `.py`
+    /// class, whose raises [`Self::record_raise_exit`] notes
+    fn records_raise_exits(&self) -> bool {
+        let scope = self.current_scope();
+        let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
+            return false;
+        };
+        self.is_passed_operands(scope, function.node(self.module))
     }
 
     /// basedpython: whether `function`, whose body is `scope`, is an operator dunder of a `.py`
@@ -6022,6 +6065,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 let condition_flow_snapshot = self.flow_snapshot_for_condition(test);
                 let predicate = self.build_predicate(test, ExpressionContext::Condition);
 
+                // basedpython: where the test fails, the assertion raises
+                if self.records_raise_exits() {
+                    let resume = self.flow_snapshot();
+                    let failing = self.record_narrowing_constraint(predicate.negated());
+                    self.record_reachability_constraint_id(failing);
+                    self.record_raise_exit(stmt.range());
+                    self.flow_restore(resume);
+                }
+
                 if msg.is_some()
                     || self
                         .exception_context_stack_manager
@@ -7084,6 +7136,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
             ast::Stmt::Raise(_) => {
                 walk_stmt(self, stmt);
+                self.record_raise_exit(stmt.range());
                 self.record_exception_checkpoint();
                 self.record_terminal_finally_entry();
                 // Everything in the current block after a terminal statement is unreachable.

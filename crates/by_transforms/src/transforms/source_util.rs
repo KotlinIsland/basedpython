@@ -663,11 +663,27 @@ pub(crate) fn body_prologue(
 /// the string stops being one and the method loses its `__doc__`.
 pub(crate) fn body_prologue_index(f: &StmtFunctionDef) -> usize {
     let header_end = header_end(f);
-    f.body
+    let start = f
+        .body
         .iter()
         .position(|stmt| body_range(stmt, header_end).is_some())
         .filter(|&index| is_docstring(&f.body[index]))
-        .map_or(0, |index| index + 1)
+        .map_or(0, |index| index + 1);
+    let declarations = f.body[start..]
+        .iter()
+        .take_while(|stmt| is_scope_declaration(stmt))
+        .count();
+    if start + declarations == f.body.len() {
+        start
+    } else {
+        start + declarations
+    }
+}
+
+/// whether `stmt` is a `global` or `nonlocal` declaration, which python requires ahead of any
+/// use of the names it declares, so a body's prologue goes after the ones it starts with
+fn is_scope_declaration(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Global(_) | Stmt::Nonlocal(_))
 }
 
 /// The first statement in `f`'s body that came from the source, skipping a
@@ -679,13 +695,19 @@ pub(crate) fn body_prologue_index(f: &StmtFunctionDef) -> usize {
 ///
 /// [`init_method`]: super::init_method
 fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
-    let mut statements = source_statements(f);
-    let first = statements.next()?;
-    if is_docstring(first) {
-        statements.next()
-    } else {
-        Some(first)
+    let mut statements = source_statements(f).peekable();
+    if statements.peek().is_some_and(|first| is_docstring(first)) {
+        statements.next();
     }
+    let first = statements.next()?;
+    // a body of nothing but declarations has nowhere after them to go, and the prologue goes
+    // ahead of them, which is valid unless it reads a name they declare
+    Some(
+        std::iter::once(first)
+            .chain(statements)
+            .find(|stmt| !is_scope_declaration(stmt))
+            .unwrap_or(first),
+    )
 }
 
 /// The statements in `f`'s body the source wrote, in order.

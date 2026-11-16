@@ -224,19 +224,21 @@ handed back with `NotImplemented`, so that python moves on to the other operand:
 
 ```python
 class Money:
-    def __add__(self, other: Money) -> Money:
+    def __add__(self, other: "Money") -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
         return Money()
 ```
 
 With this enabled, `other` is also typed as whatever falls outside `Money` until the body
-tests it, a body that returns a value for an operand it never tested is reported as
-[`unguarded-operand`](rules.md#unguarded-operand), and a `return NotImplemented` reached
-with an operand inside the domain means the operation can move on with one of those too.
+tests it, a body that returns a value or raises for an operand it never tested is
+reported as [`unguarded-operand`](rules.md#unguarded-operand), and a `return
+NotImplemented` reached with an operand inside the domain means the operation can move on
+with that operand too.
 
 When set to `false`, the body sees the annotation, as if python only ever passed it what
-it says. A `.by` dunder is lowered with the test, and is unaffected.
+it says, and dispatch takes every `.py` dunder at its word that it hands back an operand
+outside the domain. A `.by` dunder is lowered with the test, and is unaffected.
 
 Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
@@ -1989,19 +1991,21 @@ handed back with `NotImplemented`, so that python moves on to the other operand:
 
 ```python
 class Money:
-    def __add__(self, other: Money) -> Money:
+    def __add__(self, other: "Money") -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
         return Money()
 ```
 
 With this enabled, `other` is also typed as whatever falls outside `Money` until the body
-tests it, a body that returns a value for an operand it never tested is reported as
-[`unguarded-operand`](rules.md#unguarded-operand), and a `return NotImplemented` reached
-with an operand inside the domain means the operation can move on with one of those too.
+tests it, a body that returns a value or raises for an operand it never tested is
+reported as [`unguarded-operand`](rules.md#unguarded-operand), and a `return
+NotImplemented` reached with an operand inside the domain means the operation can move on
+with that operand too.
 
 When set to `false`, the body sees the annotation, as if python only ever passed it what
-it says. A `.by` dunder is lowered with the test, and is unaffected.
+it says, and dispatch takes every `.py` dunder at its word that it hands back an operand
+outside the domain. A `.by` dunder is lowered with the test, and is unaffected.
 
 Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 

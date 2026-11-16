@@ -286,9 +286,10 @@ pub struct AnalysisSettings {
     /// Python calls `__add__` and the other operator dunders with whatever the other operand is,
     /// and dispatch reads an operand outside a parameter's domain as handed back with
     /// `NotImplemented`. With this enabled the body sees an operand outside the domain too, has
-    /// to have tested the operand into the domain wherever it returns a value, and a
-    /// `NotImplemented` it returns for an operand inside the domain makes the operation move on.
-    /// A `.by` dunder is lowered with that test, and is checked this way whatever this says.
+    /// to have tested the operand into the domain wherever it returns a value or raises, and a
+    /// `NotImplemented` it returns for an operand inside the domain makes the operation move on
+    /// with that operand. Only a plain `def` of the dunder is taken to hand an operand back.
+    /// A `.by` dunder is lowered with the test whatever this says.
     pub checked_operator_operands: bool,
 
     /// Classes whose values do not count as a distinct member of an overlapping condition.

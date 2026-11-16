@@ -9577,7 +9577,7 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.2">0.0.2</a> 
 **What it does**
 
 Checks that an operator dunder of a `.py` class tests its operand before it returns a
-value with it.
+value with it, or raises.
 
 **Why is this bad?**
 
@@ -9595,7 +9595,7 @@ only while `analysis.checked-operator-operands` is enabled.
 
 ```python
 class Money:
-    def __add__(self, other: Money) -> Money:
+    def __add__(self, other: "Money") -> "Money":
         return Money()  # error: `other` may be outside `Money` here
 ```
 
@@ -9603,7 +9603,7 @@ Use instead:
 
 ```python
 class Money:
-    def __add__(self, other: Money) -> Money:
+    def __add__(self, other: "Money") -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
         return Money()

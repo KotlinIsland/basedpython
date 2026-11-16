@@ -6455,7 +6455,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 .map(|(_, function)| function),
                         );
                         let in_place_ty = outcome.return_type(db, env).without_not_implemented(db);
-                        if !outcome.may_reject_by_value(db) {
+                        let value_ty = match call_arguments.source_types(0) {
+                            Some(types) => types.get_default().unwrap_or_else(Type::unknown),
+                            None => Type::unknown(),
+                        };
+                        if !outcome.may_reject_by_value(db, env, value_ty) {
                             return Ok(in_place_ty);
                         }
                         // the in-place dunder may hand the operand back, and python then falls
@@ -6489,17 +6493,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 .map(|(_, function)| function),
                         );
                         let value_ty = outcome.type_for_argument(&call_arguments, 0);
+                        let in_place_ty = outcome.return_type(db, env).without_not_implemented(db);
                         match binary_return_ty(self, value_ty, state) {
                             Ok(binary_ty) => Ok(UnionType::from_two_elements(
                                 db,
                                 env,
-                                outcome.return_type(db, env),
+                                in_place_ty,
                                 binary_ty,
                             )),
                             Err(recovery_ty) => Err(UnionType::from_two_elements(
                                 db,
                                 env,
-                                outcome.return_type(db, env),
+                                in_place_ty,
                                 recovery_ty,
                             )),
                         }

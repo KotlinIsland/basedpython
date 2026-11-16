@@ -133,7 +133,7 @@ an `__eq__` that runs with its operand doesn't fall back to identity either
 
 ```py
 class E[T]:
-    def __eq__(self, other: "E[T]") -> bool:
+    def __eq__(self, other: "E[T]") -> bool:  # error: [invalid-method-override]
         return True
 
 def g(a: E[int], b: E[str]):
@@ -245,14 +245,24 @@ reveal_type(A() + A())  # revealed: A
 python hands `__eq__` every operand, and one outside its domain moves on to the other operand's
 `__eq__` and then to an identity test. so an `__eq__` that takes only some operands still compares
 with every one, and still answers with a `bool`. that makes it a valid override of
-`object.__eq__(self, other: object) -> bool`
+`object.__eq__(self, other: object) -> bool`, wherever the method really hands that operand back: in
+a `.py` file, that is where the project checks that it does
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
 
 ```py
 class Point:
     def __eq__(self, other: "Point") -> bool:  # no diagnostic
+        if not isinstance(other, Point):
+            return NotImplemented
         return True
 
     def __ne__(self, other: "Point") -> bool:  # no diagnostic
+        if not isinstance(other, Point):
+            return NotImplemented
         return False
 
 reveal_type(Point() == Point())  # revealed: bool
@@ -265,11 +275,28 @@ an override of an `__eq__` that narrows may narrow further
 ```py
 class Shape:
     def __eq__(self, other: "Shape") -> bool:
+        if not isinstance(other, Shape):
+            return NotImplemented
         return True
 
 class Square(Shape):
     def __eq__(self, other: "Square") -> bool:  # no diagnostic
+        if not isinstance(other, Square):
+            return NotImplemented
         return True
+```
+
+## An unchecked `.py` `__eq__` may not narrow its operand
+
+without `checked-operator-operands`, nothing holds a `.py` `__eq__` to handing back what it doesn't
+take, so `Point() == 1` may run its body with the `int`
+
+```py
+class Point:
+    x: int = 0
+
+    def __eq__(self, other: "Point") -> bool:  # error: [invalid-method-override]
+        return self.x == other.x
 ```
 
 ## A `.by` `__eq__` that narrows its operand compares with every operand
@@ -293,6 +320,11 @@ assert Point() != 1
 handing back an operand of the right class moves on the same way, so writing `NotImplementedType` in
 the return type is a valid override too
 
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
 ```py
 from types import NotImplementedType
 
@@ -310,6 +342,11 @@ class Money:
 an operand the override hands back is answered with a `bool`, so an override that narrows has to
 answer with something a `bool` is assignable to wherever the method it overrides does
 
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
 ```py
 class Base:
     def __eq__(self, other: object) -> int:  # error: [invalid-method-override]
@@ -317,10 +354,14 @@ class Base:
 
 class Sub(Base):
     def __eq__(self, other: "Sub") -> int:  # no diagnostic
+        if not isinstance(other, Sub):
+            return NotImplemented
         return 0
 
 class Text:
     def __eq__(self, other: "Text") -> str:  # error: [invalid-method-override]
+        if not isinstance(other, Text):
+            return NotImplemented
         return ""
 ```
 
@@ -433,4 +474,178 @@ class B:
 A() + 1  # no diagnostic
 # error: [unsupported-operator]
 A() + B()
+```
+
+## A class's type parameter is not part of the domain
+
+an operand annotated with the class's type parameter is tested for what the parameter is bound to,
+since the receiver's type arguments are nothing a runtime test can see. `Box[int]` runs `__iadd__`
+with a `str`
+
+```py
+class Box[T]:
+    def __iadd__(self, other: T) -> "Box[T]":
+        return self
+
+    def __add__(self, other: object) -> str:
+        return ""
+
+def f(box: Box[int]):
+    # error: [unsupported-operator]
+    box += "s"
+```
+
+## A union operand reaches the method if any of its types is inside the domain
+
+```py
+class Box[T]:
+    pass
+
+class A:
+    def __iadd__(self, other: Box[int]) -> "A":
+        return self
+
+    def __add__(self, other: object) -> str:
+        return ""
+
+def f(a: A, value: Box[str] | int):
+    # error: [unsupported-operator]
+    a += value
+```
+
+## Only a method that tests its operand hands it back
+
+a coroutine or generator function hands back the coroutine or generator it makes, whatever it is
+written with. and the test a `.by` dunder is lowered with, or a checked `.py` one is written with,
+is only at the top of a plain `def` of the dunder: a function bound to a dunder under another name
+is called with whatever the operand is, and so is a decorated method, since python calls whatever
+the decorator made. none of them move on to the other operand
+
+```toml
+[environment]
+python-version = "3.13"
+
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+from typing import Callable
+
+class Other:
+    def __radd__(self, other: object) -> str:
+        return ""
+
+def keep[**P, R](f: Callable[P, R]) -> Callable[P, R]:
+    return f
+
+def add(self: "Aliased", other: int) -> int:
+    return 1
+
+class Async:
+    async def __add__(self, other: int) -> int:
+        return 1
+
+class Generator:
+    def __add__(self, other: int):
+        yield 1
+
+class Aliased:
+    __add__ = add
+
+class Decorated:
+    @keep
+    def __add__(self, other: int) -> int:
+        return 1
+
+class Variadic:
+    def __add__(self, *others: int) -> int:
+        return 1
+
+# error: [unsupported-operator]
+Async() + Other()
+# error: [unsupported-operator]
+Generator() + Other()
+# error: [unsupported-operator]
+Aliased() + Other()
+# error: [unsupported-operator]
+Decorated() + Other()
+# error: [unsupported-operator]
+Variadic() + Other()
+```
+
+## A call that fails for another reason hands nothing back
+
+```py
+class Other:
+    def __rsub__(self, other: object) -> str:
+        return ""
+
+class A:
+    def __sub__(self, other: int, extra: int) -> int:
+        return 1
+
+# error: [unsupported-operator]
+A() - Other()
+```
+
+## An unannotated operand takes every operand
+
+```py
+class Other:
+    x: int = 0
+
+    def __radd__(self, other: object) -> str:
+        return ""
+
+class Point:
+    x: int = 0
+
+class A:
+    def __add__(self, other):
+        return other.x + 1
+
+A() + Point()  # no diagnostic
+# error: [unsupported-operator]
+A() + 1
+```
+
+a method whose inferred return type is only `NotImplementedType` hands back whatever it takes
+
+```py
+class Never:
+    def __add__(self, other):
+        return NotImplemented
+
+# error: [unsupported-operator]
+Never() + 1
+```
+
+## A type alias doesn't hide `NotImplementedType`
+
+```py
+from types import NotImplementedType
+
+type Answer = int | NotImplementedType
+
+class A:
+    def __add__(self, other: int) -> Answer:
+        return NotImplemented
+
+# error: [unsupported-operator]
+A() + 1
+```
+
+## A `.by` protocol's dunders are not tested
+
+a method a protocol declares is never the one python calls, so its operand needs no runtime test
+
+```by
+from typing import Protocol
+
+class HasX(Protocol):
+    x: int
+
+class SupportsAdd(Protocol):
+    def __add__(self, other: HasX) -> int: ...  # no diagnostic
 ```

@@ -238,6 +238,9 @@ impl<'db> SemanticModel<'db> {
         &'ast ast::Parameter,
         crate::types::reified_infer::ParametricIsPlan,
     )> {
+        if !ty_python_core::operator_dunders::hands_back_operands(function.name.as_str()) {
+            return None;
+        }
         let parameters = &function.parameters;
         let operand = parameters
             .posonlyargs

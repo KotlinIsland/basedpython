@@ -2293,31 +2293,33 @@ info: This violates the Liskov Substitution Principle
 
 ## Bad override of `__eq__`
 
-An `__eq__` override may take fewer operands than `object.__eq__`: python moves on from an operand
-it doesn't take, and ends at an identity test (see `basedpython_operator_domains.md`). What it
-answers with still has to be a `bool`.
-
 ```py
 class Bad:
     x: int
-    def __eq__(self, other: "Bad") -> int:  # snapshot: invalid-method-override
-        return self.x - other.x
+    def __eq__(self, other: "Bad") -> bool:  # snapshot: invalid-method-override
+        return self.x == other.x
 ```
 
 ```snapshot
 error[invalid-method-override]: Invalid override of method `__eq__`
   --> src/mdtest_snippet.py:3:9
    |
- 3 |     def __eq__(self, other: "Bad") -> int:  # snapshot: invalid-method-override
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Definition is incompatible with `object.__eq__`
+ 3 |     def __eq__(self, other: "Bad") -> bool:  # snapshot: invalid-method-override
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Definition is incompatible with `object.__eq__`
    |
   ::: stdlib/builtins.byi:91:9
    |
 91 |     def __eq__(self, value: object, /) -> bool
    |         -------------------------------------- `object.__eq__` defined here
-info: incompatible return types: `int` is not assignable to `bool`
-info: `==` answers an operand `Bad.__eq__` hands back with an identity test, which is a `bool`
+info: parameter `value` has an incompatible type: `object` is not assignable to `Bad`
 info: This violates the Liskov Substitution Principle
+help: It is recommended for `__eq__` to work with arbitrary objects, for example:
+help: 
+help:     def __eq__(self, other: object) -> bool:
+help:         if not isinstance(other, Bad):
+help:             return False
+help:         return <logic to compare two `Bad` instances>
+help: 
 ```
 
 ## Hash method overrides

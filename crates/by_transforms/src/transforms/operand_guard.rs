@@ -29,10 +29,11 @@
 //! this code.
 
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_stmt};
-use ruff_python_ast::{Stmt, StmtFunctionDef};
+use ruff_python_ast::{Expr, ExprNoneLiteral, Stmt, StmtFunctionDef};
 use ruff_text_size::Ranged;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::mutable_defaults::DefaultMarkers;
 use super::parametric_is::{PredicateNeeds, PredicateRuntime, ProbeStrictness, fragments_for_plan};
 use super::repeated_underscore::WrittenNames;
 use super::soundness::RerenderedCheck;
@@ -51,11 +52,20 @@ impl PrologueStatement for Guard {
 pub(crate) struct OperandGuardPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    markers: &'src DefaultMarkers,
 }
 
 impl<'src> OperandGuardPass<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
-        Self { source, written }
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        markers: &'src DefaultMarkers,
+    ) -> Self {
+        Self {
+            source,
+            written,
+            markers,
+        }
     }
 }
 
@@ -90,20 +100,39 @@ impl TypeAwarePass for OperandGuardPass<'_> {
                 let Some((parameter, plan)) = types.operand_guard(function) else {
                     continue;
                 };
-                // a guard is only made for an annotated operand: the domain of one without
-                // an annotation is every operand
-                let Some(annotation) = parameter.annotation() else {
-                    ctx.errors.push(format!(
-                        "`{}` tests an operand its parameter has no annotation for",
-                        function.name
-                    ));
-                    continue;
+                // the plan spells a type the source writes only from the operand's own
+                // annotation. one that takes its type from the method it overrides is spelled
+                // whole, and never from this placeholder
+                let placeholder;
+                let annotation = match parameter.annotation() {
+                    Some(annotation) => annotation,
+                    None => {
+                        placeholder = Expr::NoneLiteral(ExprNoneLiteral::default());
+                        &placeholder
+                    }
                 };
                 let name =
                     crate::python_parameter_name(&function.parameters, parameter, self.written)
                         .to_string();
                 let value = || Fragment::Lit(name.clone());
                 let mut guard = vec![Fragment::Lit("if not ".to_owned())];
+                // a default swapped for a sentinel is put back after this test: the sentinel
+                // stands for the default, which is inside the annotation, and only a direct
+                // call that leaves the operand out passes it. python's operators never do
+                let sentinel = function
+                    .parameters
+                    .posonlyargs
+                    .iter()
+                    .chain(&function.parameters.args)
+                    .find(|candidate| candidate.parameter.range() == parameter.range())
+                    .and_then(|candidate| candidate.default.as_deref())
+                    .and_then(|default| {
+                        self.markers
+                            .sentinel_for(self.written, default, self.source)
+                    });
+                if let Some(sentinel) = &sentinel {
+                    guard.push(Fragment::Lit(format!("({name} is {sentinel} or ")));
+                }
                 guard.extend(fragments_for_plan(
                     types,
                     self.written,
@@ -113,6 +142,9 @@ impl TypeAwarePass for OperandGuardPass<'_> {
                     ProbeStrictness::Strict,
                     &mut needs,
                 ));
+                if sentinel.is_some() {
+                    guard.push(Fragment::Lit(")".to_owned()));
+                }
                 guard.push(Fragment::Lit(format!(
                     ": return {}",
                     self.written.builtin("NotImplemented")
@@ -307,5 +339,112 @@ mod tests {
             out.contains("        if not isinstance(other, int):\n            return NotImplemented\n        return other"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn the_test_runs_ahead_of_the_soundness_checks_in_a_rewritten_statement() {
+        let out = transpile(
+            indoc! {"
+                class Box[T]:
+                    pass
+
+                class A:
+                    def __add__(self, other: Box[int]) -> int:
+                        return 1
+
+                    def ignore(self, _, _) -> None: ...
+            "},
+            &Config {
+                min_version: PythonVersion::PY313,
+                soundness: crate::SoundnessPositions::all(),
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        let test = out.find("if not isinstance(other, Box)").expect(&out);
+        let check = out.find("_soundness_parametric(other").expect(&out);
+        assert!(test < check, "{out}");
+    }
+
+    #[test]
+    fn a_method_of_an_extension_tests_nothing() {
+        // an extension's method is called directly, never dispatched to, so a `NotImplemented`
+        // it handed back would be the call's value
+        let out = out(indoc! {"
+            class V:
+                pass
+
+            extension V:
+                def __add__(self, other: int) -> int:
+                    return other
+        "});
+        assert!(!out.contains("NotImplemented"), "{out}");
+    }
+
+    #[test]
+    fn the_test_follows_the_global_declarations_a_body_starts_with() {
+        // python requires a `global` ahead of any use of the name it declares
+        let out = out(indoc! {"
+            class A:
+                def __add__(self, other: int) -> int:
+                    global count
+                    count = 1
+                    return 1
+
+            count = 0
+        "});
+        assert!(
+            out.contains(
+                "        global count\n        if not isinstance(other, int): return NotImplemented"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_default_swapped_for_a_sentinel_passes_the_test() {
+        // python's operators always pass the operand, so only a direct call that leaves it out
+        // passes the sentinel, which stands for the default
+        let out = out(indoc! {"
+            class A:
+                def __add__(self, other: list[int] = []) -> int:
+                    return len(other)
+        "});
+        assert!(
+            out.contains(
+                "if not (other is _MISSING or isinstance(other, list)): return NotImplemented\n        if other is _MISSING:"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_operand_that_inherits_its_type_is_tested_against_it() {
+        let out = out(indoc! {"
+            class A:
+                def __add__(self, other: int) -> int:
+                    return 1
+
+            class B(A):
+                override def __add__(self, other) -> int:
+                    return 2
+        "});
+        assert_eq!(
+            out.matches("if not isinstance(other, int): return NotImplemented")
+                .count(),
+            2,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_protocol_member_tests_nothing() {
+        let out = out(indoc! {"
+            from typing import Protocol
+
+            class SupportsAdd(Protocol):
+                def __add__(self, other: int) -> int: ...
+        "});
+        assert!(!out.contains("NotImplemented"), "{out}");
     }
 }

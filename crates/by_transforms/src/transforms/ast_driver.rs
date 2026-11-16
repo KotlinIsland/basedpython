@@ -1623,7 +1623,8 @@ pub(crate) fn run_against_source<'a>(
     let generics_pass =
         generics::GenericPolyfillPass::new(source_ref, written, quotes, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
-    let operand_guard_pass = operand_guard::OperandGuardPass::new(source_ref, written);
+    let operand_guard_pass =
+        operand_guard::OperandGuardPass::new(source_ref, written, &default_markers);
     let checked_cast_pass = checked_cast::CheckedCastPass { written, quotes };
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
@@ -2010,7 +2011,16 @@ pub(crate) fn run_against_source<'a>(
     // here, ahead of the runtime block below, because the two rewrites that answer for
     // what a program reads back read the finished tree and can ask for a helper of their
     // own
+    // one statement's checks go in together, in the order the passes made them: the test an
+    // operator dunder makes of its operand runs ahead of the soundness checks of its parameters
+    let mut rerendered_checks: Vec<(usize, Vec<super::soundness::RerenderedCheck>)> = Vec::new();
     for (idx, checks) in std::mem::take(&mut ctx.rerendered_checks) {
+        match rerendered_checks.iter_mut().find(|(at, _)| *at == idx) {
+            Some((_, existing)) => existing.extend(checks),
+            None => rerendered_checks.push((idx, checks)),
+        }
+    }
+    for (idx, checks) in rerendered_checks {
         if let Some(stmt) = module.body.get_mut(idx)
             && let Err(error) = super::soundness::place_in_rerendered(stmt, checks)
         {

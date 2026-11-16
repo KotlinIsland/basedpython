@@ -595,7 +595,7 @@ pub(crate) fn place_in_rerendered(
     checks: Vec<RerenderedCheck>,
 ) -> Result<(), String> {
     let mut wraps = Vec::new();
-    let mut guards = Vec::new();
+    let mut guards: Vec<(TextRange, Vec<Stmt>, Cell<bool>)> = Vec::new();
     for check in checks {
         match check {
             RerenderedCheck::Wrap {
@@ -634,7 +634,11 @@ pub(crate) fn place_in_rerendered(
                 statements
                     .iter_mut()
                     .for_each(super::rerender::forget_stmt_ranges);
-                guards.push((function, statements, Cell::new(false)));
+                // a function several passes guard takes them in the order they came
+                match guards.iter_mut().find(|(range, _, _)| *range == function) {
+                    Some((_, existing, _)) => existing.extend(statements),
+                    None => guards.push((function, statements, Cell::new(false))),
+                }
             }
         }
     }

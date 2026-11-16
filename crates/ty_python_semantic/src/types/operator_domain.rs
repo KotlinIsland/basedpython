@@ -19,20 +19,24 @@
 //! full type is what an accepted operand must be. an operand outside the domain is rejected; one
 //! inside it that the call doesn't accept is a type error, with no fallback
 
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ty_python_core::operator_dunders::hands_back_operands;
 use ty_python_core::semantic_index;
 
 use super::check_order::InferredInCheckOrder;
-use super::passed_operand::operand_exits;
+use super::function::{FunctionDecorators, OverloadLiteral};
+use super::inferred_narrowing::is_empty_body;
+use super::passed_operand::is_protocol_member;
+use super::passed_operand::operand_rejected_by_value;
 use super::reified_infer::{ErasedTargetReason, ParametricIsPlan, type_test_plan};
 use super::runtime_spelling::RuntimeSite;
-use super::signatures::{CallableSignature, Parameter};
+use super::signatures::{CallableSignature, Parameter, ReturnCallableTypeVarScope};
 use super::subclass_of::SubclassOfInner;
 use super::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
 use super::{
     ClassLiteral, IntersectionType, KnownClass, SubclassOfType, Type, UnionType, binding_type,
-    call::CallDunderError, call::bind::Bindings, callable::CallableType, infer_definition_types,
+    call::CallDunderError, call::bind::Bindings, callable::CallableType,
 };
 use crate::place::{RuntimeBinding, RuntimeRead, binds_one_class_wherever_bound, runtime_binding};
 use crate::{Db, ProgramEnvironment};
@@ -79,16 +83,10 @@ impl<'db> Type<'db> {
             Type::LiteralValue(literal) if literal.is_literal_string() => {
                 KnownClass::Str.to_instance(db, env)
             }
-            // the bound of a `.by` parameter written without a type is what the body happens to
-            // ask of it, which no test is written from: the method runs with every operand
+            // the bound of a parameter written without a type is what the body happens to ask of
+            // it, which nothing tests an operand against: the method runs with every operand
             Type::TypeVar(typevar)
-                if typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter
-                    && typevar
-                        .typevar(db)
-                        .definition(db)
-                        .is_some_and(|definition| {
-                            definition.file(db).source_type(db).is_basedpython()
-                        }) =>
+                if typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter =>
             {
                 Type::object()
             }
@@ -158,34 +156,122 @@ impl<'db> Bindings<'db> {
     ///
     /// each callee that failed is asked on its own: a receiver typed `int | float` calls
     /// `int.__add__` or `float.__add__`, never both, so `1.0` is rejected by the `int` that
-    /// fails on it whatever the `float` would have done. a callee whose overloads never matched
-    /// the operand to a parameter has nothing a runtime check could have looked at, and rejects
+    /// fails on it whatever the `float` would have done
+    ///
+    /// a union operand is rejected only when each of its types is: an `int | Box[str]` against a
+    /// `Box` domain may be a `Box`, which reaches the method, and the method runs with it
     pub(crate) fn rejects_operand(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         operand: Type<'db>,
     ) -> bool {
-        self.failed_operand_parameter_types().all(|parameters| {
-            parameters.is_empty()
-                || !operand.is_assignable_to(
-                    db,
-                    env,
-                    UnionType::from_elements(
-                        db,
-                        env,
-                        parameters
-                            .iter()
-                            .map(|parameter| parameter.runtime_domain(db, env)),
-                    ),
-                )
-        })
+        let operands = match operand {
+            Type::Union(union) => union.elements(db).to_vec(),
+            _ => vec![operand],
+        };
+        self.failed_operand_parameters()
+            .all(|(callee, parameters)| {
+                rejected_domain(db, env, callee, &parameters).is_some_and(|domain| {
+                    operands
+                        .iter()
+                        .all(|operand| !operand.is_assignable_to(db, env, domain))
+                })
+            })
     }
 }
 
+/// the domain a failed call to `callee` hands an operand back outside of: that of the
+/// parameters the operand matched, as the function declares them. `None` for a callee that hands
+/// nothing back, and for one whose overloads never matched the operand to a parameter, which
+/// python calls and fails on whatever the operand is
+///
+/// the parameters are read as declared, not as bound to the receiver: in `Box[int].__add__` a
+/// parameter annotated `T` is an `int`, but `T` is nothing a runtime test can see
+fn rejected_domain<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    callee: Type<'db>,
+    parameters: &[(Option<usize>, usize)],
+) -> Option<Type<'db>> {
+    let function = match callee {
+        Type::BoundMethod(bound) => bound.function(db)?,
+        Type::FunctionLiteral(function) => function,
+        _ => return None,
+    };
+    let implementation = function.literal(db).last_definition;
+    if parameters.is_empty() || !tests_its_operand(db, implementation) {
+        return None;
+    }
+    let declared: Vec<_> = function.iter_overloads_and_implementation(db).collect();
+    Some(UnionType::from_elements(
+        db,
+        env,
+        parameters.iter().map(|(overload, index)| {
+            overload
+                .and_then(|overload| declared.get(overload))
+                .copied()
+                .unwrap_or(implementation)
+                .parameter_signature(db, ReturnCallableTypeVarScope::Public)
+                .parameters()
+                .get(*index)
+                .map_or(Type::object(), Parameter::annotated_type)
+                .runtime_domain(db, env)
+        }),
+    ))
+}
+
+/// whether python's call to the operator dunder `implementation` hands an operand outside its
+/// domain back with `NotImplemented`
+///
+/// - a coroutine or generator function never does: it hands back the coroutine or generator it
+///   makes, whatever the operand
+/// - a stub declares what the method does, and is taken at its word, as is a `.py` method when
+///   the project doesn't check `.py` dunders
+/// - otherwise the method has the test only where it is a plain `def` of an operator dunder, with
+///   an operand parameter, in a class body: that is what a `.by` dunder is lowered with a test
+///   for, and what a checked `.py` dunder is checked for. a function bound to a dunder under
+///   another name, a `@staticmethod` or `@classmethod`, an operand gathered into `*args`, and a
+///   method of an extension, which is called directly rather than dispatched to, have none
+#[salsa::tracked(heap_size = ruff_memory_usage::heap_size)]
+pub(crate) fn tests_its_operand<'db>(
+    db: &'db dyn Db,
+    implementation: OverloadLiteral<'db>,
+) -> bool {
+    let program_file = implementation.program_file(db);
+    let index = semantic_index(db, program_file);
+    let body_scope = implementation.body_scope(db).file_scope_id(db);
+    if implementation.header(db).is_async || body_scope.is_generator_function(index) {
+        return false;
+    }
+    let file = implementation.file(db);
+    let source_type = file.source_type(db);
+    if source_type.is_stub()
+        || (!source_type.is_basedpython() && !db.analysis_settings(file).checked_operator_operands)
+    {
+        return true;
+    }
+    if !hands_back_operands(implementation.name(db))
+        || implementation.has_known_decorator(db, FunctionDecorators::STATICMETHOD)
+        || implementation.has_known_decorator(db, FunctionDecorators::CLASSMETHOD)
+        || implementation
+            .parameter_signature(db, ReturnCallableTypeVarScope::Public)
+            .parameters()
+            .get_positional(1)
+            .is_none()
+    {
+        return false;
+    }
+    let definition = implementation.definition(db);
+    let Some(class) = index.scope(definition.file_scope(db)).node().as_class() else {
+        return false;
+    };
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    !class.node(&module).is_extension()
+}
+
 impl<'db> Bindings<'db> {
-    /// whether the dunder this call resolved to may still hand back an operand it takes: the
-    /// return annotation it wrote includes `NotImplementedType`
+    /// whether the dunder this call resolved to may still hand back `operand`, which it takes
     ///
     /// ```python
     /// class A:
@@ -196,10 +282,22 @@ impl<'db> Bindings<'db> {
     /// ```
     ///
     /// python then moves on exactly as it does for an operand outside the domain, so the
-    /// operation also has to be answered by whatever comes next. only a written annotation says
-    /// this: a return type inferred from the body also counts the `return NotImplemented` that
-    /// rejects an operand of the wrong class, which dispatch already moves past
-    pub(crate) fn may_reject_by_value(&self, db: &'db dyn Db) -> bool {
+    /// operation also has to be answered by whatever comes next. a method says this
+    ///
+    /// - with a return annotation that includes `NotImplementedType`
+    /// - with a return type inferred from the body that is nothing else: whatever it takes, it
+    ///   hands back
+    /// - in a checked `.py` dunder, with a `return NotImplemented` reached for an operand inside
+    ///   the domain, which is then handed back only where it could be `operand`
+    ///   ([`operand_rejected_by_value`]). a return type inferred from an unchecked body may
+    ///   include `NotImplementedType` only for the operands of the wrong class, which dispatch
+    ///   already moves past, so it says nothing more
+    pub(crate) fn may_reject_by_value(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        operand: Type<'db>,
+    ) -> bool {
         self.iter_flat().any(|binding| {
             let function = match binding.callable_type {
                 Type::BoundMethod(bound) => bound.function(db),
@@ -210,13 +308,15 @@ impl<'db> Bindings<'db> {
                 return false;
             };
             let implementation = function.literal(db).last_definition;
-            (implementation.header(db).writes_return
-                && binding
-                    .matching_overloads()
-                    .any(|(_, overload)| overload.return_ty.includes_not_implemented(db)))
-                // a `.py` dunder says so by returning `NotImplemented` for an operand inside the
-                // domain, since it never had to write it
-                || operand_exits(db, implementation).rejects_by_value
+            let writes_return = implementation.header(db).writes_return;
+            if binding.matching_overloads().any(|(_, overload)| {
+                overload.return_ty.includes_not_implemented(db)
+                    && (writes_return || overload.return_ty.without_not_implemented(db).is_never())
+            }) {
+                return true;
+            }
+            let rejected = *operand_rejected_by_value(db, implementation);
+            !rejected.is_never() && may_be_inside(db, env, operand, rejected)
         })
     }
 }
@@ -228,7 +328,9 @@ impl<'db> Type<'db> {
             Type::Union(union) => union
                 .elements(db)
                 .iter()
-                .any(|element| element.is_notimplemented(db)),
+                .any(|element| element.includes_not_implemented(db)),
+            // `type Result = int | NotImplementedType`
+            Type::TypeAlias(alias) => alias.value_type(db).includes_not_implemented(db),
             _ => self.is_notimplemented(db),
         }
     }
@@ -237,6 +339,9 @@ impl<'db> Type<'db> {
     /// `NotImplemented` the dunder hands back is the operation moving on, never its result
     pub(crate) fn without_not_implemented(self, db: &'db dyn Db) -> Type<'db> {
         match self {
+            Type::TypeAlias(alias) if self.includes_not_implemented(db) => {
+                alias.value_type(db).without_not_implemented(db)
+            }
             Type::Union(union) => union.filter(db, |element| !element.is_notimplemented(db)),
             _ if self.is_notimplemented(db) => Type::Never,
             _ => self,
@@ -489,21 +594,24 @@ pub(crate) fn operand_guard<'db>(
     }
     let index = semantic_index(db, file);
     let definition = index.try_definition(function)?;
-    index.scope(definition.file_scope(db)).node().as_class()?;
-    let function_type = match binding_type(db, definition) {
-        Type::FunctionLiteral(function_type) => function_type,
-        _ => infer_definition_types(db, definition)
-            .undecorated_type()?
-            .as_function_literal()?,
+    // a decorated dunder is called through whatever the decorator made, which a test written at
+    // the top of this body doesn't guard
+    let Type::FunctionLiteral(function_type) = binding_type(db, definition) else {
+        return None;
     };
-    if function_type.literal(db).last_definition.is_overload(db)
-        || function_type.is_staticmethod(db)
-        || function_type.is_classmethod(db)
+    let implementation = function_type.literal(db).last_definition;
+    // an `@overload` never runs, and dispatch takes nothing else to test its operand. a method
+    // a protocol or an `@abstractmethod` declares without implementing is never what python
+    // calls. one with a body is what a class that inherits it runs
+    if implementation.is_overload(db)
+        || !*tests_its_operand(db, implementation)
+        || ((is_protocol_member(db, implementation)
+            || implementation.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD))
+            && is_empty_body(function))
     {
         return None;
     }
-    // the receiver is positional parameter zero, and the operand the one after it. a method with
-    // none there gathers the operand into `*args`, which takes anything
+    // the receiver is positional parameter zero, and the operand the one after it
     let operand = UnionType::from_elements(
         db,
         env,
@@ -600,5 +708,41 @@ fn names_unchecked_protocol<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
             .and_then(|origin| origin.into_protocol_class(db))
             .is_none_or(|class| !class.is_runtime_checkable(db)),
         _ => false,
+    }
+}
+
+/// whether a value of type `operand` may be one of `set`, reading each class as dispatch does:
+/// a value of class `C` is inside `D` where `C` is assignable to `D`, and outside it otherwise
+///
+/// a class that could share a subclass with another isn't read as possibly being both, as
+/// nothing at runtime is. so a `Money` is not an `int`, and it is a `~int`
+fn may_be_inside<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    operand: Type<'db>,
+    set: Type<'db>,
+) -> bool {
+    match operand {
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .any(|element| may_be_inside(db, env, *element, set)),
+        _ => match set {
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .any(|element| may_be_inside(db, env, operand, *element)),
+            Type::Intersection(intersection) => {
+                intersection
+                    .positive(db)
+                    .iter()
+                    .all(|positive| may_be_inside(db, env, operand, *positive))
+                    && intersection
+                        .negative(db)
+                        .iter()
+                        .all(|negative| !operand.is_assignable_to(db, env, *negative))
+            }
+            _ => operand.is_assignable_to(db, env, set),
+        },
     }
 }

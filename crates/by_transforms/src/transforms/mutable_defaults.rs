@@ -234,6 +234,22 @@ impl DefaultMarkers {
         }
     }
 
+    /// the name of the sentinel `default`, the default of a parameter of a function that runs,
+    /// is swapped for, or `None` for a default evaluated in place
+    ///
+    /// the same name this pass binds it under, whichever asks first
+    pub(crate) fn sentinel_for(
+        &self,
+        written: WrittenNames,
+        default: &Expr,
+        source: &str,
+    ) -> Option<String> {
+        (!is_immutable_scalar_default(default) && !body_cannot_evaluate(default)).then(|| {
+            self.marker(written, MarkerSite::Default(default.range()), source)
+                .0
+        })
+    }
+
     /// the name `site`'s marker is bound under, and the line binding it
     fn marker(&self, written: WrittenNames, site: MarkerSite, source: &str) -> (String, String) {
         let mut named = self.named.borrow_mut();

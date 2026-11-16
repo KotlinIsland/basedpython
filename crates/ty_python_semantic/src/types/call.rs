@@ -176,7 +176,7 @@ impl<'db> Type<'db> {
                     .map(|bindings| {
                         (
                             bindings.return_type(db, env),
-                            bindings.may_reject_by_value(db),
+                            bindings.may_reject_by_value(db, env, argument),
                         )
                     })
             } else {
@@ -192,7 +192,7 @@ impl<'db> Type<'db> {
                     .map(|bindings| {
                         (
                             bindings.return_type(db, env),
-                            bindings.may_reject_by_value(db),
+                            bindings.may_reject_by_value(db, env, argument),
                         )
                     })
             };
@@ -381,7 +381,7 @@ impl<'db> Type<'db> {
                         policy,
                     )
                     .map(|bindings| {
-                        let may_reject = bindings.may_reject_by_value(db);
+                        let may_reject = bindings.may_reject_by_value(db, env, right_ty);
                         (bindings, may_reject)
                     }),
                 right_ty,
@@ -401,7 +401,7 @@ impl<'db> Type<'db> {
                         policy,
                     )
                     .map(|bindings| {
-                        let may_reject = bindings.may_reject_by_value(db);
+                        let may_reject = bindings.may_reject_by_value(db, env, left_ty);
                         (bindings, may_reject)
                     }),
                 left_ty,

@@ -199,8 +199,13 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
     fn context(&mut self, node: &ast::Expr) -> Option<&InferContext<'db, 'a>> {
         let file = self.model.program_file();
         let scope = semantic_index(self.db, file).try_expression_scope_id(node)?;
+        Some(self.scope_context(scope))
+    }
+
+    fn scope_context(&mut self, scope: FileScopeId) -> &InferContext<'db, 'a> {
+        let file = self.model.program_file();
         let (db, env, source_file, parsed) = (self.db, self.env, self.file, self.parsed);
-        Some(self.contexts.entry(scope).or_insert_with(|| {
+        self.contexts.entry(scope).or_insert_with(|| {
             InferContext::new(
                 db,
                 env,
@@ -209,7 +214,7 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                 file,
                 parsed,
             )
-        }))
+        })
     }
 
     fn site(&self, node: &ast::Expr) -> RuntimeSite<'db> {
@@ -708,26 +713,67 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
     fn operand_guard(&mut self, function: &'a ast::StmtFunctionDef, reports: bool) {
         match operand_guard(self.db, self.env, function, self.in_check_order) {
             Some(OperandGuard::Test(plan)) => self.read_spellings(&plan),
-            // an operand with no annotation is tested for nothing, so the one reported has one
-            Some(OperandGuard::Untestable(reason))
-                if reports
-                    && let Some(annotation) = function
-                        .parameters
-                        .posonlyargs
-                        .iter()
-                        .chain(&function.parameters.args)
-                        .nth(1)
-                        .and_then(|parameter| parameter.annotation()) =>
-            {
-                let source = source_text(self.db, self.file);
-                if let Some(context) = self.context(annotation) {
-                    report_untestable_operand(
-                        context,
-                        annotation.range(),
-                        &source[annotation.range()],
-                        reason,
-                        function.name.as_str(),
-                    );
+            Some(OperandGuard::Untestable(reason)) if reports => {
+                let Some(parameter) = function
+                    .parameters
+                    .posonlyargs
+                    .iter()
+                    .chain(&function.parameters.args)
+                    .nth(1)
+                else {
+                    return;
+                };
+                match parameter.annotation() {
+                    Some(annotation) => {
+                        let source = source_text(self.db, self.file);
+                        if let Some(context) = self.context(annotation) {
+                            report_untestable_operand(
+                                context,
+                                annotation.range(),
+                                &source[annotation.range()],
+                                reason,
+                                function.name.as_str(),
+                            );
+                        }
+                    }
+                    // an operand that takes its type from the method it overrides is tested
+                    // against that type, which is reported on the parameter
+                    None => {
+                        let file = self.model.program_file();
+                        let Some(definition) =
+                            semantic_index(self.db, file).try_definition(function)
+                        else {
+                            return;
+                        };
+                        let Type::FunctionLiteral(function_type) =
+                            binding_type(self.db, definition)
+                        else {
+                            return;
+                        };
+                        let Some(target) = function_type
+                            .literal(self.db)
+                            .last_definition
+                            .signature(self.db)
+                            .parameters()
+                            .get_positional(1)
+                            .map(|operand| {
+                                operand
+                                    .annotated_type()
+                                    .display(self.db, self.env)
+                                    .to_string()
+                            })
+                        else {
+                            return;
+                        };
+                        let context = self.scope_context(definition.file_scope(self.db));
+                        report_untestable_operand(
+                            context,
+                            parameter.range(),
+                            &target,
+                            reason,
+                            function.name.as_str(),
+                        );
+                    }
                 }
             }
             Some(OperandGuard::Untestable(_)) | None => {}

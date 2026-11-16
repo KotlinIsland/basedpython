@@ -1763,33 +1763,46 @@ impl<'db> Bindings<'db> {
         Some(overload_parameter_types(binding, overload, argument_count))
     }
 
-    /// basedpython: for every callee that didn't accept the call, the annotated types of the
-    /// parameters the first argument matched across its overloads
+    /// basedpython: for every callee that didn't accept the call, the callee, and where the first
+    /// argument matched a parameter in each of its overloads that failed only on the types of
+    /// its arguments: the overload's position in the function's overload list, and the
+    /// parameter's index
     ///
     /// an operator dunder takes its operand as that argument; see
     /// [`Self::rejects_operand`]
-    pub(crate) fn failed_operand_parameter_types(
+    pub(crate) fn failed_operand_parameters(
         &self,
-    ) -> impl Iterator<Item = Vec<Type<'db>>> + '_ {
+    ) -> impl Iterator<Item = (Type<'db>, Vec<(Option<usize>, usize)>)> + '_ {
         self.iter_flat()
             .filter(|binding| binding.as_result().is_err())
             .map(|binding| {
-                binding
+                // a call that fails for some other reason, like an argument it leaves out, fails
+                // whatever the operand is. with overloads, the implementation runs whichever
+                // one the operand matches, so each counts once one fails on the operand alone
+                let fails_on_arguments = binding.overloads.iter().any(|overload| {
+                    overload
+                        .errors
+                        .iter()
+                        .all(|error| matches!(error, BindingError::InvalidArgumentType { .. }))
+                });
+                let parameters = binding
                     .overloads
                     .iter()
+                    .filter(|_| fails_on_arguments)
                     .filter_map(|overload| {
                         match overload
                             .matched_argument_for_call_argument(binding, 0)?
                             .parameters
                             .as_slice()
                         {
-                            [parameter] => Some(
-                                overload.signature.parameters()[parameter.index].annotated_type(),
-                            ),
+                            [parameter] => {
+                                Some((overload.signature.source_overload_index(), parameter.index))
+                            }
                             _ => None,
                         }
                     })
-                    .collect()
+                    .collect();
+                (binding.callable_type, parameters)
             })
     }
 

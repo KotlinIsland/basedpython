@@ -7,7 +7,7 @@
 //!
 //! ```python
 //! class Money:
-//!     def __add__(self, other: Money) -> Money:
+//!     def __add__(self, other: "Money") -> "Money":
 //!         if not isinstance(other, Money):
 //!             return NotImplemented
 //!         return Money()
@@ -19,8 +19,8 @@
 //! - the body sees the operand as the annotation, or as anything outside its domain
 //!   ([`PassedOperand::as_passed`]). an operand inside the domain matched the annotation at the
 //!   call that dispatched to it, so only what is outside is new
-//! - a body that returns a value for an operand it hasn't tested into the domain is reported as
-//!   `unguarded-operand`: dispatch has already sent that operand somewhere else
+//! - a body that returns a value, or raises, for an operand it hasn't tested into the domain is
+//!   reported as `unguarded-operand`: dispatch has already sent that operand somewhere else
 //! - a `return NotImplemented` reached with an operand inside the domain hands that one back too,
 //!   so the operation moves on with it ([`Bindings::may_reject_by_value`])
 //!
@@ -35,15 +35,16 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::definition::Definition;
-use ty_python_core::operator_dunders::hands_back_operands;
 use ty_python_core::semantic_index;
 
 use crate::types::context::InferContext;
 use crate::types::diagnostic::UNGUARDED_OPERAND;
 use crate::types::function::{FunctionDecorators, OverloadLiteral};
 use crate::types::inferred_narrowing::{
-    NormalExit, holds_the_argument, is_declaration_body, narrowed_at_exit, normal_exits,
+    NormalExit, exits_through_finally, holds_the_argument, is_declaration_body, is_empty_body,
+    narrowed_at_exit, narrowed_at_recorded_exit, raise_exits,
 };
+use crate::types::operator_domain::tests_its_operand;
 use crate::types::signatures::{Parameter, ReturnCallableTypeVarScope};
 use crate::types::{
     IntersectionBuilder, Type, TypeContext, UnionType, binding_type, infer_scope_types,
@@ -59,8 +60,11 @@ pub(crate) struct PassedOperand<'db> {
     /// what the parameter is annotated with
     annotated: Type<'db>,
     /// what dispatch reads the method as taking: the domain of the operand parameter of every
-    /// overload together, since dispatch asks each overload
+    /// overload together, since dispatch asks each overload. `object` for a method that takes
+    /// every operand
     domain: Type<'db>,
+    /// whether some operand is outside the domain, so that the body has something to test
+    pub(crate) has_outside: bool,
 }
 
 impl<'db> PassedOperand<'db> {
@@ -68,6 +72,9 @@ impl<'db> PassedOperand<'db> {
     /// inside the domain matched at the call that dispatched to the method, or anything outside
     /// the domain, which python hands the method too
     pub(crate) fn as_passed(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        if !self.has_outside {
+            return Type::object();
+        }
         UnionType::from_two_elements(db, env, self.annotated, self.domain.negate(db, env))
     }
 }
@@ -76,8 +83,13 @@ impl<'db> PassedOperand<'db> {
 /// some operand is outside the domain of, and the project checks such a dunder against what
 /// python hands it
 ///
-/// `None` for a method that takes every operand, for a `@staticmethod` or `@classmethod`, and for
-/// one whose operand has no annotation, which claims nothing about it
+/// `None` for a method dispatch doesn't take to test its operand ([`tests_its_operand`]): a
+/// coroutine or generator function, a `@staticmethod` or `@classmethod`, an operand gathered into
+/// `*args`, or a function bound under another name. also `None` for a decorated method, which
+/// python calls through whatever the decorator made. an operand with no annotation of its own is
+/// read as the type it inherits, from the method it overrides or the overloads it implements, and
+/// otherwise takes every operand: such a method has nothing to test, but a `NotImplemented` it
+/// returns still hands back what reaches it
 #[salsa::tracked(
     returns(ref),
     cycle_initial = |_, _, _| None,
@@ -92,22 +104,17 @@ pub(crate) fn passed_operand<'db>(
     if source_type.is_basedpython()
         || source_type.is_stub()
         || !db.analysis_settings(file).checked_operator_operands
-        || !hands_back_operands(implementation.name(db))
         || implementation.is_overload(db)
-        || implementation.has_known_decorator(db, FunctionDecorators::STATICMETHOD)
-        || implementation.has_known_decorator(db, FunctionDecorators::CLASSMETHOD)
+        || !tests_its_operand(db, implementation)
     {
         return None;
     }
-    let program_file = implementation.program_file(db);
     let definition = implementation.definition(db);
-    semantic_index(db, program_file)
-        .scope(definition.file_scope(db))
-        .node()
-        .as_class()?;
+    let Type::FunctionLiteral(function) = binding_type(db, definition) else {
+        return None;
+    };
 
-    // the receiver is positional parameter zero, and the operand the one after it. a method with
-    // none there gathers the operand into `*args`, which takes anything
+    // the receiver is positional parameter zero, and the operand the one after it
     let operand = |overload: OverloadLiteral<'db>| {
         overload
             .parameter_signature(db, ReturnCallableTypeVarScope::Public)
@@ -116,17 +123,11 @@ pub(crate) fn passed_operand<'db>(
             .cloned()
     };
     let parameter = operand(implementation)?;
-    if parameter.inferred_annotation {
-        return None;
-    }
     let name = parameter.name()?.clone();
     let annotated = parameter.annotated_type();
 
     let env = &ProgramEnvironment::from_definition(definition);
-    let overloads = match binding_type(db, definition) {
-        Type::FunctionLiteral(function) => function.overloads_and_implementation(db).0,
-        _ => &[],
-    };
+    let overloads = function.overloads_and_implementation(db).0;
     let domain = if overloads.is_empty() {
         annotated.runtime_domain(db, env)
     } else {
@@ -141,66 +142,85 @@ pub(crate) fn passed_operand<'db>(
             }),
         )
     };
-    if Type::object().is_assignable_to(db, env, domain) {
-        return None;
-    }
+    let has_outside = !Type::object().is_assignable_to(db, env, domain);
     Some(PassedOperand {
         name,
         annotated,
-        domain,
+        domain: if has_outside { domain } else { Type::object() },
+        has_outside,
     })
 }
 
+/// where the body of an operator dunder of a `.py` class gives an answer for an operand it
+/// hasn't tested into the domain
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize)]
+pub(crate) enum UnguardedExit {
+    /// a `return` statement that hands back a value
+    Return(TextRange),
+    /// falling off the end of the body, which returns `None`
+    EndOfBody,
+    /// a `raise`, or an `assert` whose test fails: python stops there rather than moving on
+    Raise(TextRange),
+}
+
 /// what the body of an operator dunder of a `.py` class does with the operand python hands it
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, get_size2::GetSize)]
-pub(crate) struct OperandExits {
-    /// where the body returns a value with an operand it hasn't tested into the domain: a
-    /// `return` statement, or `None` for falling off the end of the body
-    pub(crate) unguarded: Box<[Option<TextRange>]>,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct OperandExits<'db> {
+    /// where the body answers for an operand it hasn't tested into the domain
+    unguarded: Box<[UnguardedExit]>,
     /// the body puts another value in the operand parameter, so what it tests is not what python
     /// handed it
-    pub(crate) rebinds: bool,
-    /// a `return NotImplemented` is reached with an operand inside the domain, so the method
-    /// hands back some of those too
-    pub(crate) rejects_by_value: bool,
+    rebinds: bool,
+    /// the operands inside the domain a `return NotImplemented` can be reached with, which the
+    /// method hands back too. `Never` when it hands back none
+    rejected_by_value: Type<'db>,
+}
+
+impl OperandExits<'_> {
+    fn none() -> Self {
+        OperandExits {
+            unguarded: Box::default(),
+            rebinds: false,
+            rejected_by_value: Type::Never,
+        }
+    }
 }
 
 /// what the body of `implementation` does with its [`PassedOperand`]: nothing for a method that
 /// has none
 ///
-/// a cycle starts at "it hands back nothing inside the domain, and returns nothing unguarded",
+/// a cycle starts at "it hands back nothing inside the domain, and answers nothing unguarded",
 /// which is where a body that has not been read yet stands
 #[salsa::tracked(
     returns(ref),
-    cycle_initial = |_, _, _| OperandExits::default(),
+    cycle_initial = |_, _, _| OperandExits::none(),
     heap_size = ruff_memory_usage::heap_size,
 )]
 pub(crate) fn operand_exits<'db>(
     db: &'db dyn Db,
     implementation: OverloadLiteral<'db>,
-) -> OperandExits {
+) -> OperandExits<'db> {
     let Some(operand) = passed_operand(db, implementation) else {
-        return OperandExits::default();
+        return OperandExits::none();
     };
     let program_file = implementation.program_file(db);
     let module = parsed_module(db, program_file.python_file(db)).load(db);
     let node = implementation.node(db, implementation.file(db), &module);
-
-    // a method that declares one without implementing it, with a `...` body or as an
-    // `@abstractmethod`, makes its claim for whatever implements it. a generator or coroutine
-    // function returns before its body runs
-    let mut returns = ReturnStatementVisitor::default();
-    returns.visit_body(&node.body);
-    if is_declaration_body(node)
-        || implementation.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
-        || returns.is_generator
-        || node.is_async
-    {
-        return OperandExits::default();
-    }
-
     let env = &ProgramEnvironment::from_file(program_file);
     let index = semantic_index(db, program_file);
+
+    // a method that declares one without implementing it, with a `...` body, as an
+    // `@abstractmethod`, or as a member of a protocol that does nothing, makes its claim for
+    // whatever implements it
+    if is_declaration_body(node)
+        || implementation.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
+        || (is_protocol_member(db, implementation) && is_empty_body(node))
+    {
+        return OperandExits::none();
+    }
+
+    let mut returns = ReturnStatementVisitor::default();
+    returns.visit_body(&node.body);
     let body_scope = implementation.body_scope(db);
     let file_scope_id = body_scope.file_scope_id(db);
     let use_def = index.use_def_map(file_scope_id);
@@ -219,18 +239,25 @@ pub(crate) fn operand_exits<'db>(
             ),
         NormalExit::EndOfBody => Type::none(db, env),
     };
+    // a `return` is read where it is written, even when a `finally` suite runs after it: that is
+    // where what it hands back is decided
+    let exits = exits_through_finally(db, use_def);
 
     // a body that puts another value in the parameter tests that, not what python handed it. it
-    // is reported once, and only a `NotImplemented` it might return is still read as handing back
-    // an operand inside the domain
+    // is reported once, and every `NotImplemented` it might return is read as handing back an
+    // operand inside the domain
     if !holds_the_argument(db, index, file_scope_id, &operand.name, &[]) {
-        let rejects_by_value = normal_exits(db, use_def)
+        let returns_not_implemented = exits
             .into_iter()
             .any(|exit| returned(exit).includes_not_implemented(db));
         return OperandExits {
             unguarded: Box::default(),
             rebinds: true,
-            rejects_by_value,
+            rejected_by_value: if returns_not_implemented {
+                operand.domain
+            } else {
+                Type::Never
+            },
         };
     }
 
@@ -239,43 +266,87 @@ pub(crate) fn operand_exits<'db>(
         .symbol_id(&operand.name)
         .map(Into::into)
     else {
-        return OperandExits::default();
+        return OperandExits::none();
     };
+    // nothing but the parameter binds the operand, so each way out starts from what python
+    // passed
     let as_passed = operand.as_passed(db, env);
-    let start = |definition: Option<Definition<'db>>| {
-        definition.map_or(as_passed, |definition| binding_type(db, definition))
-    };
+    let start = |_: Option<Definition<'db>>| as_passed;
     let outside = operand.domain.negate(db, env);
-    let overlaps = |a: Type<'db>, b: Type<'db>| {
-        !IntersectionBuilder::new(db, env)
+    let meet = |a: Type<'db>, b: Type<'db>| {
+        IntersectionBuilder::new(db, env)
             .add_positive(a)
             .add_positive(b)
             .build()
-            .is_never()
     };
 
     let mut unguarded = Vec::new();
-    let mut rejects_by_value = false;
-    for exit in normal_exits(db, use_def) {
+    let mut rejected_by_value = Vec::new();
+    for exit in exits {
         let returned = returned(exit);
         let established = narrowed_at_exit(db, env, use_def, exit, place, &start);
         // `Any` is inside every domain as far as assignability goes, and says nothing about the
         // operand: what is left of it outside the domain has to be nothing
-        if !returned.without_not_implemented(db).is_never() && overlaps(established, outside) {
+        if !returned.without_not_implemented(db).is_never()
+            && !meet(established, outside).is_never()
+        {
             unguarded.push(match exit {
-                NormalExit::Return { range, .. } => Some(range),
-                NormalExit::EndOfBody => None,
+                NormalExit::Return { range, .. } => UnguardedExit::Return(range),
+                NormalExit::EndOfBody => UnguardedExit::EndOfBody,
             });
         }
-        if returned.includes_not_implemented(db) && overlaps(established, operand.domain) {
-            rejects_by_value = true;
+        if returned.includes_not_implemented(db) {
+            rejected_by_value.push(meet(established, operand.domain));
+        }
+    }
+    // python stops at a raise, where dispatch would have moved on with an operand outside the
+    // domain
+    for (exit, range) in raise_exits(db, use_def) {
+        let established = narrowed_at_recorded_exit(db, env, use_def, exit, place, &start);
+        if !meet(established, outside).is_never() {
+            unguarded.push(UnguardedExit::Raise(range));
         }
     }
     OperandExits {
         unguarded: unguarded.into_boxed_slice(),
         rebinds: false,
-        rejects_by_value,
+        rejected_by_value: UnionType::from_elements(db, env, rejected_by_value),
     }
+}
+
+/// the operands inside its domain the `.py` operator dunder `implementation` hands back with a
+/// `return NotImplemented`: `Never` for a method that hands back none, or isn't checked
+///
+/// kept apart from [`operand_exits`] so that an edit to the body that moves its `return`
+/// statements, without changing what they hand back, doesn't change what dispatch reads
+#[salsa::tracked(
+    cycle_initial = |_, _, _| Type::Never,
+    heap_size = ruff_memory_usage::heap_size,
+)]
+pub(crate) fn operand_rejected_by_value<'db>(
+    db: &'db dyn Db,
+    implementation: OverloadLiteral<'db>,
+) -> Type<'db> {
+    operand_exits(db, implementation).rejected_by_value
+}
+
+/// whether `implementation` is written in the body of a protocol class
+pub(crate) fn is_protocol_member<'db>(
+    db: &'db dyn Db,
+    implementation: OverloadLiteral<'db>,
+) -> bool {
+    let definition = implementation.definition(db);
+    let program_file = implementation.program_file(db);
+    let index = semantic_index(db, program_file);
+    let Some(class) = index.scope(definition.file_scope(db)).node().as_class() else {
+        return false;
+    };
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let class_definition = index.expect_single_definition(class.node(&module));
+    matches!(
+        binding_type(db, class_definition),
+        Type::ClassLiteral(class) if class.is_protocol(db)
+    )
 }
 
 /// report where the `.py` operator dunder `node` returns a value with an operand it hasn't tested
@@ -291,7 +362,10 @@ pub(crate) fn check_operand_exits<'db>(
     let db = context.db();
     let env = &context.program_environment();
     let implementation = function.literal(db).last_definition;
-    let Some(operand) = passed_operand(db, implementation) else {
+    let Some(operand) = passed_operand(db, implementation)
+        .as_ref()
+        .filter(|operand| operand.has_outside)
+    else {
         return;
     };
     let exits = operand_exits(db, implementation);
@@ -322,8 +396,9 @@ pub(crate) fn check_operand_exits<'db>(
 
     for exit in &exits.unguarded {
         let (anchor, location) = match exit {
-            Some(range) => (*range, "where this returns"),
-            None => (node.name.range(), "where the body ends"),
+            UnguardedExit::Return(range) => (*range, "where this returns"),
+            UnguardedExit::EndOfBody => (node.name.range(), "where the body ends"),
+            UnguardedExit::Raise(range) => (*range, "where this raises"),
         };
         let Some(builder) = context.report_lint(&UNGUARDED_OPERAND, anchor) else {
             continue;
@@ -337,8 +412,8 @@ pub(crate) fn check_operand_exits<'db>(
              one outside `{domain}`"
         ));
         diagnostic.help(format_args!(
-            "return `NotImplemented` for an operand outside `{domain}` before returning anything \
-             else"
+            "return `NotImplemented` for an operand outside `{domain}` before returning or \
+             raising anything else"
         ));
     }
 }

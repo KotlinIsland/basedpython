@@ -43,6 +43,7 @@ use crate::{
         list_members::{
             Member, MemberWithDefinition, all_end_of_scope_members, extract_underlying_functions,
         },
+        operator_domain::tests_its_operand,
         tuple::Tuple,
     },
 };
@@ -1592,8 +1593,9 @@ struct OverrideTypes<'db> {
     compared_by_equality: bool,
 }
 
-/// basedpython: an `__eq__` or `__ne__` override is read as `==` and `!=` see it, so it may narrow
-/// its operand ([`CallableType::as_compared_by_equality`]).
+/// basedpython: an `__eq__` or `__ne__` override that hands back an operand it doesn't take is
+/// read as `==` and `!=` see it, so it may narrow its operand
+/// ([`CallableType::as_compared_by_equality`]).
 fn method_override_types<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -1633,7 +1635,11 @@ fn method_override_types<'db>(
             // annotations refer to the subclass even when the receiver is implicitly annotated.
             let subclass_callables =
                 subclass_method.callables_with_receiver(db, env, receiver, typing_self_type)?;
-            let subclass_callables = if matches!(name.as_str(), "__eq__" | "__ne__") {
+            let subclass_callables = if matches!(name.as_str(), "__eq__" | "__ne__")
+                && subclass_method
+                    .function(db)
+                    .is_some_and(|function| hands_back_untaken_operands(db, function))
+            {
                 subclass_callables.map(|callable| {
                     callable
                         .as_compared_by_equality(db, env)
@@ -2809,4 +2815,18 @@ fn check_enum_member_against_constructor_method<'db>(
             ));
         }
     }
+}
+
+/// basedpython: whether `function` really hands back an operand outside its domain: a `.by`
+/// method, which is lowered with the test, a `.py` one where the project checks that it is written
+/// with it, or one a stub declares. an unchecked `.py` method that narrows its operand runs with
+/// whatever python passes it, and its `==` with anything else can fail rather than fall back
+fn hands_back_untaken_operands<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> bool {
+    let implementation = function.literal(db).last_definition;
+    let file = implementation.file(db);
+    let source_type = file.source_type(db);
+    *tests_its_operand(db, implementation)
+        && (source_type.is_stub()
+            || source_type.is_basedpython()
+            || db.analysis_settings(file).checked_operator_operands)
 }

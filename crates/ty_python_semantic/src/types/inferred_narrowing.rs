@@ -384,21 +384,70 @@ pub(crate) enum NormalExit {
 /// that suite, which this model does not have. So it is neither read as establishing something nor
 /// reported as failing to.
 pub(crate) fn normal_exits<'db>(db: &'db dyn Db, use_def: &UseDefMap<'db>) -> Vec<NormalExit> {
-    let is_reachable = |reachability| {
-        !use_def
-            .reachability_constraints()
-            .evaluate(db, use_def.predicates(), reachability)
-            .is_always_false()
-    };
+    exits(db, use_def, false)
+}
+
+/// Every way out of a function body that can be reached and hands control back to the caller,
+/// including a `return` a `finally` suite can run after, read at the `return`.
+///
+/// What a `return` hands back is decided where it is written, so this is the state to read the
+/// returned value against, even though the caller may see the state after the `finally` suite.
+pub(crate) fn exits_through_finally<'db>(
+    db: &'db dyn Db,
+    use_def: &UseDefMap<'db>,
+) -> Vec<NormalExit> {
+    exits(db, use_def, true)
+}
+
+fn exits<'db>(db: &'db dyn Db, use_def: &UseDefMap<'db>, through_finally: bool) -> Vec<NormalExit> {
     use_def
         .return_exits()
-        .enumerate()
-        .filter(|(_, (_, reachability, through_finally))| {
-            !through_finally && is_reachable(*reachability)
+        .filter(|(_, _, reachability, finally)| {
+            (through_finally || !finally) && is_reachable(db, use_def, *reachability)
         })
-        .map(|(index, (range, _, _))| NormalExit::Return { index, range })
+        .map(|(index, range, _, _)| NormalExit::Return { index, range })
         .chain(can_implicitly_return_none(db, use_def).then_some(NormalExit::EndOfBody))
         .collect()
+}
+
+/// Every `raise`, and every `assert` whose test can fail, that the index recorded in a body and
+/// that can be reached: its index among the recorded exits, and its range.
+pub(crate) fn raise_exits<'db>(
+    db: &'db dyn Db,
+    use_def: &UseDefMap<'db>,
+) -> Vec<(usize, TextRange)> {
+    use_def
+        .raise_exits()
+        .filter(|(_, _, reachability)| is_reachable(db, use_def, *reachability))
+        .map(|(index, range, _)| (index, range))
+        .collect()
+}
+
+fn is_reachable<'db>(
+    db: &'db dyn Db,
+    use_def: &UseDefMap<'db>,
+    reachability: ty_python_core::reachability_constraints::ScopedReachabilityConstraintId,
+) -> bool {
+    !use_def
+        .reachability_constraints()
+        .evaluate(db, use_def.predicates(), reachability)
+        .is_always_false()
+}
+
+/// What `place` is at the exit the index recorded at `index`: a `return`, a `raise` or a failing
+/// `assert`. See [`narrowed_at_exit`]
+pub(crate) fn narrowed_at_recorded_exit<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    use_def: &UseDefMap<'db>,
+    index: usize,
+    place: ScopedPlaceId,
+    start: &dyn Fn(Option<Definition<'db>>) -> Type<'db>,
+) -> Type<'db> {
+    use_def.return_exit_bindings(index, place).map_or_else(
+        || start(None),
+        |bindings| narrowed_over(db, env, use_def, bindings, place, start),
+    )
 }
 
 /// What `place` is where `exit` leaves the body.
@@ -801,6 +850,18 @@ pub(crate) fn is_declaration_body(node: &ast::StmtFunctionDef) -> bool {
         .iter()
         .all(|stmt| match stmt {
             ast::Stmt::Expr(ast::StmtExpr { value, .. }) => value.is_ellipsis_literal_expr(),
+            _ => false,
+        })
+}
+
+/// basedpython: whether `node`'s body does nothing: only `...` or `pass`, after any docstring.
+/// a protocol member written so declares the method for whatever implements it
+pub(crate) fn is_empty_body(node: &ast::StmtFunctionDef) -> bool {
+    ast::helpers::body_without_leading_docstring(&node.body)
+        .iter()
+        .all(|stmt| match stmt {
+            ast::Stmt::Expr(ast::StmtExpr { value, .. }) => value.is_ellipsis_literal_expr(),
+            ast::Stmt::Pass(_) => true,
             _ => false,
         })
 }

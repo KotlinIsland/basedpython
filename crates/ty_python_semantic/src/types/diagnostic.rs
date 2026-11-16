@@ -2254,7 +2254,7 @@ declare_lint! {
 declare_lint! {
     /// ## What it does
     /// Checks that an operator dunder of a `.py` class tests its operand before it returns a
-    /// value with it.
+    /// value with it, or raises.
     ///
     /// ## Why is this bad?
     /// Python calls `__add__`, `__eq__` and the other operator dunders with whatever the other
@@ -2270,7 +2270,7 @@ declare_lint! {
     ///
     /// ```python
     /// class Money:
-    ///     def __add__(self, other: Money) -> Money:
+    ///     def __add__(self, other: "Money") -> "Money":
     ///         return Money()  # error: `other` may be outside `Money` here
     /// ```
     ///
@@ -2278,7 +2278,7 @@ declare_lint! {
     ///
     /// ```python
     /// class Money:
-    ///     def __add__(self, other: Money) -> Money:
+    ///     def __add__(self, other: "Money") -> "Money":
     ///         if not isinstance(other, Money):
     ///             return NotImplemented
     ///         return Money()
@@ -9209,6 +9209,27 @@ pub(super) fn report_invalid_method_override<'db>(
                     .message(format_args!("Definition of `{superclass_name}`")),
             );
             diagnostic.sub(sub);
+        }
+    }
+
+    // an `__eq__` read as `==` sees it may already narrow its operand, so this only helps one
+    // that wasn't: a `.py` `__eq__` the project doesn't check hands back nothing it doesn't take
+    if !compared_by_equality && superclass.is_object(db) && matches!(member, "__eq__" | "__ne__") {
+        // Inspired by mypy's subdiagnostic at <https://github.com/python/mypy/blob/1b6ebb17b7fe64488a7b3c3b4b0187bb14fe331b/mypy/messages.py#L1307-L1318>
+        let eq_subdiagnostics = [
+            format_args!(
+                "It is recommended for `{member}` to work with arbitrary objects, for example:",
+            ),
+            format_args!(""),
+            format_args!("    def {member}(self, other: object) -> bool:"),
+            format_args!("        if not isinstance(other, {class_name}):"),
+            format_args!("            return False"),
+            format_args!("        return <logic to compare two `{class_name}` instances>"),
+            format_args!(""),
+        ];
+
+        for subdiag in eq_subdiagnostics {
+            diagnostic.help(subdiag);
         }
     }
 }

@@ -2093,9 +2093,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let declared_ty = self
                 .file_expression_type(annotation)
                 .erase_overlapping(db, env);
-            // basedpython: python hands a `.py` operator dunder whatever the other operand is,
-            // so the body sees an operand outside the annotation's domain too
-            let declared_ty = self.passed_operand_type(parameter).unwrap_or(declared_ty);
 
             // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
             // not on regular parameters. basedpython has no source spelling for them at all,
@@ -2168,7 +2165,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ));
             }
 
-            self.add_parameter(parameter.into(), definition, declared_ty);
+            // basedpython: python hands a `.py` operator dunder whatever the other operand is,
+            // so the body sees an operand outside the annotation's domain too. a default is still
+            // checked against the annotation, above
+            let body_ty = self.passed_operand_type(parameter).unwrap_or(declared_ty);
+            self.add_parameter(parameter.into(), definition, body_ty);
         } else if let Some(function) = self.enclosing_trailing_lambda() {
             // basedpython: the implicit `it` parameter of a trailing lambda
             // block is context-typed from the called expression — the sole
@@ -2216,6 +2217,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             } else {
                 Type::unknown()
             };
+            // basedpython: an operand that takes its type from the method it overrides is
+            // handed whatever the other operand is, like an annotated one
+            let ty = self.passed_operand_type(parameter).unwrap_or(ty);
 
             self.add_binding(parameter.into(), definition)
                 .insert(self, ty);
@@ -2232,7 +2236,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let function = nearest_enclosing_function(db, self.index, self.scope())?;
         let operand = passed_operand(db, function.literal(db).last_definition)
             .as_ref()
-            .filter(|operand| operand.name == parameter.name.id)?;
+            .filter(|operand| operand.has_outside && operand.name == parameter.name.id)?;
         Some(operand.as_passed(db, self.program_environment()))
     }
 
