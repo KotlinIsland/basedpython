@@ -20,9 +20,11 @@
 //! inside it that the call doesn't accept is a type error, with no fallback
 
 use ruff_python_ast as ast;
+use ty_python_core::operator_dunders::hands_back_operands;
 use ty_python_core::semantic_index;
 
 use super::check_order::InferredInCheckOrder;
+use super::passed_operand::operand_exits;
 use super::reified_infer::{ErasedTargetReason, ParametricIsPlan, type_test_plan};
 use super::runtime_spelling::RuntimeSite;
 use super::signatures::{CallableSignature, Parameter};
@@ -42,7 +44,7 @@ impl<'db> Type<'db> {
     /// it matches what `isinstance` narrows to: `list[int]` and `Iterable[T]` become every
     /// `list` and every `Iterable`, a literal stays the literal an equality check can test, and a
     /// type variable becomes the domain of what it stands for
-    fn runtime_domain(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
+    pub(crate) fn runtime_domain(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
         self.domain(db, env, Erasure::Top)
     }
 
@@ -207,21 +209,21 @@ impl<'db> Bindings<'db> {
             let Some(function) = function else {
                 return false;
             };
-            function
-                .literal(db)
-                .last_definition
-                .header(db)
-                .writes_return
+            let implementation = function.literal(db).last_definition;
+            (implementation.header(db).writes_return
                 && binding
                     .matching_overloads()
-                    .any(|(_, overload)| overload.return_ty.includes_not_implemented(db))
+                    .any(|(_, overload)| overload.return_ty.includes_not_implemented(db)))
+                // a `.py` dunder says so by returning `NotImplemented` for an operand inside the
+                // domain, since it never had to write it
+                || operand_exits(db, implementation).rejects_by_value
         })
     }
 }
 
 impl<'db> Type<'db> {
     /// whether this is, or is a union that includes, `NotImplementedType`
-    fn includes_not_implemented(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn includes_not_implemented(self, db: &'db dyn Db) -> bool {
         match self {
             Type::Union(union) => union
                 .elements(db)
@@ -359,40 +361,6 @@ impl<'db> CallDunderError<'db> {
             }
         }
     }
-}
-
-/// the operators whose dunders python hands an operand it may hand back: each binary operator's
-/// dunder, its reflected dunder and its in-place dunder
-const OPERATORS: [ast::Operator; 13] = [
-    ast::Operator::Add,
-    ast::Operator::Sub,
-    ast::Operator::Mult,
-    ast::Operator::MatMult,
-    ast::Operator::Div,
-    ast::Operator::Mod,
-    ast::Operator::Pow,
-    ast::Operator::LShift,
-    ast::Operator::RShift,
-    ast::Operator::BitOr,
-    ast::Operator::BitXor,
-    ast::Operator::BitAnd,
-    ast::Operator::FloorDiv,
-];
-
-/// whether python moves on from a method called `name` that returns `NotImplemented`: an
-/// operator dunder, a reflected or in-place one, or a rich comparison
-pub(crate) fn hands_back_operands(name: &str) -> bool {
-    matches!(
-        name,
-        "__eq__" | "__ne__" | "__lt__" | "__le__" | "__gt__" | "__ge__"
-    ) || OPERATORS.iter().any(|operator| {
-        [
-            operator.dunder(),
-            operator.reflected_dunder(),
-            operator.in_place_dunder(),
-        ]
-        .contains(&name)
-    })
 }
 
 impl<'db> CallableType<'db> {

@@ -1499,6 +1499,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             ty,
                             function.node(self.module()),
                         );
+                        crate::types::passed_operand::check_operand_exits(
+                            &self.context,
+                            ty,
+                            function.node(self.module()),
+                        );
                     }
                     DefinitionKind::Class(class_node) => {
                         post_inference::decorator::check_decorator_calls(

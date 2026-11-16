@@ -198,6 +198,14 @@ basedpython infers a precise type in places the spec allows a gradual one, so
 code that leaned on `Any` flowing through silently now reports. see
 [sound types](sound-types.md)
 
+### an operator dunder's operand is whatever python passes
+
+python calls `__add__` and the other operator dunders with whatever the other operand
+is, so in a `.py` file an annotated operand is also typed as anything outside its
+annotation until the body tests it, and a value returned for an untested operand is
+`unguarded-operand`. see
+[operator dispatch](operator-dispatch.md#a-py-dunder-tests-its-operand-itself)
+
 ### the stdlib is typed differently
 
 [typeshed improvements](typeshed.md) lists the whole set. the ones most

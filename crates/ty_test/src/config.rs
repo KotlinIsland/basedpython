@@ -280,6 +280,9 @@ pub(crate) struct Analysis {
 
     pub(crate) precise_unsolved_typevars: Option<bool>,
 
+    /// see [`ty_python_semantic::AnalysisSettings::checked_operator_operands`]
+    pub(crate) checked_operator_operands: Option<bool>,
+
     pub(crate) overlapping_condition_exempt_types: Option<Vec<String>>,
 
     pub(crate) overlapping_condition_assume_truthy_instances: Option<bool>,

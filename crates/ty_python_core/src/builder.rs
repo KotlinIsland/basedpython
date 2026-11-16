@@ -55,6 +55,7 @@ use crate::fluid::{FluidUse, FluidUseRole};
 use crate::frozen::{FrozenMap, FrozenSet};
 use crate::member::MemberExprBuilder;
 use crate::node_key::NodeKey;
+use crate::operator_dunders::hands_back_operands;
 use crate::place::{
     PlaceExpr, PlaceTable, PlaceTableBuilder, PossiblyNarrowedPlacesBuilder, ScopedPlaceId,
     match_subject_place_expressions,
@@ -1664,6 +1665,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     /// [`Self::record_merged_normal_exit`]; a written `-> asserts` keeps each `return` on its own,
     /// so that the one that fails the assertion is the one reported.
     /// See `ty_python_semantic::types::inferred_narrowing`.
+    ///
+    /// An operator dunder of a `.py` class keeps each `return` too: python hands it whatever the
+    /// other operand is, and what it returns depends on what it established about that operand on
+    /// the way. See `ty_python_semantic::types::operator_domain`.
     fn record_return_exit(&mut self, stmt: &'ast ast::Stmt) {
         let scope = self.current_scope();
         let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
@@ -1671,7 +1676,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         };
         let function = function.node(self.module);
         let is_asserts_return = function.is_asserts_return;
+        let records_each_return = is_asserts_return || self.is_passed_operands(scope, function);
         if function.returns.is_some() && !is_asserts_return {
+            if records_each_return {
+                self.record_each_return(stmt, scope, function);
+            }
             return;
         }
         // `return None` hands back exactly what a bare `return` does
@@ -1704,18 +1713,39 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             }
         }
 
-        if !is_asserts_return {
-            return;
+        if records_each_return {
+            self.record_each_return(stmt, scope, function);
         }
+    }
+
+    /// basedpython: the state of `function`'s parameters where `stmt` returns, kept on its own
+    fn record_each_return(
+        &mut self,
+        stmt: &'ast ast::Stmt,
+        scope: FileScopeId,
+        function: &ast::StmtFunctionDef,
+    ) {
         let places = self.parameter_places(scope, function);
         if places.is_empty() {
             return;
         }
+        let in_finally_statement = self.in_finally_statement;
         self.use_def_maps[scope].record_return_exit(
             stmt.range(),
             in_finally_statement,
             places.into_iter(),
         );
+    }
+
+    /// basedpython: whether `function`, whose body is `scope`, is an operator dunder of a `.py`
+    /// class, which python calls with whatever the other operand is
+    fn is_passed_operands(&self, scope: FileScopeId, function: &ast::StmtFunctionDef) -> bool {
+        !self.source_type.is_basedpython()
+            && !self.source_type.is_stub()
+            && hands_back_operands(function.name.as_str())
+            && self.scopes[scope]
+                .parent()
+                .is_some_and(|parent| self.scopes[parent].kind().is_class())
     }
 
     /// basedpython: records `expr` as a value of the statement expression whose

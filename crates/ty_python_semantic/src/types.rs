@@ -63,9 +63,7 @@ pub(crate) use self::match_pattern::{
     pattern_binding_fallthrough_type, sequence_pattern_type_builder, singleton_pattern_type,
     starred_sequence_pattern_type, typed_dict_matches_class_pattern,
 };
-pub(crate) use self::operator_domain::{
-    OperandGuard, UntestableOperand, hands_back_operands, operand_guard,
-};
+pub(crate) use self::operator_domain::{OperandGuard, UntestableOperand, operand_guard};
 pub(crate) use self::relation_error::{ErrorContext, ErrorContextTree, ParameterDescription};
 use self::set_theoretic::NegativeIntersectionElements;
 pub(crate) use self::set_theoretic::builder::{
@@ -240,6 +238,7 @@ pub(crate) mod normal_completion;
 mod operator_domain;
 mod overlapping;
 mod overrides;
+mod passed_operand;
 mod protocol_class;
 pub(crate) mod receivers;
 mod recursive;

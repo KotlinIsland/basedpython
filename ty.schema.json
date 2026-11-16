@@ -172,6 +172,13 @@
             "null"
           ]
         },
+        "checked-operator-operands": {
+          "description": "Whether an operator dunder of a `.py` class is checked against what python hands it. This\nis a basedpython feature.\n\nPython calls `__add__`, `__eq__` and the other operator dunders with whatever the other\noperand is, and an operand outside the domain of the parameter's annotation is read as\nhanded back with `NotImplemented`, so that python moves on to the other operand:\n\n```python\nclass Money:\n    def __add__(self, other: Money) -> Money:\n        if not isinstance(other, Money):\n            return NotImplemented\n        return Money()\n```\n\nWith this enabled, `other` is also typed as whatever falls outside `Money` until the body\ntests it, a body that returns a value for an operand it never tested is reported as\n[`unguarded-operand`](rules.md#unguarded-operand), and a `return NotImplemented` reached\nwith an operand inside the domain means the operation can move on with one of those too.\n\nWhen set to `false`, the body sees the annotation, as if python only ever passed it what\nit says. A `.by` dunder is lowered with the test, and is unaffected.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "dependency-groups": {
           "description": "The requirement groups the matching files may import from.\n\n`project` names `[project].dependencies`, an extra or a PEP 735 dependency group\nis named by its own name, and `*` names every group.\n\nWhen this is unset, a file may import from every group unless it is part of what\nthe project ships — the modules named by `shipped-modules` — in which case it may\nimport only `project` and the extras. Nothing the project ships can import a\ndependency group, because nothing installs one alongside the project.",
           "type": [
@@ -2690,6 +2697,16 @@
         "unestablished-assertion-guard": {
           "title": "detects an assertion guard its function can return without establishing",
           "description": "## What it does\nChecks that a function with a basedpython assertion guard establishes what it asserts\nwherever it returns.\n\n## Why is this bad?\n`-> asserts x` tells every caller that `x` is truthy once the call has returned, and each\ncall narrows its argument on the strength of that. A body that can return without having\nestablished it — by falling off its end, or through a `return` — narrows the caller's\nargument to something it may not be.\n\n## Example\n\n```by\ndef check(x: int | None) -> asserts x:  # error: `x` can still be `0` here\n    if x is None:\n        raise ValueError\n```\n\nUse instead:\n\n```by\ndef check(x: int | None) -> asserts x:\n    assert x\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unguarded-operand": {
+          "title": "detects an operator dunder that returns a value for an operand it hasn't tested",
+          "description": "## What it does\nChecks that an operator dunder of a `.py` class tests its operand before it returns a\nvalue with it.\n\n## Why is this bad?\nPython calls `__add__`, `__eq__` and the other operator dunders with whatever the other\noperand is. An operand outside what the parameter's annotation can tell apart at runtime\nis read as handed back with `NotImplemented`, so that python asks the other operand next,\nand the type of `a + b` is worked out on the strength of that. A method that returns a\nvalue for such an operand answers an operation that was typed as answered somewhere else.\n\nA `.by` operator dunder is lowered with the test, so this only applies to a `.py` one, and\nonly while `analysis.checked-operator-operands` is enabled.\n\n## Example\n\n```python\nclass Money:\n    def __add__(self, other: Money) -> Money:\n        return Money()  # error: `other` may be outside `Money` here\n```\n\nUse instead:\n\n```python\nclass Money:\n    def __add__(self, other: Money) -> Money:\n        if not isinstance(other, Money):\n            return NotImplemented\n        return Money()\n```",
           "default": "error",
           "oneOf": [
             {

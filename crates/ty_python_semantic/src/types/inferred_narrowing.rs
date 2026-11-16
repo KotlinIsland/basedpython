@@ -791,3 +791,16 @@ fn narrowed_members_protocol<'db>(
 
     (!members.is_empty()).then(|| Type::inline_protocol(db, env, members, Box::default()))
 }
+
+/// basedpython: whether `node` declares a function without implementing one.
+///
+/// A `...` body is a declaration: what it claims is for whatever implements it to establish. A
+/// `pass` body is an implementation, and an empty one establishes nothing.
+pub(crate) fn is_declaration_body(node: &ast::StmtFunctionDef) -> bool {
+    ast::helpers::body_without_leading_docstring(&node.body)
+        .iter()
+        .all(|stmt| match stmt {
+            ast::Stmt::Expr(ast::StmtExpr { value, .. }) => value.is_ellipsis_literal_expr(),
+            _ => false,
+        })
+}

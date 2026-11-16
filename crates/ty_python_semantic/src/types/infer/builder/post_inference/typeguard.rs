@@ -8,7 +8,7 @@ use crate::place::{ConsideredDefinitions, symbol};
 use crate::semantic_index;
 use crate::types::function::{FunctionDecorators, OverloadLiteral};
 use crate::types::inferred_narrowing::{
-    NormalExit, holds_the_argument, narrowed_at_exit, normal_exits,
+    NormalExit, holds_the_argument, is_declaration_body, narrowed_at_exit, normal_exits,
 };
 use crate::types::narrowing_guards::guard_place_display;
 use crate::types::signatures::{NarrowingGuard, NarrowingGuardKind, Signature};
@@ -404,17 +404,4 @@ fn check_assertion_established<'db>(
             established = established.display(db, env),
         ));
     }
-}
-
-/// basedpython: whether `node` declares a function without implementing one.
-///
-/// A `...` body is a declaration: what it claims is for whatever implements it to establish. A
-/// `pass` body is an implementation, and an empty one establishes nothing.
-fn is_declaration_body(node: &ast::StmtFunctionDef) -> bool {
-    ast::helpers::body_without_leading_docstring(&node.body)
-        .iter()
-        .all(|stmt| match stmt {
-            ast::Stmt::Expr(ast::StmtExpr { value, .. }) => value.is_ellipsis_literal_expr(),
-            _ => false,
-        })
 }

@@ -114,6 +114,57 @@ a natively compiled dunder hands an operand that isn't of the class its paramete
 interpreted definition, which makes the test. one whose test asks for more than that class — a
 union, a protocol — is left to the interpreted definition
 
+## a `.py` dunder tests its operand itself
+
+nothing lowers a `.py` file, so a `.py` dunder has to be written with the test a `.by` one is
+given. the checker holds it to that: until the body tests its operand, the operand is the
+annotation or anything outside its domain
+
+```python
+class Money:
+    def __add__(self, other: Money) -> Money:
+        reveal_type(other)  # object
+        if not isinstance(other, Money):
+            return NotImplemented
+        reveal_type(other)  # Money
+        return Money()
+```
+
+an operand inside the domain matched the whole annotation at the operation that dispatched to the
+method, so testing its class gets the annotation back: a `list[int]` operand is a `list[int]` once
+`isinstance(other, list)` holds
+
+a body that returns a value for an operand it never tested into the domain is
+`unguarded-operand`. the operation has already been typed as moving on from that operand, so the
+value answers something the checker said was answered somewhere else. falling off the end of the
+body returns `None`, so it counts too, and a body that reassigns its operand is reported once,
+since what it tests is then not what python handed it
+
+```python
+class Bad:
+    def __add__(self, other: int) -> int:
+        return 1  # error: [unguarded-operand] `other` may be outside `int` here
+```
+
+a `return NotImplemented` reached with an operand inside the domain [rejects it by
+value](#rejecting-by-value), without writing `NotImplementedType` in the return type
+
+```python
+class Small:
+    def __add__(self, other: int) -> int:
+        if not isinstance(other, int):
+            return NotImplemented
+        if other > 1:
+            return NotImplemented
+        return 0
+
+Small() + 1  # error: when `__add__` hands the `int` back, `int.__radd__` doesn't take a `Small`
+```
+
+an operand annotated `object`, or not annotated at all, claims nothing, and is not checked. this is
+`analysis.checked-operator-operands`, which is on under the `strict` preset and off under
+`ty-compatible`, where the body sees the annotation as if python only passed what it says
+
 ## rejecting by value
 
 a dunder can also hand back an operand of the right class, after testing its value. it says so by
@@ -142,9 +193,10 @@ Small() + 1  # error: when `__add__` hands the `int` back, `int.__radd__` doesn'
 an operation never has `NotImplementedType` in its own type: a `NotImplemented` the dunder hands back
 is the operation moving on
 
-only a return type you write says a dunder may reject by value. one inferred from the body also
-counts the `return NotImplemented` that rejects an operand of the wrong class, which the domain
-already covers
+a return type inferred from the body doesn't say this: it also counts the `return NotImplemented`
+that rejects an operand of the wrong class, which the domain already covers. a `.py` dunder whose
+operand is [checked](#a-py-dunder-tests-its-operand-itself) says it with a `return NotImplemented`
+reached for an operand inside the domain
 
 ### in a `.by` file
 
@@ -183,8 +235,8 @@ no other operator gets this: `<` with nothing that takes the operand is a `TypeE
 override that narrows its operand is still `invalid-method-override`
 
 in a `.by` file the override [tests its operand](#a-by-dunder-tests-its-operand) before its body
-runs. in a `.py` file nothing does, so the body has to: python still calls it with whatever the
-other operand is
+runs. in a `.py` file [the body has to](#a-py-dunder-tests-its-operand-itself): python still calls
+it with whatever the other operand is
 
 ## a receiver that may be one of several
 

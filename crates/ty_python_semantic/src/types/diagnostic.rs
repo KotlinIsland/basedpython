@@ -208,6 +208,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNRESOLVED_NARROWING_GUARD);
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&UNESTABLISHED_ASSERTION_GUARD);
+    registry.register_lint(&UNGUARDED_OPERAND);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&MUTABLE_STATE_VALUE);
     registry.register_lint(&SILENT_MUTATION);
@@ -2245,6 +2246,46 @@ declare_lint! {
     pub(crate) static UNESTABLISHED_ASSERTION_GUARD = {
         summary: "detects an assertion guard its function can return without establishing",
         status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that an operator dunder of a `.py` class tests its operand before it returns a
+    /// value with it.
+    ///
+    /// ## Why is this bad?
+    /// Python calls `__add__`, `__eq__` and the other operator dunders with whatever the other
+    /// operand is. An operand outside what the parameter's annotation can tell apart at runtime
+    /// is read as handed back with `NotImplemented`, so that python asks the other operand next,
+    /// and the type of `a + b` is worked out on the strength of that. A method that returns a
+    /// value for such an operand answers an operation that was typed as answered somewhere else.
+    ///
+    /// A `.by` operator dunder is lowered with the test, so this only applies to a `.py` one, and
+    /// only while `analysis.checked-operator-operands` is enabled.
+    ///
+    /// ## Example
+    ///
+    /// ```python
+    /// class Money:
+    ///     def __add__(self, other: Money) -> Money:
+    ///         return Money()  # error: `other` may be outside `Money` here
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```python
+    /// class Money:
+    ///     def __add__(self, other: Money) -> Money:
+    ///         if not isinstance(other, Money):
+    ///             return NotImplemented
+    ///         return Money()
+    /// ```
+    pub(crate) static UNGUARDED_OPERAND = {
+        summary: "detects an operator dunder that returns a value for an operand it hasn't tested",
+        status: LintStatus::stable("0.0.2"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }

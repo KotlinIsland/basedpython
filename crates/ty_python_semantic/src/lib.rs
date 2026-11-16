@@ -281,6 +281,16 @@ pub struct AnalysisSettings {
     /// occurrence stays gradual, since `Never` there would say nothing can be written or passed.
     pub precise_unsolved_typevars: bool,
 
+    /// Whether an operator dunder of a `.py` class is checked against what python hands it.
+    ///
+    /// Python calls `__add__` and the other operator dunders with whatever the other operand is,
+    /// and dispatch reads an operand outside a parameter's domain as handed back with
+    /// `NotImplemented`. With this enabled the body sees an operand outside the domain too, has
+    /// to have tested the operand into the domain wherever it returns a value, and a
+    /// `NotImplemented` it returns for an operand inside the domain makes the operation move on.
+    /// A `.by` dunder is lowered with that test, and is checked this way whatever this says.
+    pub checked_operator_operands: bool,
+
     /// Classes whose values do not count as a distinct member of an overlapping condition.
     ///
     /// Entries are qualified class names (`decimal.Decimal`); a class in `builtins` may also be
@@ -387,6 +397,7 @@ impl AnalysisSettings {
             infer_unannotated_signatures: basedpython,
             bivariant_private_attributes: basedpython,
             precise_unsolved_typevars: basedpython,
+            checked_operator_operands: basedpython,
             overlapping_condition_exempt_types: Box::default(),
             overlapping_condition_assume_truthy_instances: false,
             implicit_object_repr_exempt_types: Box::default(),

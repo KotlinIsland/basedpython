@@ -1,4 +1,5 @@
 use crate::types::any_over_type;
+use crate::types::passed_operand::passed_operand;
 use crate::{
     Db, DisplaySettings, FxIndexMap, ProgramEnvironment,
     reachability::is_end_of_scope_reachable,
@@ -1566,7 +1567,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // classes the module may bind further down. a stub has no body to run
         if self.file().source_type(db).is_basedpython()
             && !self.file().source_type(db).is_stub()
-            && crate::types::hands_back_operands(function.name.as_str())
+            && ty_python_core::operator_dunders::hands_back_operands(function.name.as_str())
             && self.scope().node(self.db()).as_class().is_some()
         {
             self.record_runtime_read(crate::types::runtime_reads::RuntimeReadSite::OperandGuard {
@@ -2092,6 +2093,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let declared_ty = self
                 .file_expression_type(annotation)
                 .erase_overlapping(db, env);
+            // basedpython: python hands a `.py` operator dunder whatever the other operand is,
+            // so the body sees an operand outside the annotation's domain too
+            let declared_ty = self.passed_operand_type(parameter).unwrap_or(declared_ty);
 
             // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
             // not on regular parameters. basedpython has no source spelling for them at all,
@@ -2216,6 +2220,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.add_binding(parameter.into(), definition)
                 .insert(self, ty);
         }
+    }
+
+    /// basedpython: what the body of a `.py` operator dunder sees `parameter` as, where it is the
+    /// operand python hands the method. See [`crate::types::passed_operand`]
+    fn passed_operand_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+        let db = self.db();
+        if !db.analysis_settings(self.file()).checked_operator_operands {
+            return None;
+        }
+        let function = nearest_enclosing_function(db, self.index, self.scope())?;
+        let operand = passed_operand(db, function.literal(db).last_definition)
+            .as_ref()
+            .filter(|operand| operand.name == parameter.name.id)?;
+        Some(operand.as_passed(db, self.program_environment()))
     }
 
     /// basedpython: for an unannotated parameter of a pytest test or fixture,

@@ -377,9 +377,13 @@ impl std::ops::Deref for MdtestRuleSelection {
 /// in a large number of files inherited from ty whose subject is something else entirely, and
 /// carrying those edits would conflict on every upstream sync. It has its own mdtest that turns it
 /// on, and the shipped default is covered end to end by the CLI tests.
+///
+/// `checked-operator-operands` is left off for the same reason: the files inherited from ty write
+/// operator dunders that use their operand without testing it, to exercise everything else.
 fn mdtest_defaults(preset: TypeCheckingPreset) -> AnalysisSettings {
     AnalysisSettings {
         sound_types: false,
+        checked_operator_operands: false,
         ..AnalysisSettings::from_preset(preset)
     }
 }
@@ -406,6 +410,7 @@ fn mdtest_analysis_settings(
         infer_unannotated_signatures: infer_unannotated_signatures_default,
         bivariant_private_attributes: bivariant_private_attributes_default,
         precise_unsolved_typevars: precise_unsolved_typevars_default,
+        checked_operator_operands: checked_operator_operands_default,
         overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
         overlapping_condition_assume_truthy_instances:
             overlapping_condition_assume_truthy_instances_default,
@@ -474,6 +479,9 @@ fn mdtest_analysis_settings(
         precise_unsolved_typevars: options
             .precise_unsolved_typevars
             .unwrap_or(precise_unsolved_typevars_default),
+        checked_operator_operands: options
+            .checked_operator_operands
+            .unwrap_or(checked_operator_operands_default),
         overlapping_condition_exempt_types: options
             .overlapping_condition_exempt_types
             .as_deref()

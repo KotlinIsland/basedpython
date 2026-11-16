@@ -213,6 +213,57 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 
 ---
 
+### `checked-operator-operands`
+
+Whether an operator dunder of a `.py` class is checked against what python hands it. This
+is a basedpython feature.
+
+Python calls `__add__`, `__eq__` and the other operator dunders with whatever the other
+operand is, and an operand outside the domain of the parameter's annotation is read as
+handed back with `NotImplemented`, so that python moves on to the other operand:
+
+```python
+class Money:
+    def __add__(self, other: Money) -> Money:
+        if not isinstance(other, Money):
+            return NotImplemented
+        return Money()
+```
+
+With this enabled, `other` is also typed as whatever falls outside `Money` until the body
+tests it, a body that returns a value for an operand it never tested is reported as
+[`unguarded-operand`](rules.md#unguarded-operand), and a `return NotImplemented` reached
+with an operand inside the domain means the operation can move on with one of those too.
+
+When set to `false`, the body sees the annotation, as if python only ever passed it what
+it says. A `.by` dunder is lowered with the test, and is unaffected.
+
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Read a `.py` operator dunder's operand as its annotation
+    checked-operator-operands = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Read a `.py` operator dunder's operand as its annotation
+    checked-operator-operands = false
+    ```
+
+---
+
 ### `dependency-groups`
 
 The requirement groups the matching files may import from.
@@ -1923,6 +1974,63 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
     [overrides.analysis]
     # Let a `let` or `var` in a block be visible for the rest of the scope
     block-scoped-declarations = false
+    ```
+
+---
+
+#### `checked-operator-operands`
+
+Whether an operator dunder of a `.py` class is checked against what python hands it. This
+is a basedpython feature.
+
+Python calls `__add__`, `__eq__` and the other operator dunders with whatever the other
+operand is, and an operand outside the domain of the parameter's annotation is read as
+handed back with `NotImplemented`, so that python moves on to the other operand:
+
+```python
+class Money:
+    def __add__(self, other: Money) -> Money:
+        if not isinstance(other, Money):
+            return NotImplemented
+        return Money()
+```
+
+With this enabled, `other` is also typed as whatever falls outside `Money` until the body
+tests it, a body that returns a value for an operand it never tested is reported as
+[`unguarded-operand`](rules.md#unguarded-operand), and a `return NotImplemented` reached
+with an operand inside the domain means the operation can move on with one of those too.
+
+When set to `false`, the body sees the annotation, as if python only ever passed it what
+it says. A `.by` dunder is lowered with the test, and is unaffected.
+
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    # Read a `.py` operator dunder's operand as its annotation
+    checked-operator-operands = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    # Read a `.py` operator dunder's operand as its annotation
+    checked-operator-operands = false
     ```
 
 ---
