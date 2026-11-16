@@ -234,6 +234,7 @@ pub(crate) mod narrow;
 pub(crate) mod narrowing_guards;
 mod newtype;
 pub(crate) mod normal_completion;
+mod operator_domain;
 mod overlapping;
 mod overrides;
 mod protocol_class;

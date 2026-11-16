@@ -86,6 +86,8 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [unused return value](unused-return-value.md) — catch a call whose answer is thrown away
 - [string formatting](string-formatting.md) — check the format spec, and the value that has no
     rendering of its own
+- [operator dispatch](operator-dispatch.md) — an operand of the right class reaches the dunder,
+    whatever its type arguments
 
 </div>
 

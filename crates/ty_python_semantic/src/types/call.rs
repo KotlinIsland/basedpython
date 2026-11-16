@@ -130,6 +130,36 @@ fn reflected_method_priority<'db>(
     }
 }
 
+/// basedpython: whether a failed operator dunder call is python moving past `operand`, rather
+/// than a call that goes ahead with an operand it shouldn't have been given
+///
+/// a missing method rejects every operand. a method that is there rejects only an operand
+/// outside its parameter's runtime domain: one inside it reaches the method, which can't tell
+/// the operand's type arguments apart and runs with it, so the call is a type error and nothing
+/// falls back. see [`Type::runtime_domain`]
+fn dunder_rejects<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    error: &CallDunderError<'db>,
+    operand: Type<'db>,
+) -> bool {
+    match error {
+        CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. } => true,
+        CallDunderError::CallError(_, bindings, _) => bindings.rejects_operand(db, env, operand),
+    }
+}
+
+/// Why dispatching a rich comparison found no result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RichComparisonFailure {
+    /// Both operands' methods are missing or rejected the other operand, so `==` and `!=` fall
+    /// back to identity.
+    Rejected,
+    /// A method that takes the other operand doesn't accept it. Python calls it anyway, so
+    /// nothing falls back.
+    NotAccepted,
+}
+
 impl<'db> Type<'db> {
     /// Return the result of dispatching a rich comparison method between two operands.
     ///
@@ -144,11 +174,12 @@ impl<'db> Type<'db> {
         dunder: &'static str,
         reflected_dunder: &'static str,
         policy: MemberLookupPolicy,
-    ) -> Option<Type<'db>> {
+    ) -> Result<Type<'db>, RichComparisonFailure> {
+        // `Err(true)` is a rejection python moves past, `Err(false)` a call it goes ahead with
         let call_dunder = |name, receiver: Type<'db>, argument: Type<'db>| {
             let mut arguments = CallArguments::positional([argument]);
-            if let Type::Intersection(intersection) = receiver {
-                return intersection
+            let outcome = if let Type::Intersection(intersection) = receiver {
+                intersection
                     .try_call_dunder_with_policy(
                         db,
                         env,
@@ -158,39 +189,60 @@ impl<'db> Type<'db> {
                         policy,
                     )
                     .map(|outcome| outcome.return_type(db, env))
-                    .ok();
+            } else {
+                receiver
+                    .try_call_dunder_with_policy(
+                        db,
+                        env,
+                        name,
+                        &mut arguments,
+                        TypeContext::default(),
+                        policy,
+                    )
+                    .map(|outcome| outcome.return_type(db, env))
+            };
+            outcome.map_err(|error| dunder_rejects(db, env, &error, argument))
+        };
+        let failure = |rejected: bool| {
+            if rejected {
+                RichComparisonFailure::Rejected
+            } else {
+                RichComparisonFailure::NotAccepted
             }
-
-            receiver
-                .try_call_dunder_with_policy(
-                    db,
-                    env,
-                    name,
-                    &mut arguments,
-                    TypeContext::default(),
-                    policy,
-                )
-                .map(|outcome| outcome.return_type(db, env))
-                .ok()
+        };
+        // try `first`, and `second` only if `first` rejected its operand
+        let in_order = |first: Result<Type<'db>, bool>,
+                        second: &dyn Fn() -> Result<Type<'db>, bool>| {
+            match first {
+                Ok(result) => Ok(result),
+                Err(true) => second().map_err(failure),
+                Err(false) => Err(RichComparisonFailure::NotAccepted),
+            }
         };
 
         match reflected_method_priority(db, env, left, right) {
-            ReflectedMethodPriority::Never => call_dunder(dunder, left, right)
-                .or_else(|| call_dunder(reflected_dunder, right, left)),
+            ReflectedMethodPriority::Never => in_order(call_dunder(dunder, left, right), &|| {
+                call_dunder(reflected_dunder, right, left)
+            }),
             ReflectedMethodPriority::Possibly => {
                 match (
                     call_dunder(dunder, left, right),
                     call_dunder(reflected_dunder, right, left),
                 ) {
-                    (Some(normal), Some(reflected)) => {
-                        Some(UnionType::from_two_elements(db, env, normal, reflected))
+                    (Ok(normal), Ok(reflected)) => {
+                        Ok(UnionType::from_two_elements(db, env, normal, reflected))
                     }
-                    (Some(result), None) | (None, Some(result)) => Some(result),
-                    (None, None) => None,
+                    (Ok(result), Err(true)) | (Err(true), Ok(result)) => Ok(result),
+                    (Err(true), Err(true)) => Err(RichComparisonFailure::Rejected),
+                    // either method may be the one python asks first
+                    (_, Err(false)) | (Err(false), _) => Err(RichComparisonFailure::NotAccepted),
                 }
             }
-            ReflectedMethodPriority::Definitely => call_dunder(reflected_dunder, right, left)
-                .or_else(|| call_dunder(dunder, left, right)),
+            ReflectedMethodPriority::Definitely => {
+                in_order(call_dunder(reflected_dunder, right, left), &|| {
+                    call_dunder(dunder, left, right)
+                })
+            }
         }
     }
 
@@ -351,7 +403,10 @@ impl<'db> Type<'db> {
                 );
 
                 if reflected_priority == ReflectedMethodPriority::Definitely {
-                    return Ok(call_on_right_instance.or_else(|_| {
+                    return Ok(call_on_right_instance.or_else(|error| {
+                        if !dunder_rejects(db, env, &error, left_ty) {
+                            return Err(error);
+                        }
                         left_ty.try_call_dunder_with_policy(
                             db,
                             env,
@@ -385,7 +440,22 @@ impl<'db> Type<'db> {
                             [right_bindings, left_bindings],
                         ))
                     }
-                    (Ok(bindings), Err(_)) | (Err(_), Ok(bindings)) => Ok(bindings),
+                    // either method may be the one python asks first, so a method that
+                    // doesn't reject its operand fails the operation whichever it is
+                    (Ok(bindings), Err(error)) => {
+                        if dunder_rejects(db, env, &error, right_ty) {
+                            Ok(bindings)
+                        } else {
+                            Err(error.into())
+                        }
+                    }
+                    (Err(error), Ok(bindings)) => {
+                        if dunder_rejects(db, env, &error, left_ty) {
+                            Ok(bindings)
+                        } else {
+                            Err(error.into())
+                        }
+                    }
                     (Err(_), Err(error)) => Err(error.into()),
                 };
             }
@@ -400,9 +470,11 @@ impl<'db> Type<'db> {
             policy,
         );
 
-        call_on_left_instance.or_else(|_| {
+        call_on_left_instance.or_else(|error| {
             if left_ty == right_ty {
                 Err(CallBinOpError::NotSupported)
+            } else if !dunder_rejects(db, env, &error, right_ty) {
+                Err(error.into())
             } else {
                 Ok(right_ty.try_call_dunder_with_policy(
                     db,

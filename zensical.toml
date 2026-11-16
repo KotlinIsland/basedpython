@@ -117,6 +117,7 @@ features = [
     { "refutable unpacking" = "features/refutable-unpacking.md" },
     { "unused return value" = "features/unused-return-value.md" },
     { "string formatting" = "features/string-formatting.md" },
+    { "operator dispatch" = "features/operator-dispatch.md" },
   ] },
   { "type system" = [
     { "tuple type literals" = "features/tuple-types.md" },

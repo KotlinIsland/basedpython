@@ -1763,6 +1763,36 @@ impl<'db> Bindings<'db> {
         Some(overload_parameter_types(binding, overload, argument_count))
     }
 
+    /// basedpython: for every callee that didn't accept the call, the annotated types of the
+    /// parameters the first argument matched across its overloads
+    ///
+    /// an operator dunder takes its operand as that argument; see
+    /// [`Self::rejects_operand`]
+    pub(crate) fn failed_operand_parameter_types(
+        &self,
+    ) -> impl Iterator<Item = Vec<Type<'db>>> + '_ {
+        self.iter_flat()
+            .filter(|binding| binding.as_result().is_err())
+            .map(|binding| {
+                binding
+                    .overloads
+                    .iter()
+                    .filter_map(|overload| {
+                        match overload
+                            .matched_argument_for_call_argument(binding, 0)?
+                            .parameters
+                            .as_slice()
+                        {
+                            [parameter] => Some(
+                                overload.signature.parameters()[parameter.index].annotated_type(),
+                            ),
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            })
+    }
+
     /// Report diagnostics for all of the errors that occurred when trying to match actual
     /// arguments to formal parameters. If the callable is a union, or has multiple overloads, we
     /// report a single diagnostic if we couldn't match any union element or overload.

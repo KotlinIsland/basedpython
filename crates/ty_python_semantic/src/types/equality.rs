@@ -326,7 +326,7 @@ impl<'db> ContainerElementEqualityEvaluator<'db> {
             return Ok(truthiness);
         }
 
-        let Some(result) = Type::try_call_rich_comparison_dunder(
+        let Ok(result) = Type::try_call_rich_comparison_dunder(
             db,
             &self.evaluator.env,
             left,

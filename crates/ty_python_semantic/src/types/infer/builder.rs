@@ -6481,6 +6481,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                     Err(CallDunderError::CallError(_, bindings, _)) => {
                         let value_ty = bindings.type_for_argument(&call_arguments, 0);
+                        // an in-place dunder that rejects its operand returns `NotImplemented`,
+                        // and python falls back to the binary operator. one that takes the
+                        // operand runs with it, so nothing falls back
+                        if bindings.rejects_operand(db, env, value_ty) {
+                            return binary_return_ty(self, value_ty, state);
+                        }
                         report_unsupported_augmented_assignment(
                             &self.context,
                             assignment,

@@ -69,7 +69,8 @@ x = C()
 # snapshot: unsupported-operator
 x -= 1
 
-reveal_type(x)  # revealed: int
+# `__isub__` rejects an `int`, so python falls back to `__sub__`, which `C` doesn't define
+reveal_type(x)  # revealed: Unknown
 ```
 
 ```snapshot
