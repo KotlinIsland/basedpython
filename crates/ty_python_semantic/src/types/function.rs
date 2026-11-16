@@ -494,6 +494,9 @@ pub(crate) struct FunctionHeader {
     pub(crate) is_async: bool,
     /// `-> asserts x`
     pub(crate) is_asserts_return: bool,
+    /// the `def` writes a return annotation, rather than leaving its return type to be
+    /// inferred from the body
+    pub(crate) writes_return: bool,
     pub(crate) form: FunctionForm,
 }
 
@@ -519,6 +522,7 @@ impl FunctionHeader {
         Self {
             is_async: function.is_async,
             is_asserts_return: function.is_asserts_return,
+            writes_return: function.returns.is_some(),
             form,
         }
     }

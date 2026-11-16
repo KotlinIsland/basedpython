@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 
 use crate::ProgramEnvironment;
-use crate::types::call::{CallArguments, CallDunderError, RichComparisonFailure};
+use crate::types::call::{CallArguments, CallDunderError};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context::InferContext;
 use crate::types::cyclic::CycleDetector;
@@ -22,7 +22,7 @@ use crate::types::{
     BoundMethodType, CallableType, DynamicType, FunctionType, IntersectionBuilder,
     IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, LiteralValueType,
     LiteralValueTypeKind, MemberLookupPolicy, PropertyInstanceType, Type, TypeContext,
-    TypeTransformer, TypeVarBoundOrConstraints, UnionBuilder,
+    TypeTransformer, TypeVarBoundOrConstraints, UnionBuilder, UnionType,
 };
 use ty_python_core::Truthiness;
 
@@ -807,6 +807,21 @@ pub(crate) fn deferred_comparison<'db>(
         MemberLookupPolicy::default(),
     )
     .ok()
+    .and_then(|comparison| {
+        // with every method able to hand the operand back, `==` and `!=` may answer by identity
+        let fallback = match (comparison.falls_through, rich) {
+            (false, _) => None,
+            (true, RichCompareOperator::Eq | RichCompareOperator::Ne) => {
+                Some(KnownClass::Bool.to_instance(db, env))
+            }
+            (true, _) => return None,
+        };
+        Some(UnionType::from_elements(
+            db,
+            env,
+            comparison.answer.into_iter().chain(fallback),
+        ))
+    })
 }
 
 /// Fold a rich comparison of two literal operands to a `Literal[bool]`, mirroring the
@@ -1699,22 +1714,32 @@ fn infer_rich_comparison<'db>(
         op.reflect().dunder(),
         policy,
     )
-    .or_else(|failure| {
+    .ok()
+    .and_then(|comparison| {
+        if !comparison.falls_through {
+            return comparison.answer;
+        }
         // When no appropriate method returns any value other than NotImplemented,
         // the `==` and `!=` operators will fall back to `is` and `is not`, respectively.
         // refer to `<https://docs.python.org/3/reference/datamodel.html#object.__eq__>`
-        if failure == RichComparisonFailure::Rejected
-            && matches!(op, RichCompareOperator::Eq | RichCompareOperator::Ne)
+        if matches!(op, RichCompareOperator::Eq | RichCompareOperator::Ne)
             // This branch implements specific behavior of the `__eq__` and `__ne__` methods
             // on `object`, so it does not apply if we skip looking up attributes on `object`.
             && !policy.mro_no_object_fallback()
         {
-            Ok(KnownClass::Bool.to_instance(db, env))
+            Some(UnionType::from_elements(
+                db,
+                env,
+                comparison
+                    .answer
+                    .into_iter()
+                    .chain([KnownClass::Bool.to_instance(db, env)]),
+            ))
         } else {
-            Err(())
+            None
         }
     })
-    .map_err(|()| UnsupportedComparisonError {
+    .ok_or_else(|| UnsupportedComparisonError {
         op: op.into(),
         left_ty: left,
         right_ty: right,

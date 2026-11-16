@@ -69,6 +69,50 @@ def f(c: C, strings: list[str]):
     c + strings  # error: the `list[int]` overload runs with any `list`
 ```
 
+## rejecting by value
+
+a dunder can also hand back an operand of the right class, after testing its value. it says so by
+writing `NotImplementedType` in its return type, and the operation then also takes whatever python
+asks next
+
+```python
+from types import NotImplementedType
+
+class Small:
+    def __add__(self, other: int) -> int | NotImplementedType:
+        if other > 1:
+            return NotImplemented
+        return 0
+
+Small() + 1  # error: when `__add__` hands the `int` back, `int.__radd__` doesn't take a `Small`
+```
+
+- after a binary dunder that may reject, python asks the other operand's reflected dunder — only
+    when the operands are of different types. when nothing takes the operand, the operation is
+    `unsupported-operator`
+- after an in-place dunder that may reject, python asks the binary dunder, so `x += y` may also
+    rebind `x` to what `__add__` returns
+- after a comparison that may reject, `==` and `!=` fall back to identity
+
+an operation never has `NotImplementedType` in its own type: a `NotImplemented` the dunder hands back
+is the operation moving on
+
+only a return type you write says a dunder may reject by value. one inferred from the body also
+counts the `return NotImplemented` that rejects an operand of the wrong class, which the domain
+already covers
+
+### in a `.by` file
+
+`NotImplemented` is a value like any other in a `.by` file, so a function that returns it has to
+declare it. in a `.py` file a `return NotImplemented` is still accepted whatever the function
+declares
+
+```by
+class A:
+    def __add__(self, other: int) -> int:
+        return NotImplemented  # error: [invalid-return-type]
+```
+
 ## a receiver that may be one of several
 
 each possible class of the receiver is asked on its own. when `x` is an `int | float`, `x + 1.0` is a

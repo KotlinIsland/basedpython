@@ -6449,7 +6449,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 .deprecated_functions(db)
                                 .map(|(_, function)| function),
                         );
-                        Ok(outcome.return_type(db, env))
+                        let in_place_ty = outcome.return_type(db, env).without_not_implemented(db);
+                        if !outcome.may_reject_by_value(db) {
+                            return Ok(in_place_ty);
+                        }
+                        // the in-place dunder may hand the operand back, and python then falls
+                        // back to the binary operator
+                        let value_ty = outcome.type_for_argument(&call_arguments, 0);
+                        match binary_return_ty(self, value_ty, state) {
+                            Ok(binary_ty) => Ok(UnionType::from_two_elements(
+                                db,
+                                env,
+                                in_place_ty,
+                                binary_ty,
+                            )),
+                            Err(recovery_ty) => Err(UnionType::from_two_elements(
+                                db,
+                                env,
+                                in_place_ty,
+                                recovery_ty,
+                            )),
+                        }
                     }
                     Err(CallDunderError::MethodNotAvailable) => {
                         let value_ty = infer_value_ty(self, TypeContext::default());

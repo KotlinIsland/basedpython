@@ -881,7 +881,7 @@ final class NoneType:
 final class EllipsisType:
     """The type of the Ellipsis singleton."""
 
-final class NotImplementedType(dynamic):
+final class NotImplementedType:
     """The type of the NotImplemented singleton."""
 
 final class UnionType:

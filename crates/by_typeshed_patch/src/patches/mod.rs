@@ -19,6 +19,7 @@ pub mod ignorable_return_value;
 pub mod init_shorthand;
 pub mod literal_unwrap;
 pub mod mapping;
+pub mod not_implemented_type;
 pub mod numeric_promotion;
 pub mod optional_marker;
 pub mod output_widening;

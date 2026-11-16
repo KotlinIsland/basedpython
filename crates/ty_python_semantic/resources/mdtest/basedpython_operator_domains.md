@@ -140,3 +140,122 @@ def g(a: E[int], b: E[str]):
     # error: [unsupported-operator]
     a == b
 ```
+
+## A dunder whose return type includes `NotImplementedType` may still reject
+
+a dunder can hand back an operand of the right class too, by testing its value. it says so in the
+return type it writes, and the operation then also takes whatever python asks next
+
+```py
+from types import NotImplementedType
+
+class Number:
+    value: int = 0
+
+class Small:
+    def __add__(self, other: Number) -> int | NotImplementedType:
+        if other.value > 1:
+            return NotImplemented
+        return 0
+
+class Count(Number):
+    def __radd__(self, other: Small) -> str:
+        return ""
+
+reveal_type(Small() + Count())  # revealed: int | str
+```
+
+when nothing after it takes the operand, python raises a `TypeError`
+
+```py
+from types import NotImplementedType
+
+class Small:
+    def __add__(self, other: int) -> int | NotImplementedType:
+        return NotImplemented
+
+# error: [unsupported-operator]
+Small() + 1
+```
+
+python asks the reflected dunder only of an operand of another type
+
+```py
+from types import NotImplementedType
+
+class Same:
+    def __add__(self, other: "Same") -> "Same | NotImplementedType":
+        return NotImplemented
+
+# error: [unsupported-operator]
+Same() + Same()
+```
+
+## An in-place dunder that may reject falls back to the binary dunder
+
+```py
+from types import NotImplementedType
+
+class Counter:
+    def __iadd__(self, other: int) -> int | NotImplementedType:
+        return NotImplemented
+
+    def __add__(self, other: int) -> str:
+        return ""
+
+counter = Counter()
+counter += 1
+reveal_type(counter)  # revealed: int | str
+```
+
+## A comparison that may reject falls through
+
+```py
+from types import NotImplementedType
+
+class Order:
+    def __lt__(self, other: "Order") -> bool | NotImplementedType:
+        return NotImplemented
+
+    def __gt__(self, other: "Order") -> bool | NotImplementedType:
+        return NotImplemented
+
+# error: [unsupported-operator]
+Order() < Order()
+```
+
+## An inferred return type never reaches the operation
+
+a return type inferred from the body also counts a `return NotImplemented` that rejects an operand
+of the wrong class, which dispatch already moves past. the operation never has `NotImplementedType`
+in its type
+
+```py
+class A:
+    def __add__(self, other):
+        if not isinstance(other, A):
+            return NotImplemented
+        return A()
+
+reveal_type(A() + A())  # revealed: A
+```
+
+## A `.by` function declares the `NotImplemented` it returns
+
+in a `.by` file `NotImplemented` is checked like any other value, so it has to be in the declared
+return type
+
+```by
+class A:
+    def __add__(self, other: int) -> int:
+        # error: [invalid-return-type]
+        return NotImplemented
+```
+
+```by
+from types import NotImplementedType
+
+class B:
+    def __add__(self, other: int) -> int | NotImplementedType:
+        return NotImplemented  # no diagnostic
+```

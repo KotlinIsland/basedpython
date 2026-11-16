@@ -12695,6 +12695,16 @@ impl<'db> DunderBindings<'db> {
         }
     }
 
+    /// basedpython: see [`Bindings::may_reject_by_value`]
+    fn may_reject_by_value(&self, db: &'db dyn Db) -> bool {
+        match self {
+            Self::Single(bindings) => bindings.may_reject_by_value(db),
+            Self::Intersection(bindings) => bindings
+                .iter()
+                .any(|bindings| bindings.may_reject_by_value(db)),
+        }
+    }
+
     fn return_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         match self {
             Self::Single(bindings) => bindings.return_type(db, env),

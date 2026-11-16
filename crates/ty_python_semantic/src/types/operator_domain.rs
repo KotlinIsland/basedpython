@@ -22,8 +22,8 @@
 use super::subclass_of::SubclassOfInner;
 use super::typevar::TypeVarBoundOrConstraints;
 use super::{
-    IntersectionType, KnownClass, SubclassOfType, Type, UnionType, call::bind::Bindings,
-    callable::CallableType,
+    IntersectionType, KnownClass, SubclassOfType, Type, UnionType, call::CallDunderError,
+    call::bind::Bindings, callable::CallableType,
 };
 use crate::Db;
 use crate::ProgramEnvironment;
@@ -129,5 +129,190 @@ impl<'db> Bindings<'db> {
                     ),
                 )
         })
+    }
+}
+
+impl<'db> Bindings<'db> {
+    /// whether the dunder this call resolved to may still hand back an operand it takes: the
+    /// return annotation it wrote includes `NotImplementedType`
+    ///
+    /// ```python
+    /// class A:
+    ///     def __add__(self, other: int) -> int | NotImplementedType:
+    ///         if other > 1:
+    ///             return NotImplemented
+    ///         return 0
+    /// ```
+    ///
+    /// python then moves on exactly as it does for an operand outside the domain, so the
+    /// operation also has to be answered by whatever comes next. only a written annotation says
+    /// this: a return type inferred from the body also counts the `return NotImplemented` that
+    /// rejects an operand of the wrong class, which dispatch already moves past
+    pub(crate) fn may_reject_by_value(&self, db: &'db dyn Db) -> bool {
+        self.iter_flat().any(|binding| {
+            let function = match binding.callable_type {
+                Type::BoundMethod(bound) => bound.function(db),
+                Type::FunctionLiteral(function) => Some(function),
+                _ => None,
+            };
+            let Some(function) = function else {
+                return false;
+            };
+            function
+                .literal(db)
+                .last_definition
+                .header(db)
+                .writes_return
+                && binding
+                    .matching_overloads()
+                    .any(|(_, overload)| overload.return_ty.includes_not_implemented(db))
+        })
+    }
+}
+
+impl<'db> Type<'db> {
+    /// whether this is, or is a union that includes, `NotImplementedType`
+    fn includes_not_implemented(self, db: &'db dyn Db) -> bool {
+        match self {
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .any(|element| element.is_notimplemented(db)),
+            _ => self.is_notimplemented(db),
+        }
+    }
+
+    /// the type an operation has when a dunder it dispatched to returned this: a
+    /// `NotImplemented` the dunder hands back is the operation moving on, never its result
+    pub(crate) fn without_not_implemented(self, db: &'db dyn Db) -> Type<'db> {
+        match self {
+            Type::Union(union) => union.filter(db, |element| !element.is_notimplemented(db)),
+            _ if self.is_notimplemented(db) => Type::Never,
+            _ => self,
+        }
+    }
+}
+
+/// what one operator dunder does with the operand python hands it
+pub(crate) enum DunderStep<'db, T> {
+    /// the method takes the operand. `may_reject` when it may still hand it back; see
+    /// [`Bindings::may_reject_by_value`]
+    Accepts { answer: T, may_reject: bool },
+    /// the method is missing, or rejects the operand's class
+    Rejects,
+    /// the method takes the operand but doesn't accept it, so the operation is a type error
+    NotAccepted(CallDunderError<'db>),
+}
+
+/// the dunders that may answer an operation, and whether it may end with every one of them
+/// having handed the operand back
+pub(crate) struct Dispatch<T> {
+    pub(crate) answers: Vec<T>,
+    pub(crate) falls_through: bool,
+}
+
+impl<'db, T> DunderStep<'db, T> {
+    /// whether python may move on from this step to the next
+    fn declines(&self) -> bool {
+        matches!(
+            self,
+            DunderStep::Rejects
+                | DunderStep::Accepts {
+                    may_reject: true,
+                    ..
+                }
+        )
+    }
+
+    /// python asks `first`, and asks `second` only when `first` hands the operand back
+    pub(crate) fn in_order(
+        first: Self,
+        second: impl FnOnce() -> Self,
+    ) -> Result<Dispatch<T>, CallDunderError<'db>> {
+        let mut answers = Vec::new();
+        match first {
+            DunderStep::NotAccepted(error) => return Err(error),
+            DunderStep::Accepts { answer, may_reject } => {
+                answers.push(answer);
+                if !may_reject {
+                    return Ok(Dispatch {
+                        answers,
+                        falls_through: false,
+                    });
+                }
+            }
+            DunderStep::Rejects => {}
+        }
+        match second() {
+            DunderStep::NotAccepted(error) => Err(error),
+            DunderStep::Accepts { answer, may_reject } => {
+                answers.push(answer);
+                Ok(Dispatch {
+                    answers,
+                    falls_through: may_reject,
+                })
+            }
+            DunderStep::Rejects => Ok(Dispatch {
+                answers,
+                falls_through: true,
+            }),
+        }
+    }
+
+    /// python may ask either step first, because the operands' runtime classes decide it
+    pub(crate) fn either_order(a: Self, b: Self) -> Result<Dispatch<T>, CallDunderError<'db>> {
+        let falls_through = a.declines() && b.declines();
+        let mut answers = Vec::new();
+        for step in [a, b] {
+            match step {
+                DunderStep::NotAccepted(error) => return Err(error),
+                DunderStep::Accepts { answer, .. } => answers.push(answer),
+                DunderStep::Rejects => {}
+            }
+        }
+        Ok(Dispatch {
+            answers,
+            falls_through,
+        })
+    }
+}
+
+impl<'db, T> DunderStep<'db, T> {
+    /// the step a dunder call made with `operand`, from its answer and whether the method may
+    /// still hand the operand back
+    pub(crate) fn of(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        outcome: Result<(T, bool), CallDunderError<'db>>,
+        operand: Type<'db>,
+    ) -> Self {
+        match outcome {
+            Ok((answer, may_reject)) => DunderStep::Accepts { answer, may_reject },
+            Err(error) if error.rejects(db, env, operand) => DunderStep::Rejects,
+            Err(error) => DunderStep::NotAccepted(error),
+        }
+    }
+}
+
+impl<'db> CallDunderError<'db> {
+    /// whether this failed operator dunder call is python moving past `operand`, rather than a
+    /// call that goes ahead with an operand it shouldn't have been given
+    ///
+    /// a missing method rejects every operand. a method that is there rejects only an operand
+    /// outside its parameter's runtime domain: one inside it reaches the method, which can't tell
+    /// the operand's type arguments apart and runs with it, so the call is a type error and
+    /// nothing falls back. see [`Type::runtime_domain`]
+    fn rejects(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        operand: Type<'db>,
+    ) -> bool {
+        match self {
+            CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. } => true,
+            CallDunderError::CallError(_, bindings, _) => {
+                bindings.rejects_operand(db, env, operand)
+            }
+        }
     }
 }

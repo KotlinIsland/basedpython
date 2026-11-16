@@ -1083,7 +1083,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .deprecated_functions(db)
                         .map(|(_, function)| function),
                 );
-                binding.return_type(db, env)
+                binding.return_type(db, env).without_not_implemented(db)
             }),
 
             // fold `(a, b) * n` (and `n * (a, b)`) into the tuple with its elements repeated

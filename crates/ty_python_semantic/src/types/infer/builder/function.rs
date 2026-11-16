@@ -588,11 +588,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 report_bool_as_int(&self.context, returned.range, returned.ty, declared_ty);
             }
 
+            // basedpython: a `NotImplemented` a `.by` function returns is a value like any other,
+            // so it has to be in the return type it declares. an operator dunder that hands back
+            // an operand of the right class says so there, and dispatch moves on past it
+            let checks_not_implemented = self.file().source_type(db).is_basedpython();
             for return_statement in
                 self.return_types_and_ranges
                     .iter()
                     .copied()
                     .filter_map(|ty_range| match ty_range.ty {
+                        _ if checks_not_implemented => Some(ty_range),
                         // We skip `is_assignable_to` checks for `NotImplemented`,
                         // so we remove it beforehand.
                         Type::Union(union) => Some(TypeAndRange {

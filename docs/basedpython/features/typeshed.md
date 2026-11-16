@@ -115,6 +115,13 @@ the call
 return `self`, which the type system cannot spell, so upstream marks them
 abstract
 
+### `NotImplementedType` is not `Any`
+
+upstream derives `types.NotImplementedType` from `Any`, so that `return NotImplemented` passes in an
+operator dunder whatever it declares. here it is an ordinary class: a dunder that rejects an operand
+by its value writes `NotImplementedType` in its return type, and [operator dispatch](operator-dispatch.md#rejecting-by-value)
+moves past it
+
 ### deletions
 
 - **mypy/pyright-only overloads** — typeshed carries overloads whose sole

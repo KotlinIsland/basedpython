@@ -337,6 +337,10 @@ impl<'db> ContainerElementEqualityEvaluator<'db> {
         ) else {
             return Ok(Truthiness::Ambiguous);
         };
+        // every `__eq__` may hand the operand back, leaving the answer to identity
+        let Some(result) = result.answer.filter(|_| !result.falls_through) else {
+            return Ok(Truthiness::Ambiguous);
+        };
 
         // Identity can turn a false equality result true, but cannot turn a true result false.
         Ok(match result.try_bool(db, &self.evaluator.env)? {
