@@ -158,6 +158,34 @@ class A:
         return NotImplemented  # error: [invalid-return-type]
 ```
 
+## `__eq__` and `__ne__` may take fewer operands
+
+an `__eq__` or `__ne__` override can narrow its operand, so a class can say what it compares with
+
+```by
+class Point:
+    x: int
+
+    def __eq__(self, other: Point) -> bool:
+        return self.x == other.x
+
+Point() == 1  # `Point.__eq__` hands back the `int`, and the comparison ends at `is`: `bool`
+```
+
+an operand an `__eq__` hands back moves on to the other operand's `__eq__`, and then to an identity
+test. so it still compares with every operand and still answers with a `bool`, the same as
+`object.__eq__(self, other: object) -> bool`, which itself hands back every operand but its
+receiver. writing `NotImplementedType` in the return type is a valid override for the same reason
+
+what it answers with is still checked: an override that narrows has to answer with something a
+`bool` is assignable to wherever the method it overrides does, or it is `invalid-method-override`.
+no other operator gets this: `<` with nothing that takes the operand is a `TypeError`, so a `__lt__`
+override that narrows its operand is still `invalid-method-override`
+
+in a `.by` file the override [tests its operand](#a-by-dunder-tests-its-operand) before its body
+runs. in a `.py` file nothing does, so the body has to: python still calls it with whatever the
+other operand is
+
 ## a receiver that may be one of several
 
 each possible class of the receiver is asked on its own. when `x` is an `int | float`, `x + 1.0` is a

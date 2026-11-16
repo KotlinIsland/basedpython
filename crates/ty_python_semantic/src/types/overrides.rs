@@ -320,8 +320,11 @@ fn check_inherited_method_conflict<'db>(
         else {
             continue;
         };
-        let Some((selected_ty, contract_ty)) =
-            method_override_types(db, env, selected_ty, contract_ty)
+        let Some(OverrideTypes {
+            subclass: selected_ty,
+            superclass: contract_ty,
+            ..
+        }) = method_override_types(db, env, name, selected_ty, contract_ty)
         else {
             continue;
         };
@@ -375,7 +378,7 @@ fn check_inherited_method_conflict<'db>(
                 continue;
             };
             if parent_decorator != ancestor_decorator
-                || !is_assignable_method_override(db, env, parent_ty, ancestor_ty)
+                || !is_assignable_method_override(db, env, name, parent_ty, ancestor_ty)
             {
                 continue;
             }
@@ -1306,12 +1309,18 @@ fn check_class_declaration<'db>(
             );
         }
 
-        let Some((subclass_override_type, superclass_override_type)) = method_override_types(
+        let Some(OverrideTypes {
+            subclass: subclass_override_type,
+            superclass: superclass_override_type,
+            compared_by_equality,
+        }) = method_override_types(
             db,
             env,
+            &member.name,
             bind_new_for_override(db, env, class, &member.name, type_on_subclass_instance),
             bind_new_for_override(db, env, class, &member.name, superclass_type),
-        ) else {
+        )
+        else {
             continue;
         };
 
@@ -1345,6 +1354,7 @@ fn check_class_declaration<'db>(
             superclass,
             superclass_type,
             method_kind,
+            compared_by_equality,
             || {
                 subclass_override_type.assignability_error_context(
                     db,
@@ -1508,7 +1518,7 @@ fn is_inherited_method_violation<'db>(
             // An inherited violation belongs to the parent's own receiver domain.
             let parent_type = bind_new_for_override(db, env, parent, name, parent_type);
             let superclass_type = bind_new_for_override(db, env, parent, name, superclass_type);
-            if is_assignable_method_override(db, env, parent_type, superclass_type) {
+            if is_assignable_method_override(db, env, name, parent_type, superclass_type) {
                 return false;
             }
 
@@ -1531,6 +1541,7 @@ fn is_inherited_method_violation<'db>(
                     !is_assignable_method_override(
                         db,
                         env,
+                        name,
                         parent_type,
                         bind_new_for_override(db, env, parent, name, ancestor_type),
                     )
@@ -1558,20 +1569,39 @@ fn is_inherited_method_violation<'db>(
 fn is_assignable_method_override<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
+    name: &Name,
     subclass_type: Type<'db>,
     superclass_type: Type<'db>,
 ) -> bool {
-    method_override_types(db, env, subclass_type, superclass_type).is_some_and(
-        |(subclass_type, superclass_type)| subclass_type.is_assignable_to(db, env, superclass_type),
+    method_override_types(db, env, name, subclass_type, superclass_type).is_some_and(
+        |OverrideTypes {
+             subclass,
+             superclass,
+             ..
+         }| subclass.is_assignable_to(db, env, superclass),
     )
 }
 
+/// An override and the method it overrides, as the callables an override check compares.
+struct OverrideTypes<'db> {
+    subclass: Type<'db>,
+    superclass: Type<'db>,
+    /// basedpython: the override is an `__eq__` or `__ne__` that takes only some operands, or
+    /// hands some back, read as the comparison sees it
+    /// ([`CallableType::as_compared_by_equality`])
+    compared_by_equality: bool,
+}
+
+/// basedpython: an `__eq__` or `__ne__` override is read as `==` and `!=` see it, so it may narrow
+/// its operand ([`CallableType::as_compared_by_equality`]).
 fn method_override_types<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
+    name: &Name,
     subclass_type: Type<'db>,
     superclass_type: Type<'db>,
-) -> Option<(Type<'db>, Type<'db>)> {
+) -> Option<OverrideTypes<'db>> {
+    let mut compared_by_equality = false;
     let (subclass_type, superclass_type) = match (subclass_type, superclass_type) {
         (Type::BoundMethod(subclass_method), Type::BoundMethod(superclass_method))
             if let Some(superclass_signature) = superclass_method.unbound_signatures(db) =>
@@ -1601,10 +1631,20 @@ fn method_override_types<'db>(
 
             // Both signatures describe calls on the subclass. In particular, inherited `Self`
             // annotations refer to the subclass even when the receiver is implicitly annotated.
+            let subclass_callables =
+                subclass_method.callables_with_receiver(db, env, receiver, typing_self_type)?;
+            let subclass_callables = if matches!(name.as_str(), "__eq__" | "__ne__") {
+                subclass_callables.map(|callable| {
+                    callable
+                        .as_compared_by_equality(db, env)
+                        .inspect(|_| compared_by_equality = true)
+                        .unwrap_or(callable)
+                })
+            } else {
+                subclass_callables
+            };
             (
-                subclass_method
-                    .callables_with_receiver(db, env, receiver, typing_self_type)?
-                    .to_type(db, env),
+                subclass_callables.to_type(db, env),
                 superclass_method
                     .callables_with_receiver(db, env, receiver, typing_self_type)?
                     .to_type(db, env),
@@ -1617,7 +1657,11 @@ fn method_override_types<'db>(
         .try_upcast_to_callable(db, env)?
         .map(|callable| callable.into_regular(db));
 
-    Some((subclass_type, superclass_callable.to_type(db, env)))
+    Some(OverrideTypes {
+        subclass: subclass_type,
+        superclass: superclass_callable.to_type(db, env),
+        compared_by_equality,
+    })
 }
 
 /// Whether an attribute declaration is a class variable or an instance variable.

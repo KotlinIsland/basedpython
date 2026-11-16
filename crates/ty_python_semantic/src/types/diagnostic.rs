@@ -8987,6 +8987,7 @@ pub(super) fn report_invalid_method_override<'db>(
     superclass: ClassType<'db>,
     superclass_type: Type<'db>,
     superclass_method_kind: MethodKind,
+    compared_by_equality: bool,
     error_context: impl FnOnce() -> ErrorContextTree<'db>,
 ) {
     let db = context.db();
@@ -9061,6 +9062,16 @@ pub(super) fn report_invalid_method_override<'db>(
     }
 
     error_context().attach_to(db, env, &mut diagnostic);
+
+    // the `bool` the error context names was not written in the override: it is the identity
+    // test that answers an operand the override hands back
+    if compared_by_equality {
+        let operator = if member == "__ne__" { "!=" } else { "==" };
+        diagnostic.info(format_args!(
+            "`{operator}` answers an operand `{class_name}.{member}` hands back with an identity \
+            test, which is a `bool`"
+        ));
+    }
 
     diagnostic.info("This violates the Liskov Substitution Principle");
 
@@ -9157,25 +9168,6 @@ pub(super) fn report_invalid_method_override<'db>(
                     .message(format_args!("Definition of `{superclass_name}`")),
             );
             diagnostic.sub(sub);
-        }
-    }
-
-    if superclass.is_object(db) && matches!(member, "__eq__" | "__ne__") {
-        // Inspired by mypy's subdiagnostic at <https://github.com/python/mypy/blob/1b6ebb17b7fe64488a7b3c3b4b0187bb14fe331b/mypy/messages.py#L1307-L1318>
-        let eq_subdiagnostics = [
-            format_args!(
-                "It is recommended for `{member}` to work with arbitrary objects, for example:",
-            ),
-            format_args!(""),
-            format_args!("    def {member}(self, other: object) -> bool:"),
-            format_args!("        if not isinstance(other, {class_name}):"),
-            format_args!("            return False"),
-            format_args!("        return <logic to compare two `{class_name}` instances>"),
-            format_args!(""),
-        ];
-
-        for subdiag in eq_subdiagnostics {
-            diagnostic.help(subdiag);
         }
     }
 }

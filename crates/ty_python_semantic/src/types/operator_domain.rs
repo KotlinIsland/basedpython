@@ -25,7 +25,7 @@ use ty_python_core::semantic_index;
 use super::check_order::InferredInCheckOrder;
 use super::reified_infer::{ErasedTargetReason, ParametricIsPlan, type_test_plan};
 use super::runtime_spelling::RuntimeSite;
-use super::signatures::Parameter;
+use super::signatures::{CallableSignature, Parameter};
 use super::subclass_of::SubclassOfInner;
 use super::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
 use super::{
@@ -393,6 +393,78 @@ pub(crate) fn hands_back_operands(name: &str) -> bool {
         ]
         .contains(&name)
     })
+}
+
+impl<'db> CallableType<'db> {
+    /// the signature `==` or `!=` sees in this `__eq__` or `__ne__`, bound to its receiver: what
+    /// an override of one has to be compatible with
+    ///
+    /// ```python
+    /// class Point:
+    ///     def __eq__(self, other: Point) -> bool: ...
+    /// ```
+    ///
+    /// python hands an `__eq__` every operand, and one outside its domain (or one it hands back by
+    /// value, when its return type includes `NotImplementedType`) moves on: to the other operand's
+    /// `__eq__`, and then to an identity test, which is a `bool`. so `Point.__eq__` compares with
+    /// every operand, and is a `bool` whichever way it goes. this is why narrowing the operand
+    /// is a valid override of `object.__eq__(self, other: object) -> bool`, which itself hands
+    /// back every operand but its receiver. no other operator falls back to something with a type
+    /// of its own: `<` with nothing that takes the operand is a `TypeError`
+    ///
+    /// `None` when the method takes every operand and never hands one back, so that `==` sees it
+    /// as it is written
+    pub(crate) fn as_compared_by_equality(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<CallableType<'db>> {
+        let signatures = self.signatures(db);
+        let operands = signatures
+            .iter()
+            .map(|signature| {
+                signature
+                    .parameters()
+                    .get_positional(0)
+                    .map(Parameter::annotated_type)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let returns = UnionType::from_elements(
+            db,
+            env,
+            signatures.iter().map(|signature| signature.return_ty),
+        );
+        let domain = UnionType::from_elements(
+            db,
+            env,
+            operands
+                .into_iter()
+                .map(|operand| operand.runtime_domain(db, env)),
+        );
+        if Type::object().is_assignable_to(db, env, domain) && !returns.includes_not_implemented(db)
+        {
+            return None;
+        }
+        // an operand one overload hands back can reach any other answer, so each overload is
+        // read as answering with what any of them might
+        let return_ty = UnionType::from_elements(
+            db,
+            env,
+            [
+                returns.without_not_implemented(db),
+                KnownClass::Bool.to_instance(db, env),
+            ],
+        );
+        Some(self.with_signatures(
+            db,
+            CallableSignature::from_overloads(signatures.iter().map(|signature| {
+                signature
+                    .clone()
+                    .with_parameter_type(0, Type::object())
+                    .with_return_type(return_ty)
+            })),
+        ))
+    }
 }
 
 /// basedpython: the test a `.by` operator dunder makes of its operand before its body runs,

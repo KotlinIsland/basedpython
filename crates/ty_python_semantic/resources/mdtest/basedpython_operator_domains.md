@@ -133,7 +133,7 @@ an `__eq__` that runs with its operand doesn't fall back to identity either
 
 ```py
 class E[T]:
-    def __eq__(self, other: "E[T]") -> bool:  # error: [invalid-method-override]
+    def __eq__(self, other: "E[T]") -> bool:
         return True
 
 def g(a: E[int], b: E[str]):
@@ -238,6 +238,105 @@ class A:
         return A()
 
 reveal_type(A() + A())  # revealed: A
+```
+
+## An `__eq__` or `__ne__` override may narrow its operand
+
+python hands `__eq__` every operand, and one outside its domain moves on to the other operand's
+`__eq__` and then to an identity test. so an `__eq__` that takes only some operands still compares
+with every one, and still answers with a `bool`. that makes it a valid override of
+`object.__eq__(self, other: object) -> bool`
+
+```py
+class Point:
+    def __eq__(self, other: "Point") -> bool:  # no diagnostic
+        return True
+
+    def __ne__(self, other: "Point") -> bool:  # no diagnostic
+        return False
+
+reveal_type(Point() == Point())  # revealed: bool
+reveal_type(Point() == 1)  # revealed: bool
+reveal_type(Point() != 1)  # revealed: bool
+```
+
+an override of an `__eq__` that narrows may narrow further
+
+```py
+class Shape:
+    def __eq__(self, other: "Shape") -> bool:
+        return True
+
+class Square(Shape):
+    def __eq__(self, other: "Square") -> bool:  # no diagnostic
+        return True
+```
+
+## A `.by` `__eq__` that narrows its operand compares with every operand
+
+the `.by` override tests its operand before its body runs, so an `int` never reaches `other.x`
+
+```by
+class Point:
+    x: int = 0
+
+    def __eq__(self, other: Point) -> bool:  # no diagnostic
+        return self.x == other.x
+
+assert Point() == Point()
+assert not (Point() == 1)
+assert Point() != 1
+```
+
+## An `__eq__` override may hand back an operand by value
+
+handing back an operand of the right class moves on the same way, so writing `NotImplementedType` in
+the return type is a valid override too
+
+```py
+from types import NotImplementedType
+
+class Money:
+    cents: int = 0
+
+    def __eq__(self, other: object) -> bool | NotImplementedType:  # no diagnostic
+        if not isinstance(other, Money):
+            return NotImplemented
+        return self.cents == other.cents
+```
+
+## An `__eq__` override that narrows its operand still answers with a `bool`
+
+an operand the override hands back is answered with a `bool`, so an override that narrows has to
+answer with something a `bool` is assignable to wherever the method it overrides does
+
+```py
+class Base:
+    def __eq__(self, other: object) -> int:  # error: [invalid-method-override]
+        return 0
+
+class Sub(Base):
+    def __eq__(self, other: "Sub") -> int:  # no diagnostic
+        return 0
+
+class Text:
+    def __eq__(self, other: "Text") -> str:  # error: [invalid-method-override]
+        return ""
+```
+
+## Other comparisons may not narrow their operand
+
+an operand that `<` hands back and nothing else takes is a `TypeError`, not an answer, so a `__lt__`
+override that narrows its operand changes what the method it overrides promised
+
+```py
+class Base:
+    def __lt__(self, other: object) -> bool:
+        return True
+
+class Sub(Base):
+    def __lt__(self, other: "Sub") -> bool:  # error: [invalid-method-override]
+        return True
 ```
 
 ## A `.by` function declares the `NotImplemented` it returns

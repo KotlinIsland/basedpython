@@ -3366,6 +3366,24 @@ impl<'db> Signature<'db> {
         Self { return_ty, ..self }
     }
 
+    /// the same signature with the parameter at `index` annotated `annotated_type`
+    pub(crate) fn with_parameter_type(self, index: usize, annotated_type: Type<'db>) -> Self {
+        let kind = self.parameters.kind();
+        let parameters: Vec<Parameter<'db>> = self
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(position, parameter)| {
+                if position == index {
+                    parameter.clone().with_annotated_type(annotated_type)
+                } else {
+                    parameter.clone()
+                }
+            })
+            .collect();
+        self.with_parameters(Parameters::new(parameters, kind))
+    }
+
     /// basedpython: the two ways a `decorator def` declared by this signature is called.
     ///
     /// `decorator def d(fn: (int) -> None, option: bool = False) -> str` is applied as `@d`, which
