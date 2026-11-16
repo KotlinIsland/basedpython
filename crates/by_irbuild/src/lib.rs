@@ -9093,6 +9093,10 @@ fn signature(
         defaults.push(None);
     }
 
+    if let Some(operand) = operand_tested_by_class(model, written, function, &params)? {
+        deferring.push(operand);
+    }
+
     Ok(Signature {
         params,
         defaults,
@@ -9108,6 +9112,53 @@ fn signature(
         deferring,
         computed_defaults,
     })
+}
+
+/// the index of the operand a `.by` operator dunder tests before its body runs, where the
+/// boundary is to hand an operand the test fails to the interpreted definition
+///
+/// the interpreted definition makes the test, and returns `NotImplemented` for an operand outside
+/// the parameter's domain, which is how python moves on to the other operand. the compiled body
+/// may only see an operand the test passes, so the test has to be the one the parameter's
+/// representation already makes at the boundary: `isinstance(other, int)` for an unboxed `int`,
+/// or the class of an emitted instance. the boundary then defers whatever it can't establish,
+/// and what it establishes passes the test. any other test declines the function
+fn operand_tested_by_class(
+    model: &SemanticModel<'_>,
+    written: by_transforms::WrittenNames,
+    function: &ast::StmtFunctionDef,
+    params: &[(String, RType)],
+) -> Lowered<Option<usize>> {
+    let Some((parameter, plan)) = model.operand_guard(function) else {
+        return Ok(None);
+    };
+    let name = by_transforms::python_parameter_name(&function.parameters, parameter, written);
+    let Some(index) = params
+        .iter()
+        .position(|(param, _)| param.as_str() == name.as_str())
+    else {
+        return Err(Decline::new(format!(
+            "the operand `{name}` an operator dunder tests has no place in its signature"
+        )));
+    };
+    let held = match &params[index].1 {
+        RType::Primitive(Primitive::Int) => Some("int"),
+        RType::Primitive(Primitive::Float) => Some("float"),
+        RType::Primitive(Primitive::Bool) => Some("bool"),
+        RType::Primitive(Primitive::Str) => Some("str"),
+        RType::Primitive(Primitive::List) => Some("list"),
+        RType::Instance { class, .. } => Some(class.as_str()),
+        _ => None,
+    };
+    match plan {
+        ty_python_semantic::ParametricIsPlan::Isinstance(
+            ty_python_semantic::TargetSpelling::Rebuilt(spelling),
+        ) if held.is_some_and(|held| spelling.source() == held) => Ok(Some(index)),
+        _ => Err(Decline::new(format!(
+            "`{}` tests its operand `{name}` against more than the class its representation holds",
+            function.name
+        ))),
+    }
 }
 
 /// the name the first of a parameter list's repeated `_`s takes in the python, where that is

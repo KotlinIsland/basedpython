@@ -1562,6 +1562,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             );
         }
 
+        // basedpython: a `.by` operator dunder tests its operand before its body runs, against
+        // classes the module may bind further down. a stub has no body to run
+        if self.file().source_type(db).is_basedpython()
+            && !self.file().source_type(db).is_stub()
+            && crate::types::hands_back_operands(function.name.as_str())
+            && self.scope().node(self.db()).as_class().is_some()
+        {
+            self.record_runtime_read(crate::types::runtime_reads::RuntimeReadSite::OperandGuard {
+                function: function.node_index.load(),
+            });
+        }
+
         self.add_declaration_with_binding(
             function.into(),
             definition,

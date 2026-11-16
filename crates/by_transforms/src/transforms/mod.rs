@@ -58,6 +58,7 @@ pub(crate) mod module_api;
 pub(crate) mod mutable_defaults;
 pub(crate) mod none_chain;
 pub(crate) mod not_type;
+pub(crate) mod operand_guard;
 pub(crate) mod optional_type;
 pub(crate) mod overload;
 pub(crate) mod parametric_is;

@@ -470,6 +470,23 @@ class Later: ...
 }
 
 #[test]
+fn an_operand_tested_against_more_than_its_representation_declines() {
+    // the interpreted `__add__` hands back an operand that is neither an `int` nor a `str`,
+    // and the compiled boundary of an `object` parameter tests nothing it could hand on
+    let reason = decline(
+        "\
+class A:
+    def __add__(self, other: int | str) -> int:
+        return 0
+",
+    );
+    assert!(
+        reason.contains("more than the class its representation holds"),
+        "{reason}"
+    );
+}
+
+#[test]
 fn a_gradual_parameter_is_an_object() {
     // `object` assumes nothing, so no check is needed and nothing declines
     let ir = ir("def f(a) -> None:\n    pass\n");

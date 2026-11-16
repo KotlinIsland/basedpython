@@ -37,7 +37,7 @@ use crate::types::diagnostic::{
     ERASED_TYPE_CHECK, NOT_SUBSCRIPTABLE, TypeCheckDiagnostics, UNRESOLVED_REFERENCE,
     report_erased_type_check, report_invalid_reified_override, report_unspecialized_reified_call,
     report_unspecialized_reified_classmethod, report_unspecialized_reified_construction,
-    report_untestable_type_argument,
+    report_untestable_operand, report_untestable_type_argument,
 };
 use crate::types::function::FunctionType;
 use crate::types::generics::GenericContext;
@@ -53,6 +53,7 @@ use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::{CastCheck, cast_check_plan, cast_is_redundant};
 use crate::types::subscript::defers_type_arguments;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance};
+use crate::types::{OperandGuard, operand_guard};
 use crate::types::{ProgramEnvironment, Type, TypeContext, binding_type};
 use crate::{Db, FxIndexMap, FxIndexSet};
 
@@ -81,6 +82,9 @@ pub(crate) enum RuntimeReadSite {
     /// a method with type parameters of its own, whose override compatibility depends on what
     /// its body forwards, and on what the body of the method it overrides does
     GenericMethod { function: NodeIndex },
+    /// an operator dunder of a `.by` class, which tests its operand against the parameter's
+    /// domain where its body begins ([`crate::types::operand_guard`])
+    OperandGuard { function: NodeIndex },
     /// a specialization written as a value, `f[int]` or `A[int]`, whose type arguments the
     /// generic may go on to test a value against, and whose names are read where it runs
     Specialization { subscript: NodeIndex },
@@ -239,6 +243,13 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
                         self.parsed.get_by_index(*function)
                 {
                     self.generic_method(function);
+                }
+            }
+            RuntimeReadSite::OperandGuard { function } => {
+                if let AnyRootNodeRef::Stmt(ast::Stmt::FunctionDef(function)) =
+                    self.parsed.get_by_index(*function)
+                {
+                    self.operand_guard(function, reports);
                 }
             }
             RuntimeReadSite::Specialization { subscript } => {
@@ -690,6 +701,37 @@ impl<'a, 'db> RuntimeReadChecker<'a, 'db> {
             binding.why_not_checkable(&name)
         ));
         diagnostic.info(binding.describe(&name));
+    }
+
+    /// the test an operator dunder makes of its operand reads the classes it names, and one the
+    /// runtime can't make leaves the dunder running with operands dispatch moves past
+    fn operand_guard(&mut self, function: &'a ast::StmtFunctionDef, reports: bool) {
+        match operand_guard(self.db, self.env, function, self.in_check_order) {
+            Some(OperandGuard::Test(plan)) => self.read_spellings(&plan),
+            // an operand with no annotation is tested for nothing, so the one reported has one
+            Some(OperandGuard::Untestable(reason))
+                if reports
+                    && let Some(annotation) = function
+                        .parameters
+                        .posonlyargs
+                        .iter()
+                        .chain(&function.parameters.args)
+                        .nth(1)
+                        .and_then(|parameter| parameter.annotation()) =>
+            {
+                let source = source_text(self.db, self.file);
+                if let Some(context) = self.context(annotation) {
+                    report_untestable_operand(
+                        context,
+                        annotation.range(),
+                        &source[annotation.range()],
+                        reason,
+                        function.name.as_str(),
+                    );
+                }
+            }
+            Some(OperandGuard::Untestable(_)) | None => {}
+        }
     }
 
     fn read_spellings(&mut self, plan: &ParametricIsPlan) {

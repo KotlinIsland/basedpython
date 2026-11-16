@@ -10699,7 +10699,16 @@ fn defer_tests(module: &ModuleIr, function: &Function, receiver: bool) -> Vec<St
         .iter()
         .map(|index| {
             let slot = slot(index);
-            format!("({slot} != NULL && !By_IsExactFloat({slot}))")
+            let held = function
+                .params()
+                .get(*index)
+                .and_then(|decl| representation_holds(module, &decl.ty, &slot));
+            match held {
+                Some(held) => format!("({slot} != NULL && !{held})"),
+                // a representation with no test of its own establishes nothing, and the
+                // interpreted definition answers every call
+                None => format!("{slot} != NULL"),
+            }
         })
         // a parameter whose default only the interpreted definition holds, omitted: a
         // computed default is the one object every such call has to share in python. in
@@ -10717,6 +10726,32 @@ fn defer_tests(module: &ModuleIr, function: &Function, receiver: bool) -> Vec<St
             }
         }))
         .collect()
+}
+
+/// the pure test of whether `slot` holds a value the representation `ty` is made of, which a
+/// deferring boundary hands the call on without. it sets no error
+///
+/// a `double` is made only of an exact `float`: a subclass's operators and type would be
+/// stripped. every other representation is made of an instance of its class
+fn representation_holds(module: &ModuleIr, ty: &RType, slot: &str) -> Option<String> {
+    Some(match ty {
+        RType::Primitive(Primitive::Float) => format!("By_IsExactFloat({slot})"),
+        RType::Primitive(Primitive::Int) => format!("PyLong_Check({slot})"),
+        RType::Primitive(Primitive::Bool) => format!("PyBool_Check({slot})"),
+        RType::Primitive(Primitive::Str) => format!("PyUnicode_Check({slot})"),
+        RType::Primitive(Primitive::List) => format!("PyList_Check({slot})"),
+        RType::Instance { class, .. } => {
+            let owner = module
+                .classes
+                .iter()
+                .find(|candidate| candidate.name == *class)?;
+            format!(
+                "PyObject_TypeCheck({slot}, (PyTypeObject *){}_OBJ)",
+                owner.type_name(module.name.dotted())
+            )
+        }
+        _ => return None,
+    })
 }
 
 /// a double operation, with each operand already written as a C `double`

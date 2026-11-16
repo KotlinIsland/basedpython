@@ -19,14 +19,21 @@
 //! full type is what an accepted operand must be. an operand outside the domain is rejected; one
 //! inside it that the call doesn't accept is a type error, with no fallback
 
+use ruff_python_ast as ast;
+use ty_python_core::semantic_index;
+
+use super::check_order::InferredInCheckOrder;
+use super::reified_infer::{ErasedTargetReason, ParametricIsPlan, type_test_plan};
+use super::runtime_spelling::RuntimeSite;
+use super::signatures::Parameter;
 use super::subclass_of::SubclassOfInner;
-use super::typevar::TypeVarBoundOrConstraints;
+use super::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
 use super::{
-    IntersectionType, KnownClass, SubclassOfType, Type, UnionType, call::CallDunderError,
-    call::bind::Bindings, callable::CallableType,
+    ClassLiteral, IntersectionType, KnownClass, SubclassOfType, Type, UnionType, binding_type,
+    call::CallDunderError, call::bind::Bindings, callable::CallableType, infer_definition_types,
 };
-use crate::Db;
-use crate::ProgramEnvironment;
+use crate::place::{RuntimeBinding, RuntimeRead, binds_one_class_wherever_bound, runtime_binding};
+use crate::{Db, ProgramEnvironment};
 
 impl<'db> Type<'db> {
     /// the runtime domain of a parameter annotated with this type: what a runtime check of the
@@ -36,8 +43,20 @@ impl<'db> Type<'db> {
     /// `list` and every `Iterable`, a literal stays the literal an equality check can test, and a
     /// type variable becomes the domain of what it stands for
     fn runtime_domain(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
+        self.domain(db, env, Erasure::Top)
+    }
+
+    /// the domain under `erasure`: [`Self::runtime_domain`] keeps every specialization of a
+    /// class, and the test a guard makes names the class as a runtime test does
+    fn domain(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>, erasure: Erasure) -> Self {
+        let class = |class: ClassLiteral<'db>| match erasure {
+            Erasure::Top => {
+                Type::instance(db, env, class.top_materialization(db)).top_materialization(db, env)
+            }
+            Erasure::Bare => Type::instance(db, env, class.unknown_specialization(db)),
+        };
         match self {
-            Type::Union(union) => union.map(db, env, |element| element.runtime_domain(db, env)),
+            Type::Union(union) => union.map(db, env, |element| element.domain(db, env, erasure)),
             // a negative element only ever shrinks the domain, and leaving it out keeps the
             // domain an over-approximation: an operand is only reported for being inside it
             Type::Intersection(intersection) => IntersectionType::from_elements(
@@ -45,60 +64,90 @@ impl<'db> Type<'db> {
                 env,
                 intersection
                     .positive_elements_or_object(db)
-                    .map(|element| element.runtime_domain(db, env)),
+                    .map(|element| element.domain(db, env, erasure)),
             ),
-            Type::NominalInstance(instance) => Type::instance(
-                db,
-                env,
-                instance
-                    .class(db, env)
-                    .class_literal(db)
-                    .top_materialization(db),
-            )
-            .top_materialization(db, env),
+            Type::NominalInstance(instance) => class(instance.class(db, env).class_literal(db)),
             Type::ProtocolInstance(protocol) => match protocol.class_origin(db) {
-                Some(origin) => {
-                    Type::instance(db, env, origin.class_literal(db).top_materialization(db))
-                        .top_materialization(db, env)
-                }
-                None => self.top_materialization(db, env),
+                Some(origin) => class(origin.class_literal(db)),
+                None => match erasure {
+                    Erasure::Top => self.top_materialization(db, env),
+                    Erasure::Bare => self,
+                },
             },
             Type::LiteralValue(literal) if literal.is_literal_string() => {
                 KnownClass::Str.to_instance(db, env)
             }
+            // the bound of a `.by` parameter written without a type is what the body happens to
+            // ask of it, which no test is written from: the method runs with every operand
+            Type::TypeVar(typevar)
+                if typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter
+                    && typevar
+                        .typevar(db)
+                        .definition(db)
+                        .is_some_and(|definition| {
+                            definition.file(db).source_type(db).is_basedpython()
+                        }) =>
+            {
+                Type::object()
+            }
             Type::TypeVar(typevar) => match typevar.typevar(db).bound_or_constraints(db, env) {
-                Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.runtime_domain(db, env),
+                Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
+                    bound.domain(db, env, erasure)
+                }
                 Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
-                    constraints.as_type(db, env).runtime_domain(db, env)
+                    constraints.as_type(db, env).domain(db, env, erasure)
                 }
                 None => Type::object(),
             },
             Type::SubclassOf(subclass_of) => match subclass_of.subclass_of() {
                 SubclassOfInner::Class(class) => {
-                    SubclassOfType::from(db, env, class.class_literal(db).top_materialization(db))
+                    let literal = class.class_literal(db);
+                    SubclassOfType::from(
+                        db,
+                        env,
+                        match erasure {
+                            Erasure::Top => literal.top_materialization(db),
+                            Erasure::Bare => literal.unknown_specialization(db),
+                        },
+                    )
                 }
                 SubclassOfInner::Dynamic(_)
                 | SubclassOfInner::Protocol(_)
                 | SubclassOfInner::TypeVar(_) => KnownClass::Type.to_instance(db, env),
             },
-            Type::TypedDict(_) => KnownClass::Dict
-                .to_instance(db, env)
-                .top_materialization(db, env),
+            Type::TypedDict(_) => match erasure {
+                Erasure::Top => KnownClass::Dict
+                    .to_instance(db, env)
+                    .top_materialization(db, env),
+                Erasure::Bare => KnownClass::Dict.to_instance_unknown(db, env),
+            },
             Type::NewTypeInstance(newtype) => {
-                newtype.concrete_base_type(db).runtime_domain(db, env)
+                newtype.concrete_base_type(db).domain(db, env, erasure)
             }
-            Type::Callable(_) => {
-                Type::Callable(CallableType::unknown(db)).top_materialization(db, env)
-            }
-            Type::TypeAlias(alias) => alias.value_type(db).runtime_domain(db, env),
+            Type::Callable(_) => match erasure {
+                Erasure::Top => {
+                    Type::Callable(CallableType::unknown(db)).top_materialization(db, env)
+                }
+                Erasure::Bare => Type::Callable(CallableType::unknown(db)),
+            },
+            Type::TypeAlias(alias) => alias.value_type(db).domain(db, env, erasure),
             Type::Overlapping(overlapping) => {
-                overlapping.value_type(db, env).runtime_domain(db, env)
+                overlapping.value_type(db, env).domain(db, env, erasure)
             }
-            Type::Restricted(restricted) => restricted.value_type(db).runtime_domain(db, env),
+            Type::Restricted(restricted) => restricted.value_type(db).domain(db, env, erasure),
             Type::Dynamic(_) => Type::object(),
             _ => self,
         }
     }
+}
+
+/// how a domain drops a class's type arguments
+#[derive(Clone, Copy)]
+enum Erasure {
+    /// every specialization of the class, which an operand of any of them is assignable to
+    Top,
+    /// the class written bare, which is what a runtime test of it names
+    Bare,
 }
 
 impl<'db> Bindings<'db> {
@@ -302,17 +351,214 @@ impl<'db> CallDunderError<'db> {
     /// outside its parameter's runtime domain: one inside it reaches the method, which can't tell
     /// the operand's type arguments apart and runs with it, so the call is a type error and
     /// nothing falls back. see [`Type::runtime_domain`]
-    fn rejects(
-        &self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-        operand: Type<'db>,
-    ) -> bool {
+    fn rejects(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>, operand: Type<'db>) -> bool {
         match self {
             CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. } => true,
             CallDunderError::CallError(_, bindings, _) => {
                 bindings.rejects_operand(db, env, operand)
             }
         }
+    }
+}
+
+/// the operators whose dunders python hands an operand it may hand back: each binary operator's
+/// dunder, its reflected dunder and its in-place dunder
+const OPERATORS: [ast::Operator; 13] = [
+    ast::Operator::Add,
+    ast::Operator::Sub,
+    ast::Operator::Mult,
+    ast::Operator::MatMult,
+    ast::Operator::Div,
+    ast::Operator::Mod,
+    ast::Operator::Pow,
+    ast::Operator::LShift,
+    ast::Operator::RShift,
+    ast::Operator::BitOr,
+    ast::Operator::BitXor,
+    ast::Operator::BitAnd,
+    ast::Operator::FloorDiv,
+];
+
+/// whether python moves on from a method called `name` that returns `NotImplemented`: an
+/// operator dunder, a reflected or in-place one, or a rich comparison
+pub(crate) fn hands_back_operands(name: &str) -> bool {
+    matches!(
+        name,
+        "__eq__" | "__ne__" | "__lt__" | "__le__" | "__gt__" | "__ge__"
+    ) || OPERATORS.iter().any(|operator| {
+        [
+            operator.dunder(),
+            operator.reflected_dunder(),
+            operator.in_place_dunder(),
+        ]
+        .contains(&name)
+    })
+}
+
+/// basedpython: the test a `.by` operator dunder makes of its operand before its body runs,
+/// handing back as `NotImplemented` an operand outside the domain of the parameter it is bound
+/// to — which is where dispatch moves past it ([`Bindings::rejects_operand`])
+///
+/// ```by
+/// class A:
+///     def __add__(self, other: int) -> int:
+///         ...
+/// ```
+///
+/// is lowered with `if not isinstance(other, int): return NotImplemented` at the top of the body.
+/// the body then sees what the annotation says it sees, and `A() + B()` reaches `B.__radd__` as
+/// the checker says it does
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OperandGuard {
+    /// the test, whose `False` is the operand handed back
+    Test(ParametricIsPlan),
+    /// no test the runtime can make tells an operand outside the domain apart
+    Untestable(UntestableOperand),
+}
+
+/// why no guard can test an operand against a parameter's domain
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UntestableOperand {
+    /// the runtime can't test a value against the domain at all
+    Erased(ErasedTargetReason),
+    /// the runtime test reads what a value records of its type, and one that records nothing
+    /// answers `False` although it is inside the domain
+    Inexact,
+}
+
+/// the guard `function` begins with, where it is a method of a `.by` class that dispatch may
+/// move past, and its operand parameter has a domain some operand is outside of. `None` for a
+/// method that takes every operand, and for one python never hands an operand back from
+///
+/// the domain is that of every overload's operand parameter together, since dispatch asks each
+/// overload ([`Bindings::rejects_operand`]). an `@overload` itself never runs, and its
+/// implementation makes the test
+pub(crate) fn operand_guard<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    function: &ast::StmtFunctionDef,
+    inferred: InferredInCheckOrder<'db>,
+) -> Option<OperandGuard> {
+    let file = inferred.file();
+    let source_type = file.file(db).source_type(db);
+    if !source_type.is_basedpython()
+        || source_type.is_stub()
+        || !hands_back_operands(function.name.as_str())
+    {
+        return None;
+    }
+    let index = semantic_index(db, file);
+    let definition = index.try_definition(function)?;
+    index.scope(definition.file_scope(db)).node().as_class()?;
+    let function_type = match binding_type(db, definition) {
+        Type::FunctionLiteral(function_type) => function_type,
+        _ => infer_definition_types(db, definition)
+            .undecorated_type()?
+            .as_function_literal()?,
+    };
+    if function_type.literal(db).last_definition.is_overload(db)
+        || function_type.is_staticmethod(db)
+        || function_type.is_classmethod(db)
+    {
+        return None;
+    }
+    // the receiver is positional parameter zero, and the operand the one after it. a method with
+    // none there gathers the operand into `*args`, which takes anything
+    let operand = UnionType::from_elements(
+        db,
+        env,
+        function_type
+            .signature(db)
+            .overloads
+            .iter()
+            .map(|signature| {
+                signature
+                    .parameters()
+                    .get_positional(1)
+                    .map_or(Type::object(), Parameter::annotated_type)
+            }),
+    );
+    operand_test(
+        db,
+        env,
+        operand,
+        RuntimeSite::body_of(db, function, inferred),
+    )
+}
+
+/// the test an operand annotated `operand` is given where `site`, the top of the dunder's body,
+/// runs. `None` where every operand is inside the domain
+fn operand_test<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    operand: Type<'db>,
+    site: RuntimeSite<'db>,
+) -> Option<OperandGuard> {
+    let file = site.inferred().file();
+    let target = operand.domain(db, env, Erasure::Bare);
+    // without `@runtime_checkable`, `isinstance` refuses a protocol. the test a protocol gets
+    // then reads the annotations a value's class records, or, for one written bare, is the
+    // `isinstance` python refuses
+    if names_unchecked_protocol(db, target) {
+        return Some(OperandGuard::Untestable(UntestableOperand::Inexact));
+    }
+    let plan = type_test_plan(db, env, file.file(db), Type::object(), target, None);
+    match plan {
+        ParametricIsPlan::Fold(true) => return None,
+        ParametricIsPlan::ErasedTarget(reason) => {
+            return Some(OperandGuard::Untestable(UntestableOperand::Erased(reason)));
+        }
+        _ if !plan.narrows_negatively() => {
+            return Some(OperandGuard::Untestable(UntestableOperand::Inexact));
+        }
+        _ => {}
+    }
+    // the test is code of the body, so it reads each class as the body does, once it is called:
+    // a class the module binds further down, and binds to nothing else, is bound by then
+    for spelling in plan.spellings() {
+        if let Some(name) = spelling.hidden_read(db, site) {
+            return Some(OperandGuard::Untestable(UntestableOperand::Erased(
+                ErasedTargetReason::NotAtRuntime(name, RuntimeBinding::Hidden),
+            )));
+        }
+        for name in spelling.global_reads() {
+            let binding = runtime_binding(
+                db,
+                env,
+                RuntimeRead::Global {
+                    name,
+                    range: site.range(),
+                },
+                site.inferred(),
+            );
+            let bound = match binding {
+                RuntimeBinding::Bound => true,
+                RuntimeBinding::Unbound | RuntimeBinding::NotTheCheckers => {
+                    binds_one_class_wherever_bound(db, file, name)
+                }
+                RuntimeBinding::Hidden => false,
+            };
+            if !bound {
+                return Some(OperandGuard::Untestable(UntestableOperand::Erased(
+                    ErasedTargetReason::NotAtRuntime(name.clone(), binding),
+                )));
+            }
+        }
+    }
+    Some(OperandGuard::Test(plan))
+}
+
+/// whether `ty` is, or has an arm that is, a protocol without `@runtime_checkable`
+fn names_unchecked_protocol<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .any(|element| names_unchecked_protocol(db, *element)),
+        Type::ProtocolInstance(protocol) => protocol
+            .class_origin(db)
+            .and_then(|origin| origin.into_protocol_class(db))
+            .is_none_or(|class| !class.is_runtime_checkable(db)),
+        _ => false,
     }
 }

@@ -807,6 +807,17 @@ pub(crate) trait TypeInfo {
     /// stands for the enclosing class and can never bind to an optional
     fn optional_wraps(&self, expr: &Expr) -> bool;
 
+    /// the operand parameter of the operator dunder `function`, and the test it makes of it
+    /// where its body begins, handing back an operand the test fails as `NotImplemented`. `None`
+    /// for a method that makes no test
+    fn operand_guard<'ast>(
+        &self,
+        function: &'ast ruff_python_ast::StmtFunctionDef,
+    ) -> Option<(
+        &'ast ruff_python_ast::Parameter,
+        ty_python_semantic::ParametricIsPlan,
+    )>;
+
     /// every runtime soundness check `suite` makes under `positions` — the checker's one
     /// answer, which the native backend reads as well
     fn soundness_sites<'ast>(
@@ -1707,6 +1718,16 @@ impl TypeInfo for LoweringModel<'_> {
         expr.inferred_type(self).is_some_and(
             |ty| matches!(ty, Type::TypeVar(typevar) if !typevar.is_typing_self(self.db())),
         )
+    }
+
+    fn operand_guard<'ast>(
+        &self,
+        function: &'ast ruff_python_ast::StmtFunctionDef,
+    ) -> Option<(
+        &'ast ruff_python_ast::Parameter,
+        ty_python_semantic::ParametricIsPlan,
+    )> {
+        SemanticModel::operand_guard(self, function)
     }
 
     fn soundness_sites<'ast>(

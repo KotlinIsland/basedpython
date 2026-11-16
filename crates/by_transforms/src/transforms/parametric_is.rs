@@ -210,7 +210,7 @@ fn arm_predicate(
 /// the fragments one already-classified plan lowers to. split out from
 /// [`arm_predicate`] so a union plan can build its arms, which the source need
 /// not spell separately — a PEP 695 alias names a whole union with one word
-fn fragments_for_plan(
+pub(crate) fn fragments_for_plan(
     types: &dyn TypeInfo,
     written: WrittenNames,
     plan: ParametricIsPlan,

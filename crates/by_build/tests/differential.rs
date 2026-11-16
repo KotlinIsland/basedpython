@@ -34998,6 +34998,54 @@ class Vec:
 }
 
 #[test]
+fn a_typed_operand_outside_the_domain_reaches_the_other_operand() {
+    // a `.by` operator dunder hands back an operand outside its parameter's domain, which
+    // the interpreted build does with a test at the top of the body. the compiled boundary
+    // already tests that the operand is what the parameter's representation holds, and
+    // hands one that isn't to the interpreted definition, whose test answers
+    // `NotImplemented` — so python asks the other operand in both builds, and the class
+    // still compiles
+    agree(
+        "operanddomain",
+        "\
+class Vec:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+    def __add__(self, other: Vec) -> Vec:
+        return Vec(self.x + other.x)
+
+    def __mul__(self, other: int) -> Vec:
+        return Vec(self.x * other)
+
+    def __lt__(self, other: Vec) -> bool:
+        return self.x < other.x
+
+class Other:
+    def __radd__(self, other: object) -> str:
+        return 'Other.__radd__'
+
+    def __rmul__(self, other: object) -> str:
+        return 'Other.__rmul__'
+",
+        &[
+            "(m.Vec(1) + m.Vec(2)).x",
+            "(m.Vec(2) * 3).x",
+            "m.Vec(1) < m.Vec(2)",
+            // outside the domain: the other operand answers
+            "m.Vec(1) + m.Other()",
+            "m.Vec(1) * m.Other()",
+            "repr(m.Vec(1).__add__(1))",
+            "repr(m.Vec(1).__mul__('x'))",
+            // and with nothing to answer, python's own error
+            "_capture(lambda a, b: a + b, m.Vec(1), 1)",
+            "_capture(lambda a, b: a * b, m.Vec(1), 2.5)",
+            "_capture(lambda a, b: a < b, m.Vec(1), 3)",
+        ],
+    );
+}
+
+#[test]
 fn an_operator_between_two_of_one_class_answers_from_that_class() {
     // an operator between two operands of one emitted class is the class's own body and
     // nothing else, so it is called directly rather than through the number and

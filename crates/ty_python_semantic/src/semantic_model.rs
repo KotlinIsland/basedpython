@@ -227,6 +227,39 @@ impl<'db> SemanticModel<'db> {
         })
     }
 
+    /// basedpython: the operand parameter of the `.by` operator dunder `function`, and the test
+    /// it makes of it where its body begins, handing back an operand the test fails as
+    /// `NotImplemented`. `None` for a method that makes no test, and for one whose operand the
+    /// runtime can't test, which the checker reports
+    pub fn operand_guard<'ast>(
+        &self,
+        function: &'ast ast::StmtFunctionDef,
+    ) -> Option<(
+        &'ast ast::Parameter,
+        crate::types::reified_infer::ParametricIsPlan,
+    )> {
+        let parameters = &function.parameters;
+        let operand = parameters
+            .posonlyargs
+            .iter()
+            .chain(&parameters.args)
+            .nth(1)?;
+        let definition = semantic_index(self.db, self.program_file()).try_definition(function)?;
+        let (_, in_check_order) = crate::types::check_order::infer_scope_in_check_order(
+            self.db,
+            definition.scope(self.db),
+        );
+        match crate::types::operand_guard(
+            self.db,
+            &self.program_environment(),
+            function,
+            in_check_order,
+        )? {
+            crate::types::OperandGuard::Test(plan) => Some((&operand.parameter, plan)),
+            crate::types::OperandGuard::Untestable(_) => None,
+        }
+    }
+
     /// basedpython: what python binds the first parameter of the method `function` to, which is
     /// none of its business if it is a `staticmethod`
     pub fn method_receiver(&self, function: &ast::StmtFunctionDef) -> Option<MethodReceiver> {

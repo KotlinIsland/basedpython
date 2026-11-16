@@ -69,6 +69,51 @@ def f(c: C, strings: list[str]):
     c + strings  # error: the `list[int]` overload runs with any `list`
 ```
 
+## a `.by` dunder tests its operand
+
+in a `.by` file you don't write the rejection: the dunder tests its operand against the parameter's
+domain before the body runs, and hands back one outside it
+
+```by
+class A:
+    def __add__(self, other: int) -> int:
+        return other + 1
+```
+
+transpiles to:
+
+```python
+class A:
+    def __add__(self, other: int) -> int:
+        if not isinstance(other, int): return NotImplemented
+        return other + 1
+```
+
+so the body sees what the annotation says, and `A() + B()` reaches `B.__radd__` as the checker says
+it does. the test is the one [`other is int`](parametric-type-tests.md) makes: a union tests each
+arm, a literal its value, `None` by identity, a callable with `callable()`, and a
+`@runtime_checkable` protocol the presence of its members. an operand annotated `object`, or not
+annotated at all, is tested for nothing, and the method runs with every operand
+
+a domain no runtime test can tell an operand apart from — a protocol that isn't
+`@runtime_checkable`, a class imported only under `if TYPE_CHECKING:` — is an
+`erased-type-check` error on the annotation
+
+```by
+from typing import Protocol
+
+class HasX(Protocol):
+    x: int
+
+class A:
+    def __add__(self, other: HasX) -> int:  # error: [erased-type-check]
+        return other.x
+```
+
+a natively compiled dunder hands an operand that isn't of the class its parameter holds to the
+interpreted definition, which makes the test. one whose test asks for more than that class — a
+union, a protocol — is left to the interpreted definition
+
 ## rejecting by value
 
 a dunder can also hand back an operand of the right class, after testing its value. it says so by

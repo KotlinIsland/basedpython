@@ -259,3 +259,79 @@ class B:
     def __add__(self, other: int) -> int | NotImplementedType:
         return NotImplemented  # no diagnostic
 ```
+
+## A `.by` dunder's operand is tested before its body runs
+
+a `.by` operator dunder hands back an operand outside its parameter's domain itself: the lowering
+tests the operand before the body runs. that needs a test the runtime can make, and an operand
+annotated with a type it can't test an operand against is reported
+
+```by
+from typing import Protocol, SupportsIndex
+
+class HasX(Protocol):
+    x: int
+
+class A:
+    # error: [erased-type-check] "`is HasX` cannot be checked at runtime: the test can't tell that an operand is outside it"
+    def __add__(self, other: HasX) -> int:
+        return other.x
+
+    def __sub__(self, other: SupportsIndex) -> int:  # no diagnostic
+        return other.__index__()
+
+    def __mul__(self, other: (int) -> str) -> str:  # no diagnostic
+        return other(1)
+```
+
+a class the module binds only under `if TYPE_CHECKING:` isn't there for the test to read
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+
+class C:
+    # error: [erased-type-check]
+    def __add__(self, other: Decimal) -> int:
+        return 0
+```
+
+## A `.by` dunder that takes every operand tests nothing
+
+an operand of any type needs no test, and neither does a method python never moves past
+
+```by
+from typing import Protocol
+
+class HasX(Protocol):
+    x: int
+
+class B:
+    def __add__(self, other: object) -> int:  # no diagnostic
+        return 0
+
+    def __contains__(self, item: HasX) -> bool:  # no diagnostic
+        return True
+```
+
+## A `.by` dunder runs with every operand it has no annotation for
+
+the type of a `.by` parameter written without one comes from what the body asks of it, which isn't
+something a test is written from. the method runs with every operand, so one it doesn't take is an
+error rather than handed back
+
+```by
+class A:
+    def __add__(self, other):
+        return other.real
+
+class B:
+    def __radd__(self, other: A) -> str:
+        return ""
+
+A() + 1  # no diagnostic
+# error: [unsupported-operator]
+A() + B()
+```

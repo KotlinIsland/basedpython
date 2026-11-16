@@ -45,13 +45,14 @@ use super::{
     grapheme_string, identity_swap, if_let, implicit_receiver, implicit_typing,
     inferred_annotation, inferred_base_arguments, init_method, just_float, kw_subscript,
     literal_string, literal_types, local_once, main_function, match_type, modifiers, module_api,
-    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
-    properties, protocol_type, raises_clause, reified_class, reified_generic, repeated_underscore,
-    return_value_use, runtime_union, runtime_variance, sentinel, some_ctor, soundness,
-    statement_expression, static_resource, string_tag, super_keyword, symbolic_type_op,
-    synthesized_types, template_expression, template_type, top_star, trailing_lambda, tuple_index,
-    type_fn, type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
-    unique_loop_bindings, unpack, use_site_variance, visibility_rename,
+    mutable_defaults, none_chain, operand_guard, optional_type, overload, parametric_is,
+    postfix_await, propagate, properties, protocol_type, raises_clause, reified_class,
+    reified_generic, repeated_underscore, return_value_use, runtime_union, runtime_variance,
+    sentinel, some_ctor, soundness, statement_expression, static_resource, string_tag,
+    super_keyword, symbolic_type_op, synthesized_types, template_expression, template_type,
+    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
+    visibility_rename,
 };
 use crate::Config;
 use crate::columns::Columns;
@@ -1622,6 +1623,7 @@ pub(crate) fn run_against_source<'a>(
     let generics_pass =
         generics::GenericPolyfillPass::new(source_ref, written, quotes, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
+    let operand_guard_pass = operand_guard::OperandGuardPass::new(source_ref, written);
     let checked_cast_pass = checked_cast::CheckedCastPass { written, quotes };
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
@@ -1760,6 +1762,10 @@ pub(crate) fn run_against_source<'a>(
         // `def` line, so it composes with every edit inside the signature and
         // body (the clause deletion among them)
         &raises_guard_pass,
+        // a `.by` operator dunder tests its operand before anything else in its body runs, so
+        // it inserts at the top of the body ahead of every other pass that writes there: the
+        // soundness pass's entry checks would raise for an operand this hands back
+        &operand_guard_pass,
         // `init(...)` shorthand: rewrite to `def __init__`, strip `let`, and
         // synthesize `self.<name>: <ann> = <name>`. type-aware because the
         // synthesized annotation is fresh output that must reproduce whatever

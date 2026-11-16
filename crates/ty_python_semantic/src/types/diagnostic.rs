@@ -15,6 +15,7 @@ use crate::importer::{ImportAction, ImportRequest, MembersInScope};
 use crate::lint::{Level, LintRegistryBuilder, LintStatus, TyCompat};
 use crate::place::{DefinedPlace, Place, imported_symbol, place_from_bindings};
 use crate::suppression::FileSuppressionId;
+use crate::types::UntestableOperand;
 use crate::types::abstract_methods::AbstractMethods;
 use crate::types::call::bind::CallableDescription;
 use crate::types::call::{Bindings, CallDiagnosticOverride, CallError};
@@ -4399,6 +4400,47 @@ pub(crate) fn report_untestable_type_argument(
     if let Some(mut diagnostic) = erased_type_check_diagnostic(context, primary, target, reason) {
         diagnostic.info(format_args!(
             "`{generic}` tests a value against its type parameter `{parameter}`"
+        ));
+    }
+}
+
+/// reports the operand annotation of a `.by` operator dunder whose domain the runtime can't test
+/// an operand against. the dunder would run with an operand dispatch moves past
+pub(crate) fn report_untestable_operand(
+    context: &InferContext<'_, '_>,
+    primary: TextRange,
+    target: &str,
+    reason: UntestableOperand,
+    dunder: &str,
+) {
+    let diagnostic = match reason {
+        UntestableOperand::Erased(reason) => {
+            erased_type_check_diagnostic(context, primary, target, reason)
+        }
+        UntestableOperand::Inexact => {
+            context
+                .report_lint(&ERASED_TYPE_CHECK, primary)
+                .map(|builder| {
+                    let mut diagnostic = builder.into_diagnostic(format_args!(
+                        "`is {target}` cannot be checked at runtime: the test can't tell that an \
+                         operand is outside it"
+                    ));
+                    diagnostic.info(format_args!(
+                        "the runtime test reads what a value's class records of its type, and \
+                         a class that records nothing would be taken for one outside `{target}`"
+                    ));
+                    diagnostic.info(format_args!(
+                        "a protocol decorated with `@typing.runtime_checkable` is tested by the \
+                         presence of its members, which python checks itself"
+                    ));
+                    diagnostic
+                })
+        }
+    };
+    if let Some(mut diagnostic) = diagnostic {
+        diagnostic.info(format_args!(
+            "`{dunder}` hands back an operand outside `{target}` as `NotImplemented`, so that \
+             python moves on to the other operand, and tests it before its body runs"
         ));
     }
 }

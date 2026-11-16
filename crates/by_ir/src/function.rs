@@ -350,6 +350,14 @@ pub struct Function {
     /// `.by` and `strict-float` opt out of the promotion, and the annotation still
     /// admits a subclass of `float`, whose operators and type a `double` does not
     /// carry — so every `double` parameter of a module-level function is one of these
+    ///
+    /// the operand of a `.by` operator dunder is one too. the interpreted definition
+    /// tests it before its body runs and returns `NotImplemented` for one outside the
+    /// parameter's domain, which is how python moves on to the other operand. that test
+    /// is the one the parameter's representation makes, so the boundary hands on
+    /// whatever it can't establish and the definition answers it
+    ///
+    /// the boundary tests each of these for a value its representation is made of
     pub deferring: Vec<usize>,
     /// the indices of parameters whose default is not an immediate.
     ///
