@@ -19,34 +19,112 @@ files any python tool can read
 [browse the features](features/index.md){ .md-button }
 </div>
 
-```by
-enum class Shape:
-    case Circle(radius: int)
-    case Rect(width: int, height: int)
+=== "shapes.by"
 
-    def area(self) -> int:
-        return match self:
-            case Shape.Circle(r):
-                3 * r * r
-            case Shape.Rect(w, h):
-                w * h
+    ```by
+    enum class Shape:
+        case Circle(radius: int)
+        case Rect(width: int, height: int)
 
-extension list[Element: Shape]:
-    def first_circle(self) -> Shape.Circle?:
-        for shape in self:
-            if shape is Shape.Circle:
-                return shape
-        return None
+        def area(self) -> int:
+            return match self:
+                case Shape.Circle(r):
+                    3 * r * r
+                case Shape.Rect(w, h):
+                    w * h
 
-def stats(shapes: list[Shape]) -> (count: int, total: int):
-    return (len(shapes), sum(s.area() for s in shapes))
+    extension list[Element: Shape]:
+        def first_circle(self) -> Shape.Circle?:
+            for shape in self:
+                if shape is Shape.Circle:
+                    return shape
+            return None
 
-def main():
-    let shapes = [Shape.Circle(1), Shape.Rect(2, 3)]
-    let summary = stats(shapes)
-    print(f"{summary.count} shapes, {summary.total} total")
-    print(shapes.first_circle()?.radius ?? 0)
-```
+    def stats(shapes: list[Shape]) -> (count: int, total: int):
+        return (len(shapes), sum(s.area() for s in shapes))
+
+    def main():
+        let shapes = [Shape.Circle(1), Shape.Rect(2, 3)]
+        let summary = stats(shapes)
+        print(f"{summary.count} shapes, {summary.total} total")
+        print(shapes.first_circle()?.radius ?? 0)
+    ```
+
+=== "shapes.py, lowered for python 3.12"
+
+    ```python
+    from __future__ import annotations
+    from typing import Final, NamedTuple
+    def _soundness_check(_v, _t):
+        if not isinstance(_v, _t):
+            raise TypeError(
+                f"type soundness violation: expected {getattr(_t, '__name__', _t)}, "
+                f"got {type(_v).__name__}"
+            )
+        return _v
+
+    def _soundness_iter(_it, _t):
+        for _x in _it:
+            yield _soundness_check(_x, _t)
+
+    def _by_no_case_matched():
+        # a statement expression's `match` the checker found exhaustive, reached with a value it
+        # ruled out. nothing else would say so: the name the value was to be read from is just unbound
+        raise TypeError("no case of this `match` matched, though the checker found it exhaustive")
+
+    class _AnonNamedTuple_4d75d31a(NamedTuple):
+        count: int
+        total: int
+
+    from dataclasses import dataclass
+    from typing import final, ClassVar
+    def _by_ext__list__first_circle(self):  # basedpython: extension method list[Element: Shape]
+            for shape in self:
+                if isinstance(shape, _Shape_Circle):
+                    return shape
+            return None
+    class Shape:
+        Circle: ClassVar[type[_Shape_Circle]]
+        Rect: ClassVar[type[_Shape_Rect]]
+        def area(self) -> int:
+            match self:
+                case Shape.Circle(r):
+                    __by_stmt_expr_0__ = 3 * r * r
+                case Shape.Rect(w, h):
+                    __by_stmt_expr_0__ = w * h
+                case _:
+                    _by_no_case_matched()
+            return __by_stmt_expr_0__
+
+    @final
+    @dataclass(frozen=True, slots=True)
+    class _Shape_Circle(Shape):
+        radius: int
+    _Shape_Circle.__name__ = "Circle"
+    _Shape_Circle.__qualname__ = Shape.__qualname__ + ".Circle"
+    Shape.Circle = _Shape_Circle
+
+    @final
+    @dataclass(frozen=True, slots=True)
+    class _Shape_Rect(Shape):
+        width: int
+        height: int
+    _Shape_Rect.__name__ = "Rect"
+    _Shape_Rect.__qualname__ = Shape.__qualname__ + ".Rect"
+    Shape.Rect = _Shape_Rect
+
+
+    def stats(shapes: list[Shape]) -> _AnonNamedTuple_4d75d31a:
+        return _AnonNamedTuple_4d75d31a(len(shapes), _soundness_check(sum(s.area() for s in _soundness_iter(shapes, Shape)), int))
+
+    def main():
+        shapes: Final = [Shape.Circle(1), Shape.Rect(2, 3)]
+        summary: Final = stats(shapes)
+        print(f"{summary.count} shapes, {summary.total} total")
+        print(__by_t_0__ if (__by_t_0__ := (None if (__by_t_0__ := _soundness_check(_by_ext__list__first_circle(shapes), (_Shape_Circle, type(None)))) is None else __by_t_0__.radius)) is not None else 0)
+    if __name__ == "__main__":
+        main()
+    ```
 
 ## why
 

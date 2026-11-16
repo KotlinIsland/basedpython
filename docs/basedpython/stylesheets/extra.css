@@ -2,9 +2,63 @@
  *
  * the theme this builds on is already close to what we want, so everything
  * here is either something the theme has no concept of (inlay hints, the
- * landing hero) or a place the reference's shape strains the default (a
- * ninety-page feature nav, cards used as link indexes)
+ * landing hero, the mark's colours) or a place the reference's shape strains
+ * the default (a ninety-page feature nav, cards used as link indexes)
  */
+
+/* --- palette ------------------------------------------------------------ */
+
+/* the colours of the mark: a yellow b over its blue reflection, a p, on navy.
+ * `primary = "custom"` and `accent = "custom"` in zensical.toml hand these
+ * over to this file. links take the blue, a shade darker on white, where the
+ * mark's own blue reads too light for body text */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #14213a;
+  --md-primary-fg-color--light: #1c2e50;
+  --md-primary-fg-color--dark: #0d1628;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffffb3;
+  --md-typeset-a-color: #2a64a8;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #2a64a8;
+  --md-accent-fg-color--transparent: #2a64a81a;
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: #ffffffb3;
+}
+
+/* slate's greys take their hue from the navy rather than the theme's own
+   blue, and the page and its code blocks a little of its saturation */
+[data-md-color-scheme="slate"] {
+  --md-hue: 218;
+  --md-default-bg-color: hsla(218, 32%, 7%, 1);
+  --md-code-bg-color: hsla(218, 30%, 11%, 1);
+}
+
+/* navy on a navy-black page is a button nobody sees: in the dark the
+   primary button is the b's yellow */
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  background-color: #ffd43b;
+  border-color: #ffd43b;
+  color: #14213a;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:focus {
+  background-color: #ffe172;
+  border-color: #ffe172;
+  color: #14213a;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-typeset-a-color: #6aa8ec;
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: #ffd43b;
+  --md-accent-fg-color--transparent: #ffd43b1a;
+}
 
 /* --- landing hero ------------------------------------------------------ */
 
@@ -94,4 +148,13 @@
    to tell from two items */
 .md-nav__link {
   line-height: 1.3;
+}
+
+/* --- the mark ----------------------------------------------------------- */
+
+/* the theme takes one logo. on slate the light tile's navy is the page's own
+   colour, so the header swaps in the IntelliJ icon's dark variant, whose tile
+   has a lighter edge */
+[data-md-color-scheme="slate"] .md-logo img {
+  content: url("../assets/logo_dark.svg");
 }

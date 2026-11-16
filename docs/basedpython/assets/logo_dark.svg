@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dark-theme variant of pluginIcon.svg: same geometry, a lighter tile with an edge, because the light
+  tile is close enough to the dark theme background that it disappears into it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+  <rect x="2" y="2" width="36" height="36" rx="8" fill="#1C2E50" stroke="#35548A"/>
+  <g stroke-width="3.2" stroke-linecap="round">
+    <g stroke="#FFD43B"><path d="M15.4 7.2V18"/><circle cx="20.2" cy="14" r="4"/></g>
+    <g stroke="#6AA8EC" transform="matrix(1 0 0 -1 0 40)"><path d="M15.4 7.2V18"/><circle cx="20.2" cy="14" r="4"/></g>
+  </g>
+</svg>

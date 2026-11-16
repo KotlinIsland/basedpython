@@ -11,6 +11,12 @@ edit_uri = "edit/main/docs/basedpython"
 extra_css = ["stylesheets/extra.css"]
 
 [project.theme]
+# the IntelliJ plugin's icon: a b over its reflection, a p, on a navy tile that
+# keeps the yellow b legible on the light scheme's white header too
+logo = "assets/logo.svg"
+favicon = "assets/logo.svg"
+# open graph and twitter tags, so a shared link unfurls into the social card
+custom_dir = "docs/basedpython-overrides"
 features = [
   # a click swaps the page in place instead of reloading the whole document,
   # and a hovered link is fetched before the click lands
@@ -33,22 +39,21 @@ features = [
 ]
 
 [project.theme.icon]
-logo = "lucide/binary"
 repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
 scheme = "default"
-primary = "black"
-accent = "indigo"
+primary = "custom"
+accent = "custom"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: dark)"
 scheme = "slate"
-primary = "black"
-accent = "indigo"
+primary = "custom"
+accent = "custom"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
