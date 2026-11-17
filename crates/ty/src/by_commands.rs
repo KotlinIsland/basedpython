@@ -673,17 +673,14 @@ fn stage_by_typed_markers(
     roots: &[PathBuf],
     root: &Path,
 ) -> anyhow::Result<()> {
-    let exported = db
-        .project()
-        .settings(db)
-        .analysis()
-        .exported_dependencies
-        .clone()
-        .unwrap_or_default();
+    let analysis = db.project().settings(db).analysis();
+    let exported = analysis.exported_dependencies.clone().unwrap_or_default();
     // written whether or not the `.by` sources went with it: the precedence claim
     // is vacuous without them — nothing to prefer — but the export declaration is
     // not, and a python-only build still has dependencies it hands out on purpose
-    let marker = ty_module_resolver::Marker::render(&exported);
+    // and how the `.by` sources were lowered, which a project reading them can't otherwise
+    // know
+    let marker = ty_module_resolver::Marker::render(&exported, analysis.compatibility);
 
     for package in staged_packages(staging, roots, root) {
         staging.write(

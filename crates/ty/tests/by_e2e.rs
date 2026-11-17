@@ -6001,6 +6001,40 @@ fn build_writes_what_the_project_exports_into_its_marker() {
     );
 }
 
+/// how the `.by` sources were lowered is fixed in the python the build ships, so a project
+/// that reads the sources has to be told, and the marker is what travels with them
+#[test]
+fn build_writes_its_lowering_into_its_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"my-lib\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.lowering]\ncompatibility = true\n",
+    )
+    .unwrap();
+    let package = dir.path().join("my_lib");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        package.join("__init__.by"),
+        "protocol Labelled:\n    def label(self) -> str\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("build").join("my_lib").join("by.typed")).unwrap(),
+        "[lowering]\ncompatibility = true\n"
+    );
+}
+
 /// a package the build emitted is marked as basedpython's even when the project
 /// exports nothing: the file's presence is what marks it
 #[test]

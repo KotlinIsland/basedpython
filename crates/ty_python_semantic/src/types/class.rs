@@ -68,7 +68,7 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, NodeIndex};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashSet;
-use ty_module_resolver::stub_file_to_real_module;
+use ty_module_resolver::{ResolverFile, built_marker, stub_file_to_real_module};
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::{FileScopeId, ScopeId};
@@ -894,24 +894,31 @@ impl<'db> ClassLiteral<'db> {
     /// whether a module lowers a `protocol`, and a `protocol(...)` shape, onto the runtime's own
     /// protocol base: a `.by` module that isn't written for other tools to read. the lowering
     /// reads the same: see `by_transforms::transforms::protocol_base`. a stub runs nothing, and
-    /// says what the module it describes does
+    /// says what the module it describes does. a module another build lowered was lowered as
+    /// that build was set, which its `by.typed` says, and the project's own setting is for the
+    /// project's modules
     pub(crate) fn protocols_lower_onto_the_runtime_base(
         db: &'db dyn Db,
         file: ProgramFile<'db>,
     ) -> bool {
-        let runs = if file.file(db).is_stub(db) {
-            let Some(runs) = stub_file_to_real_module(db, file.resolver_file(db))
-                .and_then(|module| module.file(db))
+        let mut runs = file.resolver_file(db);
+        if runs.file(db).is_stub(db) {
+            let Some(module) =
+                stub_file_to_real_module(db, runs).and_then(|module| module.file(db))
             else {
                 return false;
             };
-            runs
-        } else {
-            file.file(db)
+            runs = ResolverFile::new(db, module, runs.environment(db));
+        }
+        let source = runs.file(db);
+        if !source.source_type(db).is_basedpython() || source.is_stub(db) {
+            return false;
+        }
+        let compatibility = match built_marker(db, runs) {
+            Some(marker) => marker.lowering_compatibility(),
+            None => db.analysis_settings(source).compatibility,
         };
-        runs.source_type(db).is_basedpython()
-            && !runs.is_stub(db)
-            && !db.analysis_settings(runs).compatibility
+        !compatibility
     }
 
     /// Returns whether this class is a `TypedDict`.

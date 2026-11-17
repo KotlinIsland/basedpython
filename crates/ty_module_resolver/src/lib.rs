@@ -19,7 +19,7 @@ pub use settings::{SearchPathSettings, SearchPathSettingsError};
 pub use strategy::{FallibleStrategy, MisconfigurationStrategy, UseDefaultStrategy};
 pub use typeshed::{PyVersionRange, TypeshedVersions, TypeshedVersionsParseError};
 
-pub use by_typed::{BY_TYPED, ExportIndex, Marker, export_index};
+pub use by_typed::{BY_TYPED, ExportIndex, Marker, built_marker, export_index};
 pub use distributions::{
     DistributionIndex, DistributionName, RequirementIndex, distribution_index, requirement_index,
 };

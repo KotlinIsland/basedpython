@@ -1849,6 +1849,9 @@ pub struct LoweringOptions {
     /// With `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker
     /// reads and which mixes with other `typing` protocols. That is also the base
     /// `runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.
+    ///
+    /// A library's build records this in the `by.typed` marker it ships, so a project that
+    /// depends on the library reads its `protocol`s as they were built.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"false"#,

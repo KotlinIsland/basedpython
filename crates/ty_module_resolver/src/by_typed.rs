@@ -8,10 +8,15 @@
 //! `by.typed` is the file that is already there. It marks a package as
 //! basedpython's, and what it says beyond that is written here.
 //!
-//! What it says today is which of a distribution's own dependencies are part of
-//! its public interface. A project that depends on `pandas` may import `numpy`
-//! if — and only if — `pandas` says that handing out numpy arrays is something it
-//! does on purpose.
+//! It says which of a distribution's own dependencies are part of its public
+//! interface. A project that depends on `pandas` may import `numpy` if — and only
+//! if — `pandas` says that handing out numpy arrays is something it does on
+//! purpose.
+//!
+//! It also says how the distribution's `.by` sources were lowered into the python
+//! it ships, which the `.by` a project reads can't say: `lowering.compatibility`
+//! decides whether a `protocol` is a `typing.Protocol`, and the shipped python was
+//! fixed when the distribution was built, whatever the project reading it sets.
 
 use ruff_db::files::{directory_listing, system_path_to_file};
 use ruff_db::source::source_text;
@@ -20,7 +25,9 @@ use rustc_hash::FxHashMap;
 
 use crate::db::Db;
 use crate::distributions::{DistributionName, distribution_name_from_dist_info, record_path};
-use crate::environment::ResolverEnvironment;
+use crate::environment::{ResolverEnvironment, ResolverFile};
+use crate::path::directory_contains_file;
+use crate::resolve::{ModuleResolveMode, search_paths};
 
 /// The name of the marker file a basedpython distribution ships.
 pub const BY_TYPED: &str = "by.typed";
@@ -33,6 +40,9 @@ pub const BY_TYPED: &str = "by.typed";
 #[derive(Clone, Debug, Default, Eq, PartialEq, get_size2::GetSize)]
 pub struct Marker {
     exported_dependencies: Box<[DistributionName]>,
+    /// whether the distribution was built with `lowering.compatibility`. a marker that doesn't
+    /// say was built without it, which is the default
+    lowering_compatibility: bool,
 }
 
 impl Marker {
@@ -54,31 +64,49 @@ impl Marker {
             })
             .unwrap_or_default();
 
+        let lowering_compatibility = table
+            .get("lowering")
+            .and_then(toml::Value::as_table)
+            .and_then(|lowering| lowering.get("compatibility"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or_default();
+
         Self {
             exported_dependencies: exported,
+            lowering_compatibility,
         }
     }
 
-    /// The text of a marker that declares `exported` and nothing else.
+    /// The text of a marker that declares `exported`, and the build's
+    /// `lowering.compatibility` where it was set.
     ///
     /// This is the other end of `parse`, and the only thing that writes a
     /// `by.typed`'s contents: what a build stages is what a consumer reads back.
-    pub fn render(exported: &[impl AsRef<str>]) -> String {
-        if exported.is_empty() {
-            return String::new();
+    pub fn render(exported: &[impl AsRef<str>], lowering_compatibility: bool) -> String {
+        let mut table = toml::Table::new();
+        if !exported.is_empty() {
+            let names = exported
+                .iter()
+                .map(|name| toml::Value::String(name.as_ref().to_string()))
+                .collect();
+            table.insert(
+                "exported-dependencies".to_string(),
+                toml::Value::Array(names),
+            );
+        }
+        if lowering_compatibility {
+            let mut lowering = toml::Table::new();
+            lowering.insert("compatibility".to_string(), toml::Value::Boolean(true));
+            table.insert("lowering".to_string(), toml::Value::Table(lowering));
         }
 
-        let names = exported
-            .iter()
-            .map(|name| toml::Value::String(name.as_ref().to_string()))
-            .collect();
-        let mut table = toml::Table::new();
-        table.insert(
-            "exported-dependencies".to_string(),
-            toml::Value::Array(names),
-        );
-
         table.to_string()
+    }
+
+    /// Whether the distribution's `.by` sources were lowered with
+    /// `lowering.compatibility`.
+    pub fn lowering_compatibility(&self) -> bool {
+        self.lowering_compatibility
     }
 
     /// The dependencies this distribution declares part of its interface.
@@ -96,8 +124,45 @@ impl Marker {
     }
 
     fn is_empty(&self) -> bool {
-        self.exported_dependencies.is_empty()
+        self.exported_dependencies.is_empty() && !self.lowering_compatibility
     }
+}
+
+/// What the `by.typed` of the package a file was built into declares.
+///
+/// A build writes a marker into each package it ships, so a file under a marked
+/// package is one a build produced, and the nearest marker above it is the one that
+/// build wrote. Only the search paths that hold code from elsewhere are asked: an
+/// installed distribution, an editable install, or an extra path. The same file can
+/// also be under the project's own root — a workspace member's build is — and is
+/// still that build's. A file only the project's own search paths reach is lowered as
+/// the project says, wherever a marker sits among its sources. `None` for a file no
+/// marked package holds.
+pub fn built_marker(db: &dyn Db, file: ResolverFile<'_>) -> Option<Marker> {
+    let path = file.file(db).path(db).as_system_path()?;
+    search_paths(db, file.environment(db), ModuleResolveMode::Runtime)
+        .filter(|search_path| search_path.can_contain_third_party_code())
+        .find_map(|search_path| {
+            let root = search_path.as_system_path()?;
+            let packages = path.strip_prefix(root).ok()?.parent()?;
+            let mut directory = root.to_path_buf();
+            let mut nearest = None;
+            for package in packages.components() {
+                directory.push(package.as_str());
+                // a marker only counts inside a package, as resolution has it
+                if directory_contains_file(db, &directory, &[BY_TYPED])
+                    && directory_contains_file(
+                        db,
+                        &directory,
+                        &["__init__.py", "__init__.pyi", "__init__.by", "__init__.byi"],
+                    )
+                {
+                    nearest = Some(directory.join(BY_TYPED));
+                }
+            }
+            let marker = system_path_to_file(db, nearest?).ok()?;
+            Some(Marker::parse(&source_text(db, marker)))
+        })
 }
 
 /// What every installed distribution's `by.typed` declares.
@@ -229,15 +294,30 @@ mod tests {
 
     #[test]
     fn what_is_rendered_is_what_is_read_back() {
-        let rendered = Marker::render(&["numpy", "python-dateutil"]);
+        let rendered = Marker::render(&["numpy", "python-dateutil"], true);
+        let marker = Marker::parse(&rendered);
 
         assert_eq!(
-            Marker::parse(&rendered).exported_dependencies(),
+            marker.exported_dependencies(),
             [
                 DistributionName::new("numpy"),
                 DistributionName::new("python-dateutil")
             ]
         );
+        assert!(marker.lowering_compatibility());
+    }
+
+    #[test]
+    fn a_marker_says_how_its_distribution_was_lowered() {
+        let nothing: [&str; 0] = [];
+        assert!(Marker::parse(&Marker::render(&nothing, true)).lowering_compatibility());
+        // a marker that doesn't say was built with the default lowering
+        for text in ["", "exported-dependencies = [\"numpy\"]\n", "lowering = 1"] {
+            assert!(
+                !Marker::parse(text).lowering_compatibility(),
+                "`{text}` should declare the default lowering",
+            );
+        }
     }
 
     #[test]
@@ -245,7 +325,7 @@ mod tests {
         // the file's presence is what marks the package, so it is written even
         // when there is nothing to put in it
         let nothing: [&str; 0] = [];
-        assert_eq!(Marker::render(&nothing), "");
+        assert_eq!(Marker::render(&nothing, false), "");
     }
 
     #[test]

@@ -246,6 +246,11 @@ bargain [`py.typed`](https://peps.python.org/pep-0561/) strikes for inline
 annotations: the package declares its own sources authoritative, rather than a
 checker guessing
 
+the marker also records how the library was lowered. a library built with
+`lowering.compatibility` ships its `protocol`s as `typing.Protocol`s, and a
+project depending on it reads them that way, whatever that project sets for
+itself
+
 ## editable installs
 
 ```sh

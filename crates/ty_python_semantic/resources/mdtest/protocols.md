@@ -9258,6 +9258,133 @@ class Both(Sized, Protocol):  # error: [invalid-protocol]
     def both(self) -> int: ...
 ```
 
+### a dependency's `protocol` is on the base it was built with
+
+an installed distribution's python was lowered when it was built, and its `by.typed` says whether
+that was with `lowering.compatibility`. this project lowers onto the protocol base, and `plib` was
+built for `typing.Protocol`
+
+```toml
+[environment]
+python = "/.venv"
+```
+
+`/.venv/<path-to-site-packages>/plib/__init__.by`:
+
+```by
+protocol Labelled:
+    def label(self) -> str
+```
+
+`/.venv/<path-to-site-packages>/plib/__init__.py`:
+
+```py
+from typing import Protocol
+
+class Labelled(Protocol):
+    def label(self) -> str: ...
+```
+
+`/.venv/<path-to-site-packages>/plib/by.typed`:
+
+```text
+[lowering]
+compatibility = true
+```
+
+`main.by`:
+
+```by
+from typing import Protocol
+from plib import Labelled
+
+protocol Named(Labelled):  # error: [invalid-protocol]
+    def name(self) -> str
+
+class Both(Labelled, Protocol):  # no diagnostic
+    def both(self) -> int: ...
+```
+
+### a build's `by.typed` speaks for it wherever it is reached from
+
+a build reached through an extra path is read by its marker too, even under the project's own root
+as a workspace member's build is, and a package marked inside another marked package was built apart
+from it
+
+```toml
+[environment]
+extra-paths = ["/src/member/build"]
+```
+
+`/src/member/build/plib/__init__.by`:
+
+```by
+protocol Labelled:
+    def label(self) -> str
+```
+
+`/src/member/build/plib/__init__.py`:
+
+```py
+from typing import Protocol
+
+class Labelled(Protocol):
+    def label(self) -> str: ...
+```
+
+`/src/member/build/plib/by.typed`:
+
+```text
+[lowering]
+compatibility = true
+```
+
+`/src/member/build/outer/__init__.by`:
+
+```by
+```
+
+`/src/member/build/outer/by.typed`:
+
+```text
+```
+
+`/src/member/build/outer/inner/__init__.by`:
+
+```by
+protocol Sized:
+    def size(self) -> int
+```
+
+`/src/member/build/outer/inner/__init__.py`:
+
+```py
+from typing import Protocol
+
+class Sized(Protocol):
+    def size(self) -> int: ...
+```
+
+`/src/member/build/outer/inner/by.typed`:
+
+```text
+[lowering]
+compatibility = true
+```
+
+`main.by`:
+
+```by
+from plib import Labelled
+from outer.inner import Sized
+
+protocol Named(Labelled):  # error: [invalid-protocol]
+    def name(self) -> str
+
+protocol Measured(Sized):  # error: [invalid-protocol]
+    def unit(self) -> str
+```
+
 ### `lowering.compatibility` lowers onto `typing.Protocol`
 
 for python other tools read, a `protocol` lowers onto `typing.Protocol`, which is an ABC and which

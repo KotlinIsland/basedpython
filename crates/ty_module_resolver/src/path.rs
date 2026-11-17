@@ -527,7 +527,7 @@ impl ModuleDirectoryEntry<'_> {
     }
 }
 
-fn directory_contains_file(db: &dyn Db, directory: &SystemPath, names: &[&str]) -> bool {
+pub(crate) fn directory_contains_file(db: &dyn Db, directory: &SystemPath, names: &[&str]) -> bool {
     let Ok(listing) = directory_listing(db, directory) else {
         return false;
     };

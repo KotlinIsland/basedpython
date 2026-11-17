@@ -566,7 +566,7 @@
       "type": "object",
       "properties": {
         "compatibility": {
-          "description": "Whether the transpiled python is written for other python tools to read.\n\nA `protocol` is a base made for the type checker, and by default it lowers onto\nbasedpython's own runtime base: one that marks the class a protocol and records its\nmembers, has no metaclass, and does nothing else. It is not `typing.Protocol`, so\nanother checker reading the python doesn't see a protocol there, and a `protocol`\ncan't extend a `typing` one.\n\nWith `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker\nreads and which mixes with other `typing` protocols. That is also the base\n`runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.",
+          "description": "Whether the transpiled python is written for other python tools to read.\n\nA `protocol` is a base made for the type checker, and by default it lowers onto\nbasedpython's own runtime base: one that marks the class a protocol and records its\nmembers, has no metaclass, and does nothing else. It is not `typing.Protocol`, so\nanother checker reading the python doesn't see a protocol there, and a `protocol`\ncan't extend a `typing` one.\n\nWith `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker\nreads and which mixes with other `typing` protocols. That is also the base\n`runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.\n\nA library's build records this in the `by.typed` marker it ships, so a project that\ndepends on the library reads its `protocol`s as they were built.",
           "anyOf": [
             {
               "$ref": "#/definitions/boolean"
