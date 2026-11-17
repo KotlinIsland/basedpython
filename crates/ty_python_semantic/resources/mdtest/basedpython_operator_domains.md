@@ -174,7 +174,7 @@ class Base:
         return 1
 
 class Child(Base):
-    def __radd__(self, other: object) -> str:
+    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
         return "s"
 
 def f[T: Base](x: final T, c: Child):
@@ -199,6 +199,230 @@ class Coupon:
 
 def f(w: WalletG, c: Coupon):
     w + c  # error: [unsupported-operator]
+```
+
+## A subclass's reflected dunder answers as its ancestor's dunder does
+
+python asks the right operand's reflected dunder first when its class is a subclass of the left
+operand's and, for a binary operator, answers that dunder differently. code typed against the
+ancestor can't see that coming: `a1 + a2` below is `A.__add__`'s `int`, even when `a2` is a `B`. so
+`B.__radd__` has to answer as `A.__add__` does
+
+```by
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B(A):
+    # snapshot: invalid-reflected-dunder
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(a1: A, a2: A):
+    reveal_type(a1 + a2)  # revealed: int
+```
+
+```snapshot
+error[invalid-reflected-dunder]: `B.__radd__` answers `A() + B()` with `str`, where `A.__add__` answers `int`
+ --> src/mdtest_snippet.by:7:9
+  |
+7 |     def __radd__(self, other: object) -> str:
+  |         ^^^^^^^^
+info: python asks a subclass's `__radd__` before `A.__add__`, so for an `A` it has to answer as `A.__add__` does, or not take an `A`
+```
+
+## A reflected dunder may answer with what the ancestor's dunder answers
+
+it may also hand the operand back with `NotImplemented`, after which python asks the ancestor's
+dunder, or take only operands the ancestor never is
+
+```by
+from types import NotImplementedType
+
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class Answers(A):
+    def __radd__(self, other: object) -> bool:  # no diagnostic
+        return True
+
+class HandsBack(A):
+    def __radd__(self, other: object) -> int | NotImplementedType:  # no diagnostic
+        return NotImplemented
+
+class TakesInts(A):
+    def __radd__(self, other: int) -> str:  # no diagnostic
+        return "s"
+```
+
+## A class's reflected dunder from one base answers before another base's dunder
+
+in `class Both(Mixin, A)`, `Mixin.__radd__` answers `A() + Both()` before `A.__add__`, though
+`Mixin` alone has nothing to conform to
+
+```by
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class Mixin:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+# snapshot: invalid-reflected-dunder
+class Both(Mixin, A): ...
+```
+
+```snapshot
+error[invalid-reflected-dunder]: `Both.__radd__` answers `A() + Both()` with `str`, where `A.__add__` answers `int`
+  --> src/mdtest_snippet.by:10:7
+   |
+10 | class Both(Mixin, A): ...
+   |       ^^^^^^^^^^^^^^
+info: python asks a subclass's `__radd__` before `A.__add__`, so for an `A` it has to answer as `A.__add__` does, or not take an `A`
+```
+
+## A subclass of a class with a wrong reflected dunder isn't reported again
+
+```by
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B(A):
+    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
+
+class C(B): ...  # no diagnostic
+```
+
+## A generic subclass answers with its own type parameter
+
+```by
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B[T](A):
+    def __init__(self, t: T):
+        self.t = t
+
+    def __radd__(self, other: object) -> T:  # error: [invalid-reflected-dunder]
+        return self.t
+```
+
+## A generic subclass that inherits the reflected dunder isn't asked first
+
+python asks the right operand first only where its class answers the reflected dunder differently,
+and `B[T]` answers it with `A[T]`'s
+
+```by
+class A[T]:
+    def __add__(self, other: object) -> int:
+        return 1
+
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+class B[T](A[T]): ...  # no diagnostic
+```
+
+## A reflected dunder that runs with an ancestor it doesn't accept
+
+`B.__radd__` can't tell an `A[str]` from an `A[int]`, so it runs with it
+
+```by
+class A[T]:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B[T](A[T]):
+    def __radd__(self, other: A[int]) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
+```
+
+## A comparison asks a subclass first even when it inherits the reflected dunder
+
+so a class whose own two comparisons disagree is wrong as soon as anything subclasses it, unless it
+is `@final`
+
+```by
+from typing import final
+
+class A:
+    def __lt__(self, other: object) -> int:  # error: [invalid-reflected-dunder]
+        return 1
+
+    def __gt__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
+
+@final
+class F:
+    def __lt__(self, other: object) -> int:  # no diagnostic
+        return 1
+
+    def __gt__(self, other: object) -> str:  # no diagnostic
+        return "s"
+```
+
+## Each wrong reflected dunder is reported, whatever another's suppression
+
+```by
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+    def __sub__(self, other: object) -> int:
+        return 1
+
+class B(A):
+    def __radd__(self, other: object) -> str:  # ty: ignore[invalid-reflected-dunder]
+        return "s"
+
+    def __rsub__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
+```
+
+## A comparison's reflected dunder answers as its ancestor's does
+
+```by
+class A:
+    def __lt__(self, other: object) -> bool:
+        return True
+
+class B(A):
+    def __gt__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
+```
+
+## A `.py` reflected dunder is checked only where its operands are checked
+
+```py
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B(A):
+    def __radd__(self, other: object) -> str:  # no diagnostic
+        return "s"
+```
+
+## A `.py` reflected dunder in a checked file answers as its ancestor's dunder does
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+class A:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class B(A):
+    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+        return "s"
 ```
 
 ## A `.py` dunder reads a shared subclass only where its operands are checked

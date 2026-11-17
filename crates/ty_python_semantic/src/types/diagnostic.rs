@@ -210,6 +210,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&UNESTABLISHED_ASSERTION_GUARD);
     registry.register_lint(&UNGUARDED_OPERAND);
+    registry.register_lint(&INVALID_REFLECTED_DUNDER);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&MUTABLE_STATE_VALUE);
     registry.register_lint(&SILENT_MUTATION);
@@ -2286,6 +2287,56 @@ declare_lint! {
     /// ```
     pub(crate) static UNGUARDED_OPERAND = {
         summary: "detects an operator dunder that returns a value for an operand it hasn't tested",
+        status: LintStatus::stable("0.0.2"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a reflected operator dunder (`__radd__`, `__gt__`, ...) that python asks
+    /// before an ancestor's own dunder answers as that dunder does.
+    ///
+    /// ## Why is this bad?
+    /// When the right operand's class is a subclass of the left operand's, python asks the right
+    /// operand first: for a binary operator where the subclass answers the reflected dunder
+    /// differently, and for a comparison even where it inherits it. Code typed against the
+    /// ancestor can't see that coming: `a1 + a2`, with both typed `A`, is what `A.__add__`
+    /// returns, but a `B` in `a2` answers with `B.__radd__`. So the reflected dunder has to return
+    /// what the ancestor's dunder returns, or hand the operand back with `NotImplemented`, after
+    /// which python asks the ancestor's dunder.
+    ///
+    /// The check applies to a reflected dunder a class inherits too: in `class C(B, A)`,
+    /// `B.__radd__` answers `A() + C()` before `A.__add__`. A class whose own `__lt__` and
+    /// `__gt__` disagree is reported unless it is `@final`, since a subclass asks its inherited
+    /// `__gt__` first.
+    ///
+    /// ## Example
+    ///
+    /// ```python
+    /// class A:
+    ///     def __add__(self, other: object) -> int:
+    ///         return 1
+    ///
+    /// class B(A):
+    ///     def __radd__(self, other: object) -> str:  # error: `A.__add__` answers `int`
+    ///         return "s"
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```python
+    /// class A:
+    ///     def __add__(self, other: object) -> int:
+    ///         return 1
+    ///
+    /// class B(A):
+    ///     def __radd__(self, other: object) -> int:
+    ///         return 2
+    /// ```
+    pub(crate) static INVALID_REFLECTED_DUNDER = {
+        summary: "detects a reflected operator dunder that answers differently from an ancestor's dunder it is asked before",
         status: LintStatus::stable("0.0.2"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,

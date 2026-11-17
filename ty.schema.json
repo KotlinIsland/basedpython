@@ -1665,6 +1665,16 @@
             }
           ]
         },
+        "invalid-reflected-dunder": {
+          "title": "detects a reflected operator dunder that answers differently from an ancestor's dunder it is asked before",
+          "description": "## What it does\nChecks that a reflected operator dunder (`__radd__`, `__gt__`, ...) that python asks\nbefore an ancestor's own dunder answers as that dunder does.\n\n## Why is this bad?\nWhen the right operand's class is a subclass of the left operand's, python asks the right\noperand first: for a binary operator where the subclass answers the reflected dunder\ndifferently, and for a comparison even where it inherits it. Code typed against the\nancestor can't see that coming: `a1 + a2`, with both typed `A`, is what `A.__add__`\nreturns, but a `B` in `a2` answers with `B.__radd__`. So the reflected dunder has to return\nwhat the ancestor's dunder returns, or hand the operand back with `NotImplemented`, after\nwhich python asks the ancestor's dunder.\n\nThe check applies to a reflected dunder a class inherits too: in `class C(B, A)`,\n`B.__radd__` answers `A() + C()` before `A.__add__`. A class whose own `__lt__` and\n`__gt__` disagree is reported unless it is `@final`, since a subclass asks its inherited\n`__gt__` first.\n\n## Example\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> str:  # error: `A.__add__` answers `int`\n        return \"s\"\n```\n\nUse instead:\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> int:\n        return 2\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-regex": {
           "title": "detects an invalid regular expression or a reference to a group it has not got",
           "description": "## What it does\nChecks a literal regular expression passed to the `re` module: that it\ncompiles at all, and that every group a match is asked for exists in it.\n\n## Why is this bad?\nThe stubs type every `re` pattern as a plain `str`, so a pattern that\n`re.compile` rejects, or a `m.group(3)` on a pattern with two groups,\nonly fails once the line runs.\n\n## Example\n\n```py\nimport re\n\nre.compile(\"(\")  # error: missing ), unterminated subpattern at position 0\n\nif m := re.match(\"(a)(b)\", \"ab\"):\n    m.group(3)  # error: No such group: 3\n```",

@@ -242,6 +242,7 @@ mod passed_operand;
 mod protocol_class;
 pub(crate) mod receivers;
 mod recursive;
+mod reflected_dunder;
 pub(crate) use recursive::RecursiveMapping;
 pub use recursive::{RecursiveType, RecursiveVar, UnfoldResult};
 mod regex;

@@ -87,6 +87,35 @@ in a `.py` file this applies to a dunder whose operands are checked
 (`analysis.checked-operator-operands`, on under the `strict` preset). elsewhere a `.py` dunder is
 read as ty reads it: an operand that isn't assignable to the domain is outside it
 
+## a subclass's reflected dunder answers as its ancestor's does
+
+python asks the right operand first when its class is a subclass of the left operand's and, for a
+binary operator, answers the reflected dunder differently. code typed against the ancestor can't see
+that coming, so the reflected dunder has to answer as the ancestor's own dunder does, or it is
+`invalid-reflected-dunder`
+
+```by
+class A:
+    def __add__(self, other: object) -> int: ...
+
+class B(A):
+    def __radd__(self, other: object) -> str: ...  # error: [invalid-reflected-dunder]
+
+def f(a1: A, a2: A):
+    reveal_type(a1 + a2)  # int, which a `B` in `a2` would make `B.__radd__`'s `str`
+```
+
+a reflected dunder that doesn't take an `A` at all never answers for one: a
+`__radd__(self, other: int)` hands an `A` back, and python asks `A.__add__`. it is also checked
+where a class inherits it: in `class Both(Mixin, A)`, `Mixin.__radd__` answers `A() + Both()` before
+`A.__add__`
+
+a comparison asks a subclass's reflected dunder first even when the subclass inherits it, so a class
+whose `__lt__` and `__gt__` disagree is reported too, unless it is `@final`
+
+in a `.py` file this applies where the file's operator dunders are checked
+(`analysis.checked-operator-operands`)
+
 ## why `list` is the motivating case
 
 a checker that treats every mismatch as a rejection picks `list.__add__` for `xs += ["a"]`, and types

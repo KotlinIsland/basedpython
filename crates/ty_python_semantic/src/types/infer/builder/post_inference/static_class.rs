@@ -168,6 +168,10 @@ pub(crate) fn check_static_class_definitions<'db>(
     // its first parameter, and converts nothing anywhere
     crate::types::conversions::validate_conversion_dunders(context, class, class_node);
 
+    // basedpython: a reflected dunder python asks before an ancestor's own dunder has to answer
+    // as that dunder does
+    crate::types::reflected_dunder::check_reflected_dunders(context, class, class_node);
+
     // Check that the class does not have a cyclic definition
     if let Some(inheritance_cycle) = class.inheritance_cycle(context.db()) {
         if inheritance_cycle.is_participant()
