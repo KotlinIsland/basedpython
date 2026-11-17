@@ -4,7 +4,7 @@ use crate::reified::{UnansweredReason, reified_class_reads};
 use crate::types::diagnostic::{INVALID_VARIANCE_DECLARATION, REIFIED_WITHOUT_RECEIVER};
 use crate::types::infer::TypeExpressionFlags;
 use crate::types::{
-    CallArguments, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
+    CallArguments, ClassLiteral, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
     KnownInstanceType, SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
     TypingModule, UnionType,
     function::{KnownFunction, OverloadLiteral},
@@ -317,6 +317,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         class_flags.set(
             ClassLiteralFlags::HAS_EXPLICIT_METACLASS,
             has_explicit_metaclass,
+        );
+        class_flags.set(
+            ClassLiteralFlags::RUNTIME_PROTOCOL_BASE,
+            class_node.has_synthetic_marker("protocol_class")
+                && ClassLiteral::protocols_lower_onto_the_runtime_base(db, self.program_file()),
         );
         let class_name = name.id.clone();
         let infer_original_class_ty = |deprecated,

@@ -419,6 +419,10 @@ impl<'db> ClassBase<'db> {
     ) -> ClassMetaclass<'db> {
         let metaclass = match self {
             Self::Class(class) => return class.inferred_metaclass(db),
+            // a basedpython `protocol` on the runtime's own base has no metaclass
+            Self::Protocol if subclass.is_on_runtime_protocol_base(db) => {
+                KnownClass::Type.to_class_literal(db, env)
+            }
             Self::Protocol => {
                 if subclass.file(db).is_stub(db)
                     && file_to_module(db, subclass.program_file(db).resolver_file(db))

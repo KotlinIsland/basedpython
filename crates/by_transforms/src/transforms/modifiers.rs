@@ -112,6 +112,8 @@ pub(crate) struct Modifiers<'src> {
     /// through the runtime helper. a stub is never run, so it has no use for it
     abstract_by_helper: bool,
     needs_abstract_helper: bool,
+    /// what a `protocol` lowers onto
+    protocol_base: super::protocol_base::ProtocolBase,
     /// Names marked `export`/`public` at module level. Used to generate `__all__`.
     exports: Vec<String>,
     /// Module-level names renamed by `private` (original → `_original`).
@@ -141,6 +143,7 @@ impl<'src> Modifiers<'src> {
         source: &'src str,
         written: WrittenNames<'src>,
         sealed_listings: &'src HashMap<TextRange, SealedListing>,
+        protocol_base: super::protocol_base::ProtocolBase,
     ) -> Self {
         Self {
             source,
@@ -160,6 +163,7 @@ impl<'src> Modifiers<'src> {
             needs_dataclass_slots: false,
             abstract_by_helper: false,
             needs_abstract_helper: false,
+            protocol_base,
             exports: Vec::new(),
             private_renames: Vec::new(),
             sealed_listings,
@@ -747,16 +751,23 @@ impl<'src> Modifiers<'src> {
 
     fn insert_base_class(&mut self, class: &StmtClassDef, base_name: &str) {
         if let Some(args) = &class.arguments {
-            let rparen = args.range().end() - TextSize::from(1);
-            if args.args.is_empty() && args.keywords.is_empty() {
-                self.edits.push(Fix::safe_edit(Edit::insertion(
-                    base_name.to_owned(),
-                    rparen,
-                )));
-            } else {
+            // a base is positional, so it goes after the last base and ahead of any keyword:
+            // `class P(metaclass=M)` takes it as `class P(Protocol, metaclass=M)`
+            if let Some(last) = args.args.last() {
                 self.edits.push(Fix::safe_edit(Edit::insertion(
                     format!(", {base_name}"),
-                    rparen,
+                    last.end(),
+                )));
+            } else if let Some(first) = args.keywords.first() {
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    format!("{base_name}, "),
+                    first.start(),
+                )));
+            } else {
+                // right after the `(`, ahead of any comment the empty list holds
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    base_name.to_owned(),
+                    args.start() + TextSize::from(1),
                 )));
             }
         } else {
@@ -769,7 +780,7 @@ impl<'src> Modifiers<'src> {
     }
 
     fn insert_protocol_base(&mut self, class: &StmtClassDef) {
-        let protocol = self.written.imported("typing", "Protocol");
+        let protocol = self.protocol_base.name(self.written);
         self.insert_base_class(class, &protocol);
     }
 }
@@ -898,6 +909,7 @@ pub(crate) struct ModifiersPass<'src> {
     /// the `__class__` cell of the class's methods at the class it makes, which 3.13
     /// began doing. before it, zero-argument `super()` in a method raises a `TypeError`
     dataclass_slots_keep_class_cell: bool,
+    protocol_base: super::protocol_base::ProtocolBase,
 }
 
 impl<'src> ModifiersPass<'src> {
@@ -914,6 +926,7 @@ impl<'src> ModifiersPass<'src> {
             is_stub: config.is_stub,
             dataclass_slots: config.min_version >= PythonVersion::PY310,
             dataclass_slots_keep_class_cell: config.min_version >= PythonVersion::PY313,
+            protocol_base: super::protocol_base::ProtocolBase::of(config),
         }
     }
 }
@@ -930,7 +943,12 @@ impl AstPass for ModifiersPass<'_> {
     }
 
     fn run(&self, module: &mut ruff_python_ast::ModModule, ctx: &mut PassContext) {
-        let mut inner = Modifiers::new(self.source, self.written, &self.sealed_listings);
+        let mut inner = Modifiers::new(
+            self.source,
+            self.written,
+            &self.sealed_listings,
+            self.protocol_base,
+        );
         // a stub is never run, so it keeps the option a checker reads
         inner.slots_by_helper = !self.dataclass_slots && !self.is_stub;
         inner.slots_by_helper_for_class_cell =
@@ -950,6 +968,11 @@ impl AstPass for ModifiersPass<'_> {
         if inner.needs_abstract_helper {
             ctx.runtime.insert(crate::runtime::ABSTRACT);
         }
+        if inner.needs_protocol
+            && let Some(helper) = inner.protocol_base.helper()
+        {
+            ctx.runtime.insert(helper);
+        }
         for (needed, module, name) in [
             (inner.needs_final, "typing", "final"),
             (inner.needs_final_annotation, "typing", "Final"),
@@ -959,7 +982,12 @@ impl AstPass for ModifiersPass<'_> {
             (inner.needs_abstractmethod, "abc", "abstractmethod"),
             (inner.needs_dataclass, "dataclasses", "dataclass"),
             (inner.needs_dataclass_field, "dataclasses", "field"),
-            (inner.needs_protocol, "typing", "Protocol"),
+            (
+                inner.needs_protocol
+                    && inner.protocol_base == super::protocol_base::ProtocolBase::Typing,
+                "typing",
+                "Protocol",
+            ),
         ] {
             if needed {
                 ctx.required_imports
@@ -1166,6 +1194,59 @@ mod tests {
     #[test]
     fn abstract_class() {
         check("abstract class Foo: ...\n", "class Foo: ...\n");
+    }
+
+    /// a base goes ahead of the class's keywords, which python takes only after the bases
+    #[test]
+    fn protocol_base_goes_ahead_of_keywords() {
+        check(
+            "class M(type): ...\nprotocol P(metaclass=M):\n    x: int\n",
+            "from typing import Protocol\nclass M(type): ...\nclass P(Protocol, metaclass=M):\n    x: int\n",
+        );
+        check(
+            "class M(type): ...\nclass A: ...\nprotocol P(A, metaclass=M):\n    x: int\n",
+            "from typing import Protocol\nclass M(type): ...\nclass A: ...\nclass P(A, Protocol, metaclass=M):\n    x: int\n",
+        );
+    }
+
+    /// a `protocol` lowers onto the runtime's base, which refuses an instance of it, unless the
+    /// python is written for other tools to read, and a stub always lowers onto `typing`
+    #[test]
+    fn protocol_lowers_onto_the_runtime_base() {
+        let source = indoc! {"
+            protocol Sized:
+                def size(self) -> int
+            protocol Both(Sized):
+                def both(self) -> int
+        "};
+        let out = transpile(
+            source,
+            &Config {
+                compatibility: false,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("class Sized(_ByProtocol):\n")
+                && out.contains("class Both(Sized, _ByProtocol):\n")
+                && out.contains("class _ByProtocol:\n")
+                && !out.contains("import Protocol"),
+            "{out}"
+        );
+        let stub = transpile(
+            source,
+            &Config {
+                compatibility: false,
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            stub.contains("class Sized(Protocol):") && !stub.contains("_ByProtocol"),
+            "{stub}"
+        );
     }
 
     #[test]

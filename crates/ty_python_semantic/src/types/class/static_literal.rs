@@ -140,6 +140,11 @@ bitflags::bitflags! {
         /// than declaring a class, its members resolve on receivers of that
         /// type, and it binds only a mangled module symbol.
         const IS_EXTENSION = 1 << 6;
+        /// basedpython: whether this class is a `protocol` that lowers onto the runtime's own
+        /// protocol base rather than `typing.Protocol`: one declared with the keyword in a
+        /// module that isn't a stub and isn't written for other tools to read. that base has
+        /// no metaclass, and `runtime_checkable` refuses it
+        const RUNTIME_PROTOCOL_BASE = 1 << 7;
     }
 }
 
@@ -148,6 +153,12 @@ impl get_size2::GetSize for ClassLiteralFlags {}
 impl<'db> StaticClassLiteral<'db> {
     pub(crate) fn is_sealed(self, db: &'db dyn Db) -> bool {
         self.flags(db).contains(ClassLiteralFlags::SEALED)
+    }
+
+    /// see [`ClassLiteralFlags::RUNTIME_PROTOCOL_BASE`]
+    pub(crate) fn is_on_runtime_protocol_base(self, db: &'db dyn Db) -> bool {
+        self.flags(db)
+            .contains(ClassLiteralFlags::RUNTIME_PROTOCOL_BASE)
     }
 
     fn has_decorators(self, db: &'db dyn Db) -> bool {

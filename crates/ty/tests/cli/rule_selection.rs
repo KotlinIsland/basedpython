@@ -1401,3 +1401,69 @@ fn all_overrides() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// `runtime_checkable` takes only `typing.Protocol`, which a `protocol` lowers onto only with
+/// `lowering.compatibility`: without it, applying it to one is an error in every preset. it is a
+/// `runtime-checkable` warning either way, and a level set for that rule outright is kept
+#[test]
+fn runtime_checkable_follows_lowering_compatibility() -> anyhow::Result<()> {
+    let source = r#"
+        from typing import runtime_checkable
+
+        @runtime_checkable
+        protocol Sized:
+            def size(self) -> int
+        "#;
+    let case = CliTest::with_file("main.by", source)?;
+    assert_cmd_snapshot!(case.command().arg("--output-format").arg("concise"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    main.by:4:1: error[invalid-argument-type] `runtime_checkable` can only be applied to protocol classes
+    main.by:4:1: warning[runtime-checkable] `runtime_checkable` makes `isinstance` test a protocol by its member names alone
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+    assert_cmd_snapshot!(
+        case.command()
+            .arg("--output-format")
+            .arg("concise")
+            .arg("--type-checking-preset")
+            .arg("ty-compatible"),
+        @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    main.by:4:1: error[invalid-argument-type] `runtime_checkable` can only be applied to protocol classes
+    Found 1 diagnostic
+
+    ----- stderr -----
+    "
+    );
+
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.basedpython.lowering]
+            compatibility = true
+
+            [tool.basedpython.rules]
+            runtime-checkable = "error"
+            "#,
+        ),
+        ("main.by", source),
+    ])?;
+    assert_cmd_snapshot!(case.command().arg("--output-format").arg("concise"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    main.by:4:1: error[runtime-checkable] `runtime_checkable` makes `isinstance` test a protocol by its member names alone
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}

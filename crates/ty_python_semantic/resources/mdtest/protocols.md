@@ -9142,19 +9142,144 @@ takes_named(Person())  # ok
 
 ### decorated `protocol` keyword
 
-a decorator may precede the `protocol` introducer. `@runtime_checkable protocol P` is equivalent to
-`@runtime_checkable class P(Protocol)`, so `P` may be used with `isinstance`.
+a decorator may precede the `protocol` introducer. `runtime_checkable` takes only `typing.Protocol`,
+which a `protocol` lowers onto only with `lowering.compatibility`, so here it is refused. it is
+reported besides, since it tests a protocol by its member names alone
 
 ```by
 from typing import runtime_checkable
 
-@runtime_checkable
+# error: [runtime-checkable]
+@runtime_checkable  # error: [invalid-argument-type]
 protocol HasLen:
     def __len__(self) -> int: ...
 
 def f(x: object) -> None:
     if isinstance(x, HasLen):
         reveal_type(x)  # revealed: HasLen
+```
+
+### a `protocol` has no metaclass
+
+a `protocol` lowers onto basedpython's own protocol base, which has no metaclass, so it is not an
+ABC, and a class implementing it mixes it with any other base
+
+```by
+from abc import ABC
+from enum import Enum
+
+protocol Sized:
+    def size(self) -> int
+
+class Impl(Sized, ABC):  # no diagnostic
+    def size(self) -> int:
+        return 1
+
+class Color(Sized, Enum):  # no diagnostic
+    red = 1
+
+    def size(self) -> int:
+        return 1
+
+Sized.register(Impl)  # error: [unresolved-attribute]
+```
+
+### a `protocol` and a `typing` protocol don't mix
+
+the protocol base is not `typing.Protocol`: `typing` refuses a protocol on it as a base of one of
+its own, and the protocol base takes no part in `typing`'s machinery. so neither kind of protocol
+extends the other, whichever way round, and a typeshed protocol is a `typing` protocol here
+
+```by
+from typing import Protocol, SupportsInt
+from collections.abc import Iterable
+
+protocol Sized:
+    def size(self) -> int
+
+protocol Number(SupportsInt):  # error: [invalid-protocol]
+    def size(self) -> int
+
+protocol Numbers(Iterable[int]):  # error: [invalid-protocol]
+    def total(self) -> int
+
+class Explicit(Sized, Protocol):  # error: [invalid-protocol]
+    def both(self) -> int: ...
+```
+
+a `protocol(...)` shape is a protocol on the same base, so a `typing` protocol doesn't name one
+either, while a `protocol` does
+
+```by
+from typing import Protocol
+
+class Shaped(protocol(a: int), Protocol):  # error: [invalid-protocol]
+    def b(self) -> int: ...
+
+protocol Keyword(protocol(a: int)):  # no diagnostic
+    def b(self) -> int
+```
+
+### a stub's `protocol` is on the base of the module it describes
+
+a stub runs nothing, so a `protocol` it declares is on whichever base the module beside it lowers it
+onto
+
+`shapes.by`:
+
+```by
+protocol Sized:
+    def size(self) -> int
+```
+
+`shapes.byi`:
+
+```byi
+protocol Sized:
+    def size(self) -> int
+```
+
+`keyword.by`:
+
+```by
+from shapes import Sized
+
+protocol Both(Sized):  # no diagnostic
+    def both(self) -> int
+```
+
+`typed.py`:
+
+```py
+from typing import Protocol
+from shapes import Sized
+
+class Both(Sized, Protocol):  # error: [invalid-protocol]
+    def both(self) -> int: ...
+```
+
+### `lowering.compatibility` lowers onto `typing.Protocol`
+
+for python other tools read, a `protocol` lowers onto `typing.Protocol`, which is an ABC and which
+`runtime_checkable` takes
+
+```toml
+[lowering]
+compatibility = true
+```
+
+```by
+from typing import runtime_checkable
+
+@runtime_checkable  # error: [runtime-checkable]
+protocol Sized:
+    def size(self) -> int
+
+class Impl:
+    def size(self) -> int:
+        return 1
+
+Sized.register(Impl)  # no diagnostic
 ```
 
 ### `Protocol` written out as well as injected

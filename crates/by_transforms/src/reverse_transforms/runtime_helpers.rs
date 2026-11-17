@@ -9,6 +9,8 @@
 //!   `_by_variance(1)(Sequence)` → `Sequence`, and `@_by_variance(1)` is dropped
 //!   (`crate::transforms::runtime_variance`), leaving a parameter written `in`, `out` or `in out`
 //!   where the checker wouldn't read the same variance off the class
+//! - `class P(_ByProtocol)` → `protocol P`, and `class Q(P, _ByProtocol)` → `protocol Q(P)`
+//!   (`crate::transforms::protocol_base`)
 //! - `@_by_abstract` over `@abstractmethod` → `abstract def` (`crate::transforms::modifiers`).
 //!   the helper is what makes the keyword differ from the decorator, so only a method it
 //!   decorates takes the keyword
@@ -32,13 +34,13 @@
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::str::Quote;
-use ruff_python_ast::token::{Tokens, parentheses_iterator, parenthesized_range};
+use ruff_python_ast::token::{TokenKind, Tokens, parentheses_iterator, parenthesized_range};
 use ruff_python_ast::visitor::{Visitor, walk_comprehension, walk_expr, walk_f_string, walk_stmt};
 use ruff_python_ast::{
     AnyNodeRef, Comprehension, Expr, ExprCall, ExprRef, FString, Identifier, Number, Operator,
     OperatorPrecedence, Stmt, StringFlags as _,
 };
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use ty_python_semantic::{python_bytes_literal, python_str_literal};
 
 use super::literal_types::is_literal_value;
@@ -46,8 +48,9 @@ use crate::runtime::{self, Helper};
 use crate::transforms::source_util::{line_past_end, line_start};
 use crate::type_info::TypeInfo;
 
-const REVERSED: [Helper; 12] = [
+const REVERSED: [Helper; 13] = [
     runtime::ABSTRACT,
+    runtime::PROTOCOL,
     runtime::TOLD,
     runtime::FORWARD,
     runtime::SUBSCRIPT,
@@ -451,6 +454,151 @@ impl<'src> RuntimeHelpersReverse<'src> {
         true
     }
 
+    /// a class on the runtime's protocol base is how a `protocol` lowers, so it is one again,
+    /// without that base
+    fn reverse_protocol(&mut self, class: &ruff_python_ast::StmtClassDef) {
+        let Some(arguments) = class.arguments.as_deref() else {
+            return;
+        };
+        let Some(position) = arguments.args.iter().position(|base| {
+            matches!(base, Expr::Name(name)
+                if self.reads_helper(name.id.as_str()) == Some(runtime::PROTOCOL))
+        }) else {
+            return;
+        };
+        let base = &arguments.args[position];
+        // the base with any parentheses written around it
+        let base_range = parenthesized_range(
+            ExprRef::from(base),
+            AnyNodeRef::from(arguments),
+            self.tokens,
+        )
+        .unwrap_or_else(|| base.range());
+        let has_comment_in = |range: TextRange| {
+            self.tokens
+                .in_range(range)
+                .iter()
+                .any(|token| token.kind() == TokenKind::Comment)
+        };
+        // the separators either side of the base, which the comments around it don't touch
+        let commas_in = |range: TextRange| {
+            self.tokens
+                .in_range(range)
+                .iter()
+                .filter(|token| token.kind() == TokenKind::Comma)
+                .map(Ranged::range)
+                .collect::<Vec<_>>()
+        };
+        let next = arguments
+            .args
+            .get(position + 1)
+            .map(Ranged::start)
+            .or_else(|| arguments.keywords.first().map(Ranged::start));
+        let close = arguments.end() - TextSize::from(1);
+        let after = commas_in(TextRange::new(base_range.end(), next.unwrap_or(close)))
+            .first()
+            .copied();
+        let previous = position
+            .checked_sub(1)
+            .map(|previous| arguments.args[previous].end());
+        // the spaces after `offset` on its own line
+        let spaces_after = |offset: TextSize| {
+            let spaces = self.source[offset.to_usize()..]
+                .chars()
+                .take_while(|character| *character == ' ' || *character == '\t')
+                .map(char::len_utf8)
+                .sum::<usize>();
+            u32::try_from(spaces).map(TextSize::from)
+        };
+        let base_end = after.map_or(base_range.end(), TextRange::end);
+        let Ok(trailing) = spaces_after(base_end) else {
+            return;
+        };
+        let mut removed = Vec::new();
+        match (next, previous) {
+            // the base was the class's only one: the parentheses go with it
+            (None, None) if arguments.keywords.is_empty() && !has_comment_in(arguments.range()) => {
+                removed.push(arguments.range());
+            }
+            // the last base, on the line of the one before it: back to the end of that one
+            (None, Some(previous))
+                if !self.source[previous.to_usize()..base_range.start().to_usize()]
+                    .contains(['\n', '\r'])
+                    && !has_comment_in(TextRange::new(previous, base_end)) =>
+            {
+                removed.push(TextRange::new(previous, base_end));
+            }
+            // otherwise the base, its comma, and the spaces after it on the same line
+            _ => removed.push(TextRange::new(base_range.start(), base_end + trailing)),
+        }
+        // the header is the line that names the class: a decorator ends its own line, so the
+        // `class` keyword is the first thing written there
+        let header_line = line_start(self.source, class.name.start());
+        let indent = self.source[header_line.to_usize()..]
+            .chars()
+            .take_while(|character| *character == ' ' || *character == '\t')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let Ok(indent) = u32::try_from(indent) else {
+            return;
+        };
+        let keyword = header_line + TextSize::from(indent);
+        let class_keyword = TextRange::at(keyword, "class".text_len());
+        if self.source.get(class_keyword.to_std_range()) != Some("class") {
+            return;
+        }
+        self.edits.push(Fix::safe_edit(Edit::range_replacement(
+            "protocol".to_owned(),
+            class_keyword,
+        )));
+        // a comment inside what goes, in the parentheses around the base say, stays, and so does
+        // the line break after it, which would otherwise end the comment with what follows, and the
+        // indentation of the line it breaks to
+        for range in removed {
+            let mut start = range.start();
+            for comment in self
+                .tokens
+                .in_range(range)
+                .iter()
+                .filter(|token| token.kind() == TokenKind::Comment)
+            {
+                let line_end = self.source[comment.end().to_usize()..]
+                    .find(['\n', '\r'])
+                    .and_then(|at| u32::try_from(at).ok())
+                    .map_or(range.end(), |at| comment.end() + TextSize::from(at));
+                let kept_end = if self.source[line_end.to_usize()..].starts_with("\r\n") {
+                    line_end + TextSize::from(2)
+                } else if line_end < range.end() {
+                    line_end + TextSize::from(1)
+                } else {
+                    line_end
+                };
+                if start < comment.start() {
+                    self.edits
+                        .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                            start,
+                            comment.start(),
+                        ))));
+                }
+                let kept_end = kept_end.min(range.end());
+                let indentation = self.source[kept_end.to_usize()..range.end().to_usize()]
+                    .chars()
+                    .take_while(|character| *character == ' ' || *character == '\t')
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+                start = kept_end
+                    + u32::try_from(indentation).map_or(TextSize::default(), TextSize::from);
+            }
+            if start < range.end() {
+                self.edits
+                    .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                        start,
+                        range.end(),
+                    ))));
+            }
+        }
+    }
+
     /// `@_by_abstract` above the other decorators and `@abstractmethod` right above the `def`
     /// is how an `abstract def` lowers. the two together become the keyword again. the
     /// helper alone, or over an `@abstractmethod` that isn't the last decorator, stays: without
@@ -488,7 +636,7 @@ impl<'src> RuntimeHelpersReverse<'src> {
         }
         self.edits.push(Fix::safe_edit(Edit::insertion(
             "abstract ".to_owned(),
-            header_line + ruff_text_size::TextSize::from(indent),
+            header_line + TextSize::from(indent),
         )));
     }
 
@@ -656,6 +804,7 @@ impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
             self.reverse_abstract(function);
         }
         if let Stmt::ClassDef(class) = stmt {
+            self.reverse_protocol(class);
             for decorator in &class.decorator_list {
                 if self.is_variance_call(&decorator.expression) {
                     self.edits
@@ -748,6 +897,7 @@ mod tests {
     fn round_trip(source: &str) -> (String, String) {
         let config = Config {
             runtime_module: Some("_by_runtime".to_owned()),
+            compatibility: false,
             prune_unused_imports_after_reverse: true,
             class_variance: true,
             ..config()
@@ -785,6 +935,94 @@ mod tests {
             "{lowered}"
         );
         assert!(reversed.contains("a = Out[Later]()"), "{reversed}");
+    }
+
+    /// a `protocol` lowers onto the runtime's base, which makes it a protocol again, with or
+    /// without bases and type parameters of its own
+    #[test]
+    fn a_protocol_is_written_with_the_keyword() {
+        let (lowered, reversed) = round_trip(indoc! {"
+            protocol Sized:
+                def size(self) -> int
+            protocol Both(Sized):
+                def both(self) -> int
+            protocol Named[T]:
+                def name(self) -> T
+            class Box(Sized):
+                def size(self) -> int:
+                    return 1
+        "});
+        assert!(lowered.contains("class Sized(_ByProtocol):"), "{lowered}");
+        assert!(reversed.contains("protocol Sized:\n"), "{reversed}");
+        assert!(reversed.contains("protocol Both(Sized):\n"), "{reversed}");
+        assert!(reversed.contains("protocol Named[T]:\n"), "{reversed}");
+        assert!(reversed.contains("class Box(Sized):\n"), "{reversed}");
+        assert!(!reversed.contains("_ByProtocol"), "{reversed}");
+    }
+
+    /// only the base and the separator beside it go: a keyword after it stays where python
+    /// takes it, and so does every comment in the base list
+    #[test]
+    fn a_protocol_keeps_the_rest_of_its_base_list() {
+        let reversed = |source: &str| {
+            reverse_transpile(
+                source,
+                &Config {
+                    prune_unused_imports_after_reverse: true,
+                    ..config()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            reversed(indoc! {"
+                from _by_runtime import _ByProtocol
+                class M(type): ...
+                class B(_ByProtocol, metaclass=M):
+                    x: int
+                class C(  # keep me
+                    _ByProtocol,  # and me
+                ):
+                    x: int
+                class D(
+                    B,
+                    _ByProtocol,  # the base
+                ):
+                    x: int
+                class E(B ,_ByProtocol,):
+                    x: int
+                class F(B, (_ByProtocol)):
+                    x: int
+                class G((_ByProtocol), B):
+                    x: int
+                class H(B, (  # inside
+                    _ByProtocol)):
+                    x: int
+            "}),
+            indoc! {"
+                class M(type)
+                protocol B(metaclass=M):
+                    x: int
+                protocol C(  # keep me
+                    # and me
+                ):
+                    x: int
+                protocol D(
+                    B,
+                    # the base
+                ):
+                    x: int
+                protocol E(B):
+                    x: int
+                protocol F(B):
+                    x: int
+                protocol G(B):
+                    x: int
+                protocol H(B, # inside
+                    ):
+                    x: int
+            "}
+        );
     }
 
     /// the helper over `@abstractmethod` is what an `abstract def` lowers to, and becomes the

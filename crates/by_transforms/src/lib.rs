@@ -435,8 +435,12 @@ pub fn transpile_typed_with_report(
     // whether the output is a stub is a fact about the file rather than about
     // the command that asked for it. `by build` hands every source it stages
     // the one config, so a flag each caller had to set would go unset there
+    // so is whether its python is written for other tools to read: the setting can differ
+    // between the project, an override and a script's own block, and the checker models
+    // the module from the file's own
     let config = &Config {
         is_stub: file.source_type(db).is_stub(),
+        compatibility: db.analysis_settings(file).compatibility,
         ..config.clone()
     };
     let source_ref = ruff_db::source::source_text(db, file);

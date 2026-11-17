@@ -239,6 +239,16 @@ pub struct AnalysisSettings {
     /// block.
     pub block_scoped_declarations: bool,
 
+    /// basedpython: whether the module's python is written for other python tools to read
+    /// (`lowering.compatibility`).
+    ///
+    /// It decides what a `protocol` lowers onto: `typing.Protocol`, which every checker reads,
+    /// or by default the runtime's own protocol base, which has no metaclass, so a protocol
+    /// declared with the keyword is not an ABC, mixes with no `typing` protocol, and is no
+    /// argument `runtime_checkable` takes. The transpiler reads the same setting, so the
+    /// checker models the class the module makes.
+    pub compatibility: bool,
+
     /// Whether the basedpython "fluid specializations" feature is disabled.
     ///
     /// When disabled, inferred generic specializations are not widened flow-sensitively by
@@ -394,6 +404,7 @@ impl AnalysisSettings {
             exported_dependencies: None,
             strict_float: false,
             block_scoped_declarations: basedpython,
+            compatibility: false,
             disable_fluid_specializations: !basedpython,
             sound_types: basedpython,
             infer_unannotated_signatures: basedpython,

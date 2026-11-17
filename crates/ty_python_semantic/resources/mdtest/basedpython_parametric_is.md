@@ -1214,7 +1214,7 @@ the check python itself performs — that the members are present.
 ```by
 from typing import Protocol, runtime_checkable
 
-@runtime_checkable
+@runtime_checkable  # error: [runtime-checkable]
 class HasName(Protocol):
     name: str
 

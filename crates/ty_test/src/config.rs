@@ -44,6 +44,9 @@ pub(crate) struct MarkdownTestConfig {
 
     pub(crate) analysis: Option<Analysis>,
 
+    /// How the module lowers to python, as `[tool.basedpython.lowering]` says for a project.
+    pub(crate) lowering: Option<Lowering>,
+
     /// The experimental features the test opts in to, as `[tool.ty.experimental]`
     /// does for a project.
     pub(crate) experimental: Option<Experimental>,
@@ -233,6 +236,14 @@ pub(crate) struct Environment {
     /// information and third-party imports.
     #[serde(skip_serializing_if = "Option::is_none")]
     python: Option<SystemPathBuf>,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct Lowering {
+    /// Whether the python is written for other python tools to read: a `protocol` lowers onto
+    /// `typing.Protocol` rather than the runtime's own protocol base.
+    pub(crate) compatibility: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]

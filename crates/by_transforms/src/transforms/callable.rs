@@ -94,6 +94,8 @@ pub(crate) struct CallableSyntax<'src> {
     needs_union_import: bool,
     needs_concatenate_import: bool,
     needs_protocol_import: bool,
+    /// what the class a non-denotable callable type is hoisted to lowers onto
+    protocol_base: super::protocol_base::ProtocolBase,
     needs_intersection_import: bool,
     needs_typeof_import: bool,
     needs_not_import: bool,
@@ -161,6 +163,7 @@ impl<'src> CallableSyntax<'src> {
             needs_union_import: false,
             needs_concatenate_import: false,
             needs_protocol_import: false,
+            protocol_base: super::protocol_base::ProtocolBase::of(config),
             needs_intersection_import: false,
             needs_typeof_import: false,
             needs_not_import: false,
@@ -253,7 +256,12 @@ impl<'src> CallableSyntax<'src> {
         for (needed, module, name) in [
             (self.needs_import, "typing", "Callable"),
             (self.needs_concatenate_import, "typing", "Concatenate"),
-            (self.needs_protocol_import, "typing", "Protocol"),
+            (
+                self.needs_protocol_import
+                    && self.protocol_base == super::protocol_base::ProtocolBase::Typing,
+                "typing",
+                "Protocol",
+            ),
             (
                 self.needs_intersection_import,
                 "ty_extensions",
@@ -271,6 +279,11 @@ impl<'src> CallableSyntax<'src> {
         }
         lines.append(&mut self.extra_imports);
         let mut helpers = std::mem::take(&mut self.helpers);
+        if self.needs_protocol_import
+            && let Some(helper) = self.protocol_base.helper()
+        {
+            helpers.push(helper);
+        }
         if self.needs_optional_runtime {
             helpers.push(crate::runtime::OPTIONAL);
         }
@@ -657,7 +670,7 @@ impl<'src> CallableSyntax<'src> {
         let _ = writeln!(
             self.protocol_class_defs,
             "class {name}({protocol}):\n    def __call__({params}) -> {ret}: ...\n",
-            protocol = self.written.imported("typing", "Protocol"),
+            protocol = self.protocol_base.name(self.written),
             params = shape.params,
             ret = shape.returns,
         );

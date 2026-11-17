@@ -513,7 +513,7 @@ class P(Protocol):
 class G[T](Protocol):
     a: T
 
-@runtime_checkable
+@runtime_checkable  # error: [runtime-checkable]
 class R(Protocol):
     a: int
 

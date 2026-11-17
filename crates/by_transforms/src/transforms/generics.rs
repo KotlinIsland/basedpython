@@ -845,7 +845,10 @@ impl<'src> GenericPolyfill<'src> {
             if deferred_protocol {
                 // keep the native `[T]`, append the base after it: `[T](Protocol)`
                 self.edits.push(Fix::safe_edit(Edit::insertion(
-                    format!("({})", self.written.imported("typing", "Protocol")),
+                    format!(
+                        "({})",
+                        super::protocol_base::ProtocolBase::of(&self.config).name(self.written)
+                    ),
                     tp.range().end(),
                 )));
             }
@@ -903,7 +906,7 @@ impl<'src> GenericPolyfill<'src> {
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 format!(
                     "({}, {generic_str})",
-                    self.written.imported("typing", "Protocol")
+                    super::protocol_base::ProtocolBase::of(&self.config).name(self.written)
                 ),
                 tp.range(),
             )));
@@ -2252,6 +2255,26 @@ mod tests {
                     a: _T
             "},
         );
+    }
+
+    /// a type-param protocol puts the runtime's base where it would put `Protocol`
+    #[test]
+    fn protocol_class_type_params_on_the_runtime_base() {
+        for (version, base) in [
+            (PythonVersion::PY313, "class Foo[T](_ByProtocol):"),
+            (PythonVersion::PY311, "class Foo(_ByProtocol, Generic[_T]):"),
+        ] {
+            let out = transpile(
+                "protocol Foo[T]:\n    def get(self) -> T\n",
+                &Config {
+                    min_version: version,
+                    compatibility: false,
+                    ..Config::test_default()
+                },
+            )
+            .unwrap();
+            assert!(out.contains(base), "{out}");
+        }
     }
 
     /// on a native-PEP-695 target the type params stay `[T]` and `Protocol` is

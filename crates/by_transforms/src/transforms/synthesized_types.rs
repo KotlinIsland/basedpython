@@ -197,6 +197,8 @@ pub(crate) struct Namer<'src> {
     /// set when a class body spells a nested optional `T??` with the runtime `Optional`
     pub(crate) needs_optional_runtime: bool,
     typed_dict_base: typed_dict_literal::TypedDictBase,
+    /// what an inline `protocol(...)` lowers onto
+    protocol_base: super::protocol_base::ProtocolBase,
 }
 
 impl<'src> Namer<'src> {
@@ -224,6 +226,7 @@ impl<'src> Namer<'src> {
             imports: BTreeSet::new(),
             needs_optional_runtime: false,
             typed_dict_base: typed_dict_literal::TypedDictBase::of(config),
+            protocol_base: super::protocol_base::ProtocolBase::of(config),
         }
     }
 
@@ -322,8 +325,13 @@ impl<'src> Namer<'src> {
                     shape.class_def(name, &written.imported("typing", "NamedTuple"))
                 }
                 ClassShape::Protocol(shape) => {
-                    kinds.insert(("typing", "Protocol"));
-                    shape.class_def(name, &written.imported("typing", "Protocol"))
+                    match self.protocol_base.helper() {
+                        Some(helper) => helpers_needed.push(helper),
+                        None => {
+                            kinds.insert(("typing", "Protocol"));
+                        }
+                    }
+                    shape.class_def(name, &self.protocol_base.name(written))
                 }
             };
             declarations.push_str(&declaration);

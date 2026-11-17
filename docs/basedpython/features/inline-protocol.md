@@ -121,12 +121,13 @@ an unspecialized pack shows as the pending splice — `<Protocol with members **
 
 ## lowering
 
-each shape is hoisted to one module-level `Protocol` class. those classes land
+each shape is hoisted to one module-level protocol class, on the same base a
+[`protocol`](modifiers.md#class-modifiers) lowers onto. those classes land
 ahead of everything the module defines, and a member can name a class declared
 later, so member types are emitted as forward references:
 
 ```python
-class _Protocol_<hash>(Protocol):
+class _Protocol_<hash>(_ByProtocol):
     a: "int"
     def m(self) -> "str": ...
 ```

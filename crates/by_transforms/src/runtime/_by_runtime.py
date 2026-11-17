@@ -191,6 +191,49 @@ def _by_instance_values(instance, name):
     return values
 
 
+# --- protocols ------------------------------------------------------------
+# a `protocol` is a base made for the checker: a value is one by its members, which no runtime test
+# sees, and `is` tests a value against one member by member. this base marks a class a protocol and
+# records its members, as `typing.Protocol` does, and does nothing else: it has no metaclass and
+# takes no part in making an instance. which classes are protocols is read off the marker every
+# copy of the base carries, so a protocol built on another package's copy of this runtime is one
+
+
+class _ByProtocol:
+    __slots__ = ()
+    __by_protocol_base__ = True
+    _is_protocol = True
+    # what each protocol is given below, which isn't one of its members. named here, since
+    # what a copy of the base defines is what a protocol's members leave out
+    __by_protocol_attrs__ = __protocol_attrs__ = frozenset()
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # a protocol names a copy of this base. a class that names only protocols implements
+        # them
+        cls._is_protocol = any(
+            base.__dict__.get("__by_protocol_base__", False) for base in cls.__bases__
+        )
+        if cls._is_protocol:
+            # `typing.get_protocol_members` reads the one, and the other is this runtime's own,
+            # which a `typing` metaclass recomputing the first leaves alone
+            cls.__by_protocol_attrs__ = cls.__protocol_attrs__ = _by_protocol_own_attrs(cls)
+
+
+def _by_protocol_own_attrs(klass):
+    # the members of a protocol made on the runtime's base: what `typing` would collect, less
+    # what any package's copy of the base defines, where `typing` only knows to pass over
+    # `typing.Protocol`
+    import typing
+    return frozenset(typing._get_protocol_attrs(klass)).difference(
+        *(
+            base.__dict__
+            for base in klass.__mro__
+            if base.__dict__.get("__by_protocol_base__", False)
+        )
+    )
+
+
 # --- typed dict literals --------------------------------------------------
 # a dict literal type is a `TypedDict` closed to every key it does not name, or open to more of
 # one type, which a class says with `closed=` or `extra_items=`. `typing.TypedDict` takes those
@@ -2033,6 +2076,9 @@ def _by_protocol_attrs(klass):
         return None if row[2] is None else frozenset(row[2])
     if not getattr(klass, "_is_protocol", False):
         return None
+    own = klass.__dict__.get("__by_protocol_attrs__")
+    if own is not None:
+        return own
     attrs = getattr(klass, "__protocol_attrs__", None)
     if attrs is None:
         import typing

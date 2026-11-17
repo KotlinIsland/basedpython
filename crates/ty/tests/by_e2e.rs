@@ -4152,6 +4152,70 @@ def main():
     );
 }
 
+/// a `protocol` lowers onto the runtime's base, which has no metaclass and takes no part in making
+/// an instance, so a class implementing it mixes it with an ABC or an enum, and is ordinary, its
+/// `__init__` chain, signature and `is` test included
+#[test]
+fn run_lowers_a_protocol_onto_the_runtime_base() {
+    let (stdout, stderr, code) = run_main_with_args(
+        "\
+from abc import ABC
+from enum import Enum
+from inspect import signature
+from typing import get_protocol_members
+
+protocol Sized:
+    def size(self) -> int
+
+class Color(Sized, Enum):
+    red = 1
+
+    override def size(self) -> int:
+        return 4
+
+class Tagged:
+    tag: str
+
+    def __init__(self) -> None:
+        self.tag = \"tagged\"
+
+class Box(Sized, Tagged, ABC):
+    x: int
+
+    def __init__(self, x: int) -> None:
+        super().__init__()
+        self.x = x
+
+    override def size(self) -> int:
+        return self.x
+
+class Plain:
+    def size(self) -> int:
+        return 2
+
+protocol Measured(Sized):
+    def unit(self) -> str
+
+def check(v: object) -> str:
+    if v is Sized:
+        return \"sized\"
+    return \"not sized\"
+
+def main():
+    box = Box(3)
+    print(box.size(), box.tag, check(box), check(Plain()), check(1))
+    print(Color.red.size(), signature(Box))
+    print(sorted(get_protocol_members(Measured)))
+",
+        &[],
+    );
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "3 tagged sized sized not sized\n4 (x: int) -> None\n['size', 'unit']",
+        "stderr:\n{stderr}"
+    );
+}
+
 /// Build stamps are experimental, so a project that writes a `build:` block has
 /// to ask for them by name — these tests are projects like any other.
 const OPT_IN_TO_STAMPS: &str = "[experimental]\nbuild-stamps = true\n";
@@ -10647,6 +10711,57 @@ fn by_run_runs_a_package_that_imports_relatively() {
         String::from_utf8_lossy(&ran.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "{} {}{} 2");
+}
+
+/// each package carries its own copy of the runtime, so a protocol of one package is built on a
+/// different copy of the protocol base than a protocol in another that extends it. the copies
+/// mix, and `is` reads a protocol's members the same through either
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_protocol_extends_a_protocol_of_another_package() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the program");
+        return;
+    };
+    let dir = Scratch::new("by_cli_protocol_across_packages");
+    let shapes = dir.join("src").join("shapes");
+    let app = dir.join("src").join("app");
+    fs::create_dir_all(&shapes).unwrap();
+    fs::create_dir_all(&app).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.11\"\n",
+    )
+    .unwrap();
+    fs::write(shapes.join("__init__.by"), "").unwrap();
+    fs::write(
+        shapes.join("sized.by"),
+        "protocol Sized:\n    def size(self) -> int\n",
+    )
+    .unwrap();
+    fs::write(app.join("__init__.by"), "").unwrap();
+    fs::write(
+        app.join("main.by"),
+        "from shapes.sized import Sized\n\n\nprotocol Both(Sized):\n    def both(self) -> int\n\n\n\
+         class Box:\n    def size(self) -> int:\n        return 1\n\n\n\
+         def main():\n    print(Box() is Sized, Box() is Both)\n",
+    )
+    .unwrap();
+    let ran = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "app.main"])
+        .env("PYTHON", &python)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        ran.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "True False");
 }
 
 /// a script in a folder that is no package has no import that works when it is

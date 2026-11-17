@@ -337,6 +337,25 @@ pub(crate) fn check_static_class_definitions<'db>(
     for (i, entry) in expanded_base_entries.iter().enumerate() {
         let source_node = entry.source_node();
         let base_class = entry.ty();
+        // a `protocol(...)` shape is hoisted to a protocol on basedpython's protocol base, which
+        // a `typing` protocol can't name
+        if is_protocol
+            && source_node.is_protocol_type_expr()
+            && !class.is_on_runtime_protocol_base(db)
+            && ClassLiteral::protocols_lower_onto_the_runtime_base(db, context.program_file())
+            && let Some(builder) = context.report_lint(&INVALID_PROTOCOL, source_node)
+        {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "Protocol class `{}` cannot inherit from a `protocol(...)` shape, which is on \
+                 basedpython's protocol base",
+                class.name(db),
+            ));
+            diagnostic.info(
+                "a `protocol` lowers onto basedpython's own protocol base, which is not \
+                 `typing.Protocol` and does not mix with it",
+            );
+            diagnostic.help("`lowering.compatibility` lowers a `protocol` onto `typing.Protocol`");
+        }
         // basedpython: a base whose type arguments the class body solves is inherited
         // specialized, and the bases the class sees are exactly its expanded entries
         let arguments_inferred = class
@@ -479,6 +498,35 @@ pub(crate) fn check_static_class_definitions<'db>(
                     class.name(db),
                     base_class.name(db),
                 ));
+            }
+            // a basedpython `protocol` on the runtime's own base is no `typing.Protocol`, and the
+            // two don't mix: `typing` refuses a base that isn't one of its protocols, and the
+            // runtime base takes no part in `typing`'s machinery
+            let on_runtime_base = class.is_on_runtime_protocol_base(db);
+            if base_class.is_protocol(db)
+                && base_class.class_literal(db).is_on_runtime_protocol_base(db) != on_runtime_base
+                && let Some(builder) = context.report_lint(&INVALID_PROTOCOL, source_node)
+            {
+                let mut diagnostic = if on_runtime_base {
+                    builder.into_diagnostic(format_args!(
+                        "Protocol `{}` cannot inherit from `typing` protocol `{}`",
+                        class.name(db),
+                        base_class.name(db),
+                    ))
+                } else {
+                    builder.into_diagnostic(format_args!(
+                        "Protocol class `{}` cannot inherit from protocol `{}`, which is on \
+                         basedpython's protocol base",
+                        class.name(db),
+                        base_class.name(db),
+                    ))
+                };
+                diagnostic.info(
+                    "a `protocol` lowers onto basedpython's own protocol base, which is not \
+                     `typing.Protocol` and does not mix with it",
+                );
+                diagnostic
+                    .help("`lowering.compatibility` lowers a `protocol` onto `typing.Protocol`");
             }
         } else if class_kind == Some(CodeGeneratorKind::TypedDict) {
             if !base_class.class_literal(db).is_typed_dict(db)

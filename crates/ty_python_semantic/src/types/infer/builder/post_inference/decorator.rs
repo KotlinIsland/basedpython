@@ -3,7 +3,7 @@ use ty_python_core::definition::Definition;
 
 use crate::types::call::{CallArguments, CallError};
 use crate::types::context::InferContext;
-use crate::types::diagnostic::report_invalid_runtime_checkable;
+use crate::types::diagnostic::check_runtime_checkable_argument;
 use crate::types::function::KnownFunction;
 use crate::types::infer::infer_definition_types;
 
@@ -29,9 +29,7 @@ pub(crate) fn check_decorator_calls<'db>(
             .is_some_and(|function| function.is_known(db, KnownFunction::RuntimeCheckable))
             && let Some(class) = input_ty.as_class_literal()
         {
-            if !class.is_protocol(db) {
-                report_invalid_runtime_checkable(context, decorator, class);
-            }
+            check_runtime_checkable_argument(context, decorator, class);
             continue;
         }
 

@@ -85,6 +85,11 @@ pub struct Config {
     /// how a float or complex literal written in a type position is spelled in
     /// the emitted python. see [`FloatLiteralLowering`]
     pub float_literals: FloatLiteralLowering,
+    /// when true, the emitted python is written for other python tools to read: a `protocol`
+    /// lowers onto `typing.Protocol`, which every checker reads, rather than onto the runtime's
+    /// own protocol base. off by default. a typed transpile takes it from the file's
+    /// settings (`[tool.basedpython.lowering] compatibility`), which the checker reads too
+    pub compatibility: bool,
     /// the module the emitted code imports its runtime helpers from, or `None`
     /// to paste the definitions in. a build names the package-qualified copy it
     /// writes into its tree; a transpile with nowhere to write one leaves it
@@ -143,6 +148,7 @@ impl Default for Config {
             runtime_raises_checks: false,
             unique_loop_bindings: true,
             float_literals: FloatLiteralLowering::Nominal,
+            compatibility: false,
             runtime_module: None,
             stamps: BTreeMap::new(),
             stamps_undetermined: false,
@@ -159,10 +165,12 @@ impl Config {
     /// `prune_unused_imports_after_reverse` disabled so test expected
     /// strings don't need to include the lazy preamble or worry about pruning,
     /// and all soundness checks and class variance off so plain output isn't peppered
-    /// with them
+    /// with them. `compatibility` is on, so a `protocol` lowers onto `typing.Protocol`
+    /// rather than pasting the runtime's base into every expected string
     #[cfg(test)]
     pub(crate) fn test_default() -> Self {
         Self {
+            compatibility: true,
             lazy_imports: false,
             prune_unused_imports_after_reverse: false,
             soundness: SoundnessPositions::none(),

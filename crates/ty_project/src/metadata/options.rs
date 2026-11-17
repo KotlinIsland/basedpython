@@ -556,7 +556,11 @@ impl Options {
     ) -> Result<(Settings, Vec<OptionDiagnostic>), Strategy::Error<ToSettingsError>> {
         let mut diagnostics = Vec::new();
         let preset = self.type_checking_preset();
-        let rules = self.to_rule_selection(db, preset, &mut diagnostics);
+        let defaults = SettingsDefaults {
+            preset,
+            compatibility: self.compatibility(),
+        };
+        let rules = self.to_rule_selection(db, defaults, &mut diagnostics);
 
         let terminal_options = self.terminal.or_default();
         let terminal = TerminalSettings {
@@ -596,7 +600,7 @@ impl Options {
         let analysis =
             self.analysis
                 .or_default()
-                .to_settings(db, preset, &mut analysis_diagnostics);
+                .to_settings(db, defaults, &mut analysis_diagnostics);
 
         let analysis_result: Result<_, ToSettingsError> =
             if let Some(diagnostic) = analysis_diagnostics.into_iter().next() {
@@ -608,13 +612,15 @@ impl Options {
             } else {
                 Ok(analysis)
             };
-        let analysis =
-            strategy.fallback(analysis_result, |_| AnalysisSettings::from_preset(preset))?;
+        let analysis = strategy.fallback(analysis_result, |_| AnalysisSettings {
+            compatibility: defaults.compatibility,
+            ..AnalysisSettings::from_preset(preset)
+        })?;
 
         let experimental = self.experimental.or_default().to_settings();
 
         let overrides = self
-            .to_overrides_settings(db, context.configuration_root(), preset, &mut diagnostics)
+            .to_overrides_settings(db, context.configuration_root(), defaults, &mut diagnostics)
             .map_err(|err| ToSettingsError {
                 diagnostic: err,
                 output_format: terminal.output_format,
@@ -654,23 +660,36 @@ impl Options {
         self.type_checking_preset.as_deref().copied()
     }
 
+    /// Whether the project writes its python for other python tools to read, which some rules'
+    /// defaults follow.
+    fn compatibility(&self) -> bool {
+        self.configured_compatibility().unwrap_or_default()
+    }
+
+    /// Whether this layer of configuration sets `lowering.compatibility`, and to what.
+    pub(crate) fn configured_compatibility(&self) -> Option<bool> {
+        self.lowering
+            .as_ref()
+            .and_then(|lowering| lowering.compatibility.as_deref().copied())
+    }
+
     #[must_use]
     fn to_rule_selection(
         &self,
         db: &dyn Db,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> RuleSelection {
         self.rules
             .or_default()
-            .to_rule_selection(db, preset, diagnostics)
+            .to_rule_selection(db, defaults, diagnostics)
     }
 
     fn to_overrides_settings(
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> Result<Vec<Override>, Box<OptionDiagnostic>> {
         let override_options = &**self.overrides.or_default();
@@ -681,7 +700,7 @@ impl Options {
             let override_instance = override_option.to_override(
                 db,
                 project_root,
-                preset,
+                defaults,
                 self.rules.as_ref(),
                 self.analysis.as_ref(),
                 diagnostics,
@@ -694,6 +713,14 @@ impl Options {
 
         Ok(overrides)
     }
+}
+
+/// What a file's settings start from: the preset, and whether the project writes its python for
+/// other tools to read, which decides what the module it is checked as makes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SettingsDefaults {
+    pub(crate) preset: TypeCheckingPreset,
+    pub(crate) compatibility: bool,
 }
 
 /// The project or standalone script whose options are being resolved.
@@ -1280,9 +1307,10 @@ impl Rules {
     pub(crate) fn to_rule_selection(
         &self,
         db: &dyn Db,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> RuleSelection {
+        let preset = defaults.preset;
         let registry = db.lint_registry();
 
         // Initialize the selection with the preset's defaults
@@ -1809,6 +1837,27 @@ pub struct LoweringOptions {
         "#
     )]
     pub float_literals: Option<RangedValue<FloatLiteralLowering>>,
+
+    /// Whether the transpiled python is written for other python tools to read.
+    ///
+    /// A `protocol` is a base made for the type checker, and by default it lowers onto
+    /// basedpython's own runtime base: one that marks the class a protocol and records its
+    /// members, has no metaclass, and does nothing else. It is not `typing.Protocol`, so
+    /// another checker reading the python doesn't see a protocol there, and a `protocol`
+    /// can't extend a `typing` one.
+    ///
+    /// With `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker
+    /// reads and which mixes with other `typing` protocols. That is also the base
+    /// `runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = r#"bool"#,
+        example = r#"
+            compatibility = true
+        "#
+    )]
+    pub compatibility: Option<RangedValue<bool>>,
 }
 
 /// How a float or complex literal type reaches the transpiled python.
@@ -2826,7 +2875,7 @@ impl AnalysisOptions {
     pub(super) fn to_settings(
         &self,
         db: &dyn Db,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> AnalysisSettings {
         let Self {
@@ -2876,7 +2925,8 @@ impl AnalysisOptions {
             dependency_groups: dependency_groups_default,
             shipped_modules: shipped_modules_default,
             exported_dependencies: exported_dependencies_default,
-        } = AnalysisSettings::from_preset(preset);
+            compatibility: _,
+        } = AnalysisSettings::from_preset(defaults.preset);
 
         let allowed_unresolved_imports =
             if let Some(allowed_unresolved_imports) = allowed_unresolved_imports {
@@ -2982,6 +3032,7 @@ impl AnalysisOptions {
                         .collect::<Box<[Box<str>]>>()
                 })
                 .or(exported_dependencies_default),
+            compatibility: defaults.compatibility,
         }
     }
 }
@@ -3222,7 +3273,7 @@ trait ToOverride {
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         global_rules: Option<&Rules>,
         global_analysis: Option<&AnalysisOptions>,
         diagnostics: &mut Vec<OptionDiagnostic>,
@@ -3234,7 +3285,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
-        preset: TypeCheckingPreset,
+        defaults: SettingsDefaults,
         global_rules: Option<&Rules>,
         global_analysis: Option<&AnalysisOptions>,
         diagnostics: &mut Vec<OptionDiagnostic>,
@@ -3377,7 +3428,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
         }
 
         // Convert merged rules to rule selection
-        let rule_selection = merged_rules.to_rule_selection(db, preset, diagnostics);
+        let rule_selection = merged_rules.to_rule_selection(db, defaults, diagnostics);
 
         let mut merged_analysis = analysis.into_owned();
 
@@ -3385,7 +3436,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
             merged_analysis = merged_analysis.combine(global_analysis.clone());
         }
 
-        let analysis = merged_analysis.to_settings(db, preset, diagnostics);
+        let analysis = merged_analysis.to_settings(db, defaults, diagnostics);
 
         let override_instance = Override {
             files,

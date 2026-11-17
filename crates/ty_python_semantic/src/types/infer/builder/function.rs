@@ -21,12 +21,11 @@ use crate::{
             STATIC_ASSERT_ERROR, TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE,
             TYPE_ASSERTION_FAILURE, UNKNOWN_FIXTURE, UNRESOLVED_ATTRIBUTE,
             UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
-            is_invalid_typed_dict_literal, report_bad_argument_to_get_protocol_members,
-            report_bad_argument_to_protocol_interface, report_bool_as_int,
-            report_implicit_return_type, report_invalid_decorator_def,
+            check_runtime_checkable_argument, is_invalid_typed_dict_literal,
+            report_bad_argument_to_get_protocol_members, report_bad_argument_to_protocol_interface,
+            report_bool_as_int, report_implicit_return_type, report_invalid_decorator_def,
             report_invalid_generator_function_return_type, report_invalid_repeated_underscore,
-            report_invalid_return_type, report_invalid_runtime_checkable,
-            report_invalid_total_ordering_call,
+            report_invalid_return_type, report_invalid_total_ordering_call,
             report_issubclass_check_against_protocol_with_non_method_members,
             report_missing_function_body,
             report_runtime_check_against_non_runtime_checkable_protocol,
@@ -3290,10 +3289,8 @@ impl KnownFunction {
             }
 
             KnownFunction::RuntimeCheckable => {
-                if let [Some(Type::ClassLiteral(class))] = parameter_types
-                    && !class.is_protocol(builder.db())
-                {
-                    report_invalid_runtime_checkable(&builder.context, call_expression, *class);
+                if let [Some(Type::ClassLiteral(class))] = parameter_types {
+                    check_runtime_checkable_argument(&builder.context, call_expression, *class);
                 }
             }
 

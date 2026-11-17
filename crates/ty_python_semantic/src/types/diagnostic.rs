@@ -173,6 +173,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&PRIVATE_CONSTRUCTOR);
     registry.register_lint(&INEFFECTIVE_PRIVATE);
+    registry.register_lint(&RUNTIME_CHECKABLE);
     registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INACCESSIBLE_MEMBER);
     registry.register_lint(&INVALID_OVERRIDE_VISIBILITY);
@@ -3481,6 +3482,49 @@ declare_lint! {
         summary: "detects `@final` classes with unimplemented abstract methods",
         status: LintStatus::stable("0.0.13"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for `runtime_checkable` in basedpython source.
+    ///
+    /// ## Why is this bad?
+    /// `runtime_checkable` makes `isinstance` test a value against a protocol by whether it
+    /// has attributes with the protocol's member names, and nothing else: a value whose
+    /// `size` is a string passes an `isinstance` test against a protocol whose `size` returns
+    /// an `int`. so the test says a value is something it isn't. `is` tests a value against a
+    /// protocol member by member, against the annotations the value's class has.
+    ///
+    /// `runtime_checkable` takes only a `typing` protocol, and a `protocol` lowers onto
+    /// basedpython's own runtime base unless `lowering.compatibility` is set, so applying it
+    /// to one is reported as an `invalid-argument-type` error besides.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// from typing import Protocol, runtime_checkable
+    ///
+    /// @runtime_checkable  # warning: tests nothing but the member names
+    /// class Sized(Protocol):
+    ///     def size(self) -> int
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```by
+    /// protocol Sized:
+    ///     def size(self) -> int
+    ///
+    /// def f(x: object):
+    ///     if x is Sized:
+    ///         print(x.size())
+    /// ```
+    pub(crate) static RUNTIME_CHECKABLE = {
+        summary: "detects `runtime_checkable`, which tests a protocol by its member names alone",
+        status: LintStatus::stable("0.0.2"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -7214,25 +7258,63 @@ pub(crate) fn report_invalid_argument_number_to_special_form(
     }
 }
 
-pub(super) fn report_invalid_runtime_checkable(
+/// `runtime_checkable` applied to `class`, as a decorator or a call. it takes a `typing` protocol,
+/// and nothing else: not an ordinary class, and not a basedpython `protocol` on the runtime's own
+/// base, which refuses it as the class is made or as it is first tested
+pub(super) fn check_runtime_checkable_argument(
     context: &InferContext,
-    node: impl Ranged,
+    node: impl Ranged + Copy,
     class: ClassLiteral,
 ) {
+    let db = context.db();
+    report_runtime_checkable(context, node);
+    let on_runtime_base = class.is_on_runtime_protocol_base(db);
+    if class.is_protocol(db) && !on_runtime_base {
+        return;
+    }
     let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, node) else {
         return;
     };
-    let db = context.db();
     let mut diagnostic =
         builder.into_diagnostic("`runtime_checkable` can only be applied to protocol classes");
-    diagnostic.annotate(
-        Annotation::secondary(class.header_span(db))
-            .message(format_args!("`{}` is not a protocol class", class.name(db))),
+    if on_runtime_base {
+        diagnostic.annotate(
+            Annotation::secondary(class.header_span(db)).message(format_args!(
+                "`{}` lowers onto basedpython's protocol base, not `typing.Protocol`",
+                class.name(db)
+            )),
+        );
+        diagnostic.info(
+            "`lowering.compatibility` lowers a `protocol` onto `typing.Protocol`, \
+            which `runtime_checkable` takes",
+        );
+    } else {
+        diagnostic.annotate(
+            Annotation::secondary(class.header_span(db))
+                .message(format_args!("`{}` is not a protocol class", class.name(db))),
+        );
+        diagnostic.info(
+            "A class is only a protocol if it directly inherits from \
+            `typing.Protocol` or `typing_extensions.Protocol`",
+        );
+    }
+}
+
+/// `runtime_checkable` used in basedpython source, which [`RUNTIME_CHECKABLE`] discourages
+fn report_runtime_checkable(context: &InferContext, node: impl Ranged) {
+    let file = context.file();
+    let db = context.db();
+    if !file.source_type(db).is_basedpython() || file.is_stub(db) {
+        return;
+    }
+    let Some(builder) = context.report_lint(&RUNTIME_CHECKABLE, node) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(
+        "`runtime_checkable` makes `isinstance` test a protocol by its member names alone",
     );
-    diagnostic.info(
-        "A class is only a protocol if it directly inherits from \
-        `typing.Protocol` or `typing_extensions.Protocol`",
-    );
+    diagnostic.info("a value whose members have the wrong types passes the test all the same");
+    diagnostic.help("test a value against a protocol with `is`, which checks each member");
 }
 
 pub(crate) fn report_bad_argument_to_get_protocol_members(
@@ -7728,7 +7810,15 @@ pub(crate) fn report_attempted_protocol_instantiation(
     let class_name = protocol.name(db);
     let mut diagnostic =
         builder.into_diagnostic(format_args!("Cannot instantiate class `{class_name}`"));
-    diagnostic.set_primary_annotation_message("This call will raise `TypeError` at runtime");
+    // a basedpython `protocol` on the runtime's own base takes no part in making an instance,
+    // so the call runs: what it makes is no value of the protocol's type
+    if protocol.class_literal(db).is_on_runtime_protocol_base(db) {
+        diagnostic.set_primary_annotation_message(
+            "A protocol has no instances of its own: this makes an object that implements nothing",
+        );
+    } else {
+        diagnostic.set_primary_annotation_message("This call will raise `TypeError` at runtime");
+    }
 
     let mut class_def_diagnostic = SubDiagnostic::new(
         SubDiagnosticSeverity::Info,

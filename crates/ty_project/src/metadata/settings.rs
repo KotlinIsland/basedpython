@@ -6,7 +6,9 @@ use ty_combine::Combine;
 use ty_python_semantic::lint::RuleSelection;
 use ty_python_semantic::{AnalysisSettings, ExperimentalSettings};
 
-use crate::metadata::options::{InnerOverrideOptions, Options, OutputFormat, ScriptLayer};
+use crate::metadata::options::{
+    InnerOverrideOptions, Options, OutputFormat, ScriptLayer, SettingsDefaults,
+};
 use crate::script::Script;
 
 use crate::glob::{GlobFilterCheckMode, IncludeResult};
@@ -383,8 +385,15 @@ fn merge_overrides(
     // the diagnostics are reported where each layer is resolved on its own: the project's
     // settings validate its rules and overrides under the project's preset, and a script's
     // settings validate the same layers, folded with its own block, under the script's preset
-    let rules = rules.to_rule_selection(db, preset, &mut Vec::new());
-    let analysis = analysis.to_settings(db, preset, &mut Vec::new());
+    let compatibility = layers()
+        .find_map(Options::configured_compatibility)
+        .unwrap_or_default();
+    let defaults = SettingsDefaults {
+        preset,
+        compatibility,
+    };
+    let rules = rules.to_rule_selection(db, defaults, &mut Vec::new());
+    let analysis = analysis.to_settings(db, defaults, &mut Vec::new());
 
     FileSettings::File(Arc::new(OverrideSettings { rules, analysis }))
 }

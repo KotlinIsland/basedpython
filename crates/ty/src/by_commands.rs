@@ -956,6 +956,17 @@ impl ResolvedProject {
         &self.root
     }
 
+    /// Whether this project writes its python for other python tools to read, for a source
+    /// that is no file: a file's own settings say it for a typed transpile.
+    fn compatibility(&self) -> bool {
+        self.metadata
+            .options()
+            .lowering
+            .as_ref()
+            .and_then(|lowering| lowering.compatibility.as_deref().copied())
+            .unwrap_or(false)
+    }
+
     /// How this project spells a float or complex literal type in the python it
     /// emits.
     fn float_literals(&self) -> by_transforms::FloatLiteralLowering {
@@ -1585,6 +1596,12 @@ pub(crate) fn cmd_compile(
             if path.extension().is_some_and(|x| x == "py") {
                 options.language = by_irbuild::Language::Python;
             }
+            // the fallback is transpiled from source alone, so it is told what the file's
+            // settings say a typed transpile would read from them
+            if let Some(fallback) = options.fallback.as_mut() {
+                fallback.compatibility =
+                    ty_python_semantic::Db::analysis_settings(&*db, *file).compatibility;
+            }
             let mut lowered = by_irbuild::build_module(
                 &*db,
                 &model.program_environment(),
@@ -1760,6 +1777,13 @@ pub(crate) fn cmd_transpile(
                 .context("failed to read stdin")?;
             (s, None)
         }
+    };
+    // a typed transpile reads this from the file's settings. standard input is no file, so
+    // it is the project's
+    let config = Config {
+        compatibility: path.is_none()
+            && ResolvedProject::discover(&cwd).is_ok_and(|project| project.compatibility()),
+        ..config
     };
 
     let is_python = path

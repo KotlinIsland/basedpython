@@ -1648,6 +1648,42 @@ declaration written anyway is reported, rather than quietly doing nothing.
 
 ## `lowering`
 
+### `compatibility`
+
+Whether the transpiled python is written for other python tools to read.
+
+A `protocol` is a base made for the type checker, and by default it lowers onto
+basedpython's own runtime base: one that marks the class a protocol and records its
+members, has no metaclass, and does nothing else. It is not `typing.Protocol`, so
+another checker reading the python doesn't see a protocol there, and a `protocol`
+can't extend a `typing` one.
+
+With `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker
+reads and which mixes with other `typing` protocols. That is also the base
+`runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.lowering]
+    compatibility = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [lowering]
+    compatibility = true
+    ```
+
+---
+
 ### `float-literals`
 
 How a float or complex literal type is spelled in the transpiled python.

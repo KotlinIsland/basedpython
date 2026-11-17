@@ -65,6 +65,7 @@ pub(crate) mod parametric_is;
 pub(crate) mod postfix_await;
 pub(crate) mod propagate;
 pub(crate) mod properties;
+pub(crate) mod protocol_base;
 pub(crate) mod protocol_type;
 pub(crate) mod python_scopes;
 pub(crate) mod quotes;

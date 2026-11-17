@@ -69,6 +69,7 @@ macro_rules! helpers {
 helpers! {
     SEALED_MEMBER = "_by_sealed_member",
     ABSTRACT = "_by_abstract",
+    PROTOCOL = "_ByProtocol",
     TYPED_DICT = "_ByTypedDict",
     SOUNDNESS_CHECK = "_soundness_check",
     SOUNDNESS_ITER = "_soundness_iter",

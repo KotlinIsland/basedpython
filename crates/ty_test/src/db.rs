@@ -1,4 +1,4 @@
-use crate::config::{Analysis, Experimental, Rules, ScriptOptions};
+use crate::config::{Analysis, Experimental, Lowering, Rules, ScriptOptions};
 use camino::{Utf8Component, Utf8PathBuf};
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{Diagnostic, Severity};
@@ -88,8 +88,14 @@ impl Db {
         &mut self,
         preset: TypeCheckingPreset,
         options: Option<&Analysis>,
+        lowering: Option<&Lowering>,
     ) {
-        let analysis = mdtest_analysis_settings(preset, options);
+        let analysis = AnalysisSettings {
+            compatibility: lowering
+                .and_then(|lowering| lowering.compatibility)
+                .unwrap_or(false),
+            ..mdtest_analysis_settings(preset, options)
+        };
 
         let settings = self.settings();
         if settings.analysis(self) != &analysis {
@@ -419,6 +425,7 @@ fn mdtest_analysis_settings(
         dependency_groups: dependency_groups_default,
         shipped_modules: shipped_modules_default,
         exported_dependencies: exported_dependencies_default,
+        compatibility: compatibility_default,
     } = mdtest_defaults(preset);
 
     let allowed_unresolved_imports =
@@ -519,6 +526,7 @@ fn mdtest_analysis_settings(
         // statement to the projects that depend on it, and they read it from the
         // `by.typed` the build wrote
         exported_dependencies: exported_dependencies_default,
+        compatibility: compatibility_default,
     }
 }
 

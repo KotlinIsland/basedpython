@@ -565,6 +565,17 @@
     "LoweringOptions": {
       "type": "object",
       "properties": {
+        "compatibility": {
+          "description": "Whether the transpiled python is written for other python tools to read.\n\nA `protocol` is a base made for the type checker, and by default it lowers onto\nbasedpython's own runtime base: one that marks the class a protocol and records its\nmembers, has no metaclass, and does nothing else. It is not `typing.Protocol`, so\nanother checker reading the python doesn't see a protocol there, and a `protocol`\ncan't extend a `typing` one.\n\nWith `compatibility`, a `protocol` lowers onto `typing.Protocol`, which every checker\nreads and which mixes with other `typing` protocols. That is also the base\n`runtime_checkable` takes, so it accepts a `protocol` only with `compatibility`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "float-literals": {
           "description": "How a float or complex literal type is spelled in the transpiled python.\n\nbasedpython reads `a: 1.5` as a literal type, and python has no spelling for one:\nPEP 586 admits only `None`, `int`, `bool`, `str`, `bytes` and enum members into\n`Literal[...]`.\n\n* `nominal` (the default) writes the type the literal is one of — `a: 1.5` becomes\n  `a: float`, `a: 2j` becomes `a: complex`. The precision is lost, and every checker\n  that reads the output accepts it.\n* `literal` keeps the literal, writing `a: Literal[1.5]`. The precision survives and\n  the output still runs, because `typing` does not check what it is handed — but a\n  checker reading it reports the argument as invalid.",
           "anyOf": [
@@ -2434,6 +2445,16 @@
             }
           ]
         },
+        "runtime-checkable": {
+          "title": "detects `runtime_checkable`, which tests a protocol by its member names alone",
+          "description": "## What it does\nChecks for `runtime_checkable` in basedpython source.\n\n## Why is this bad?\n`runtime_checkable` makes `isinstance` test a value against a protocol by whether it\nhas attributes with the protocol's member names, and nothing else: a value whose\n`size` is a string passes an `isinstance` test against a protocol whose `size` returns\nan `int`. so the test says a value is something it isn't. `is` tests a value against a\nprotocol member by member, against the annotations the value's class has.\n\n`runtime_checkable` takes only a `typing` protocol, and a `protocol` lowers onto\nbasedpython's own runtime base unless `lowering.compatibility` is set, so applying it\nto one is reported as an `invalid-argument-type` error besides.\n\n## Example\n\n```by\nfrom typing import Protocol, runtime_checkable\n\n@runtime_checkable  # warning: tests nothing but the member names\nclass Sized(Protocol):\n    def size(self) -> int\n```\n\nUse instead:\n\n```by\nprotocol Sized:\n    def size(self) -> int\n\ndef f(x: object):\n    if x is Sized:\n        print(x.size())\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "shadowed-receiver-member": {
           "title": "detects a block declaration that shadows the receiver's member of the same name",
           "description": "## What it does\nChecks for a declaration inside a [trailing lambda] block that gives the block a\nname the block's receiver already has a member for.\n\n## Why is this bad?\nThe declaration takes the name away from the member for the whole block. A bare\n`href = \"/x\"` there writes the receiver's `href`, and reading `href` means the\nreceiver's `href` — so a `let href` two lines away silently makes both mean\nsomething else.\n\nShadowing is what a declaration is for, so this is a warning rather than an error:\nit is how you ask for a name of your own when the receiver happens to have one\nalready. Renaming the local says the same thing without the ambiguity.\n\n## Examples\n```by\nclass Tag:\n    var href: str\n\n    def div(self, block: Tag.() -> None) -> None:\n        block(self)\n\ndef build(t: Tag) -> None:\n    t.div:\n        href = \"/x\"      # ok, writes `t.href`\n        let href = \"/x\"  # warning: shadows `t.href` for the whole block\n```\n\n[trailing lambda]: https://basedpython.org/features/trailing-lambdas/",
@@ -3252,6 +3273,9 @@
           "const": "ty-compatible"
         }
       ]
+    },
+    "boolean": {
+      "type": "boolean"
     },
     "string": {
       "type": "string"

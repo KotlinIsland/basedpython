@@ -43,7 +43,7 @@ ORIGIN: Final = Point(0, 0)
 | `open class Foo`        | `class Foo` (keyword stripped, no decorator)              |
 | `data class Foo`        | `@dataclass(slots=True)` + `class Foo`                    |
 | `frozen data class Foo` | `@dataclass(frozen=True, slots=True)` + `class Foo`       |
-| `protocol Foo`          | `class Foo(Protocol)` (base added)                        |
+| `protocol Foo`          | `class Foo` on a protocol base (see below)                |
 | `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__` built per subclass |
 
 `dataclass(slots=True)` is new in python 3.10. below it, a `data class` is
@@ -59,6 +59,31 @@ subclassed. neither emits a runtime artefact
 
 `sealed` declares a closed subclass hierarchy — see
 [sealed classes](sealed-classes.md)
+
+a `protocol` is a base made for the type checker: a value is one by its
+members, which no runtime test can see. so it lowers onto basedpython's own
+runtime base, which marks the class a protocol and records its members, and does
+nothing else: it has no metaclass and takes no part in making an instance. so a
+class implementing a protocol stays an ordinary class, mixed with an ABC or an
+enum as much as anything, and a protocol extends a protocol from another
+basedpython package. `is` tests a value against a protocol member by member.
+
+that base is not `typing.Protocol`, and the two don't mix: a `protocol` can't
+extend a `typing` protocol, which includes every protocol of the standard
+library's stubs, and a `typing` protocol can't extend a `protocol`. another
+checker reading the python doesn't know the base either. for python other tools
+read, or a protocol that has to extend a `typing` one, `lowering.compatibility`
+lowers a `protocol` onto `typing.Protocol` instead:
+
+```toml
+[tool.basedpython.lowering]
+compatibility = true
+```
+
+`runtime_checkable` tests a protocol by its member names alone, and is
+reported as a `runtime-checkable` warning. it only takes `typing.Protocol`, so on
+a `protocol` it is also an `invalid-argument-type` error unless
+`lowering.compatibility` is set
 
 `frozen data class` rejects every attribute write after construction, so its
 fields are read-only and the class is inferred [covariant](variance.md) in

@@ -68,6 +68,7 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, NodeIndex};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashSet;
+use ty_module_resolver::stub_file_to_real_module;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::{FileScopeId, ScopeId};
@@ -881,6 +882,36 @@ impl<'db> ClassLiteral<'db> {
     /// Returns whether this class is a protocol.
     pub(crate) fn is_protocol(self, db: &'db dyn Db) -> bool {
         self.as_static().is_some_and(|class| class.is_protocol(db))
+    }
+
+    /// whether this is a basedpython `protocol` that lowers onto the runtime's own protocol
+    /// base, which has no metaclass and which `runtime_checkable` refuses
+    pub(crate) fn is_on_runtime_protocol_base(self, db: &'db dyn Db) -> bool {
+        self.as_static()
+            .is_some_and(|class| class.is_on_runtime_protocol_base(db))
+    }
+
+    /// whether a module lowers a `protocol`, and a `protocol(...)` shape, onto the runtime's own
+    /// protocol base: a `.by` module that isn't written for other tools to read. the lowering
+    /// reads the same: see `by_transforms::transforms::protocol_base`. a stub runs nothing, and
+    /// says what the module it describes does
+    pub(crate) fn protocols_lower_onto_the_runtime_base(
+        db: &'db dyn Db,
+        file: ProgramFile<'db>,
+    ) -> bool {
+        let runs = if file.file(db).is_stub(db) {
+            let Some(runs) = stub_file_to_real_module(db, file.resolver_file(db))
+                .and_then(|module| module.file(db))
+            else {
+                return false;
+            };
+            runs
+        } else {
+            file.file(db)
+        };
+        runs.source_type(db).is_basedpython()
+            && !runs.is_stub(db)
+            && !db.analysis_settings(runs).compatibility
     }
 
     /// Returns whether this class is a `TypedDict`.
