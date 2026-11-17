@@ -1,0 +1,19 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY022 [*] `@abstractmethod` can be written as `abstract`
+ --> BY022.byi:6:5
+  |
+4 | class Shape:
+5 |     # in a stub the keyword is python's `@abstractmethod`
+6 |     @abstractmethod
+  |     ^^^^^^^^^^^^^^^
+7 |     def area(self) -> int: ...
+  |
+help: Replace with the `abstract` modifier
+  |
+5 |     # in a stub the keyword is python's `@abstractmethod`
+  -     @abstractmethod
+  -     def area(self) -> int: ...
+6 +     abstract def area(self) -> int: ...
+  |

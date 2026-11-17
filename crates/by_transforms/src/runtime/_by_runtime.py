@@ -26,6 +26,171 @@ def _by_sealed_member(_cls):
             ) + (_cls,)
 
 
+# --- abstract members -----------------------------------------------------
+# an abstract member is one a subclass implements, and the class mixed in after the declaring one
+# may be what does: in `class E(D, Impl)` python finds `D.foo` first and never reaches
+# `Impl.foo`. so an abstract member is read through the class the access starts from, as the
+# first definition after the declaring class in that class's mro that isn't abstract itself. the
+# declaring class's own ancestors are skipped: what one of those defines, the abstract member
+# declares again, so it is not an implementation. with no definition found, the member's own body
+# is what runs
+
+
+def _by_abstract(member):
+    if _by_is_data_descriptor(member):
+        return _ByAbstractData(member)
+    return _ByAbstract(member)
+
+
+class _ByAbstract:
+    __slots__ = ("member", "name", "candidates", "__weakref__")
+    __isabstractmethod__ = True
+
+    def __init__(self, member):
+        self.member = member
+        self.name = None
+        self.candidates = None
+
+    def __set_name__(self, owner, name):
+        if self.name is not None:
+            # bound under a second name, `alias = method`, which reads through to the
+            # implementation of that name
+            alias = _by_abstract(self.member)
+            setattr(owner, name, alias)
+            alias.__set_name__(owner, name)
+            return
+        # python makes these two class methods when they are plain functions, and only sees
+        # this wrapper, so it does what python would
+        if name in ("__init_subclass__", "__class_getitem__") and type(self.member) is type(
+            _by_abstract
+        ):
+            self.member = classmethod(self.member)
+        self.name = name
+        # the classes that may implement the member, per class it is read through: the ones
+        # after the declaring class in that class's mro that the declaring class doesn't
+        # inherit from. kept by the class's identity, since a metaclass may make classes
+        # compare equal, and with the mro it was worked out from, since assigning `__bases__`
+        # makes a new one
+        self.candidates = {}
+        set_name = getattr(type(self.member), "__set_name__", None)
+        if set_name is not None:
+            set_name(self.member, owner, name)
+
+    @property
+    def __wrapped__(self):
+        return self.member
+
+    @property
+    def __doc__(self):
+        return self.member.__doc__
+
+    def __getattr__(self, name):
+        # this wrapper's own state isn't the member's: a copy is made without running
+        # `__init__`, and reading the member it doesn't have yet would ask for it again
+        if name in _ByAbstract.__slots__:
+            raise AttributeError(name)
+        # a property's `.setter`, `.getter` and `.deleter` make a new property, which is just
+        # as abstract
+        attribute = getattr(self.member, name)
+        if name in ("setter", "getter", "deleter"):
+            return lambda accessor: _by_abstract(attribute(accessor))
+        return attribute
+
+    def _implementation(self, cls):
+        mro = cls.__mro__
+        cached = self.candidates.get(id(cls))
+        if cached is not None and cached[0]() is cls and cached[1] is mro:
+            candidates = cached[2]
+        else:
+            import weakref
+
+            # the declaring class is the one holding this member, not the one `__set_name__`
+            # was given: a class can be handed a member another class body made
+            at = next(
+                (index for index, klass in enumerate(mro) if klass.__dict__.get(self.name) is self),
+                None,
+            )
+            if at is None:
+                candidates = ()
+            else:
+                ancestry = mro[at].__mro__
+                candidates = tuple(
+                    klass
+                    for klass in mro[at + 1 :]
+                    if not any(klass is ancestor for ancestor in ancestry)
+                )
+            self.candidates[id(cls)] = (weakref.ref(cls), mro, candidates)
+        name = self.name
+        for klass in candidates:
+            found = klass.__dict__.get(name, _by_abstract)
+            if found is not _by_abstract and not getattr(found, "__isabstractmethod__", False):
+                return found
+        return self.member
+
+    def __get__(self, instance, owner=None):
+        found = self._implementation(type(instance) if owner is None else owner)
+        get = getattr(type(found), "__get__", None)
+        return found if get is None else get(found, instance, owner)
+
+
+class _ByAbstractData(_ByAbstract):
+    # an abstract property, which is a data descriptor, so it comes before the instance's own
+    # attributes. an implementation that isn't one, a plain class attribute, leaves the value on
+    # the instance, as python does when nothing ahead of it is a data descriptor
+    __slots__ = ()
+    __doc__ = _ByAbstract.__dict__["__doc__"]
+
+    def __get__(self, instance, owner=None):
+        if instance is not None:
+            found = self._implementation(type(instance))
+            if not _by_is_data_descriptor(found):
+                values = getattr(instance, "__dict__", None)
+                if values is not None and self.name in values:
+                    return values[self.name]
+        return _ByAbstract.__get__(self, instance, owner)
+
+    def __set__(self, instance, value):
+        found = self._implementation(type(instance))
+        set_ = getattr(type(found), "__set__", None)
+        if set_ is not None:
+            set_(found, instance, value)
+        elif found is self.member:
+            raise AttributeError(
+                f"'{type(instance).__name__}' object attribute '{self.name}' is read-only"
+            )
+        else:
+            _by_instance_values(instance, self.name)[self.name] = value
+
+    def __delete__(self, instance):
+        found = self._implementation(type(instance))
+        delete = getattr(type(found), "__delete__", None)
+        if delete is not None:
+            delete(found, instance)
+        elif found is self.member:
+            raise AttributeError(
+                f"'{type(instance).__name__}' object attribute '{self.name}' is read-only"
+            )
+        else:
+            values = _by_instance_values(instance, self.name)
+            if self.name not in values:
+                raise AttributeError(self.name)
+            del values[self.name]
+
+
+def _by_is_data_descriptor(value):
+    kind = type(value)
+    return hasattr(kind, "__set__") or hasattr(kind, "__delete__")
+
+
+def _by_instance_values(instance, name):
+    values = getattr(instance, "__dict__", None)
+    if values is None:
+        raise AttributeError(
+            f"'{type(instance).__name__}' object has no attribute '{name}' to assign to"
+        )
+    return values
+
+
 # --- typed dict literals --------------------------------------------------
 # a dict literal type is a `TypedDict` closed to every key it does not name, or open to more of
 # one type, which a class says with `closed=` or `extra_items=`. `typing.TypedDict` takes those

@@ -560,3 +560,280 @@ class Child(Base): ...
 
 Child()  # error: [call-non-callable] "Cannot instantiate `Child` with unimplemented abstract method `method`"
 ```
+
+### a class mixed in after the declaring class implements it
+
+python finds an abstract method before a definition later in the MRO, so in `class E(D, Impl)` it
+would reach `D.greet` and never `Impl.greet`. a method made abstract with the `abstract` keyword
+reads through to the next definition in the MRO instead, so `Impl` implements it
+
+```by
+abstract class D:
+    abstract def greet(self) -> str
+
+class Impl:
+    def greet(self) -> str:
+        return "hi"
+
+class E(D, Impl)
+
+E()  # no diagnostic
+```
+
+the same goes for a class method, a static method and a property
+
+```by
+abstract class Factory:
+    abstract class def make(cls) -> int
+    abstract static def check() -> bool
+    @property
+    abstract def size(self) -> int
+
+class FactoryImpl:
+    class def make(cls) -> int:
+        return 1
+    static def check() -> bool:
+        return True
+    @property
+    def size(self) -> int:
+        return 1
+
+class Made(Factory, FactoryImpl)
+
+Made()  # no diagnostic
+```
+
+### what the declaring class inherits does not implement it
+
+an abstract method that overrides one of its own class's bases declares that method abstract again,
+so the base's definition is not what implements it. that includes the methods every class inherits
+from `object`
+
+```by
+class A:
+    def foo(self): ...
+
+abstract class B(A):
+    override abstract def foo(self)
+
+class C(B)
+
+C()  # error: [call-non-callable]
+
+abstract class Named:
+    abstract override def __str__(self) -> str
+
+class NamedImpl:
+    override def __str__(self) -> str:
+        return "hi"
+
+class Anonymous(Named)
+
+Anonymous()  # error: [call-non-callable]
+
+class Described(Named, NamedImpl)
+
+Described()  # no diagnostic
+```
+
+### an abstract method later in the MRO implements nothing
+
+```by
+abstract class D:
+    abstract def greet(self) -> str
+
+abstract class AlsoAbstract:
+    abstract def greet(self) -> str
+
+class E(D, AlsoAbstract)
+
+E()  # error: [call-non-callable]
+```
+
+### the implementation has to fit the abstract method
+
+calls on `E` are checked against `D.greet`, and run `Impl.greet`, so `Impl.greet` has to be
+assignable to `D.greet`
+
+```by
+abstract class D:
+    abstract def greet(self) -> object
+
+class Impl:
+    def greet(self) -> str:
+        return "hi"
+
+class E(D, Impl)  # no diagnostic
+
+abstract class Exact:
+    abstract def greet(self) -> str
+
+class Loose:
+    def greet(self) -> object:
+        return 1
+
+class Unsound(Exact, Loose)  # error: [invalid-method-override] "Base classes for class `Unsound` define method `greet` incompatibly"
+```
+
+### a call on the class runs the implementation
+
+```by
+abstract class Factory:
+    abstract class def make(cls) -> int
+
+class FactoryImpl:
+    class def make(cls) -> int:
+        return 1
+
+class Made(Factory, FactoryImpl)
+
+Made.make()  # no diagnostic
+Factory.make()  # error: [call-abstract-method]
+```
+
+### an abstract method later in the MRO is passed over
+
+```by
+abstract class D:
+    abstract def greet(self) -> str
+
+abstract class AlsoAbstract:
+    abstract def greet(self) -> str
+
+class Impl:
+    def greet(self) -> str:
+        return "hi"
+
+class E(D, AlsoAbstract, Impl)
+
+E()  # no diagnostic
+```
+
+### `@abstractmethod` is python's
+
+a method made abstract with the decorator is looked up the way python looks it up
+
+```by
+from abc import abstractmethod
+
+class D:
+    @abstractmethod
+    def greet(self) -> str: ...
+
+class Impl:
+    def greet(self) -> str:
+        return "hi"
+
+class E(D, Impl)
+
+E()  # error: [call-non-callable]
+```
+
+### a stub's `abstract def` is python's
+
+nothing a stub declares runs the lowering, so its `abstract def` is `@abstractmethod`, the
+typeshed's ABCs among them
+
+`shape.byi`:
+
+```byi
+abstract class Shape:
+    abstract def area(self) -> float
+```
+
+```by
+from shape import Shape
+
+class AreaImpl:
+    def area(self) -> float:
+        return 1.0
+
+class Square(Shape, AreaImpl)
+
+Square()  # error: [call-non-callable]
+```
+
+```py
+from collections.abc import Sized
+
+class LenImpl:
+    def __len__(self) -> int:
+        return 0
+
+class MySized(Sized, LenImpl): ...
+
+MySized()  # error: [call-non-callable]
+```
+
+### a property implementation has to fit the abstract property
+
+```by
+abstract class D:
+    @property
+    abstract def size(self) -> object
+
+class Impl:
+    @property
+    def size(self) -> int:
+        return 1
+
+class E(D, Impl)  # no diagnostic
+
+abstract class Exact:
+    @property
+    abstract def size(self) -> str
+
+class Loose:
+    @property
+    def size(self) -> object:
+        return 1
+
+class Unsound(Exact, Loose)  # error: [invalid-property-type-override] "Incompatible inherited attribute `size`: `Loose.size` is incompatible with `Exact.size`"
+```
+
+### a synthesized member implements it
+
+```by
+from dataclasses import dataclass
+
+abstract class Ordered:
+    abstract def __lt__(self, other: Impl) -> bool
+
+@dataclass(order=True)
+class Impl:
+    x: int = 0
+
+class E(Ordered, Impl)  # error: [subclass-of-dataclass-with-order]
+
+E()  # no diagnostic
+```
+
+### an attribute only declared implements nothing
+
+an annotation alone puts nothing in the class's namespace, so there is nothing to read through to,
+as for a subclass that only declares it
+
+```by
+abstract class D:
+    abstract var size: int
+        get() = field
+        set(value):
+            field = value
+
+class Declared:
+    size: int
+
+    def __init__(self) -> None:
+        self.size = 1
+
+class E(D, Declared)
+
+E()  # error: [call-non-callable]
+
+class Assigned:
+    size: int = 1
+
+class F(D, Assigned)
+
+F()  # no diagnostic
+```

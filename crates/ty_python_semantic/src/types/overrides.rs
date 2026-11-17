@@ -25,6 +25,7 @@ use crate::{
         CallableType, ClassBase, ClassLiteral, ClassType, IntersectionType, KnownClass,
         MemberLookupPolicy, Parameter, Parameters, Signature, StaticClassLiteral, Type,
         TypeContext, TypeQualifiers, UnionType,
+        abstract_methods::{forwarded_implementation, type_as_abstract_method},
         call::CallArguments,
         class::{CodeGeneratorKind, FieldKind, MethodDecorator},
         constraints::ConstraintSetBuilder,
@@ -39,7 +40,9 @@ use crate::{
             report_overridden_final_method, report_overridden_final_variable,
         },
         enums::{EnumMetadata, enum_metadata, is_enum_class_by_inheritance},
-        function::{FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral},
+        function::{
+            AbstractMethodKind, FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral,
+        },
         list_members::{
             Member, MemberWithDefinition, all_end_of_scope_members, extract_underlying_functions,
         },
@@ -314,6 +317,13 @@ fn check_inherited_method_conflict<'db>(
     else {
         return;
     };
+    // a method made abstract with basedpython's `abstract` keyword reads through to an
+    // implementation later in the MRO. calls are checked against the abstract method and run
+    // the implementation, so for that one pair it is the implementation that has to fit
+    let forwarded_to = type_as_abstract_method(db, selected_ty, owner)
+        .is_some_and(AbstractMethodKind::forwards)
+        .then(|| forwarded_implementation(db, env, owner, contracts.iter().copied(), name))
+        .flatten();
 
     for contract_owner in contracts.iter().copied() {
         let Some((contract_decorator, contract_ty)) =
@@ -321,16 +331,23 @@ fn check_inherited_method_conflict<'db>(
         else {
             continue;
         };
+        // the method that has to fit is the subclass side of the comparison
+        let forwarded = forwarded_to == Some(contract_owner);
+        let (fitting_ty, fitted_ty) = if forwarded {
+            (contract_ty, selected_ty)
+        } else {
+            (selected_ty, contract_ty)
+        };
         let Some(OverrideTypes {
-            subclass: selected_ty,
-            superclass: contract_ty,
+            subclass: fitting_ty,
+            superclass: fitted_ty,
             ..
-        }) = method_override_types(db, env, name, selected_ty, contract_ty)
+        }) = method_override_types(db, env, name, fitting_ty, fitted_ty)
         else {
             continue;
         };
         if selected_decorator == contract_decorator
-            && selected_ty.is_assignable_to(db, env, contract_ty)
+            && fitting_ty.is_assignable_to(db, env, fitted_ty)
         {
             continue;
         }
@@ -396,14 +413,16 @@ fn check_inherited_method_conflict<'db>(
         else {
             continue;
         };
-        report_incompatible_base_method(
-            context,
-            class,
-            name,
-            (owner, definition, selected_decorator),
-            (contract_owner, contract_definition, contract_decorator),
-            || selected_ty.assignability_error_context(db, env, contract_ty),
-        );
+        let selected = (owner, definition, selected_decorator);
+        let contract = (contract_owner, contract_definition, contract_decorator);
+        let (fitting, fitted) = if forwarded {
+            (contract, selected)
+        } else {
+            (selected, contract)
+        };
+        report_incompatible_base_method(context, class, name, fitting, fitted, || {
+            fitting_ty.assignability_error_context(db, env, fitted_ty)
+        });
         return;
     }
 }

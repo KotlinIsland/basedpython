@@ -132,6 +132,9 @@ pub(crate) struct PropertiesPass<'src> {
     written: WrittenNames<'src>,
     value_ranges: ValueRanges,
     min_version: ruff_python_ast::PythonVersion,
+    /// a stub is never run, so an abstract property in one has no use for the runtime
+    /// helper that reads through to an implementation later in the mro
+    is_stub: bool,
 }
 
 impl<'src> PropertiesPass<'src> {
@@ -140,12 +143,14 @@ impl<'src> PropertiesPass<'src> {
         written: WrittenNames<'src>,
         value_ranges: ValueRanges,
         min_version: ruff_python_ast::PythonVersion,
+        is_stub: bool,
     ) -> Self {
         Self {
             source,
             written,
             value_ranges,
             min_version,
+            is_stub,
         }
     }
 
@@ -664,16 +669,31 @@ impl PropertiesPass<'_> {
             } else {
                 (self.written.builtin("property"), "self")
             };
+            // an abstract property reads through to an implementation later in the mro,
+            // which takes the helper wrapping the whole property
+            let abstract_helper = if is_abstract && !self.is_stub {
+                ctx.runtime.insert(crate::runtime::ABSTRACT);
+                format!("@{}\n{indent}", crate::runtime::ABSTRACT.name())
+            } else {
+                String::new()
+            };
             frags.push(Fragment::Lit(format!(
-                "@{decorator}\n{indent}{accessor_decorators}def {emitted}({receiver})"
+                "{abstract_helper}@{decorator}\n{indent}{accessor_decorators}def {emitted}({receiver})"
             )));
             if let Some(returns) = &getter.returns {
                 frags.push(Fragment::Lit(" -> ".to_owned()));
                 frags.push(Fragment::Src(returns.range()));
             }
+            // an abstract accessor declares a shape, not an implementation, and is what runs
+            // when nothing later in the mro implements it, so like a bodyless `abstract def` it
+            // raises. a stub is never run
+            let abstract_body = if self.is_stub {
+                "..."
+            } else {
+                "raise NotImplementedError"
+            };
             if is_abstract {
-                // an abstract accessor declares a shape, not an implementation
-                frags.push(Fragment::Lit(": ...".to_owned()));
+                frags.push(Fragment::Lit(format!(": {abstract_body}")));
             } else {
                 frags.push(Fragment::Lit(":\n".to_owned()));
                 frags.extend(self.accessor_body(getter, &body_indent, &backing_name, ctx));
@@ -693,7 +713,7 @@ impl PropertiesPass<'_> {
                     }
                 }
                 if is_abstract {
-                    frags.push(Fragment::Lit(") -> None: ...".to_owned()));
+                    frags.push(Fragment::Lit(format!(") -> None: {abstract_body}")));
                 } else {
                     frags.push(Fragment::Lit(") -> None:\n".to_owned()));
                     frags.extend(self.accessor_body(setter, &body_indent, &backing_name, ctx));
@@ -1460,23 +1480,28 @@ mod tests {
         );
     }
 
-    /// an abstract property declares a shape: `@abstractmethod` and no body
+    /// an abstract property declares a shape: `@abstractmethod`, and a body that raises
     #[test]
     fn abstract_property_is_bodyless() {
-        check(
+        let out = transpile(
             indoc! {"
                 class Shape:
                     abstract let area: int
                         get() = field
             "},
-            indoc! {"
-                from abc import abstractmethod
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(indoc! {"
                 class Shape:
                     __area: int
+                    @_by_abstract
                     @property
                     @abstractmethod
-                    def area(self) -> int: ...
-            "},
+                    def area(self) -> int: raise NotImplementedError
+            "}) && out.contains("def _by_abstract(member):"),
+            "{out}"
         );
     }
 

@@ -5735,7 +5735,6 @@ fn a_modifier_is_translated_rather_than_looked_up() {
     // same mapping — so the compiled definition ends up wearing what the interpreted
     // twin wears
     for (modifier, expected) in [
-        ("abstract", vec!["abstractmethod".to_string()]),
         ("override", vec!["override".to_string()]),
         ("export", Vec::new()),
     ] {
@@ -5762,6 +5761,34 @@ class Box:
         });
         assert_eq!(decorators, expected, "{modifier}");
     }
+}
+
+#[test]
+fn an_abstract_method_wears_the_wrapper_the_transpiler_writes() {
+    // a `.by` module's `abstract def` reads through to an implementation later in the mro, so
+    // the class holds `_by_abstract` over `abstractmethod` rather than the function
+    let decorators = with_source(
+        "\
+class Box:
+    abstract def make(self) -> int:
+        return 7
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            module
+                .all_functions()
+                .find(|function| function.name.ends_with("make"))
+                .map(|function| dotted(&function.decorators))
+        },
+    );
+    assert_eq!(
+        decorators,
+        Some(vec![
+            "_by_abstract".to_string(),
+            "abstractmethod".to_string()
+        ])
+    );
 }
 
 #[test]

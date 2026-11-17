@@ -15,12 +15,14 @@ use crate::{
     types::{
         ClassBase, ClassType, InstanceFallbackShadowsNonDataDescriptor, IntersectionType,
         KnownInstanceType, MemberLookupPolicy, StaticClassLiteral, Type, TypeQualifiers,
+        abstract_methods::{forwarded_implementation, type_as_abstract_method},
         attribute_write::{DescriptorSetterDomain, descriptor_setter_domain},
         class::CodeGeneratorKind,
         context::InferContext,
         diagnostic::{
             INVALID_ATTRIBUTE_OVERRIDE, INVALID_MUTABLE_OVERRIDE, INVALID_PROPERTY_TYPE_OVERRIDE,
         },
+        function::AbstractMethodKind,
     },
 };
 
@@ -840,24 +842,40 @@ pub(super) fn check_inherited_conflict<'db>(
     else {
         return;
     };
+    // a property made abstract with basedpython's `abstract` keyword reads through to an
+    // implementation later in the MRO. reads are checked against the abstract property and run
+    // the implementation, so for that one pair it is the implementation that has to fit
+    let forwarded_to = match owner.own_class_member(db, env, None, name).inner.place {
+        Place::Defined(DefinedPlace { ty, .. }) => type_as_abstract_method(db, ty, owner)
+            .is_some_and(AbstractMethodKind::forwards)
+            .then(|| forwarded_implementation(db, env, owner, contracts.iter().copied(), name))
+            .flatten(),
+        Place::Undefined => None,
+    };
     for target_owner in contracts.iter().copied().filter(|target| *target != owner) {
         let Some(MemberContract::Attribute(target)) =
             member_contract(db, env, target_owner, receiver, name, kind)
         else {
             continue;
         };
+        let forwarded = forwarded_to == Some(target_owner);
+        let (fitting_owner, fitted_owner, fitting, fitted) = if forwarded {
+            (target_owner, owner, &target, &source)
+        } else {
+            (owner, target_owner, &source, &target)
+        };
         let Some(violation) = attribute_violation(
             db,
             env,
             receiver,
-            Type::instance(db, env, target_owner),
+            Type::instance(db, env, fitted_owner),
             name,
-            &source,
-            &target,
+            fitting,
+            fitted,
         ) else {
             continue;
         };
-        if already_inherited(db, env, class_type, target_owner, name, &source, kind) {
+        if !forwarded && already_inherited(db, env, class_type, target_owner, name, &source, kind) {
             continue;
         }
         let rule = violation.rule(source.is_property || target.is_property);
@@ -868,8 +886,8 @@ pub(super) fn check_inherited_conflict<'db>(
             builder.into_diagnostic(format_args!("Incompatible inherited attribute `{name}`"));
         diagnostic.set_primary_annotation_message(format_args!(
             "`{}.{name}` is incompatible with `{}.{name}`",
-            owner.name(db),
-            target_owner.name(db),
+            fitting_owner.name(db),
+            fitted_owner.name(db),
         ));
         match violation {
             AttributeViolation::Read { source, target } => diagnostic.info(format_args!(

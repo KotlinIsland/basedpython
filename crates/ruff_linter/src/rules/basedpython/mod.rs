@@ -36,6 +36,7 @@ mod tests {
     #[test_case(Rule::ManualCastCall, Path::new("BY020.by"))]
     #[test_case(Rule::ManualProperty, Path::new("BY021.by"))]
     #[test_case(Rule::ManualModifier, Path::new("BY022.by"))]
+    #[test_case(Rule::ManualModifier, Path::new("BY022.byi"))]
     #[test_case(Rule::ManualTupleAnnotation, Path::new("BY023.by"))]
     #[test_case(Rule::ManualTupleAnnotation, Path::new("BY023.py"))]
     #[test_case(Rule::RedundantNoneCoalesce, Path::new("BY101.by"))]

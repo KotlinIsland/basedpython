@@ -105,6 +105,46 @@ static def helper()   # error: `static` is only a modifier on a method
 `final`, `abstract` and the visibility keywords read on a function wherever it
 is written
 
+### a class mixed in later implements an abstract method
+
+python looks a method up in the first class of the MRO that defines it, so in
+`class E(D, Impl)` an abstract `D.greet` is found before `Impl.greet`, and `E`
+is abstract. an `abstract def` reads through to the next definition in the MRO
+instead, so `Impl` implements it:
+
+```by
+abstract class D:
+    abstract def greet(self) -> str
+
+class Impl:
+    def greet(self) -> str:
+        return "hi"
+
+class E(D, Impl)
+
+E().greet()  # "hi"
+```
+
+the classes the declaring class inherits from are skipped: an `abstract def`
+that overrides one of their methods declares it abstract again, so their
+definition is not an implementation. that includes what every class inherits
+from `object`:
+
+```by
+abstract class Named:
+    abstract override def __str__(self) -> str
+
+class Anonymous(Named)
+
+Anonymous()  # error: `__str__` is unimplemented
+```
+
+an implementation found this way is checked against the abstract method's
+signature, which is what calls through `E` are checked against. with nothing
+to read through to, the method's own body runs. a method made abstract with
+`@abstractmethod` is looked up the way python looks it up, and so is one in a
+stub: nothing a stub declares runs, so its `abstract def` is `@abstractmethod`
+
 ## let / var / class-var / newtype
 
 | basedpython                 | Python output                          |

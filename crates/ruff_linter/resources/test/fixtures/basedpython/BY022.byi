@@ -1,0 +1,7 @@
+from abc import abstractmethod
+
+
+class Shape:
+    # in a stub the keyword is python's `@abstractmethod`
+    @abstractmethod
+    def area(self) -> int: ...

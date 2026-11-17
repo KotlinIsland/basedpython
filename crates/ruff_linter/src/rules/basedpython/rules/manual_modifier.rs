@@ -39,8 +39,10 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ```
 ///
 /// The decorators with a keyword spelling are `@staticmethod`, `@classmethod`,
-/// `@abstractmethod`, `@override` and `@final` on a `def`, and `@final` and
-/// `@dataclass` on a `class`. A `@dataclass` is only one when its arguments are
+/// `@override` and `@final` on a `def`, `@abstractmethod` on a `def` in a stub, and
+/// `@final` and `@dataclass` on a `class`. Outside a stub `abstract def` reads
+/// through to an implementation later in the MRO, which `@abstractmethod` doesn't,
+/// so the two say different things. A `@dataclass` is only one when its arguments are
 /// what `data class` emits: `slots=True`, and `frozen=True` beside it for
 /// `frozen data class`.
 ///
@@ -168,6 +170,12 @@ fn modifier_for(checker: &Checker, decorator: &Decorator, header: Header) -> Opt
             }
             if semantic.match_typing_expr(expression, "final") {
                 return Some("final");
+            }
+            // outside a stub the keyword says more than the decorator: an `abstract def`
+            // reads through to an implementation later in the mro, and `@abstractmethod`
+            // doesn't, so rewriting one as the other changes what the program does
+            if !checker.source_type.is_stub() {
+                return None;
             }
             semantic
                 .resolve_qualified_name(expression)

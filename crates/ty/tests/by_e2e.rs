@@ -4041,6 +4041,117 @@ fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {
     )
 }
 
+/// an abstract method reads through to an implementation in a class mixed in after the
+/// declaring one, for a method, a class method, a static method and a property alike, while
+/// what the declaring class inherits, `object`'s methods included, implements nothing
+#[test]
+fn run_reads_an_abstract_method_through_to_a_later_implementation() {
+    let (stdout, stderr, code) = run_main_with_args(
+        "\
+abstract class Shape:
+    abstract def name(self) -> str
+    abstract class def make(cls) -> int
+    abstract static def check() -> bool
+    @property
+    abstract def size(self) -> int
+    abstract override def __str__(self) -> str
+
+class ShapeImpl:
+    def name(self) -> str:
+        return \"square\"
+    class def make(cls) -> int:
+        return 1
+    static def check() -> bool:
+        return True
+    @property
+    def size(self) -> int:
+        return 4
+    override def __str__(self) -> str:
+        return \"a shape\"
+
+class Square(Shape, ShapeImpl)
+
+class Bare(Shape):
+    override def name(self) -> str:
+        return \"bare\"
+    override class def make(cls) -> int:
+        return 0
+    override static def check() -> bool:
+        return False
+    @property
+    override def size(self) -> int:
+        return 0
+
+def main():
+    square = Square()
+    print(square.name(), Square.make(), square.check(), square.size, str(square))
+    try:
+        Bare.__str__(object.__new__(Bare))
+    except NotImplementedError:
+        print(\"bare has no __str__\")
+",
+        &[],
+    );
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "square 1 True 4 a shape\nbare has no __str__",
+        "stderr:\n{stderr}"
+    );
+}
+
+/// what `_by_abstract` wraps keeps working as python's own decorators would: a property's
+/// accessors chain, a slotted data class's `super()` reaches the class it was given, an
+/// abstract `__init_subclass__` is still a class method, and a property a class attribute
+/// implements is written to the instance
+#[test]
+fn run_keeps_what_an_abstract_member_wraps_working() {
+    let (stdout, stderr, code) = run_main_with_args(
+        "\
+abstract class Sized:
+    abstract var size: int
+        get() = field
+        set(value):
+            field = value
+
+class Base:
+    def greet(self) -> str:
+        return \"base\"
+
+abstract data class Greeter(Base):
+    override abstract def greet(self) -> str:
+        return \"greeter+\" + super().greet()
+
+data class Loud(Greeter):
+    override def greet(self) -> str:
+        return \"loud+\" + super().greet()
+
+abstract class Registry:
+    abstract def __init_subclass__(cls) -> None:
+        print(\"registered\", cls.__name__)
+
+class Entry(Registry)
+
+class SizeAttribute:
+    size: int = 4
+
+class Fixed(Sized, SizeAttribute)
+
+def main():
+    print(\"defined\", Loud().greet())
+    fixed = Fixed()
+    before = fixed.size
+    fixed.size = 5
+    print(before, fixed.size, Fixed().size)
+",
+        &[],
+    );
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "registered Entry\ndefined loud+greeter+base\n4 5 4",
+        "stderr:\n{stderr}"
+    );
+}
+
 /// Build stamps are experimental, so a project that writes a `build:` block has
 /// to ask for them by name — these tests are projects like any other.
 const OPT_IN_TO_STAMPS: &str = "[experimental]\nbuild-stamps = true\n";

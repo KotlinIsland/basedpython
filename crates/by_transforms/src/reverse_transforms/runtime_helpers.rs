@@ -9,6 +9,9 @@
 //!   `_by_variance(1)(Sequence)` → `Sequence`, and `@_by_variance(1)` is dropped
 //!   (`crate::transforms::runtime_variance`), leaving a parameter written `in`, `out` or `in out`
 //!   where the checker wouldn't read the same variance off the class
+//! - `@_by_abstract` over `@abstractmethod` → `abstract def` (`crate::transforms::modifiers`).
+//!   the helper is what makes the keyword differ from the decorator, so only a method it
+//!   decorates takes the keyword
 //!
 //! the name alone says nothing, since an author may call their own function any of these. a
 //! call counts only when the one thing binding the name at module level is the runtime: an
@@ -43,7 +46,8 @@ use crate::runtime::{self, Helper};
 use crate::transforms::source_util::{line_past_end, line_start};
 use crate::type_info::TypeInfo;
 
-const REVERSED: [Helper; 11] = [
+const REVERSED: [Helper; 12] = [
+    runtime::ABSTRACT,
     runtime::TOLD,
     runtime::FORWARD,
     runtime::SUBSCRIPT,
@@ -447,6 +451,47 @@ impl<'src> RuntimeHelpersReverse<'src> {
         true
     }
 
+    /// `@_by_abstract` above the other decorators and `@abstractmethod` right above the `def`
+    /// is how an `abstract def` lowers. the two together become the keyword again. the
+    /// helper alone, or over an `@abstractmethod` that isn't the last decorator, stays: without
+    /// it the decorator is python's, which doesn't read through to a later implementation
+    fn reverse_abstract(&mut self, function: &ruff_python_ast::StmtFunctionDef) {
+        let Some(helper) = function.decorator_list.iter().find(|decorator| {
+            matches!(&decorator.expression, Expr::Name(name)
+                if self.reads_helper(name.id.as_str()) == Some(runtime::ABSTRACT))
+        }) else {
+            return;
+        };
+        let Some(last) = function.decorator_list.last() else {
+            return;
+        };
+        if !matches!(&last.expression, Expr::Name(name) if name.id.as_str() == "abstractmethod") {
+            return;
+        }
+        // the header is the line that names the function: a decorator ends its own line, so
+        // the `def`, or the `async` ahead of it, is the first thing written there
+        let header_line = line_start(self.source, function.name.start());
+        let indent = self.source[header_line.to_usize()..]
+            .chars()
+            .take_while(|character| *character == ' ' || *character == '\t')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let Ok(indent) = u32::try_from(indent) else {
+            return;
+        };
+        for decorator in [helper, last] {
+            self.edits
+                .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                    line_start(self.source, decorator.start()),
+                    line_past_end(self.source, decorator.end()),
+                ))));
+        }
+        self.edits.push(Fix::safe_edit(Edit::insertion(
+            "abstract ".to_owned(),
+            header_line + ruff_text_size::TextSize::from(indent),
+        )));
+    }
+
     /// whether `expr` calls the runtime's `_by_variance`, which is what telling a class's
     /// variance is written as both ways
     fn is_variance_call(&self, expr: &Expr) -> bool {
@@ -607,6 +652,9 @@ impl<'ast> Visitor<'ast> for RuntimeHelpersReverse<'_> {
             _ => Enclosing::Operand(OperatorPrecedence::None),
         };
         self.in_type = false;
+        if let Stmt::FunctionDef(function) = stmt {
+            self.reverse_abstract(function);
+        }
         if let Stmt::ClassDef(class) = stmt {
             for decorator in &class.decorator_list {
                 if self.is_variance_call(&decorator.expression) {
@@ -737,6 +785,77 @@ mod tests {
             "{lowered}"
         );
         assert!(reversed.contains("a = Out[Later]()"), "{reversed}");
+    }
+
+    /// the helper over `@abstractmethod` is what an `abstract def` lowers to, and becomes the
+    /// keyword again, under the other decorators as much as alone
+    #[test]
+    fn an_abstract_method_is_written_with_the_keyword() {
+        let (lowered, reversed) = round_trip(indoc! {"
+            class A:
+                abstract def f(self) -> int
+                abstract class def g(cls) -> int
+        "});
+        assert!(
+            lowered.contains("@_by_abstract\n    @abstractmethod"),
+            "{lowered}"
+        );
+        assert!(
+            reversed.contains("    abstract def f(self) -> int"),
+            "{reversed}"
+        );
+        assert!(
+            reversed.contains("    @classmethod\n    abstract def g(cls) -> int"),
+            "{reversed}"
+        );
+        assert!(!reversed.contains("_by_abstract"), "{reversed}");
+    }
+
+    /// a comment between the decorators and the header is no part of either, and stays
+    #[test]
+    fn an_abstract_method_keeps_the_comments_around_it() {
+        assert_eq!(
+            reverse_transpile(
+                indoc! {"
+                    from _by_runtime import _by_abstract
+                    from abc import abstractmethod
+                    class D:
+                        @_by_abstract
+                        @abstractmethod
+                        # the def case
+                        def f(self) -> int: ...
+                "},
+                &Config {
+                    prune_unused_imports_after_reverse: true,
+                    ..config()
+                },
+            )
+            .unwrap(),
+            indoc! {"
+                class D:
+                    # the def case
+                    abstract def f(self) -> int: ...
+            "}
+        );
+    }
+
+    /// without the helper the decorator is python's, which doesn't read through to a later
+    /// implementation, and an author's own `_by_abstract` is theirs
+    #[test]
+    fn an_abstract_method_without_the_runtime_helper_keeps_its_decorator() {
+        let (_, reversed) = round_trip(indoc! {"
+            from abc import abstractmethod
+            def _by_abstract(f):
+                return f
+            class A:
+                @_by_abstract
+                @abstractmethod
+                def f(self) -> int: ...
+        "});
+        assert!(
+            reversed.contains("    @_by_abstract\n    @abstractmethod\n    def f(self) -> int"),
+            "{reversed}"
+        );
     }
 
     #[test]

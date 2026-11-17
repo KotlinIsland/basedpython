@@ -109,94 +109,76 @@ help: Replace with the `final` modifier
 27 |         return 0
    |
 
-BY022 [*] `@abstractmethod` can be written as `abstract`
-  --> BY022.by:30:5
-   |
-28 |         return 0
-29 |
-30 |     @abstractmethod
-   |     ^^^^^^^^^^^^^^^
-31 |     def missing(self) -> int: ...
-   |
-help: Replace with the `abstract` modifier
-   |
-29 |
-   -     @abstractmethod
-   -     def missing(self) -> int: ...
-30 +     abstract def missing(self) -> int: ...
-31 |
-   |
-
 BY022 [*] `@override` can be written as `override`
-  --> BY022.by:35:5
+  --> BY022.by:37:5
    |
-34 | class Child(Point):
-35 |     @override
+36 | class Child(Point):
+37 |     @override
    |     ^^^^^^^^^
-36 |     def origin(self) -> "Point":
-37 |         return Point()
+38 |     def origin(self) -> "Point":
+39 |         return Point()
    |
 help: Replace with the `override` modifier
    |
-34 | class Child(Point):
+36 | class Child(Point):
    -     @override
    -     def origin(self) -> "Point":
-35 +     override def origin(self) -> "Point":
-36 |         return Point()
+37 +     override def origin(self) -> "Point":
+38 |         return Point()
    |
 
 BY022 [*] `@staticmethod` can be written as `static`
-  --> BY022.by:43:5
+  --> BY022.by:45:5
    |
-41 |     # only the last decorator is rewritten; the next run takes the one above it
-42 |     @final
-43 |     @staticmethod
+43 |     # only the last decorator is rewritten; the next run takes the one above it
+44 |     @final
+45 |     @staticmethod
    |     ^^^^^^^^^^^^^
-44 |     def both() -> int:
-45 |         return 0
+46 |     def both() -> int:
+47 |         return 0
    |
 help: Replace with the `static` modifier
    |
-42 |     @final
+44 |     @final
    -     @staticmethod
    -     def both() -> int:
-43 +     static def both() -> int:
-44 |         return 0
+45 +     static def both() -> int:
+46 |         return 0
    |
 
 BY022 [*] `@staticmethod` can be written as `static`
-  --> BY022.by:48:5
+  --> BY022.by:50:5
    |
-47 |     @overload
-48 |     @staticmethod
+49 |     @overload
+50 |     @staticmethod
    |     ^^^^^^^^^^^^^
-49 |     def over(x: int) -> int: ...
+51 |     def over(x: int) -> int: ...
    |
 help: Replace with the `static` modifier
    |
-47 |     @overload
+49 |     @overload
    -     @staticmethod
    -     def over(x: int) -> int: ...
-48 +     static def over(x: int) -> int: ...
-49 |
+50 +     static def over(x: int) -> int: ...
+51 |
    |
 
 BY022 [*] `@staticmethod` can be written as `static`
-  --> BY022.by:53:5
+  --> BY022.by:55:5
    |
-52 | class Commented:
-53 |     @staticmethod
+54 | class Commented:
+55 |     @staticmethod
    |     ^^^^^^^^^^^^^
-54 |     # the comment goes with the line the decorator is on
-55 |     def noted() -> int:
+56 |     # the comment goes with the line the decorator is on
+57 |     def noted() -> int:
    |
 help: Replace with the `static` modifier
    |
-52 | class Commented:
+54 | class Commented:
    -     @staticmethod
    -     # the comment goes with the line the decorator is on
    -     def noted() -> int:
-53 +     static def noted() -> int:
-54 |         return 0
+55 +     static def noted() -> int:
+56 |         return 0
    |
 note: This is an unsafe fix and may change runtime behavior

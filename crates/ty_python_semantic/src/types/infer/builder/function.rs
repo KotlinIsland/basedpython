@@ -1200,6 +1200,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 continue;
             }
 
+            // the `abstract` keyword resolves to `abc.abstractmethod` like the other
+            // modifiers resolve to theirs, and is recorded besides: the lowering of a `.by`
+            // module reads a method it marks through to an implementation later in the MRO.
+            // a stub's `abstract def` is python's `@abstractmethod`, the typeshed's among
+            // them, since nothing a stub declares runs the lowering
+            if let ast::Expr::Name(n) = &decorator.expression
+                && matches!(n.ctx, ast::ExprContext::Invalid)
+                && n.id.as_str() == "abstract"
+                && self.file().source_type(db).is_basedpython()
+                && !self.file().is_stub(db)
+            {
+                function_decorators |= FunctionDecorators::ABSTRACT_FORWARDING;
+            }
             let decorator_type = decorator_inference
                 .as_ref()
                 .and_then(|decorator_inference| {

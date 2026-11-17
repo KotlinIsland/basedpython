@@ -5392,6 +5392,9 @@ fn marks_only(
     model: &SemanticModel<'_>,
     decorator: &ast::Decorator,
 ) -> bool {
+    if forwards_to_an_implementation(db, model, decorator) {
+        return false;
+    }
     let env = &model.program_environment();
     let Some(resolved) = decorator.expression.inferred_type(model) else {
         return false;
@@ -5399,6 +5402,21 @@ fn marks_only(
     MARKING_DECORATORS.iter().any(|(module, name)| {
         ty_python_semantic::basedpython_module_symbol(db, env, module, name) == Some(resolved)
     })
+}
+
+/// whether `decorator` is the `abstract` keyword of a non-stub `.by` module, which on a method
+/// the transpiler writes as `_by_abstract` over `abstractmethod`: the class holds a wrapper that
+/// reads the member through to an implementation later in the mro, not the function it marked
+fn forwards_to_an_implementation(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    decorator: &ast::Decorator,
+) -> bool {
+    let file = model.file();
+    !is_written_decorator(db, model, decorator)
+        && matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "abstract")
+        && file.source_type(db).is_basedpython()
+        && !file.is_stub(db)
 }
 
 /// the same for a function or a method
@@ -7594,6 +7612,17 @@ fn lower_function_with_receiver(
             }
             Modifier::Erased | Modifier::DataClass => {}
         }
+    }
+    if matches!(receiver, Some(Receiver::Explicit(_)))
+        && function
+            .decorator_list
+            .iter()
+            .any(|decorator| forwards_to_an_implementation(db, model, decorator))
+    {
+        decorators.insert(
+            0,
+            Decorator::name(by_transforms::runtime::abstract_member_wrapper()),
+        );
     }
     // a method's first parameter is forced to the receiver, because that is what python
     // puts in slot zero — and `staticmethod` and `classmethod` are exactly the two that

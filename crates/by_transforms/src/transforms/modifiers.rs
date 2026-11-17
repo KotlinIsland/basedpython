@@ -10,7 +10,8 @@
 //! ─────────────────────────
 //! `final class/def`       → `@final` (from `typing`)
 //! `abstract class`        → (modifier deleted, no decorator)
-//! `abstract def`          → `@abstractmethod` (from `abc`)
+//! `abstract def`          → `@abstractmethod` (from `abc`), and in a class body
+//!                           `@_by_abstract` above every decorator
 //! `override def`          → `@override` (from `typing`)
 //! `open class`            → (modifier deleted, no decorator)
 //! `static def`            → `@staticmethod`
@@ -107,6 +108,10 @@ pub(crate) struct Modifiers<'src> {
     /// leaves that cell pointing at the class it replaced
     slots_by_helper_for_class_cell: bool,
     needs_dataclass_slots: bool,
+    /// whether an abstract method reads through to an implementation later in the mro,
+    /// through the runtime helper. a stub is never run, so it has no use for it
+    abstract_by_helper: bool,
+    needs_abstract_helper: bool,
     /// Names marked `export`/`public` at module level. Used to generate `__all__`.
     exports: Vec<String>,
     /// Module-level names renamed by `private` (original → `_original`).
@@ -153,6 +158,8 @@ impl<'src> Modifiers<'src> {
             slots_by_helper: false,
             slots_by_helper_for_class_cell: false,
             needs_dataclass_slots: false,
+            abstract_by_helper: false,
+            needs_abstract_helper: false,
             exports: Vec::new(),
             private_renames: Vec::new(),
             sealed_listings,
@@ -369,13 +376,52 @@ impl<'src> Modifiers<'src> {
             match name {
                 "abstract" => {
                     self.needs_abstractmethod = true;
-                    self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!(
-                            "@{}\n{indent}",
-                            self.written.imported("abc", "abstractmethod")
-                        ),
-                        dec.range(),
-                    )));
+                    // `abstractmethod` marks the function it is given, and a class or
+                    // static method object refuses the mark, so it goes right above the
+                    // `def`, under every other decorator whatever order the modifiers
+                    // were written in
+                    let abstractmethod = format!(
+                        "@{}\n{indent}",
+                        self.written.imported("abc", "abstractmethod")
+                    );
+                    match func.decorator_list.last() {
+                        Some(last) if last.range() != dec.range() => {
+                            self.edits
+                                .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
+                            self.edits
+                                .push(Fix::safe_edit(Edit::insertion(abstractmethod, last.end())));
+                        }
+                        _ => self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                            abstractmethod,
+                            dec.range(),
+                        ))),
+                    }
+                    // the helper wraps whatever the other decorators make of the
+                    // method, a property or a class method as much as a function, so
+                    // it goes above all of them
+                    // a property block's member is written whole by the properties pass,
+                    // which places the helper itself
+                    let property_block = func.decorator_list.iter().any(|decorator| {
+                        matches!(
+                            self.synthetic_name(decorator),
+                            Some("__property__" | "__static_property__")
+                        )
+                    });
+                    if self.abstract_by_helper && self.class_body && !property_block {
+                        self.needs_abstract_helper = true;
+                        let first = func
+                            .decorator_list
+                            .first()
+                            .map_or(dec.start(), Ranged::start);
+                        self.edits.push(Fix::safe_edit(Edit::insertion(
+                            format!(
+                                "{}@{}\n",
+                                self.line_indent(first),
+                                crate::runtime::ABSTRACT.name()
+                            ),
+                            super::source_util::line_start(self.source, first),
+                        )));
+                    }
                 }
                 "final" => {
                     self.needs_final = true;
@@ -889,6 +935,7 @@ impl AstPass for ModifiersPass<'_> {
         inner.slots_by_helper = !self.dataclass_slots && !self.is_stub;
         inner.slots_by_helper_for_class_cell =
             !self.dataclass_slots_keep_class_cell && !self.is_stub;
+        inner.abstract_by_helper = !self.is_stub;
         for stmt in &module.body {
             inner.visit_stmt(stmt);
         }
@@ -899,6 +946,9 @@ impl AstPass for ModifiersPass<'_> {
 
         if inner.needs_dataclass_slots {
             ctx.runtime.insert(crate::runtime::DATACLASS_SLOTS);
+        }
+        if inner.needs_abstract_helper {
+            ctx.runtime.insert(crate::runtime::ABSTRACT);
         }
         for (needed, module, name) in [
             (inner.needs_final, "typing", "final"),
@@ -1120,18 +1170,76 @@ mod tests {
 
     #[test]
     fn abstract_def() {
-        check(
+        let out = transpile(
             indoc! {"
                 class Base:
                     abstract def method(self)
             "},
-            indoc! {"
-                from abc import abstractmethod
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(indoc! {"
                 class Base:
+                    @_by_abstract
                     @abstractmethod
                     def method(self): raise NotImplementedError
-            "},
+            "}) && out.contains("def _by_abstract(member):"),
+            "{out}"
         );
+    }
+
+    /// `abstractmethod` goes on the function, under `classmethod` and `staticmethod`, which
+    /// refuse it, and the helper over everything
+    #[test]
+    fn abstract_def_under_other_method_modifiers() {
+        let out = transpile(
+            indoc! {"
+                class Base:
+                    abstract class def make(cls)
+                    static abstract def check()
+                    @property
+                    abstract def size(self) -> int
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(indoc! {"
+                class Base:
+                    @_by_abstract
+                    @classmethod
+                    @abstractmethod
+                    def make(cls): raise NotImplementedError
+                    @_by_abstract
+                    @staticmethod
+                    @abstractmethod
+                    def check(): raise NotImplementedError
+                    @_by_abstract
+                    @property
+                    @abstractmethod
+                    def size(self) -> int: raise NotImplementedError
+            "}),
+            "{out}"
+        );
+    }
+
+    /// a function no class owns has no mro to read through, and a stub is never run
+    #[test]
+    fn abstract_def_without_the_helper() {
+        check(
+            "abstract def free()\n",
+            "from abc import abstractmethod\n@abstractmethod\ndef free(): raise NotImplementedError\n",
+        );
+        let out = transpile(
+            "class Base:\n    abstract def method(self)\n",
+            &Config {
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(!out.contains("_by_abstract"), "{out}");
     }
 
     #[test]

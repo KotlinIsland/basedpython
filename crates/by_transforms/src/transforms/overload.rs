@@ -504,20 +504,21 @@ mod tests {
 
     #[test]
     fn abstract_bodyless_gets_raise() {
-        check(
+        let out = transpile(
             indoc! {"
                 from abc import ABC
 
                 class A(ABC):
                     abstract def f(self) -> int
             "},
-            indoc! {"
-                from abc import ABC, abstractmethod
-
-                class A(ABC):
-                    @abstractmethod
-                    def f(self) -> int: raise NotImplementedError
-            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "    @abstractmethod\n    def f(self) -> int: raise NotImplementedError\n"
+            ),
+            "{out}"
         );
     }
 

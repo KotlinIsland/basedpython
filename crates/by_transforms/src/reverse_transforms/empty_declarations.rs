@@ -315,9 +315,9 @@ mod tests {
 
     #[test]
     fn abstract_function_keeps_body_outside_a_stub() {
-        // `@abstractmethod` reverses to the `abstract` modifier, and the `: ...` body stays
-        // with it: a bodyless `abstract def` forward-maps to `: raise NotImplementedError`,
-        // so stripping it would not round-trip even where a declaration is allowed
+        // outside a stub `@abstractmethod` stays python's decorator, and its `: ...` body stays
+        // with it: the body is what runs, and a bodyless `abstract def` would forward-map to
+        // `: raise NotImplementedError`
         check(
             indoc! {"
                 from abc import abstractmethod
@@ -328,7 +328,8 @@ mod tests {
             indoc! {"
                 from abc import abstractmethod
                 class A:
-                    abstract def f(self) -> None: ...
+                    @abstractmethod
+                    def f(self) -> None: ...
             "},
         );
     }

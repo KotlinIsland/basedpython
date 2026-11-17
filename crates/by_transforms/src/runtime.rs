@@ -68,6 +68,7 @@ macro_rules! helpers {
 
 helpers! {
     SEALED_MEMBER = "_by_sealed_member",
+    ABSTRACT = "_by_abstract",
     TYPED_DICT = "_ByTypedDict",
     SOUNDNESS_CHECK = "_soundness_check",
     SOUNDNESS_ITER = "_soundness_iter",
@@ -1280,6 +1281,12 @@ pub(crate) fn pasted_definitions(suite: &[Stmt], source: &str) -> Vec<TextRange>
         }
     }
     pasted
+}
+
+/// the helper an `abstract def` in a class body is wrapped in, which the native build applies
+/// where the transpiler wrote it
+pub fn abstract_member_wrapper() -> &'static str {
+    ABSTRACT.name()
 }
 
 /// the name `local` is a helper's under: its own, or the name of a helper in

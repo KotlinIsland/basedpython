@@ -2123,7 +2123,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut tuple_type = reverse_transforms::tuple_type::TupleTypeReverse::new(src, &model);
     let mut unpack = reverse_transforms::unpack::UnpackReverse::new(src, &model);
     let mut overload = reverse_transforms::overload::OverloadReverse::new(src);
-    let mut modifiers_rev = reverse_transforms::modifiers::ModifiersReverse::new(src);
+    let mut modifiers_rev =
+        reverse_transforms::modifiers::ModifiersReverse::new(src, config.is_stub);
     let mut enums_rev = reverse_transforms::enums::EnumsReverse::new();
     let mut extension_rev =
         reverse_transforms::extension::ExtensionReverse::new(src, module.suite());

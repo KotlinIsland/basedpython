@@ -27,6 +27,8 @@ class Sealed:
     def kept(self) -> int:
         return 0
 
+    # outside a stub, `abstract def` reads through to a later implementation, which
+    # `@abstractmethod` doesn't, so it stays
     @abstractmethod
     def missing(self) -> int: ...
 

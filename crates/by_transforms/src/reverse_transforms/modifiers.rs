@@ -1,5 +1,5 @@
 //! reverse of `crate::transforms::modifiers`:
-//!   `@abstractmethod\ndef f(self):` → `abstract def f(self):`
+//!   `@abstractmethod\ndef f(self):` → `abstract def f(self):`, in a stub
 //!   `@final\nclass A:` → `final class A:`
 //!   `@dataclass(slots=True)\nclass A:` → `data class A:`
 //!   etc.
@@ -15,13 +15,15 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 pub(crate) struct ModifiersReverse<'src> {
     source: &'src str,
+    is_stub: bool,
     pub(crate) edits: Vec<Fix>,
 }
 
 impl<'src> ModifiersReverse<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
+    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
         Self {
             source,
+            is_stub,
             edits: Vec::new(),
         }
     }
@@ -76,6 +78,12 @@ impl<'src> ModifiersReverse<'src> {
         else {
             return;
         };
+        // a `.by` module's `abstract def` reads through to an implementation later in the mro,
+        // which python's `@abstractmethod` doesn't, so outside a stub it is only the keyword
+        // when the runtime's helper says so, which `runtime_helpers` reverses
+        if modifier == "abstract" && !self.is_stub {
+            return;
+        }
         let header_keyword = if func.is_async { "async " } else { "def " };
         let Some(next_start) = self.next_header_start(&func.decorator_list, idx, header_keyword)
         else {
@@ -177,13 +185,30 @@ mod tests {
         );
     }
 
+    fn check_stub(input: &str, expected: &str) {
+        let config = Config {
+            is_stub: true,
+            ..Config::test_default()
+        };
+        assert_eq!(reverse_transpile(input, &config).unwrap(), expected);
+    }
+
+    /// outside a stub `abstract def` reads through to an implementation later in the mro, which
+    /// `@abstractmethod` doesn't, so the decorator stays python's
     #[test]
     fn abstract_method() {
-        // non-stub: the modifier reverses but the `: ...` body is kept, since a
-        // bodyless `abstract def` forward-maps to `: raise NotImplementedError`
         check(
             "class A:\n    @abstractmethod\n    def f(self): ...\n",
-            "class A:\n    abstract def f(self): ...\n",
+            "class A:\n    @abstractmethod\n    def f(self): ...\n",
+        );
+    }
+
+    /// in a stub the keyword is python's `@abstractmethod`
+    #[test]
+    fn abstract_method_in_a_stub() {
+        check_stub(
+            "class A:\n    @abstractmethod\n    def f(self): ...\n",
+            "class A:\n    abstract def f(self)\n",
         );
     }
 
@@ -246,7 +271,7 @@ mod tests {
         // All bodies are `: ...` so the overload reverse strips `@overload`
         // and the colon body; modifier reverse still rewrites
         // `@abstractmethod` even though it isn't the first decorator.
-        check(
+        check_stub(
             "from typing import overload\nclass A:\n    @overload\n    @abstractmethod\n    def f(self, x: int) -> int: ...\n    @overload\n    @abstractmethod\n    def f(self, x: str) -> str: ...\n",
             "from typing import overload\nclass A:\n    abstract def f(self, x: int) -> int\n    abstract def f(self, x: str) -> str\n",
         );
@@ -256,7 +281,7 @@ mod tests {
     fn stacked_overload_abstract_with_docstring() {
         // Docstring-bearing stub keeps `@overload` removed and its body intact;
         // `@abstractmethod` still reverses to `abstract`.
-        check(
+        check_stub(
             "from typing import overload\nclass A:\n    @overload\n    @abstractmethod\n    def f(self, x: int) -> int:\n        \"\"\"doc\"\"\"\n    @overload\n    @abstractmethod\n    def f(self, x: str) -> str: ...\n",
             "from typing import overload\nclass A:\n    abstract def f(self, x: int) -> int:\n        \"\"\"doc\"\"\"\n    abstract def f(self, x: str) -> str\n",
         );

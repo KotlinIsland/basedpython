@@ -9506,8 +9506,12 @@ fn a_method_modifier_is_not_looked_up_as_a_name() {
     // 'override' is not defined`, taking every function in the module with it.
     //
     // `static` is the sharper case and is not here: it declines, because a method's
-    // slot zero is forced to the receiver and `staticmethod` says it is not one
-    agree(
+    // slot zero is forced to the receiver and `staticmethod` says it is not one.
+    //
+    // the method itself declines: an `abstract def` is wrapped so it reads through to an
+    // implementation later in the mro, and the class holds the wrapper the interpreted
+    // definition made
+    agree_with_declines(
         "methodmodifier",
         "\
 class Box:
@@ -9524,6 +9528,68 @@ def probe() -> int:
             // marker the interpreted twin carries — not a name nobody bound
             "getattr(m.Box.area, '__isabstractmethod__', None)",
         ],
+    );
+}
+
+#[test]
+fn an_abstract_method_reads_through_to_an_implementation_mixed_in_after_its_class() {
+    // the class holds a wrapper that finds the implementation, and the emitted type holds the
+    // same one, so the method declines: a call licensed straight to a compiled body would never
+    // reach `Impl.area`
+    agree_with_declines(
+        "abstractforward",
+        "\
+class Shape:
+    abstract def area(self) -> int:
+        return 7
+
+    abstract static def sides() -> int:
+        return 0
+
+class Impl:
+    def area(self) -> int:
+        return 9
+
+    @staticmethod
+    def sides() -> int:
+        return 4
+
+class Square(Shape, Impl):
+    pass
+
+def probe() -> int:
+    return Shape().area() * 10 + Square().area() + Square.sides() * 100
+",
+        &[
+            "m.probe()",
+            "m.Square().area()",
+            "m.Shape().area()",
+            "(m.Shape.sides(), m.Square.sides(), m.Square().sides())",
+            "getattr(m.Shape.area, '__isabstractmethod__', None)",
+        ],
+    );
+}
+
+#[test]
+fn an_abstract_property_reads_through_to_an_implementation_mixed_in_after_its_class() {
+    agree_with_declines(
+        "abstractpropertyforward",
+        "\
+class Shape:
+    abstract let area: int
+
+class Impl:
+    @property
+    def area(self) -> int:
+        return 9
+
+class Square(Shape, Impl):
+    pass
+
+def probe() -> int:
+    return Square().area
+",
+        &["m.probe()", "m.Square().area"],
     );
 }
 

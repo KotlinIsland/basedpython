@@ -173,7 +173,7 @@ pub(crate) struct FunctionSpans {
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Hash)]
-    pub struct FunctionDecorators: u16 {
+    pub struct FunctionDecorators: u32 {
         /// `@classmethod`
         const CLASSMETHOD = 1 << 0;
         /// `@typing.no_type_check`
@@ -221,6 +221,11 @@ bitflags! {
         /// protected member is reachable from the declaring class's body and from
         /// a subclass's, and from nowhere else
         const PROTECTED = 1 << 15;
+        /// basedpython: the method is made abstract with the `abstract` keyword in a `.by`
+        /// module, rather than with `@abstractmethod`. it reads through to an implementation
+        /// later in the MRO of the class it is looked up on, so a class mixed in after the
+        /// declaring one can implement it
+        const ABSTRACT_FORWARDING = 1 << 16;
     }
 }
 
@@ -2294,7 +2299,13 @@ impl<'db> FunctionLiteral<'db> {
         enclosing_class: ClassType<'db>,
     ) -> Option<AbstractMethodKind> {
         if self.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD) {
-            return Some(AbstractMethodKind::Explicit);
+            return Some(
+                if self.has_known_decorator(db, FunctionDecorators::ABSTRACT_FORWARDING) {
+                    AbstractMethodKind::Forwarding
+                } else {
+                    AbstractMethodKind::Explicit
+                },
+            );
         }
         if self.definition(db).file(db).is_stub(db) {
             return None;
@@ -2514,6 +2525,21 @@ pub(crate) enum ReturnTypeSource<'db> {
 pub(super) enum AbstractMethodKind {
     /// The method is explicitly marked as abstract using `@abstractmethod`.
     Explicit,
+    /// basedpython: the method is marked as abstract with the `abstract` keyword in a `.by`
+    /// module. a definition later in the MRO than the declaring class implements it, unless
+    /// the declaring class inherits that definition: there the keyword declares it abstract
+    /// again
+    ///
+    /// ```by
+    /// abstract class D:
+    ///     abstract def greet(self) -> str
+    ///
+    /// class Impl:
+    ///     def greet(self) -> str: ...
+    ///
+    /// class E(D, Impl)  # not abstract: `Impl.greet` implements `D.greet`
+    /// ```
+    Forwarding,
     /// The method is implicitly abstract due to being in a `Protocol` class without an
     /// implementation.
     ImplicitDueToStubBody,
@@ -2524,7 +2550,14 @@ pub(super) enum AbstractMethodKind {
 
 impl AbstractMethodKind {
     pub(super) const fn is_explicit(self) -> bool {
-        matches!(self, AbstractMethodKind::Explicit)
+        matches!(
+            self,
+            AbstractMethodKind::Explicit | AbstractMethodKind::Forwarding
+        )
+    }
+
+    pub(super) const fn forwards(self) -> bool {
+        matches!(self, AbstractMethodKind::Forwarding)
     }
 
     pub(super) const fn is_implicit_due_to_stub_body(self) -> bool {

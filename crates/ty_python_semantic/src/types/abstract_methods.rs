@@ -260,9 +260,11 @@ impl<'db> ClassType<'db> {
         let mut abstract_methods: FxIndexMap<Name, _> = FxIndexMap::default();
         let env = &ProgramEnvironment::from_file(self.class_literal(db).program_file(db));
 
+        let mro: Vec<ClassBase<'db>> = self.iter_mro(db).collect();
+
         // Iterate through the MRO in reverse order,
         // skipping `object` (we know it doesn't define any abstract methods)
-        for supercls in self.iter_mro(db).rev().skip(1) {
+        for (position, supercls) in mro.iter().copied().enumerate().rev().skip(1) {
             let ClassBase::Class(class) = supercls else {
                 continue;
             };
@@ -323,6 +325,21 @@ impl<'db> ClassType<'db> {
                     continue;
                 };
                 if let Some(kind) = type_as_abstract_method(db, ty, class) {
+                    if kind.forwards()
+                        && forwarded_implementation(
+                            db,
+                            env,
+                            class,
+                            mro[position + 1..]
+                                .iter()
+                                .filter_map(|base| base.into_class()),
+                            name,
+                        )
+                        .is_some()
+                    {
+                        abstract_methods.shift_remove(name);
+                        continue;
+                    }
                     let abstract_method = AbstractMethod {
                         defining_class: class,
                         definition,
@@ -343,6 +360,56 @@ impl<'db> ClassType<'db> {
         abstract_methods.shrink_to_fit();
 
         abstract_methods
+    }
+}
+
+/// the class in `later`, the part of an MRO after `declaring_class`, whose definition of `name`
+/// implements the abstract method `declaring_class` makes abstract with basedpython's `abstract`
+/// keyword: the first definition there that isn't abstract itself, passing over the classes
+/// `declaring_class` inherits from. what one of those defines, the keyword declares abstract
+/// again. this is the definition the lowering's `_by_abstract` reads through to, and a member a
+/// class synthesizes, like a data class's `__repr__`, is in its namespace like any other
+pub(super) fn forwarded_implementation<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    declaring_class: ClassType<'db>,
+    later: impl IntoIterator<Item = ClassType<'db>>,
+    name: &Name,
+) -> Option<ClassType<'db>> {
+    later
+        .into_iter()
+        .filter(|class| !declaring_class.is_subclass_of(db, env, *class))
+        .find(|class| {
+            class.static_class_literal(db).is_some_and(|(literal, _)| {
+                literal
+                    .own_synthesized_member(db, env, None, None, name)
+                    .is_some()
+            }) || own_bound_member(db, env, *class, name)
+                .is_some_and(|ty| type_as_abstract_method(db, ty, *class).is_none())
+        })
+}
+
+/// what `class`'s body binds `name` to, which is what its namespace holds: a name the body only
+/// declares, `size: int`, is in no namespace, and the runtime has nothing there to read through
+/// to. a dynamic class has no body, so it is asked for the member itself
+fn own_bound_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &Name,
+) -> Option<Type<'db>> {
+    let Some((literal, _)) = class.static_class_literal(db) else {
+        return match class.own_class_member(db, env, None, name).inner.place {
+            Place::Defined(DefinedPlace { ty, .. }) => Some(ty),
+            Place::Undefined => None,
+        };
+    };
+    let scope = literal.body_scope(db);
+    let symbol = place_table(db, scope).symbol_id(name)?;
+    let bindings = use_def_map(db, scope).end_of_scope_symbol_bindings(symbol);
+    match place_from_bindings(db, env, bindings).place {
+        Place::Defined(DefinedPlace { ty, .. }) => Some(ty),
+        Place::Undefined => None,
     }
 }
 

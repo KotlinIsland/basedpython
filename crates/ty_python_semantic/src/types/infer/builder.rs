@@ -13149,7 +13149,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let Some(function) = bound_method.function(self.db())
                     && let Some(class) = bound_method.self_instance(self.db()).to_class_type(db)
                     && bound_method.class_method(self.db())
-                    && function.as_abstract_method(self.db(), class).is_some()
+                    && is_unimplemented_abstract_method(self.db(), function, class)
                     && function.has_trivial_body(self.db())
                 {
                     report_call_to_abstract_method(
@@ -13164,7 +13164,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let ast::Expr::Attribute(ast::ExprAttribute { value, .. }) = func.as_ref() {
                     let value_type = self.expression_type(value);
                     if let Some(class) = value_type.to_class_type(db) {
-                        if function.as_abstract_method(self.db(), class).is_some()
+                        if is_unimplemented_abstract_method(self.db(), function, class)
                             && function.has_trivial_body(self.db())
                         {
                             report_call_to_abstract_method(
@@ -19494,4 +19494,17 @@ fn for_each_subject_level_case_name<'ast>(
         }
         _ => {}
     }
+}
+
+/// whether `function`, looked up on `class`, is an abstract method `class` leaves unimplemented.
+/// one made abstract with basedpython's `abstract` keyword reads through to an implementation
+/// later in `class`'s MRO, so that is what a call on `class` runs when there is one
+fn is_unimplemented_abstract_method<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+    class: ClassType<'db>,
+) -> bool {
+    function.as_abstract_method(db, class).is_some_and(|kind| {
+        !kind.forwards() || class.abstract_methods(db).contains_key(function.name(db))
+    })
 }

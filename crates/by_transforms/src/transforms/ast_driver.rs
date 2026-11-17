@@ -1533,6 +1533,7 @@ pub(crate) fn run_against_source<'a>(
         written,
         accessor_value_ranges,
         config.min_version,
+        config.is_stub,
     );
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
