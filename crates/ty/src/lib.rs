@@ -180,6 +180,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             python_version,
             git_merge,
             no_git_merge,
+            no_sync,
         } => {
             let kind = if lib {
                 by_init::ProjectKind::Library
@@ -193,7 +194,19 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 (_, true) => by_init::GitMerge::Skip,
                 _ => by_init::GitMerge::Ask,
             };
-            by_init::cmd_init(path.as_deref(), name.as_deref(), kind, &version, git_merge)
+            let sync = if no_sync {
+                by_init::Sync::Skip
+            } else {
+                by_init::Sync::Create
+            };
+            by_init::cmd_init(
+                path.as_deref(),
+                name.as_deref(),
+                kind,
+                &version,
+                git_merge,
+                sync,
+            )
         }
         Command::Restage {
             build_directory,

@@ -329,6 +329,7 @@ by init [OPTIONS] [PATH]
 </dd><dt id="by-init--lib"><a href="#by-init--lib"><code>--lib</code></a></dt><dd><p>Create a library: no entry point, the same packaging</p>
 </dd><dt id="by-init--name"><a href="#by-init--name"><code>--name</code></a> <i>name</i></dt><dd><p>The project's name [default: the directory's name]</p>
 </dd><dt id="by-init--no-git-merge"><a href="#by-init--no-git-merge"><code>--no-git-merge</code></a></dt><dd><p>Leave git's merges of the project as they are</p>
+</dd><dt id="by-init--no-sync"><a href="#by-init--no-sync"><code>--no-sync</code></a></dt><dd><p>Don't create the new project's environment. Without this, <code>by init</code> runs <code>uv sync</code> in the new project, which creates its <code>.venv</code> on the python the project targets</p>
 </dd><dt id="by-init--python-version"><a href="#by-init--python-version"><code>--python-version</code></a> <i>version</i></dt><dd><p>The python version to target [default: the version of the project environment's interpreter]</p>
 </dd></dl>
 

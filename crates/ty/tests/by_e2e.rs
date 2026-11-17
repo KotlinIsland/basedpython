@@ -9820,8 +9820,8 @@ fn the_merge_driver_leaves_an_api_lock_both_sides_changed_conflicted() {
 /// what `by init` writes has to be a project the rest of the toolchain accepts,
 /// or it is a template for a thing that does not work
 ///
-/// the new project has no environment of its own, so `by run` runs it on the
-/// python `PYTHON` names. the test names that interpreter itself, and targets
+/// the new project is started without an environment of its own, so `by run` runs it on
+/// the python `PYTHON` names. the test names that interpreter itself, and targets
 /// the project at its version, rather than leaving an activated environment or
 /// whichever `python3` comes first on `PATH` to decide either
 #[test]
@@ -9835,6 +9835,7 @@ fn init_writes_a_project_that_builds_and_runs() {
         .args([
             "init",
             "demo",
+            "--no-sync",
             "--python-version",
             &format!("{major}.{minor}"),
         ])
@@ -9867,6 +9868,171 @@ fn init_writes_a_project_that_builds_and_runs() {
         String::from_utf8_lossy(&output.stdout).trim(),
         "hello from basedpython"
     );
+}
+
+/// a directory holding only an executable `uv` that runs `script` in the directory it is run
+/// in, and a `PATH` that finds it first
+#[cfg(unix)]
+fn fake_uv(script: &str) -> (tempfile::TempDir, std::ffi::OsString) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = tempfile::tempdir().expect("tempdir");
+    let uv = bin.path().join("uv");
+    fs::write(&uv, format!("#!/bin/sh\n{script}\n")).unwrap();
+    fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    (bin, path)
+}
+
+/// `by init` with `uv` found on `path`, in `dir`, outside any environment
+#[cfg(unix)]
+fn init_with_path(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("VIRTUAL_ENV")
+        .env("PATH", path)
+        .arg("init")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by")
+}
+
+/// a new project gets its environment from `uv sync`, run in the project once it is written,
+/// and only adding to what is there
+#[cfg(unix)]
+#[test]
+fn init_creates_the_environment_with_uv_sync() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_bin, path) = fake_uv("test -f pyproject.toml && printf '%s\\n' \"$*\" > ran-uv");
+
+    let output = init_with_path(
+        dir.path(),
+        &path,
+        &["demo", "--no-git-merge", "--python-version", "3.12"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("demo/ran-uv")).unwrap(),
+        "sync --inexact\n"
+    );
+}
+
+/// `--no-sync` starts a project without running `uv` at all
+#[cfg(unix)]
+#[test]
+fn init_no_sync_leaves_uv_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (bin, path) = fake_uv("touch \"$(dirname \"$0\")/ran-uv\"; exit 1");
+
+    let output = init_with_path(
+        dir.path(),
+        &path,
+        &[
+            "demo",
+            "--no-git-merge",
+            "--no-sync",
+            "--python-version",
+            "3.12",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(dir.path().join("demo/pyproject.toml").exists());
+    assert!(!bin.path().join("ran-uv").exists(), "uv was run");
+}
+
+/// a `.venv` already in the directory is somebody's environment: the sync would replace or
+/// prune it, so it is left as it is
+#[cfg(unix)]
+#[test]
+fn init_leaves_an_existing_venv_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(dir.path().join(".venv")).unwrap();
+    fs::write(dir.path().join(".venv/mine"), "").unwrap();
+    let (bin, path) = fake_uv("touch \"$(dirname \"$0\")/ran-uv\"; exit 1");
+
+    let output = init_with_path(
+        dir.path(),
+        &path,
+        &["--no-git-merge", "--python-version", "3.12"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("left as it is"), "{stderr}");
+    assert!(!bin.path().join("ran-uv").exists(), "uv was run");
+    assert!(dir.path().join(".venv/mine").exists());
+}
+
+/// a sync that fails leaves the project written and git's merges set up as asked, and says
+/// how to finish
+#[cfg(unix)]
+#[test]
+fn init_reports_a_failing_sync_after_setting_up_git_merges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = git_in(dir.path(), &["init", "-q", "-b", "main"]);
+    assert!(output.status.success(), "{output:?}");
+    let (_bin, path) = fake_uv("exit 1");
+
+    let output = init_with_path(
+        dir.path(),
+        &path,
+        &["--git-merge", "--python-version", "3.12"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("run `uv sync`"), "{stderr}");
+    assert!(dir.path().join("pyproject.toml").exists());
+    assert!(
+        fs::read_to_string(dir.path().join(".gitattributes"))
+            .unwrap()
+            .contains("*.by merge=by"),
+        "{stderr}"
+    );
+}
+
+/// with no `uv` to create the environment, nothing is written, so the `--no-sync` the error
+/// suggests still works
+#[cfg(unix)]
+#[test]
+fn init_without_uv_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // a `PATH` with git, which `by init` asks about the repository, and nothing else
+    let bin = tempfile::tempdir().expect("tempdir");
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH");
+    std::os::unix::fs::symlink(git, bin.path().join("git")).unwrap();
+    // a `uv` that cannot be executed is not one
+    fs::write(bin.path().join("uv"), "").unwrap();
+
+    let output = init_with_path(
+        dir.path(),
+        bin.path().as_os_str(),
+        &["demo", "--no-git-merge", "--python-version", "3.12"],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("is not on `PATH`"), "{stderr}");
+    assert!(!dir.path().join("demo").exists());
+
+    let output = init_with_path(
+        dir.path(),
+        bin.path().as_os_str(),
+        &[
+            "demo",
+            "--no-git-merge",
+            "--no-sync",
+            "--python-version",
+            "3.12",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
 }
 
 #[test]
@@ -10187,7 +10353,7 @@ fn init_names_a_by_run_by_a_relative_path_absolutely() {
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args(["init", "proj", "--git-merge"])
+        .args(["init", "proj", "--git-merge", "--no-sync"])
         .current_dir(dir.path())
         .output()
         .expect("failed to spawn by");

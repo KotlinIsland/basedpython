@@ -8,6 +8,10 @@
 //! that the answer to "how do I ship this" is settled at the point the project is
 //! created rather than discovered afterwards.
 //!
+//! A new project also gets its environment, by `uv sync`: the `.venv` `by run` and
+//! `by check` find, on the python the project targets, with the project installed
+//! into it.
+//!
 //! It also sets up git's merges of the project, for a new project or one that is
 //! already there: `by merge-driver` as the driver git runs for its python and
 //! basedpython files and its `api.lock`. See [`ty_project::git_merge`].
@@ -15,6 +19,7 @@
 use std::fs;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
 use ruff_db::system::{OsSystem, SystemPathBuf};
@@ -29,6 +34,15 @@ pub(crate) enum ProjectKind {
     Application,
     /// something to import: no entry point, but the same packaging
     Library,
+}
+
+/// Whether to create a new project's environment with `uv sync`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sync {
+    /// without `--no-sync`
+    Create,
+    /// `--no-sync`
+    Skip,
 }
 
 /// Whether to set up git's merges of the project.
@@ -48,6 +62,7 @@ pub(crate) fn cmd_init(
     kind: ProjectKind,
     python_version: &str,
     git_merge: GitMerge,
+    sync: Sync,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let root = match path {
@@ -90,6 +105,18 @@ pub(crate) fn cmd_init(
             pyproject.display()
         );
     }
+    // the `uv` that creates the environment is found before anything is written, so a project
+    // is never left half set up for want of it
+    let uv = if !exists && sync == Sync::Create {
+        Some(crate::by_wheels::which_uv().ok_or_else(|| {
+            anyhow!(
+                "`uv`, which creates a new project's environment, is not on `PATH`: install it, \
+                 or start the project without an environment with `by init --no-sync`"
+            )
+        })?)
+    } else {
+        None
+    };
     if !exists {
         scaffold(&root, name, kind, python_version)?;
     }
@@ -109,6 +136,12 @@ pub(crate) fn cmd_init(
                 after.attributes_path
             );
         }
+    }
+    if let Some(uv) = uv {
+        create_environment(&uv, &root)?;
+    }
+    if !exists {
+        report_next_steps(kind);
     }
     Ok(ExitStatus::Success)
 }
@@ -197,11 +230,61 @@ fn scaffold(
     }
 
     eprintln!("initialized `{project_name}` at {}", root.display());
+    Ok(())
+}
+
+/// creates the environment of the new project at `root` with `uv sync`, which reads the
+/// python version from the `.python-version` just written, fetching that python if it has to
+///
+/// it only ever adds: a `.venv` already in the directory is somebody's, and is left as it is,
+/// and the sync is `--inexact`, so a workspace the project joins keeps every package its
+/// environment has
+#[expect(clippy::print_stderr)]
+fn create_environment(uv: &Path, root: &Path) -> anyhow::Result<()> {
+    let venv = root.join(".venv");
+    if venv.exists() {
+        eprintln!(
+            "`{}` was already there, so it was left as it is: `uv sync` installs the project \
+             into it",
+            venv.display()
+        );
+        return Ok(());
+    }
+    // `uv sync` leaves an activated environment alone and creates `.venv`, but `by run` and
+    // `by check` put the activated one first
+    let active = std::env::var_os("VIRTUAL_ENV").filter(|active| Path::new(active) != venv);
+    let mut command = Command::new(uv);
+    command.args(["sync", "--inexact"]).current_dir(root);
+    if active.is_some() {
+        // uv only warns that it ignores it, which says nothing about `by`
+        command.env_remove("VIRTUAL_ENV");
+    }
+    let status = command
+        .status()
+        .with_context(|| format!("could not run `{}`", uv.display()))?;
+    if !status.success() {
+        bail!(
+            "the project was written, but `uv sync` could not create its environment: once \
+             what it reported is fixed, run `uv sync` in `{}`",
+            root.display()
+        );
+    }
+    if let Some(active) = active {
+        eprintln!(
+            "the activated environment `{}` comes before the project's `.venv`: deactivate it \
+             for `by run` and `by check` to use the project's",
+            Path::new(&active).display()
+        );
+    }
+    Ok(())
+}
+
+#[expect(clippy::print_stderr)]
+fn report_next_steps(kind: ProjectKind) {
     if kind == ProjectKind::Application {
         eprintln!("run it with `by run`");
     }
     eprintln!("build a wheel with `uv build`");
-    Ok(())
 }
 
 /// The entry module of a new application.
@@ -211,9 +294,6 @@ fn scaffold(
 const MAIN: &str = "\
 def main():
     print(\"hello from basedpython\")
-
-
-main()
 ";
 
 fn render_pyproject(

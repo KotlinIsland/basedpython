@@ -482,10 +482,17 @@ by init my-app                      # a new application in my-app/
 by init my-library --lib            # a new library
 by init --git-merge                 # set up git's merges of the project here
 by init my-app --no-git-merge       # a new project, and leave git as it is
+by init my-app --no-sync            # a new project, without its environment
 ```
 
 writes a new project: see [packaging](packaging.md#starting-from-scratch). it
 will not write over a `pyproject.toml` that is already there
+
+a new project gets its environment from `uv sync`, run in it once it is written: a
+`.venv` on the python the project targets, with the project installed. a `.venv`
+already in the directory is left as it is. `--no-sync` leaves the environment out;
+without `uv` on `PATH`, `by init` writes nothing and fails saying so, and a sync
+that fails leaves the project written, for `uv sync` to finish
 
 in a git work tree it also sets up git's merges of the project, with
 [`by merge-driver`](#by-merge-driver) as the merge driver for its python and

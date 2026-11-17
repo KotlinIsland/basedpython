@@ -37,6 +37,18 @@ my-library/src/my_library/__init__.by
 leave off `--lib` and you also get a `main.by` and a configured entry point, so
 `by run` works immediately
 
+it then runs `uv sync` in the new project, which creates its `.venv` on the python
+`.python-version` names, fetching that python if it isn't installed, and installs the
+project into it, so the first `by init` needs the network. that `.venv` is the
+environment `by run` and `by check` use, unless an activated one comes first (see
+[running on the right python](#running-on-the-right-python)). the sync only adds:
+a `.venv` that is already in the directory is left as it is, and in a uv workspace
+nothing the workspace's environment holds is removed
+
+`--no-sync` leaves the environment out. without `uv` on `PATH`, `by init` writes
+nothing and says so. a sync that fails leaves the project written, and `uv sync`
+finishes it once what uv reported is fixed
+
 in a git repository, `by init` also asks whether to set up git's merges of the
 project with [`by merge-driver`](cli-reference.md#by-merge-driver); `--git-merge`
 and `--no-git-merge` answer for a script. `by init --git-merge` in a project that

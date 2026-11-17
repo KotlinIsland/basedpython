@@ -17,6 +17,8 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -343,13 +345,25 @@ fn find_uv(cwd: &Path) -> anyhow::Result<PathBuf> {
     )
 }
 
-fn which_uv() -> Option<PathBuf> {
+/// the `uv` a shell would run: the first on `PATH` that is a file it may execute
+pub(crate) fn which_uv() -> Option<PathBuf> {
     let name = if cfg!(windows) { "uv.exe" } else { "uv" };
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|directory| directory.join(name))
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| is_executable(candidate))
     })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[allow(clippy::print_stderr)]

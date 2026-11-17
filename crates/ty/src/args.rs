@@ -224,6 +224,11 @@ pub(crate) enum Command {
         /// Leave git's merges of the project as they are.
         #[arg(long)]
         no_git_merge: bool,
+        /// Don't create the new project's environment. Without this, `by init`
+        /// runs `uv sync` in the new project, which creates its `.venv` on the
+        /// python the project targets.
+        #[arg(long)]
+        no_sync: bool,
     },
 
     /// Build the project as python.
