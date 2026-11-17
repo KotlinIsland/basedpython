@@ -272,7 +272,12 @@ impl<'db> StaticClassLiteral<'db> {
     pub(super) fn has_nonempty_slots(self, db: &'db dyn Db) -> bool {
         (self.has_explicit_slots(db) || self.has_generated_slots(db))
             && match self.slot_definition(db) {
-                SlotDefinition::Names(names) => !names.is_empty(),
+                // `__weakref__` and `__dict__` slots add nothing to the instance layout that
+                // another class's can conflict with: `class C(A, B)` works when each of `A` and
+                // `B` declares only those
+                SlotDefinition::Names(names) => names
+                    .iter()
+                    .any(|name| !matches!(name.as_str(), "__weakref__" | "__dict__")),
                 SlotDefinition::NonEmpty => true,
                 SlotDefinition::DynamicOrNone => false,
             }

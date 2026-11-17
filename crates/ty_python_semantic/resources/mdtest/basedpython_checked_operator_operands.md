@@ -247,6 +247,9 @@ a `return NotImplemented` hands back only what the operand can be where it is re
 operation moves on only for those
 
 ```py
+from typing import final
+
+@final
 class Money:
     def __add__(self, other: "Money | int") -> "Money":
         if isinstance(other, int):
@@ -260,6 +263,24 @@ class Money:
 reveal_type(Money() + Money())  # revealed: Money
 # error: [unsupported-operator]
 Money() + 1
+```
+
+an operand of a class that isn't final may also be an `int`, through a class that inherits from
+both, so it may be handed back too
+
+```py
+class OpenMoney:
+    def __add__(self, other: "OpenMoney | int") -> "OpenMoney":
+        if isinstance(other, int):
+            if other == 0:
+                return self
+            return NotImplemented
+        if not isinstance(other, OpenMoney):
+            return NotImplemented
+        return OpenMoney()
+
+# error: [unsupported-operator]
+OpenMoney() + OpenMoney()
 ```
 
 an operand with no annotation takes every operand, and a `NotImplemented` its body returns hands

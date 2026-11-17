@@ -28,6 +28,223 @@ class B:
 reveal_type(A() + B())  # revealed: str
 ```
 
+## An operand that may share a subclass with the domain may reach the method
+
+a `Coupon` isn't a `Money`, but a class may be both, so a `Coupon` operand may be inside
+`Wallet.__add__`'s domain. python then runs `Wallet.__add__`, and the operation may be either
+dunder's answer
+
+```by
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        return 1
+
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+class MoneyCoupon(Coupon, Money): ...
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w + c)  # revealed: int | str
+```
+
+## An operand of an exact class is outside the domain
+
+an operand whose class is exact can't be both, and neither can one of a final class: those are
+outside the domain
+
+```by
+from typing import final
+
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        return 1
+
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+@final
+class FinalCoupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(w: Wallet, c: final Coupon, d: FinalCoupon):
+    reveal_type(w + c)  # revealed: str
+    reveal_type(w + Coupon())  # revealed: str
+    reveal_type(w + d)  # revealed: str
+```
+
+## Two disjoint bases don't share a subclass
+
+two classes that are each a disjoint base (PEP 800) are never both, since no class may inherit from
+both
+
+```by
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        return 1
+
+@disjoint_base
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w + c)  # revealed: str
+```
+
+## An operand that may be outside the domain needs something to fall back to
+
+with nothing to fall back to, an operand that may be outside the domain is a `TypeError`
+
+```by
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        return 1
+
+class Plain: ...
+
+def f(w: Wallet, p: Plain):
+    w + p  # error: [unsupported-operator]
+```
+
+## An in-place dunder runs with the part of the operand inside its domain
+
+an in-place dunder runs with the part of the operand inside its domain, and python falls back to the
+binary dunder with the rest
+
+```by
+class Money: ...
+
+class Wallet:
+    def __iadd__(self, other: Money) -> bytes:
+        return b""
+
+    def __add__(self, other: object) -> int:
+        return 1
+
+class Coupon: ...
+
+def f(w: Wallet, c: Coupon):
+    x = w
+    x += c
+    reveal_type(x)  # revealed: bytes | int
+```
+
+## A comparison may reach the method through a shared subclass
+
+```by
+class Money: ...
+
+class Wallet:
+    def __lt__(self, other: Money) -> int:
+        return 1
+
+class Coupon:
+    def __gt__(self, other: object) -> str:
+        return "s"
+
+class MoneyCoupon(Coupon, Money): ...
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w < c)  # revealed: int | str
+```
+
+## A `final` type variable operand may be a subclass
+
+a `final T` is exactly whatever `T` is, which may be a subclass of its bound. when it is the same
+class as the other operand, python asks only the left operand's dunder
+
+```by
+class Base:
+    def __add__(self, other: object) -> int:
+        return 1
+
+class Child(Base):
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f[T: Base](x: final T, c: Child):
+    reveal_type(x + c)  # revealed: str | int
+```
+
+## A generic domain runs with a shared subclass it doesn't accept
+
+a class may inherit from both `Coupon` and `Box[str]`, and `WalletG.__add__` can't tell a `Box[str]`
+from a `Box[int]`, so it would run with it
+
+```by
+class Box[T]: ...
+
+class WalletG:
+    def __add__(self, other: Box[int]) -> int:
+        return 1
+
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(w: WalletG, c: Coupon):
+    w + c  # error: [unsupported-operator]
+```
+
+## A `.py` dunder reads a shared subclass only where its operands are checked
+
+without `checked-operator-operands`, a `.py` dunder is read as ty reads it: an operand that isn't
+assignable to the domain is outside it
+
+```py
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        return 1
+
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w + c)  # revealed: str
+```
+
+## A `.py` dunder whose operands are checked reads a shared subclass
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int:
+        if not isinstance(other, Money):
+            return NotImplemented
+        return 1
+
+class Coupon:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w + c)  # revealed: int | str
+```
+
 ## An in-place dunder that rejects falls back to the binary dunder
 
 `__iadd__` rejects a `str`, so python calls `__add__`, and the target is rebound to its result

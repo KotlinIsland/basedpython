@@ -49,6 +49,29 @@ class C(  # error: [instance-layout-conflict]
 ): ...
 ```
 
+## `__weakref__` and `__dict__` slots
+
+a `__weakref__` or `__dict__` slot adds nothing to the instance layout, so two classes that declare
+only those can be combined
+
+```py
+class A:
+    __slots__ = ("__weakref__",)
+
+class B:
+    __slots__ = ("__weakref__",)
+
+class C:
+    __slots__ = ("__dict__",)
+
+class D:
+    __slots__ = ("__dict__", "x")
+
+class AB(A, B): ...  # no diagnostic
+class AC(A, C): ...  # no diagnostic
+class AD(A, D): ...  # no diagnostic
+```
+
 ## `__slots__` is a string
 
 ```py

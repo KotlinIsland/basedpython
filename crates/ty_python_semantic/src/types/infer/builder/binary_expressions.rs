@@ -1,6 +1,7 @@
 use crate::Db;
 use crate::ProgramEnvironment;
 use compact_str::CompactString;
+use ruff_python_ast::helpers::TypeModifier;
 use ruff_python_ast::{self as ast, AnyNodeRef};
 
 use super::TypeInferenceBuilder;
@@ -64,6 +65,29 @@ pub(crate) struct BinaryInferenceState<'db> {
     emitted_division_by_zero_diagnostic: bool,
     pub(super) deprecated_functions: Vec<OverloadLiteral<'db>>,
     used_tuple_addition: bool,
+    /// basedpython: the `final` operands the inference took the modifier off, left and right
+    exact_operands: ExactOperands<'db>,
+}
+
+/// basedpython: a `final A` operand is inferred as an `A`, so that every special case of `A`
+/// applies to it, but the dunder call still sees it as `final A`: its class being exactly `A`
+/// decides which dunder python asks first, and which domains the operand can't be inside
+#[derive(Default, Clone, Copy)]
+struct ExactOperands<'db> {
+    left: Option<Type<'db>>,
+    right: Option<Type<'db>>,
+}
+
+impl<'db> ExactOperands<'db> {
+    /// `operand`, or the `final` operand it was taken from
+    fn restore(db: &'db dyn Db, exact: Option<Type<'db>>, operand: Type<'db>) -> Type<'db> {
+        match exact {
+            Some(Type::Restricted(restricted)) if restricted.value_type(db) == operand => {
+                Type::Restricted(restricted)
+            }
+            _ => operand,
+        }
+    }
 }
 
 impl<'db> BinaryInferenceState<'db> {
@@ -463,12 +487,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         right_ty: Type<'db>,
         tcx: TypeContext<'db>,
     ) -> Option<Type<'db>> {
+        let db = self.db();
+        let exact = state.exact_operands;
         let result = Type::try_call_bin_op_result_with_tcx(
-            self.db(),
+            db,
             self.program_environment(),
-            left_ty,
+            ExactOperands::restore(db, exact.left, left_ty),
             op,
-            right_ty,
+            ExactOperands::restore(db, exact.right, right_ty),
             tcx,
         )?;
         state
@@ -547,9 +573,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     )
                 })
             }
-            // a use-site modifier says nothing about what the value can do
+            // a use-site modifier says nothing about what the value can do, except that a
+            // `final` operand's class is exact, which only the dunder call asks about
             (Type::Restricted(restricted), _, _) => {
-                visitor.visit(db, (left_ty, op, right_ty), || {
+                let outer = state.exact_operands;
+                if restricted.modifier(db) == TypeModifier::Final {
+                    state.exact_operands.left = Some(left_ty);
+                }
+                let result = visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
                         restricted.value_type(db),
@@ -559,10 +590,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         tcx,
                         state,
                     )
-                })
+                });
+                state.exact_operands = outer;
+                result
             }
             (_, Type::Restricted(restricted), _) => {
-                visitor.visit(db, (left_ty, op, right_ty), || {
+                let outer = state.exact_operands;
+                if restricted.modifier(db) == TypeModifier::Final {
+                    state.exact_operands.right = Some(right_ty);
+                }
+                let result = visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
                         left_ty,
@@ -572,7 +609,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         tcx,
                         state,
                     )
-                })
+                });
+                state.exact_operands = outer;
+                result
             }
             (_, Type::Overlapping(overlapping), _) => {
                 visitor.visit(db, (left_ty, op, right_ty), || {

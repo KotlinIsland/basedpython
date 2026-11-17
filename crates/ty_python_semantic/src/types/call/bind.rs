@@ -1769,7 +1769,7 @@ impl<'db> Bindings<'db> {
     /// parameter's index
     ///
     /// an operator dunder takes its operand as that argument; see
-    /// [`Self::rejects_operand`]
+    /// [`Self::operand_rejection`]
     pub(crate) fn failed_operand_parameters(
         &self,
     ) -> impl Iterator<Item = (Type<'db>, Vec<(Option<usize>, usize)>)> + '_ {

@@ -51,6 +51,42 @@ this applies to binary operators, augmented assignment, and comparisons. a compa
 its operand doesn't fall back to identity either: `==` between two values whose `__eq__` takes the
 other but doesn't accept it is an error, not an `is` test
 
+## an operand that may be both
+
+a class that isn't in the domain may still share a subclass with it. python lets a class inherit
+from both, so an operand of the one may be an instance of the other, and then it reaches the method.
+the operation may be either answer
+
+```by
+class Money: ...
+
+class Wallet:
+    def __add__(self, other: Money) -> int: ...
+
+class Coupon:
+    def __radd__(self, other: object) -> str: ...
+
+class MoneyCoupon(Coupon, Money): ...
+
+def f(w: Wallet, c: Coupon):
+    reveal_type(w + c)  # int | str: a `MoneyCoupon` reaches `Wallet.__add__`
+```
+
+an operand is outside the domain, and answered by the other side alone, when nothing can be both:
+
+- its class is exact: `c: final Coupon`, or, in a `.by` file, a value made by `Coupon()`. the
+    `final T` of a type variable isn't exact, since `T` may be any subclass of its bound
+- its class is `@final`, or is a literal
+- the two classes are each a `@disjoint_base` (PEP 800), so no class may inherit from both
+- their instances are laid out differently, as `int`'s and `float`'s are
+
+with nothing to fall back to, an operand that may be outside the domain is `unsupported-operator`,
+since python raises a `TypeError` for it
+
+in a `.py` file this applies to a dunder whose operands are checked
+(`analysis.checked-operator-operands`, on under the `strict` preset). elsewhere a `.py` dunder is
+read as ty reads it: an operand that isn't assignable to the domain is outside it
+
 ## why `list` is the motivating case
 
 a checker that treats every mismatch as a rejection picks `list.__add__` for `xs += ["a"]`, and types
@@ -182,6 +218,9 @@ value](#rejecting-by-value), without writing `NotImplementedType` in the return 
 operands it can be reached with move on
 
 ```python
+from typing import final
+
+@final
 class Money:
     def __add__(self, other: "Money | int") -> "Money":
         if isinstance(other, int):
@@ -195,6 +234,10 @@ class Money:
 Money() + Money()  # Money: only an `int` is handed back
 Money() + 1  # error: [unsupported-operator]: `int.__radd__` doesn't take a `Money`
 ```
+
+without `@final`, a `Money` operand [may also be an `int`](#an-operand-that-may-be-both), through a
+class that inherits from both, so `Money() + Money()` may be handed back too, and is
+`unsupported-operator`
 
 an operand annotated `object`, or not annotated at all, claims nothing about what it takes, and
 nothing it returns is reported. a `NotImplemented` it returns still hands back whatever reaches it.

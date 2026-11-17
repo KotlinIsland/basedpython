@@ -288,7 +288,8 @@ pub struct AnalysisSettings {
     /// `NotImplemented`. With this enabled the body sees an operand outside the domain too, has
     /// to have tested the operand into the domain wherever it returns a value or raises, and a
     /// `NotImplemented` it returns for an operand inside the domain makes the operation move on
-    /// with that operand. Only a plain `def` of the dunder is taken to hand an operand back.
+    /// with that operand. An operand that may share a subclass with the domain may reach the
+    /// method. Only a plain `def` of the dunder is taken to hand an operand back.
     /// A `.by` dunder is lowered with the test whatever this says.
     pub checked_operator_operands: bool,
 

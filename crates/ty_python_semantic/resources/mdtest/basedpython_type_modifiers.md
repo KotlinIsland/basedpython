@@ -293,6 +293,32 @@ def f(a: literal str, b: final int, c: literal list[*]) -> None:
     e: int = b
 ```
 
+## an operator on a `final` value keeps its special cases
+
+```by
+def f(t: final tuple[int, str], i: final int):
+    reveal_type(t + t)  # revealed: (int, str, int, str)
+    reveal_type(t * 2)  # revealed: (int, str, int, str)
+    i / 0  # error: [division-by-zero]
+
+def g[I: int](x: final I) -> I + 1:
+    return x + 1  # no diagnostic
+```
+
+## `final` of a type variable is exactly whatever the variable is
+
+`T` may be any subclass of its bound, so a `final T` may be one too
+
+```by
+class A: ...
+
+class B(A): ...
+
+def f[T: A](t: final T):
+    if isinstance(t, B):
+        reveal_type(t)  # revealed: final T & B
+```
+
 ## modifiers in a type parameter's bound, constraints and default
 
 A bound is a type expression like any other, and so is each element of a tuple bound and each member

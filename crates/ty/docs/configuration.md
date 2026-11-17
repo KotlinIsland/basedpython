@@ -234,11 +234,14 @@ With this enabled, `other` is also typed as whatever falls outside `Money` until
 tests it, a body that returns a value or raises for an operand it never tested is
 reported as [`unguarded-operand`](rules.md#unguarded-operand), and a `return
 NotImplemented` reached with an operand inside the domain means the operation can move on
-with that operand too.
+with that operand too. An operand of a class that may share a subclass with `Money` may be
+inside the domain, so the operation may be this method's answer as well as the other
+operand's.
 
 When set to `false`, the body sees the annotation, as if python only ever passed it what
 it says, and dispatch takes every `.py` dunder at its word that it hands back an operand
-outside the domain. A `.by` dunder is lowered with the test, and is unaffected.
+that isn't assignable to the domain. A `.by` dunder is lowered with the test, and is
+unaffected.
 
 Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
@@ -2001,11 +2004,14 @@ With this enabled, `other` is also typed as whatever falls outside `Money` until
 tests it, a body that returns a value or raises for an operand it never tested is
 reported as [`unguarded-operand`](rules.md#unguarded-operand), and a `return
 NotImplemented` reached with an operand inside the domain means the operation can move on
-with that operand too.
+with that operand too. An operand of a class that may share a subclass with `Money` may be
+inside the domain, so the operation may be this method's answer as well as the other
+operand's.
 
 When set to `false`, the body sees the annotation, as if python only ever passed it what
 it says, and dispatch takes every `.py` dunder at its word that it hands back an operand
-outside the domain. A `.by` dunder is lowered with the test, and is unaffected.
+that isn't assignable to the domain. A `.by` dunder is lowered with the test, and is
+unaffected.
 
 Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 

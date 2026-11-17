@@ -8,6 +8,7 @@ use crate::types::operator_domain::DunderStep;
 use crate::types::{MemberLookupPolicy, PropertyInstanceType};
 use crate::{Program, ProgramEnvironment};
 use ruff_python_ast as ast;
+use ruff_python_ast::helpers::TypeModifier;
 
 mod arguments;
 pub(crate) mod bind;
@@ -49,6 +50,13 @@ fn has_exact_runtime_class<'db>(
         Type::ClassLiteral(_) | Type::LiteralValue(_) => true,
         Type::NominalInstance(instance) => instance.class(db, env).is_final(db),
         Type::TypeAlias(alias) => has_exact_runtime_class(db, env, alias.value_type(db)),
+        // basedpython: `final A` holds only values whose class is exactly `A`. a `final T`
+        // holds values whose class is exactly whatever `T` is, which may be a subclass of its
+        // bound
+        Type::Restricted(restricted) => match restricted.value_type(db) {
+            Type::NominalInstance(_) => restricted.modifier(db) == TypeModifier::Final,
+            value => has_exact_runtime_class(db, env, value),
+        },
         _ => false,
     }
 }
@@ -64,6 +72,8 @@ fn operator_dispatch_class<'db>(
 ) -> Option<ClassType<'db>> {
     match ty {
         Type::ClassLiteral(class) => class.metaclass(db).to_class_type(db),
+        // basedpython: a use-site modifier leaves the class the value dispatches through
+        Type::Restricted(restricted) => operator_dispatch_class(db, env, restricted.value_type(db)),
         _ => ty.nominal_class(db, env),
     }
 }
@@ -161,42 +171,43 @@ impl<'db> Type<'db> {
         reflected_dunder: &'static str,
         policy: MemberLookupPolicy,
     ) -> Result<RichComparison<'db>, RichComparisonNotAccepted> {
-        let call_dunder = |name, receiver: Type<'db>, argument: Type<'db>| {
-            let mut arguments = CallArguments::positional([argument]);
-            let outcome = if let Type::Intersection(intersection) = receiver {
-                intersection
-                    .try_call_dunder_with_policy(
-                        db,
-                        env,
-                        name,
-                        &mut arguments,
-                        TypeContext::default(),
-                        policy,
-                    )
-                    .map(|bindings| {
-                        (
-                            bindings.return_type(db, env),
-                            bindings.may_reject_by_value(db, env, argument),
+        let call_dunder = |name, receiver: Type<'db>, operand: Type<'db>| {
+            DunderStep::of(db, env, operand, |argument| {
+                let mut arguments = CallArguments::positional([argument]);
+                if let Type::Intersection(intersection) = receiver {
+                    intersection
+                        .try_call_dunder_with_policy(
+                            db,
+                            env,
+                            name,
+                            &mut arguments,
+                            TypeContext::default(),
+                            policy,
                         )
-                    })
-            } else {
-                receiver
-                    .try_call_dunder_with_policy(
-                        db,
-                        env,
-                        name,
-                        &mut arguments,
-                        TypeContext::default(),
-                        policy,
-                    )
-                    .map(|bindings| {
-                        (
-                            bindings.return_type(db, env),
-                            bindings.may_reject_by_value(db, env, argument),
+                        .map(|bindings| {
+                            (
+                                bindings.return_type(db, env),
+                                bindings.may_reject_by_value(db, env, argument),
+                            )
+                        })
+                } else {
+                    receiver
+                        .try_call_dunder_with_policy(
+                            db,
+                            env,
+                            name,
+                            &mut arguments,
+                            TypeContext::default(),
+                            policy,
                         )
-                    })
-            };
-            DunderStep::of(db, env, outcome, argument)
+                        .map(|bindings| {
+                            (
+                                bindings.return_type(db, env),
+                                bindings.may_reject_by_value(db, env, argument),
+                            )
+                        })
+                }
+            })
         };
 
         let dispatch = match reflected_method_priority(db, env, left, right) {
@@ -367,46 +378,25 @@ impl<'db> Type<'db> {
         // establish that priority conditionally.
         let reflected_priority = reflected_method_priority(db, env, left_ty, right_ty);
 
-        let normal = || {
-            DunderStep::of(
-                db,
-                env,
-                left_ty
+        let call_dunder = |receiver: Type<'db>, name: &str, operand: Type<'db>| {
+            DunderStep::of(db, env, operand, |argument| {
+                receiver
                     .try_call_dunder_with_policy(
                         db,
                         env,
-                        op.dunder(),
-                        &mut CallArguments::positional([right_ty]),
+                        name,
+                        &mut CallArguments::positional([argument]),
                         tcx,
                         policy,
                     )
                     .map(|bindings| {
-                        let may_reject = bindings.may_reject_by_value(db, env, right_ty);
+                        let may_reject = bindings.may_reject_by_value(db, env, argument);
                         (bindings, may_reject)
-                    }),
-                right_ty,
-            )
+                    })
+            })
         };
-        let reflected = || {
-            DunderStep::of(
-                db,
-                env,
-                right_ty
-                    .try_call_dunder_with_policy(
-                        db,
-                        env,
-                        op.reflected_dunder(),
-                        &mut CallArguments::positional([left_ty]),
-                        tcx,
-                        policy,
-                    )
-                    .map(|bindings| {
-                        let may_reject = bindings.may_reject_by_value(db, env, left_ty);
-                        (bindings, may_reject)
-                    }),
-                left_ty,
-            )
-        };
+        let normal = || call_dunder(left_ty, op.dunder(), right_ty);
+        let reflected = || call_dunder(right_ty, op.reflected_dunder(), left_ty);
 
         let left_class = left_ty.to_meta_type(db, env);
         let right_class = right_ty.to_meta_type(db, env);

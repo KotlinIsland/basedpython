@@ -150,35 +150,101 @@ enum Erasure {
     Bare,
 }
 
+/// what a one-argument dunder call that failed does with the operand it failed on
+pub(crate) enum OperandRejection<'db> {
+    /// the operand is outside the domain whatever it is at runtime, so python moves on
+    Whole,
+    /// the operand may be outside the domain, and python moves on, or may be the `inside` part
+    /// of it, which reaches the method and runs with it
+    ///
+    /// ```python
+    /// class Wallet:
+    ///     def __add__(self, other: Money) -> int: ...
+    ///
+    /// def f(w: Wallet, c: Coupon):
+    ///     w + c  # a `class MoneyCoupon(Coupon, Money)` reaches `Wallet.__add__`
+    /// ```
+    Partly { inside: Type<'db> },
+    /// the operand reaches the method whatever it is, so the call goes ahead with an operand it
+    /// doesn't accept: a type error, with nothing to fall back to
+    Reaches,
+}
+
 impl<'db> Bindings<'db> {
-    /// whether a one-argument dunder call that failed rejected `operand`, so that python moves
-    /// on, rather than going ahead with an operand it doesn't accept
+    /// what this failed one-argument dunder call does with `operand`
     ///
     /// each callee that failed is asked on its own: a receiver typed `int | float` calls
     /// `int.__add__` or `float.__add__`, never both, so `1.0` is rejected by the `int` that
     /// fails on it whatever the `float` would have done
     ///
-    /// a union operand is rejected only when each of its types is: an `int | Box[str]` against a
-    /// `Box` domain may be a `Box`, which reaches the method, and the method runs with it
-    pub(crate) fn rejects_operand(
+    /// a type of the operand is outside a domain only when nothing can be both: a final class,
+    /// a literal, or a class whose instances are laid out differently. two other classes may
+    /// share a subclass, which is inside, where the callee reads it
+    /// ([`reads_shared_subclasses`]). a union operand is wholly rejected only when each of
+    /// its types is: an `int | Box[str]` against a `Box` domain may be a `Box`, which reaches the
+    /// method, and the method runs with it
+    pub(crate) fn operand_rejection(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         operand: Type<'db>,
-    ) -> bool {
+    ) -> OperandRejection<'db> {
         let operands = match operand {
             Type::Union(union) => union.elements(db).to_vec(),
             _ => vec![operand],
         };
-        self.failed_operand_parameters()
-            .all(|(callee, parameters)| {
-                rejected_domain(db, env, callee, &parameters).is_some_and(|domain| {
-                    operands
-                        .iter()
-                        .all(|operand| !operand.is_assignable_to(db, env, domain))
-                })
-            })
+        let mut overlapped = Vec::new();
+        for (callee, parameters) in self.failed_operand_parameters() {
+            let Some(domain) = rejected_domain(db, env, callee, &parameters) else {
+                return OperandRejection::Reaches;
+            };
+            let reads_shared_subclasses = reads_shared_subclasses(db, callee);
+            for operand in &operands {
+                if operand.is_assignable_to(db, env, domain) {
+                    return OperandRejection::Reaches;
+                }
+                if reads_shared_subclasses
+                    && !overlapped.contains(&domain)
+                    && !operand.is_disjoint_from(db, env, domain)
+                {
+                    overlapped.push(domain);
+                }
+            }
+        }
+        if overlapped.is_empty() {
+            OperandRejection::Whole
+        } else {
+            OperandRejection::Partly {
+                inside: IntersectionType::from_two_elements(
+                    db,
+                    env,
+                    operand,
+                    UnionType::from_elements(db, env, overlapped),
+                ),
+            }
+        }
     }
+}
+
+/// whether an operand that may share a subclass with `callee`'s domain is read as possibly
+/// inside it, which is what it is at runtime ([`OperandRejection::Partly`])
+///
+/// a `.by` dunder is, and so is one in a file whose operator dunders are checked
+/// ([`checked-operator-operands`](crate::AnalysisSettings::checked_operator_operands)). elsewhere
+/// an operand that isn't assignable to the domain is read as outside it, which is how ty reads
+/// it
+fn reads_shared_subclasses<'db>(db: &'db dyn Db, callee: Type<'db>) -> bool {
+    let function = match callee {
+        Type::BoundMethod(bound) => bound.function(db),
+        Type::FunctionLiteral(function) => Some(function),
+        _ => None,
+    };
+    function.is_some_and(|function| {
+        let file = function.literal(db).last_definition.file(db);
+        let source_type = file.source_type(db);
+        (source_type.is_basedpython() && !source_type.is_stub())
+            || db.analysis_settings(file).checked_operator_operands
+    })
 }
 
 /// the domain a failed call to `callee` hands an operand back outside of: that of the
@@ -316,7 +382,7 @@ impl<'db> Bindings<'db> {
                 return true;
             }
             let rejected = *operand_rejected_by_value(db, implementation);
-            !rejected.is_never() && may_be_inside(db, env, operand, rejected)
+            !rejected.is_never() && !operand.is_disjoint_from(db, env, rejected)
         })
     }
 }
@@ -434,35 +500,54 @@ impl<'db, T> DunderStep<'db, T> {
 }
 
 impl<'db, T> DunderStep<'db, T> {
-    /// the step a dunder call made with `operand`, from its answer and whether the method may
-    /// still hand the operand back
+    /// the step a call of a dunder made with `operand`, from `call`, which calls the dunder with
+    /// an operand and gives its answer and whether the method may still hand the operand back
+    ///
+    /// an operand that may be partly inside the domain reaches the method as that part, which
+    /// the method answers, and may be outside it, which the method hands back
     pub(crate) fn of(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
-        outcome: Result<(T, bool), CallDunderError<'db>>,
         operand: Type<'db>,
+        call: impl Fn(Type<'db>) -> Result<(T, bool), CallDunderError<'db>>,
     ) -> Self {
-        match outcome {
+        match call(operand) {
             Ok((answer, may_reject)) => DunderStep::Accepts { answer, may_reject },
-            Err(error) if error.rejects(db, env, operand) => DunderStep::Rejects,
-            Err(error) => DunderStep::NotAccepted(error),
+            Err(error) => match error.operand_rejection(db, env, operand) {
+                OperandRejection::Whole => DunderStep::Rejects,
+                OperandRejection::Partly { inside } => match call(inside) {
+                    Ok((answer, _)) => DunderStep::Accepts {
+                        answer,
+                        may_reject: true,
+                    },
+                    Err(_) => DunderStep::NotAccepted(error),
+                },
+                OperandRejection::Reaches => DunderStep::NotAccepted(error),
+            },
         }
     }
 }
 
 impl<'db> CallDunderError<'db> {
-    /// whether this failed operator dunder call is python moving past `operand`, rather than a
-    /// call that goes ahead with an operand it shouldn't have been given
+    /// what this failed operator dunder call does with `operand`: python moves past it, or the
+    /// call goes ahead with an operand it shouldn't have been given
     ///
     /// a missing method rejects every operand. a method that is there rejects only an operand
     /// outside its parameter's runtime domain: one inside it reaches the method, which can't tell
     /// the operand's type arguments apart and runs with it, so the call is a type error and
     /// nothing falls back. see [`Type::runtime_domain`]
-    fn rejects(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>, operand: Type<'db>) -> bool {
+    fn operand_rejection(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        operand: Type<'db>,
+    ) -> OperandRejection<'db> {
         match self {
-            CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. } => true,
+            CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. } => {
+                OperandRejection::Whole
+            }
             CallDunderError::CallError(_, bindings, _) => {
-                bindings.rejects_operand(db, env, operand)
+                bindings.operand_rejection(db, env, operand)
             }
         }
     }
@@ -542,7 +627,7 @@ impl<'db> CallableType<'db> {
 
 /// basedpython: the test a `.by` operator dunder makes of its operand before its body runs,
 /// handing back as `NotImplemented` an operand outside the domain of the parameter it is bound
-/// to — which is where dispatch moves past it ([`Bindings::rejects_operand`])
+/// to — which is where dispatch moves past it ([`Bindings::operand_rejection`])
 ///
 /// ```by
 /// class A:
@@ -576,7 +661,7 @@ pub(crate) enum UntestableOperand {
 /// method that takes every operand, and for one python never hands an operand back from
 ///
 /// the domain is that of every overload's operand parameter together, since dispatch asks each
-/// overload ([`Bindings::rejects_operand`]). an `@overload` itself never runs, and its
+/// overload ([`Bindings::operand_rejection`]). an `@overload` itself never runs, and its
 /// implementation makes the test
 pub(crate) fn operand_guard<'db>(
     db: &'db dyn Db,
@@ -708,41 +793,5 @@ fn names_unchecked_protocol<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
             .and_then(|origin| origin.into_protocol_class(db))
             .is_none_or(|class| !class.is_runtime_checkable(db)),
         _ => false,
-    }
-}
-
-/// whether a value of type `operand` may be one of `set`, reading each class as dispatch does:
-/// a value of class `C` is inside `D` where `C` is assignable to `D`, and outside it otherwise
-///
-/// a class that could share a subclass with another isn't read as possibly being both, as
-/// nothing at runtime is. so a `Money` is not an `int`, and it is a `~int`
-fn may_be_inside<'db>(
-    db: &'db dyn Db,
-    env: &ProgramEnvironment<'db>,
-    operand: Type<'db>,
-    set: Type<'db>,
-) -> bool {
-    match operand {
-        Type::Union(union) => union
-            .elements(db)
-            .iter()
-            .any(|element| may_be_inside(db, env, *element, set)),
-        _ => match set {
-            Type::Union(union) => union
-                .elements(db)
-                .iter()
-                .any(|element| may_be_inside(db, env, operand, *element)),
-            Type::Intersection(intersection) => {
-                intersection
-                    .positive(db)
-                    .iter()
-                    .all(|positive| may_be_inside(db, env, operand, *positive))
-                    && intersection
-                        .negative(db)
-                        .iter()
-                        .all(|negative| !operand.is_assignable_to(db, env, *negative))
-            }
-            _ => operand.is_assignable_to(db, env, set),
-        },
     }
 }

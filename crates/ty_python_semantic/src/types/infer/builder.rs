@@ -145,6 +145,7 @@ use crate::types::narrow::{
     argument_tested_by_known_function, pattern_subject_type, pattern_success_types,
 };
 use crate::types::newtype::NewType;
+use crate::types::operator_domain::OperandRejection;
 use crate::types::receivers;
 use crate::types::regex;
 use crate::types::reified_infer;
@@ -6389,6 +6390,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         Type::unknown()
                     })
             };
+        // the in-place dunder answered with `outcome` but may hand the operand back, and python
+        // then falls back to the binary operator
+        let in_place_or_binary_ty =
+            |builder: &mut Self,
+             outcome: &Bindings<'db>,
+             value_ty,
+             state: &mut BinaryInferenceState<'db>| {
+                state.deprecated_functions.extend(
+                    outcome
+                        .deprecated_functions(db)
+                        .map(|(_, function)| function),
+                );
+                let in_place_ty = outcome.return_type(db, env).without_not_implemented(db);
+                let union =
+                    |binary_ty| UnionType::from_two_elements(db, env, in_place_ty, binary_ty);
+                binary_return_ty(builder, value_ty, state)
+                    .map(union)
+                    .map_err(union)
+            };
 
         match target_type {
             Type::Union(union) => {
@@ -6462,23 +6482,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         if !outcome.may_reject_by_value(db, env, value_ty) {
                             return Ok(in_place_ty);
                         }
-                        // the in-place dunder may hand the operand back, and python then falls
-                        // back to the binary operator
                         let value_ty = outcome.type_for_argument(&call_arguments, 0);
-                        match binary_return_ty(self, value_ty, state) {
-                            Ok(binary_ty) => Ok(UnionType::from_two_elements(
-                                db,
-                                env,
-                                in_place_ty,
-                                binary_ty,
-                            )),
-                            Err(recovery_ty) => Err(UnionType::from_two_elements(
-                                db,
-                                env,
-                                in_place_ty,
-                                recovery_ty,
-                            )),
-                        }
+                        let union = |binary_ty| {
+                            UnionType::from_two_elements(db, env, in_place_ty, binary_ty)
+                        };
+                        binary_return_ty(self, value_ty, state)
+                            .map(union)
+                            .map_err(union)
                     }
                     Err(CallDunderError::MethodNotAvailable) => {
                         let value_ty = infer_value_ty(self, TypeContext::default());
@@ -6487,35 +6497,33 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     Err(CallDunderError::PossiblyUnbound {
                         bindings: outcome, ..
                     }) => {
-                        state.deprecated_functions.extend(
-                            outcome
-                                .deprecated_functions(db)
-                                .map(|(_, function)| function),
-                        );
                         let value_ty = outcome.type_for_argument(&call_arguments, 0);
-                        let in_place_ty = outcome.return_type(db, env).without_not_implemented(db);
-                        match binary_return_ty(self, value_ty, state) {
-                            Ok(binary_ty) => Ok(UnionType::from_two_elements(
-                                db,
-                                env,
-                                in_place_ty,
-                                binary_ty,
-                            )),
-                            Err(recovery_ty) => Err(UnionType::from_two_elements(
-                                db,
-                                env,
-                                in_place_ty,
-                                recovery_ty,
-                            )),
-                        }
+                        in_place_or_binary_ty(self, &outcome, value_ty, state)
                     }
                     Err(CallDunderError::CallError(_, bindings, _)) => {
                         let value_ty = bindings.type_for_argument(&call_arguments, 0);
                         // an in-place dunder that rejects its operand returns `NotImplemented`,
                         // and python falls back to the binary operator. one that takes the
                         // operand runs with it, so nothing falls back
-                        if bindings.rejects_operand(db, env, value_ty) {
-                            return binary_return_ty(self, value_ty, state);
+                        match bindings.operand_rejection(db, env, value_ty) {
+                            OperandRejection::Whole => {
+                                return binary_return_ty(self, value_ty, state);
+                            }
+                            // the part of the operand inside the domain reaches the in-place
+                            // dunder, and the rest falls back
+                            OperandRejection::Partly { inside } => {
+                                if let Ok(outcome) = target_type.try_call_dunder_with_policy(
+                                    db,
+                                    env,
+                                    op.in_place_dunder(),
+                                    &mut CallArguments::positional([inside]),
+                                    TypeContext::default(),
+                                    MemberLookupPolicy::NO_INSTANCE_FALLBACK,
+                                ) {
+                                    return in_place_or_binary_ty(self, &outcome, value_ty, state);
+                                }
+                            }
+                            OperandRejection::Reaches => {}
                         }
                         report_unsupported_augmented_assignment(
                             &self.context,

@@ -2,7 +2,7 @@
 //!
 //! Python calls `__add__`, `__eq__` and the other operator dunders with whatever the other operand
 //! is. Dispatch reads an operand outside the domain of the parameter's annotation as handed back
-//! with `NotImplemented` ([`Bindings::rejects_operand`]), which only holds if the body hands it
+//! with `NotImplemented` ([`Bindings::operand_rejection`]), which only holds if the body hands it
 //! back. A `.by` dunder is lowered with a test that does; a `.py` one has to be written with it:
 //!
 //! ```python
@@ -24,7 +24,7 @@
 //! - a `return NotImplemented` reached with an operand inside the domain hands that one back too,
 //!   so the operation moves on with it ([`Bindings::may_reject_by_value`])
 //!
-//! [`Bindings::rejects_operand`]: crate::types::call::bind::Bindings::rejects_operand
+//! [`Bindings::operand_rejection`]: crate::types::call::bind::Bindings::operand_rejection
 //! [`Bindings::may_reject_by_value`]: crate::types::call::bind::Bindings::may_reject_by_value
 //! [`AnalysisSettings::checked_operator_operands`]: crate::AnalysisSettings::checked_operator_operands
 

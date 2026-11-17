@@ -3936,13 +3936,20 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
             // `A`'s, which is a sharper question than "is an `A` also a `B`".
             // This mirrors the literal arms below: `Literal[1]` is an instance of
             // exactly `int`, so it is disjoint from every type `int` is not
-            // assignable to
-            (Type::Restricted(restricted), _) if restricted.modifier(db) == TypeModifier::Final => {
+            // assignable to. a `final T` is exactly whatever class `T` is, which may be any
+            // subclass of its bound, so it says no more than `T` does
+            (Type::Restricted(restricted), _)
+                if restricted.modifier(db) == TypeModifier::Final
+                    && matches!(restricted.value_type(db), Type::NominalInstance(_)) =>
+            {
                 self.when_exact_instances_meet(db, restricted, right)
                     .negate(db, self.constraints)
             }
 
-            (_, Type::Restricted(restricted)) if restricted.modifier(db) == TypeModifier::Final => {
+            (_, Type::Restricted(restricted))
+                if restricted.modifier(db) == TypeModifier::Final
+                    && matches!(restricted.value_type(db), Type::NominalInstance(_)) =>
+            {
                 self.when_exact_instances_meet(db, restricted, left)
                     .negate(db, self.constraints)
             }
