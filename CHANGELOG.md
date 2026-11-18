@@ -2,6 +2,48 @@
 
 ruff's changelog, from before basedpython forked it, is in [`changelogs/`](https://github.com/KotlinIsland/basedpython/tree/main/changelogs)
 
+## 0.0.2
+
+```sh
+uv add --dev "basedpython>=0.0.2"
+```
+
+### operator dispatch
+
+[operator dispatch](https://kotlinisland.github.io/basedpython/features/operator-dispatch/) follows python's own rule:
+an operation falls back past a dunder only for an operand outside its parameter's runtime domain
+
+- a `.by` operator dunder tests its operand before its body runs, and returns `NotImplemented`
+    outside the parameter's domain
+- a `.py` operator dunder is checked against the operand python hands it: the body sees what's
+    outside the domain, and a `NotImplemented` inside the domain falls back
+- `NotImplemented` is typed: a written `NotImplementedType` return falls back, and `.by` declares it
+- an `__eq__` or `__ne__` override may narrow its operand, or declare `NotImplementedType`
+- an operand that may share a subclass with a dunder's domain may reach it, so the operation may be
+    either side's answer; an exact, final or disjoint-base operand stays outside
+- a subclass's reflected dunder answers as its ancestor's own dunder does, and a class's `__gt__`
+    as its own `__lt__` unless the class is final
+- a subclass's in-place dunder answers as its ancestor's binary dunder does, and an operator dunder
+    override takes only what the overridden dunder takes. `invalid-reflected-dunder` is now
+    `invalid-operator-override`
+
+### protocols
+
+- a `protocol` lowers onto basedpython's own protocol base rather than `typing.Protocol`;
+    [`lowering.compatibility`](https://kotlinisland.github.io/basedpython/features/modifiers/) restores `typing.Protocol`.
+    `runtime_checkable` is reported, and the two kinds of protocol don't mix
+- a built package's `by.typed` records whether it was lowered with `lowering.compatibility`, and a
+    project reads that package's protocols as it was built
+
+### other changes
+
+- an abstract method is implemented by a class mixed in later in the mro, so `class E(D, Impl)` is
+    implemented by `Impl`
+- `by init` creates the project's environment with `uv sync`, and the `main.by` template no longer
+    calls `main()`
+- the docs carry basedpython's logo and palette, show the python `by` writes beside the landing
+    page's example, and unfurl into a social card when shared
+
 ## 0.0.1
 
 the first stable release of basedpython: a python-like language with sum types, extensions,
