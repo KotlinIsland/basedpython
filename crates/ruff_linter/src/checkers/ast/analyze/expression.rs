@@ -1685,6 +1685,22 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 flake8_simplify::rules::double_negation(checker, expr, *op, operand);
             }
         }
+        // basedpython: `x is T` is a type test, whose right-hand side is a type
+        // expression. it compares no two values, so the rules of the next arm, each
+        // reasoning about what a comparison operator does to its operands, would read
+        // it as the python identity comparison it looks like. a rule joins this arm
+        // only when its premise holds for a type test too
+        //
+        // that includes a chain ending in one, `a < b is int`: the type test shares
+        // `b` with the comparison before it, so a rule rewriting that comparison as
+        // if it stood alone, `b < a` for `a > b`, would change what is tested
+        Expr::Compare(compare) if compare.has_type_test(checker.source_type) => {
+            // `password is "hunter2"` checks the value against the literal at
+            // runtime, so the secret is written there all the same
+            if checker.is_rule_enabled(Rule::HardcodedPasswordString) {
+                flake8_bandit::rules::compare_to_hardcoded_password_string(checker, compare);
+            }
+        }
         Expr::Compare(compare) => {
             if checker.any_rule_enabled(&[Rule::NoneComparison, Rule::TrueFalseComparison]) {
                 pycodestyle::rules::literal_comparisons(checker, compare);

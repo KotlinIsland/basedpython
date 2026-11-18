@@ -1,0 +1,63 @@
+"""Type tests, which no rule may read as a comparison of two values."""
+
+from enum import Enum
+
+
+class Color(Enum):
+    """A color."""
+
+    RED = 1
+
+
+def literal_types(value: object) -> tuple[bool, ...]:
+    """Test a value against literal types."""
+    return (
+        value is 5000,
+        value is not 5000,
+        value is "text",
+        value is b"bytes",
+        value is -1,
+        value is True,
+        value is not False,
+        value is None,
+        value is Color.RED,
+        5000 is 5000,
+    )
+
+
+def class_types(value: object, items: list[int]) -> tuple[bool, ...]:
+    """Test a value against classes."""
+    return (
+        value is int,
+        value is not str,
+        value is int | str,
+        value is int?,
+        items is list[int],
+        value is type[int],
+        5000 is int,
+    )
+
+
+def chains(count: int, items: dict[int, int], value: object) -> tuple[bool, ...]:
+    """Test values at the end of a chain, sharing them with a comparison."""
+    return (
+        1 < count is int,
+        count in items.keys() is int,
+        count in [1, 2] is int,
+        count == True is int,
+        "text" == value is str,
+    )
+
+
+def positions(value: object, values: list[object]) -> list[object]:
+    """Test values in every position a test can take."""
+    if value is 5000:
+        return []
+    assert value is not "text"
+    while value is b"bytes":
+        value = None
+    found: list[object] = [item for item in values if item is 5000]
+    found.sort(key=lambda item: item is "text")
+    if value is None or value is int:
+        return found
+    return values

@@ -16,8 +16,12 @@ mod tests {
     use anyhow::Result;
     use test_case::test_case;
 
+    use strum::IntoEnumIterator;
+
+    use crate::codes::Category;
     use crate::registry::Rule;
-    use crate::test::test_path;
+    use crate::settings::types::PreviewMode;
+    use crate::test::{print_messages, test_path};
     use crate::{assert_diagnostics, settings};
 
     #[test_case(Rule::ManualNoneCoalesce, Path::new("BY001.by"))]
@@ -53,6 +57,45 @@ mod tests {
             &settings::LinterSettings::for_rule(rule_code),
         )?;
         assert_diagnostics!(snapshot, diagnostics);
+        Ok(())
+    }
+
+    /// a type test, `x is T`, compares no two values, so a rule that reads it as
+    /// the python identity comparison it looks like reports something untrue
+    /// about it. every rule runs, with preview behaviour on, over a file of type
+    /// tests that is otherwise clean, so a rule that starts misreading one fails
+    /// here by name, an upstream rule arriving in a merge above all
+    #[test]
+    fn no_rule_reads_a_type_test_as_a_comparison() -> Result<()> {
+        // what the file cannot satisfy without testing less: it is not in a
+        // package and carries no copyright notice, its docstrings document no
+        // return values, and an `assert` is one of the places a type test is
+        // written. `D203` is the half of an incompatible pair that a selection of
+        // every rule drops
+        let unsatisfiable = [
+            Rule::ImplicitNamespacePackage,
+            Rule::MissingCopyrightNotice,
+            Rule::DocstringMissingReturns,
+            Rule::Assert,
+            Rule::IncorrectBlankLineBeforeClass,
+        ];
+        let rules = Rule::iter().filter(|rule| {
+            !rule.is_removed()
+                && rule.category() != Category::Testing
+                && !unsatisfiable.contains(rule)
+        });
+        let diagnostics = test_path(
+            Path::new("basedpython/type_tests.by"),
+            &settings::LinterSettings {
+                preview: PreviewMode::Enabled,
+                ..settings::LinterSettings::for_rules(rules)
+            },
+        )?;
+        assert!(
+            diagnostics.is_empty(),
+            "a rule reported on a file of type tests:\n{}",
+            print_messages(&diagnostics)
+        );
         Ok(())
     }
 }

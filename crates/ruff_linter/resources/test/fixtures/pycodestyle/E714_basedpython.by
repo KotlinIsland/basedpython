@@ -1,0 +1,9 @@
+# basedpython spells identity `!==`, and a negated type test is `is not`
+def identity(x: object, y: object) -> None:
+    print(not x === y)  # E714
+    print(not (x === y))  # E714
+
+
+def type_test(x: object) -> None:
+    print(not x is int)  # E714
+    print(not x is 5000)  # E714

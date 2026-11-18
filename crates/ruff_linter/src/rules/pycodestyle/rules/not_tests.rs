@@ -67,16 +67,42 @@ impl AlwaysFixableViolation for NotInTest {
 /// [PEP8]: https://peps.python.org/pep-0008/#programming-recommendations
 #[derive(ViolationMetadata)]
 #[violation_metadata(stable_since = "v0.0.28", category = Category::Pedantic)]
-pub(crate) struct NotIsTest;
+pub(crate) struct NotIsTest {
+    test: IsTest,
+}
 
 impl AlwaysFixableViolation for NotIsTest {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Test for object identity should be `is not`".to_string()
+        let negated = self.test.negated();
+        match self.test {
+            IsTest::Identity | IsTest::SpelledIdentity => {
+                format!("Test for object identity should be `{negated}`")
+            }
+            IsTest::TypeTest => format!("Test for type should be `{negated}`"),
+        }
     }
 
     fn fix_title(&self) -> String {
-        "Convert to `is not`".to_string()
+        format!("Convert to `{}`", self.test.negated())
+    }
+}
+
+/// what the negated `is` asks: python's identity, basedpython's identity spelled
+/// `===`, or basedpython's type test spelled with the `is` keyword
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IsTest {
+    Identity,
+    SpelledIdentity,
+    TypeTest,
+}
+
+impl IsTest {
+    const fn negated(self) -> &'static str {
+        match self {
+            IsTest::Identity | IsTest::TypeTest => "is not",
+            IsTest::SpelledIdentity => "!==",
+        }
     }
 }
 
@@ -114,7 +140,15 @@ pub(crate) fn not_tests(checker: &Checker, unary_op: &ast::ExprUnaryOp) {
             )));
         }
         [CmpOp::Is] if checker.is_rule_enabled(Rule::NotIsTest) => {
-            let mut diagnostic = checker.report_diagnostic(NotIsTest, unary_op.operand.range());
+            let test = if compare.is_type_test(0, checker.source_type) {
+                IsTest::TypeTest
+            } else if compare.is_identity_operator(0) {
+                IsTest::SpelledIdentity
+            } else {
+                IsTest::Identity
+            };
+            let mut diagnostic =
+                checker.report_diagnostic(NotIsTest { test }, unary_op.operand.range());
             diagnostic.set_fix(Fix::safe_edit(Edit::range_replacement(
                 pad(
                     generate_comparison(

@@ -1,0 +1,41 @@
+---
+source: crates/ruff_linter/src/rules/refurb/mod.rs
+---
+FURB118 [*] Use `operator.is_` instead of defining a lambda
+ --> FURB118_basedpython.by:2:7
+  |
+1 | # `===` is the identity `operator.is_` implements
+2 | is_ = lambda x, y: x === y  # FURB118
+  |       ^^^^^^^^^^^^^^^^^^^^
+3 | is_not = lambda x, y: x !== y  # FURB118
+  |
+help: Replace with `operator.is_`
+  |
+1 | # `===` is the identity `operator.is_` implements
+  - is_ = lambda x, y: x === y  # FURB118
+2 + import operator
+3 + is_ = operator.is_  # FURB118
+4 | is_not = lambda x, y: x !== y  # FURB118
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+FURB118 [*] Use `operator.is_not` instead of defining a lambda
+ --> FURB118_basedpython.by:3:10
+  |
+1 | # `===` is the identity `operator.is_` implements
+2 | is_ = lambda x, y: x === y  # FURB118
+3 | is_not = lambda x, y: x !== y  # FURB118
+  |          ^^^^^^^^^^^^^^^^^^^^
+4 |
+5 | # a type test asks about a type, which no `operator` function does
+  |
+help: Replace with `operator.is_not`
+  |
+1 | # `===` is the identity `operator.is_` implements
+2 + import operator
+3 | is_ = lambda x, y: x === y  # FURB118
+  - is_not = lambda x, y: x !== y  # FURB118
+4 + is_not = operator.is_not  # FURB118
+5 |
+  |
+note: This is an unsafe fix and may change runtime behavior

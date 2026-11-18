@@ -1,0 +1,7 @@
+# `===` is the identity `operator.is_` implements
+is_ = lambda x, y: x === y  # FURB118
+is_not = lambda x, y: x !== y  # FURB118
+
+# a type test asks about a type, which no `operator` function does
+is_type = lambda x, y: x is y
+is_not_type = lambda x, y: x is not y

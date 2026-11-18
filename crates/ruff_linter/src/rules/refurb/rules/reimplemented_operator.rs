@@ -7,7 +7,9 @@ use itertools::Itertools;
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::helpers::any_over_expr;
 use ruff_python_ast::identifier::Identifier;
-use ruff_python_ast::{self as ast, Expr, ExprSlice, ExprSubscript, ExprTuple, Parameters, Stmt};
+use ruff_python_ast::{
+    self as ast, Expr, ExprSlice, ExprSubscript, ExprTuple, Parameters, PySourceType, Stmt,
+};
 use ruff_python_semantic::SemanticModel;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -117,7 +119,7 @@ pub(crate) fn reimplemented_operator(checker: &Checker, target: &FunctionLike) {
         return;
     };
     let Some(body) = target.body() else { return };
-    let Some(operator) = get_operator(body, params, checker.locator()) else {
+    let Some(operator) = get_operator(body, params, checker.locator(), checker.source_type) else {
         return;
     };
     let fix = target.try_fix(&operator, checker.importer(), checker.semantic());
@@ -352,11 +354,16 @@ impl Display for Operator {
 }
 
 /// Return the `operator` implemented by the given expression.
-fn get_operator(expr: &Expr, params: &Parameters, locator: &Locator) -> Option<Operator> {
+fn get_operator(
+    expr: &Expr,
+    params: &Parameters,
+    locator: &Locator,
+    source_type: PySourceType,
+) -> Option<Operator> {
     match expr {
         Expr::UnaryOp(expr) => unary_op(expr, params).map(Operator::from),
         Expr::BinOp(expr) => bin_op(expr, params).map(Operator::from),
-        Expr::Compare(expr) => cmp_op(expr, params).map(Operator::from),
+        Expr::Compare(expr) => cmp_op(expr, params, source_type).map(Operator::from),
         Expr::Subscript(expr) => itemgetter_op(expr, params, locator),
         Expr::Tuple(expr) => itemgetter_op_tuple(expr, params, locator),
         _ => None,
@@ -429,10 +436,18 @@ fn bin_op(expr: &ast::ExprBinOp, params: &Parameters) -> Option<&'static str> {
 }
 
 /// Return the name of the `operator` implemented by the given comparison expression.
-fn cmp_op(expr: &ast::ExprCompare, params: &Parameters) -> Option<&'static str> {
+fn cmp_op(
+    expr: &ast::ExprCompare,
+    params: &Parameters,
+    source_type: PySourceType,
+) -> Option<&'static str> {
     let [arg1, arg2] = params.args.as_slice() else {
         return None;
     };
+    // a basedpython type test asks about a type, which no `operator` function does
+    if expr.has_type_test(source_type) {
+        return None;
+    }
     let (left, op, right) = expr.as_single()?;
 
     match op {

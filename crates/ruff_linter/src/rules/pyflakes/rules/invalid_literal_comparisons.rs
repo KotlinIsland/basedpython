@@ -82,10 +82,9 @@ impl AlwaysFixableViolation for IsLiteral {
 
 /// F632
 pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ExprCompare) {
-    // basedpython keeps `is` as python identity only where its right-hand side is a
-    // literal; anywhere else `is` is a type test, and `===` is the spelling that always
-    // compares identity. the parser records which of the two was written, so the tokens
-    // are needed only to place a fix
+    // a basedpython type test never reaches this rule, so every `is` here is identity,
+    // written `===` in a `.by` file. the parser records which spelling was written, so
+    // the tokens are needed only to place a fix
     let mut lazy_located = None;
     for (index, (left, op, right)) in compare.iter().enumerate() {
         let spells_identity = compare.is_identity_operator(index);
@@ -95,7 +94,6 @@ pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ExprCompar
                 || helpers::is_constant_non_singleton(right)
                 || helpers::is_mutable_iterable_initializer(left)
                 || helpers::is_mutable_iterable_initializer(right))
-            && (!checker.source_type.is_basedpython() || spells_identity || right.is_literal_expr())
         {
             let mut diagnostic = checker.report_diagnostic(
                 IsLiteral {

@@ -2,181 +2,150 @@
 source: crates/ruff_linter/src/rules/pyflakes/mod.rs
 ---
 F632 [*] Use `==` to compare constant literals
- --> F632_basedpython.by:5:11
+ --> F632_basedpython.by:4:11
   |
-3 | # spellings, and an `is` whose right-hand side is a literal, compare identity
-4 | def identity(x: object) -> None:
-5 |     print(1 === 1)  # F632
+2 | # parser flattens to the same operator. only the identity spellings compare identity
+3 | def identity(x: object) -> None:
+4 |     print(1 === 1)  # F632
   |           ^^^^^^^
-6 |     print(x !== "a")  # F632
+5 |     print(x !== "a")  # F632
   |
 help: Replace `===` with `==`
   |
-4 | def identity(x: object) -> None:
+3 | def identity(x: object) -> None:
   -     print(1 === 1)  # F632
-5 +     print(1 == 1)  # F632
-6 |     print(x !== "a")  # F632
+4 +     print(1 == 1)  # F632
+5 |     print(x !== "a")  # F632
   |
 
 F632 [*] Use `!=` to compare constant literals
- --> F632_basedpython.by:6:11
+ --> F632_basedpython.by:5:11
   |
-4 | def identity(x: object) -> None:
-5 |     print(1 === 1)  # F632
-6 |     print(x !== "a")  # F632
+3 | def identity(x: object) -> None:
+4 |     print(1 === 1)  # F632
+5 |     print(x !== "a")  # F632
   |           ^^^^^^^^^
 help: Replace `!==` with `!=`
   |
-5 |     print(1 === 1)  # F632
+4 |     print(1 === 1)  # F632
   -     print(x !== "a")  # F632
-6 +     print(x != "a")  # F632
-7 |
+5 +     print(x != "a")  # F632
+6 |
   |
-
-F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:10:11
-   |
- 9 | def literal_right_hand_side(x: object) -> None:
-10 |     print(1 is 1)  # F632
-   |           ^^^^^^
-11 |     print(x is not "a")  # F632
-   |
-help: Replace `is` with `==`
-   |
-9  | def literal_right_hand_side(x: object) -> None:
-   -     print(1 is 1)  # F632
-10 +     print(1 == 1)  # F632
-11 |     print(x is not "a")  # F632
-   |
-
-F632 [*] Use `!=` to compare constant literals
-  --> F632_basedpython.by:11:11
-   |
- 9 | def literal_right_hand_side(x: object) -> None:
-10 |     print(1 is 1)  # F632
-11 |     print(x is not "a")  # F632
-   |           ^^^^^^^^^^^^
-help: Replace `is not` with `!=`
-   |
-10 |     print(1 is 1)  # F632
-   -     print(x is not "a")  # F632
-11 +     print(x != "a")  # F632
-12 |
-   |
-
-F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:25:9
-   |
-23 | # source between the operands, so it survives everything that can sit there
-24 | def spelling_survives_what_sits_between(x: object) -> None:
-25 |     a = (1) === (1)  # F632
-   |         ^^^^^^^^^^^
-26 |     b = 1 \
-27 |         === 1  # F632
-   |
-help: Replace `===` with `==`
-   |
-24 | def spelling_survives_what_sits_between(x: object) -> None:
-   -     a = (1) === (1)  # F632
-25 +     a = (1) == (1)  # F632
-26 |     b = 1 \
-   |
-
-F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:26:9
-   |
-24 |   def spelling_survives_what_sits_between(x: object) -> None:
-25 |       a = (1) === (1)  # F632
-26 |       b = 1 \
-   |  _________^
-27 | |         === 1  # F632
-   | |_____________^
-28 |       c = (1 ===  # a comment between the operands
-29 |            1)  # F632
-   |
-help: Replace `===` with `==`
-   |
-26 |     b = 1 \
-   -         === 1  # F632
-27 +         == 1  # F632
-28 |     c = (1 ===  # a comment between the operands
-   |
-
-F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:28:10
-   |
-26 |       b = 1 \
-27 |           === 1  # F632
-28 |       c = (1 ===  # a comment between the operands
-   |  __________^
-29 | |          1)  # F632
-   | |__________^
-30 |       d = 1===1  # F632
-   |
-help: Replace `===` with `==`
-   |
-27 |         === 1  # F632
-   -     c = (1 ===  # a comment between the operands
-28 +     c = (1 ==  # a comment between the operands
-29 |          1)  # F632
-   |
-
-F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:30:9
-   |
-28 |     c = (1 ===  # a comment between the operands
-29 |          1)  # F632
-30 |     d = 1===1  # F632
-   |         ^^^^^
-help: Replace `===` with `==`
-   |
-29 |          1)  # F632
-   -     d = 1===1  # F632
-30 +     d = 1==1  # F632
-31 |
-   |
 
 F632 [*] Use `==` to compare constant literals
   --> F632_basedpython.by:35:9
    |
-33 | # each operator of a chain answers for its own spelling
-34 | def chained(x: object) -> None:
-35 |     e = x < 1 === 1  # F632
+33 | # source between the operands, so it survives everything that can sit there
+34 | def spelling_survives_what_sits_between(x: object) -> None:
+35 |     a = (1) === (1)  # F632
    |         ^^^^^^^^^^^
-36 |     f = 1 === 1 !== 2  # F632
+36 |     b = 1 \
+37 |         === 1  # F632
    |
 help: Replace `===` with `==`
    |
-34 | def chained(x: object) -> None:
-   -     e = x < 1 === 1  # F632
-35 +     e = x < 1 == 1  # F632
-36 |     f = 1 === 1 !== 2  # F632
+34 | def spelling_survives_what_sits_between(x: object) -> None:
+   -     a = (1) === (1)  # F632
+35 +     a = (1) == (1)  # F632
+36 |     b = 1 \
    |
 
 F632 [*] Use `==` to compare constant literals
   --> F632_basedpython.by:36:9
    |
-34 | def chained(x: object) -> None:
-35 |     e = x < 1 === 1  # F632
-36 |     f = 1 === 1 !== 2  # F632
+34 |   def spelling_survives_what_sits_between(x: object) -> None:
+35 |       a = (1) === (1)  # F632
+36 |       b = 1 \
+   |  _________^
+37 | |         === 1  # F632
+   | |_____________^
+38 |       c = (1 ===  # a comment between the operands
+39 |            1)  # F632
+   |
+help: Replace `===` with `==`
+   |
+36 |     b = 1 \
+   -         === 1  # F632
+37 +         == 1  # F632
+38 |     c = (1 ===  # a comment between the operands
+   |
+
+F632 [*] Use `==` to compare constant literals
+  --> F632_basedpython.by:38:10
+   |
+36 |       b = 1 \
+37 |           === 1  # F632
+38 |       c = (1 ===  # a comment between the operands
+   |  __________^
+39 | |          1)  # F632
+   | |__________^
+40 |       d = 1===1  # F632
+   |
+help: Replace `===` with `==`
+   |
+37 |         === 1  # F632
+   -     c = (1 ===  # a comment between the operands
+38 +     c = (1 ==  # a comment between the operands
+39 |          1)  # F632
+   |
+
+F632 [*] Use `==` to compare constant literals
+  --> F632_basedpython.by:40:9
+   |
+38 |     c = (1 ===  # a comment between the operands
+39 |          1)  # F632
+40 |     d = 1===1  # F632
+   |         ^^^^^
+help: Replace `===` with `==`
+   |
+39 |          1)  # F632
+   -     d = 1===1  # F632
+40 +     d = 1==1  # F632
+41 |
+   |
+
+F632 [*] Use `==` to compare constant literals
+  --> F632_basedpython.by:45:9
+   |
+43 | # each operator of a chain answers for its own spelling
+44 | def chained(x: object) -> None:
+45 |     e = x < 1 === 1  # F632
+   |         ^^^^^^^^^^^
+46 |     f = 1 === 1 !== 2  # F632
+   |
+help: Replace `===` with `==`
+   |
+44 | def chained(x: object) -> None:
+   -     e = x < 1 === 1  # F632
+45 +     e = x < 1 == 1  # F632
+46 |     f = 1 === 1 !== 2  # F632
+   |
+
+F632 [*] Use `==` to compare constant literals
+  --> F632_basedpython.by:46:9
+   |
+44 | def chained(x: object) -> None:
+45 |     e = x < 1 === 1  # F632
+46 |     f = 1 === 1 !== 2  # F632
    |         ^^^^^^^^^^^^^
 help: Replace `===` with `==`
    |
-35 |     e = x < 1 === 1  # F632
+45 |     e = x < 1 === 1  # F632
    -     f = 1 === 1 !== 2  # F632
-36 +     f = 1 == 1 !== 2  # F632
+46 +     f = 1 == 1 !== 2  # F632
    |
 
 F632 [*] Use `!=` to compare constant literals
-  --> F632_basedpython.by:36:9
+  --> F632_basedpython.by:46:9
    |
-34 | def chained(x: object) -> None:
-35 |     e = x < 1 === 1  # F632
-36 |     f = 1 === 1 !== 2  # F632
+44 | def chained(x: object) -> None:
+45 |     e = x < 1 === 1  # F632
+46 |     f = 1 === 1 !== 2  # F632
    |         ^^^^^^^^^^^^^
 help: Replace `!==` with `!=`
    |
-35 |     e = x < 1 === 1  # F632
+45 |     e = x < 1 === 1  # F632
    -     f = 1 === 1 !== 2  # F632
-36 +     f = 1 === 1 != 2  # F632
+46 +     f = 1 === 1 != 2  # F632
    |

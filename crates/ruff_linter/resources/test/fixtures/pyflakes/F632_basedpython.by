@@ -1,22 +1,32 @@
-# basedpython spells identity `===` / `!==`; a plain `is` is a parametric type
-# test, which the parser flattens to the same operator. Only the identity
-# spellings, and an `is` whose right-hand side is a literal, compare identity
+# basedpython spells identity `===` / `!==`; a plain `is` is a type test, which the
+# parser flattens to the same operator. only the identity spellings compare identity
 def identity(x: object) -> None:
     print(1 === 1)  # F632
     print(x !== "a")  # F632
 
 
-def literal_right_hand_side(x: object) -> None:
-    print(1 is 1)  # F632
-    print(x is not "a")  # F632
+# a literal target names a literal type: `x is 1` tests for `Literal[1]`, which
+# needs the class and the value both, so there is no `==` to suggest
+def literal_types(x: object) -> None:
+    print(1 is 1)
+    print(x is not "a")
+    print(x is 5000)
+    print(x is b"a")
 
 
 def type_tests[T](x: T, xs: list[int]) -> None:
     print(1 is T)
     print(xs is list[int])
-    # this one lowers to `isinstance([], [])`, which raises at runtime — but the
-    # mistake in it is the target, not the operator, so it is ty's to report
+    # this one is not a type at all — but the mistake in it is the target, not the
+    # operator, so it is ty's to report
     print([] is [])
+
+
+# a type test may end a chain, sharing its value with the comparison before it, so
+# that comparison is not rewritten as if it stood alone
+def chain_ending_in_a_type_test(x: object) -> None:
+    print(1 === 1 is int)
+    print((1) === (x) is int)
 
 
 # which spelling was written is recorded on the comparison, not recovered from the

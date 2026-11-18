@@ -1,0 +1,64 @@
+---
+source: crates/ruff_linter/src/rules/pycodestyle/mod.rs
+---
+E714 [*] Test for object identity should be `!==`
+ --> E714_basedpython.by:3:15
+  |
+1 | # basedpython spells identity `!==`, and a negated type test is `is not`
+2 | def identity(x: object, y: object) -> None:
+3 |     print(not x === y)  # E714
+  |               ^^^^^^^
+4 |     print(not (x === y))  # E714
+  |
+help: Convert to `!==`
+  |
+2 | def identity(x: object, y: object) -> None:
+  -     print(not x === y)  # E714
+3 +     print(x !== y)  # E714
+4 |     print(not (x === y))  # E714
+  |
+
+E714 [*] Test for object identity should be `!==`
+ --> E714_basedpython.by:4:16
+  |
+2 | def identity(x: object, y: object) -> None:
+3 |     print(not x === y)  # E714
+4 |     print(not (x === y))  # E714
+  |                ^^^^^^^
+help: Convert to `!==`
+  |
+3 |     print(not x === y)  # E714
+  -     print(not (x === y))  # E714
+4 +     print(x !== y)  # E714
+5 |
+  |
+
+E714 [*] Test for type should be `is not`
+ --> E714_basedpython.by:8:15
+  |
+7 | def type_test(x: object) -> None:
+8 |     print(not x is int)  # E714
+  |               ^^^^^^^^
+9 |     print(not x is 5000)  # E714
+  |
+help: Convert to `is not`
+  |
+7 | def type_test(x: object) -> None:
+  -     print(not x is int)  # E714
+8 +     print(x is not int)  # E714
+9 |     print(not x is 5000)  # E714
+  |
+
+E714 [*] Test for type should be `is not`
+ --> E714_basedpython.by:9:15
+  |
+7 | def type_test(x: object) -> None:
+8 |     print(not x is int)  # E714
+9 |     print(not x is 5000)  # E714
+  |               ^^^^^^^^^
+help: Convert to `is not`
+  |
+8 |     print(not x is int)  # E714
+  -     print(not x is 5000)  # E714
+9 +     print(x is not 5000)  # E714
+  |
