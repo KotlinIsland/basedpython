@@ -19,7 +19,7 @@ def is_int(a: object):
     return a is int
 
 def f(x: object):
-    reveal_type(is_int)  # revealed: def is_int(a: object) -> TypeIs[int]
+    reveal_type(is_int)  # revealed: def is_int(a: object) -> a is int
     if is_int(x):
         reveal_type(x)  # revealed: int
     else:
@@ -54,6 +54,21 @@ def f(x: int | None):
         reveal_type(x)  # revealed: None
     else:
         reveal_type(x)  # revealed: int
+```
+
+A predicate that narrows to everything but a type is shown with the type parenthesized, since
+`a is not None` would be the predicate negated.
+
+```by
+def present(a: int | None):
+    return a is not None
+
+def f(x: int | None):
+    reveal_type(present)  # revealed: def present(a: int | None) -> a is (not None)
+    if present(x):
+        reveal_type(x)  # revealed: int
+    else:
+        reveal_type(x)  # revealed: None
 ```
 
 ## the recovered guard follows the parameter, not its position
@@ -92,6 +107,7 @@ def loaded(h: Holder):
     return h.data is str
 
 def f(h: Holder):
+    reveal_type(loaded)  # revealed: def loaded(h: Holder) -> h.data is str
     if loaded(h):
         reveal_type(h.data)  # revealed: str
 ```
@@ -1066,4 +1082,44 @@ def is_int(a: object):
 def f(x: object):
     if is_int(x):
         reveal_type(x)  # revealed: int
+```
+
+A test on a member narrows that member, and a body that returns nothing asserts what it establishes,
+about a parameter or about a variable it reads.
+
+```py
+class A:
+    a: object
+
+def member_is_int(a: A):
+    return isinstance(a.a, int)
+
+def assert_member_is_int(a: A):
+    assert isinstance(a.a, int)
+
+def assign_member(a: A):
+    a.a = 1
+
+def g(x: A, y: A, z: A):
+    if member_is_int(x):
+        reveal_type(x.a)  # revealed: int
+    assert_member_is_int(y)
+    reveal_type(y.a)  # revealed: int
+    assign_member(z)
+    reveal_type(z.a)  # revealed: object
+```
+
+```py
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def check():
+    assert a is not None
+
+def h():
+    reveal_type(a)  # revealed: int | None
+    check()
+    reveal_type(a)  # revealed: int
 ```

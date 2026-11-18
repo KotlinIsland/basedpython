@@ -361,9 +361,8 @@ pub struct SemanticIndex<'db> {
     /// basedpython: the call expressions this file makes as bare statements.
     ///
     /// An assertion guard narrows only when it is called as a statement, so this is what
-    /// tells a checker that a guard call was used as a value instead. Only collected for
-    /// basedpython files, where such a guard can be declared.
-    basedpython_statement_calls: FrozenSet<ExpressionNodeKey>,
+    /// tells a checker that a guard call was used as a value instead.
+    statement_calls: FrozenSet<ExpressionNodeKey>,
 
     /// Node indices of syntactic annotation roots, sorted in source order. Annotations cannot
     /// contain other syntactic annotations, so their ranges do not overlap. Storing only indices
@@ -478,7 +477,7 @@ impl<'db> SemanticIndex<'db> {
 
     /// basedpython: whether this call expression is made as a bare statement.
     pub fn is_statement_call(&self, key: impl Into<ExpressionNodeKey>) -> bool {
-        self.basedpython_statement_calls.contains(&key.into())
+        self.statement_calls.contains(&key.into())
     }
 
     /// Returns alias metadata for an alias Name node in a predicate, if one exists.

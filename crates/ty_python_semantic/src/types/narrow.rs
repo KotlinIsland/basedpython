@@ -198,10 +198,6 @@ fn asserts_guard_targets<'db>(
 ) -> Box<[(ScopedPlaceId, Type<'db>)]> {
     let env = &ProgramEnvironment::from_scope(callable.scope(db));
     let scope = callable.scope(db);
-    // `asserts` is basedpython surface syntax, so this lookup costs other files nothing
-    if !scope.file(db).source_type(db).is_basedpython() {
-        return Box::default();
-    }
 
     let callee_ty = infer_same_file_expression_type(db, callable, TypeContext::default());
     if matches!(callee_ty, Type::Dynamic(_)) {

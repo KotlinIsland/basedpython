@@ -4024,20 +4024,31 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
             }
             if let Type::TypeIs(type_is) = self.return_ty
                 && type_is.place_name(db).is_none()
-                && let Some(guard) = self
-                    .narrowing_guards
-                    .iter()
-                    .find(|guard| matches!(guard.kind, NarrowingGuardKind::Predicate))
+                && let Some(guard) = self.narrowing_guards.iter().find(|guard| {
+                    matches!(
+                        guard.kind,
+                        NarrowingGuardKind::Predicate
+                            | NarrowingGuardKind::InferredPredicate { .. }
+                    )
+                })
             {
                 // a callable type's return binds tighter than a comparison, so its predicate is
                 // parenthesized, as it is written
                 f.write_str(if is_declaration { " -> " } else { " -> (" })?;
                 fmt_guard_place(guard, &mut f)?;
                 f.write_str(" is ")?;
-                type_is
-                    .type_argument(db)
+                let narrowed = type_is.type_argument(db);
+                // `x is not int` is a negated predicate, which is not what this is
+                let is_negation = reads_as_negation(db, narrowed);
+                if is_negation {
+                    f.write_char('(')?;
+                }
+                narrowed
                     .display_with(db, env, settings.singleline())
                     .fmt_detailed(&mut f)?;
+                if is_negation {
+                    f.write_char(')')?;
+                }
                 if !is_declaration {
                     f.write_char(')')?;
                 }
@@ -4109,12 +4120,13 @@ impl<'db> DisplaySignature<'_, 'db> {
 /// basedpython: the place a guard narrows, `x` or `self.data`
 fn fmt_guard_place(guard: &NarrowingGuard<'_>, f: &mut TypeWriter<'_, '_, '_>) -> fmt::Result {
     f.set_invalid_type_annotation();
-    f.write_str(&guard.name)?;
-    for member in &guard.members {
-        f.write_char('.')?;
-        f.write_str(member)?;
-    }
-    Ok(())
+    f.write_str(&guard.place())
+}
+
+/// basedpython: whether `ty` is written `not T`, which has to be parenthesized after the `is` of
+/// a predicate: `x is not int` is the predicate negated, `x is (not int)` narrows to `not int`
+pub(crate) fn reads_as_negation<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(ty, Type::Intersection(intersection) if intersection.positive(db).is_empty())
 }
 
 impl Display for DisplaySignature<'_, '_> {

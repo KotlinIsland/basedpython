@@ -28,11 +28,12 @@ use ty_python_semantic::reified::{
 };
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
-    BaseTypeArgument, InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails,
-    StateRead, WriteSite, hintable_parameter_type, implicit_enum_member_value,
-    implicit_type_name_module, inferred_base_type_arguments, inferred_derived_dependencies,
-    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_parameter_holes,
-    inferred_property_type, inferred_raises, inferred_return_type, inferred_state_reads,
+    BaseTypeArgument, InferredInvalidations, InferredReturnPredicate, InferredStateReads,
+    InlayHintCallArgumentDetails, StateRead, WriteSite, hintable_parameter_type,
+    implicit_enum_member_value, implicit_type_name_module, inferred_base_type_arguments,
+    inferred_derived_dependencies, inferred_invalidations, inferred_override,
+    inferred_parameter_bound, inferred_parameter_holes, inferred_property_type, inferred_raises,
+    inferred_return_predicate, inferred_return_type, inferred_state_reads,
     inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
     inlay_hint_call_argument_details, is_composable_function, is_inferred_parameter_hole,
     is_reveal_type_function, is_union_special_form, numeric_promotion, parameter_stability,
@@ -532,13 +533,18 @@ impl InlayHint {
 
     /// The return type recovered for a `def` that leaves its annotation out,
     /// shown where the annotation would be written.
+    ///
+    /// A `predicate` is shown as `-> place is T`, which says which place the call narrows where
+    /// the `TypeIs[T]` it is typed as does not.
     fn inferred_return<'db>(
         context: InlayHintImportContext<'_, 'db>,
         function: &ast::StmtFunctionDef,
+        predicate: Option<&InferredReturnPredicate<'db>>,
         returned: Type<'db>,
         type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
     ) -> Self {
         let position = function.parameters.end();
+        let returned = predicate.map_or(returned, |predicate| predicate.narrowed);
         let details = type_display_details(
             context.db,
             context.file,
@@ -557,10 +563,18 @@ impl InlayHint {
             type_params_in_scope,
         );
 
+        // `x is not int` is a negated predicate, which is not what this is
+        let (open, close) = match predicate {
+            Some(predicate) if predicate.narrowed_reads_as_negation => ("(", ")"),
+            _ => ("", ""),
+        };
+        let place = predicate.map(|predicate| format!("{} is {open}", predicate.place));
+        let place = place.as_deref().unwrap_or_default();
+
         let text_edits = if spelled.editable {
             let mut text_edits = vec![InlayHintTextEdit {
                 range: TextRange::empty(position),
-                new_text: format!(" -> {}", spelled.edit_label),
+                new_text: format!(" -> {place}{}{close}", spelled.edit_label),
             }];
             text_edits.extend(spelled.import_edits);
             text_edits
@@ -568,8 +582,11 @@ impl InlayHint {
             vec![]
         };
 
-        let mut label_parts = vec!["-> ".into()];
+        let mut label_parts = vec![format!("-> {place}").into()];
         label_parts.extend(spelled.label_parts);
+        if !close.is_empty() {
+            label_parts.push(close.into());
+        }
 
         Self {
             position,
@@ -2569,11 +2586,22 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             file: self.model.program_file(),
             importer: &self.importer,
         };
+        // a predicate's `TypeIs[T]` narrows the first argument a call passes (after the receiver,
+        // for a method), so a recovered one is spelled as the guard it stands for, which only
+        // basedpython can write. python has no spelling for a guard on any other place
+        let predicate = inferred_return_predicate(&self.model, function);
+        let predicate = match predicate {
+            Some(predicate) if self.is_basedpython() => Some(predicate),
+            Some(predicate) if !predicate.is_type_is_parameter => return,
+            _ => None,
+        };
+
         let mut type_params_in_scope = self.model.type_params_in_signature(function);
         type_params_in_scope.extend(inferred_parameter_holes(&self.model, function));
         self.push(InlayHint::inferred_return(
             context,
             function,
+            predicate.as_ref(),
             returned,
             &type_params_in_scope,
         ));
@@ -14988,6 +15016,307 @@ def each(fn: (int) -> None) -> None:
         assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
         def f(a):
             pass
+        ");
+    }
+
+    /// A recovered predicate is typed `TypeIs[T]`, which narrows a call's first argument, so the
+    /// hint names the place the body actually narrows.
+    #[test]
+    fn basedpython_inferred_predicate_return_names_its_place() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                a: object
+
+            def member(a: A):
+                return a.a is int
+
+            def second(x: object, y: object):
+                return y is int
+
+            def first(x: object):
+                return x is int
+
+            def not_none(x: int | None):
+                return x is not None
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_return_types: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        class A:
+            a: object
+
+        def member(a: A)[ -> a.a is int]:
+            return a.a is int
+
+        def second(x: object, y: object)[ -> y is int]:
+            return y is int
+
+        def first(x: object)[ -> x is int]:
+            return x is int
+
+        def not_none(x: int | None)[ -> x is (not None)]:
+            return x is not None
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:29
+           |
+        LL | def member(a: A)[ -> a.a is int]:
+           |                             ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:43
+           |
+        LL | def second(x: object, y: object)[ -> y is int]:
+           |                                           ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:31
+           |
+        LL | def first(x: object)[ -> x is int]:
+           |                               ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/types.byi:LL:13
+           |
+        LL | final class NoneType:
+           |             ^^^^^^^^
+        info: Source
+          --> main2.py:LL:43
+           |
+        LL | def not_none(x: int | None)[ -> x is (not None)]:
+           |                                           ^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+           |
+        4  |
+           - def member(a: A):
+        5  + def member(a: A) -> a.a is int:
+        6  |     return a.a is int
+        7  |
+           - def second(x: object, y: object):
+        8  + def second(x: object, y: object) -> y is int:
+        9  |     return y is int
+        10 |
+           - def first(x: object):
+        11 + def first(x: object) -> x is int:
+        12 |     return x is int
+           |
+        ");
+    }
+
+    /// Python has no spelling for a predicate on anything but the first argument, so only that
+    /// one is hinted, as the `TypeIs[T]` that narrows it.
+    #[test]
+    fn inferred_predicate_return_types() {
+        let mut test = return_type_hint_test(
+            "
+            class A:
+                a: object
+
+            def member(a: A):
+                return isinstance(a.a, int)
+
+            def second(x: object, y: object):
+                return isinstance(y, int)
+
+            def first(x: object):
+                return isinstance(x, int)
+
+            def keyword(*, x: object):
+                return isinstance(x, int)
+
+            class C:
+                def method(self, x: object):
+                    return isinstance(x, int)
+
+                def receiver(self):
+                    return isinstance(self, int)
+
+                @staticmethod
+                def static(x: object):
+                    return isinstance(x, int)
+
+                @classmethod
+                def klass(cls, x: object):
+                    return isinstance(x, int)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_return_types: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        class A:
+            a: object
+
+        def member(a: A):
+            return isinstance(a.a, int)
+
+        def second(x: object, y: object):
+            return isinstance(y, int)
+
+        def first(x: object)[ -> TypeIs[int]]:
+            return isinstance(x, int)
+
+        def keyword(*, x: object):
+            return isinstance(x, int)
+
+        class C:
+            def method(self, x: object)[ -> TypeIs[int]]:
+                return isinstance(x, int)
+
+            def receiver(self):
+                return isinstance(self, int)
+
+            @staticmethod
+            def static(x: object)[ -> TypeIs[int]]:
+                return isinstance(x, int)
+
+            @classmethod
+            def klass(cls, x: object)[ -> TypeIs[int]]:
+                return isinstance(x, int)
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing_extensions.byi:LL:9
+           |
+        LL |         TypeIs,
+           |         ^^^^^^
+        info: Source
+          --> main2.py:LL:26
+           |
+        LL | def first(x: object)[ -> TypeIs[int]]:
+           |                          ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:33
+           |
+        LL | def first(x: object)[ -> TypeIs[int]]:
+           |                                 ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing_extensions.byi:LL:9
+           |
+        LL |         TypeIs,
+           |         ^^^^^^
+        info: Source
+          --> main2.py:LL:37
+           |
+        LL |     def method(self, x: object)[ -> TypeIs[int]]:
+           |                                     ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:44
+           |
+        LL |     def method(self, x: object)[ -> TypeIs[int]]:
+           |                                            ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing_extensions.byi:LL:9
+           |
+        LL |         TypeIs,
+           |         ^^^^^^
+        info: Source
+          --> main2.py:LL:31
+           |
+        LL |     def static(x: object)[ -> TypeIs[int]]:
+           |                               ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:38
+           |
+        LL |     def static(x: object)[ -> TypeIs[int]]:
+           |                                      ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing_extensions.byi:LL:9
+           |
+        LL |         TypeIs,
+           |         ^^^^^^
+        info: Source
+          --> main2.py:LL:35
+           |
+        LL |     def klass(cls, x: object)[ -> TypeIs[int]]:
+           |                                   ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:42
+           |
+        LL |     def klass(cls, x: object)[ -> TypeIs[int]]:
+           |                                          ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+           |
+        1  + from typing_extensions import TypeIs
+        2  +
+        3  |
+        --------------------------------------------------------------------------------
+        12 |
+           - def first(x: object):
+        13 + def first(x: object) -> TypeIs[int]:
+        14 |     return isinstance(x, int)
+        --------------------------------------------------------------------------------
+        19 | class C:
+           -     def method(self, x: object):
+        20 +     def method(self, x: object) -> TypeIs[int]:
+        21 |         return isinstance(x, int)
+        --------------------------------------------------------------------------------
+        26 |     @staticmethod
+           -     def static(x: object):
+        27 +     def static(x: object) -> TypeIs[int]:
+        28 |         return isinstance(x, int)
+        29 |
+        30 |     @classmethod
+           -     def klass(cls, x: object):
+        31 +     def klass(cls, x: object) -> TypeIs[int]:
+        32 |         return isinstance(x, int)
+           |
         ");
     }
 

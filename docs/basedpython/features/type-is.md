@@ -182,14 +182,15 @@ def rebound(x):
 ```
 
 a single place narrowed both ways is exactly what `TypeIs[T]` says, so that is
-how the recovered return type is written — and a result held in a variable
-carries it, the same as a written one. a guard set with no such spelling —
-several places, or one side only — rides on the signature instead, and narrows
-where the call itself is tested
+the recovered return type — shown as the guard it stands for, `x is str`, which
+names the place it narrows — and a result held in a variable carries a
+parameter's narrowing, the same as a written one. a guard set with no such spelling — several places, or
+one side only — rides on the signature instead, and narrows where the call
+itself is tested
 
 ```by
 def is_str(x):
-    return isinstance(x, str)   # -> TypeIs[str]
+    return isinstance(x, str)   # -> x is str
 
 def f(a: object):
     ok = is_str(a)
@@ -344,6 +345,20 @@ written as a statement
 
 an override is handed what the method it overrides asserts, recovered or
 written, and is checked against it
+
+a recovered predicate or assertion is read from the body alone, so a plain
+python file narrows by it the same way:
+
+```py
+a: int | None = None
+
+def check():
+    assert a is not None
+
+def f():
+    check()
+    a  # int
+```
 
 ## asserting a type
 

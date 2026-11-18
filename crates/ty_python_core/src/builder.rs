@@ -339,7 +339,7 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// [generator functions]: https://docs.python.org/3/glossary.html#term-generator
     generator_functions: FxHashSet<FileScopeId>,
     /// basedpython: the call expressions this file makes as bare statements.
-    basedpython_statement_calls: FxHashSet<ExpressionNodeKey>,
+    statement_calls: FxHashSet<ExpressionNodeKey>,
     /// Hashset of all [`FileScopeId`]s that correspond to asynchronous comprehensions.
     async_comprehensions: FxHashSet<FileScopeId>,
     /// Node indices of syntactic annotation roots.
@@ -365,9 +365,9 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// pattern's `case Circle(r):` name, keyed by its expression.
     case_names: FxHashMap<NodeKey, CaseNamePredicateKind<'db>>,
 
-    /// basedpython: places this file's narrowing return annotations name, computed on
-    /// demand. See [`Self::basedpython_guard_targets`].
-    basedpython_guard_targets: Option<GuardTargets>,
+    /// basedpython: places this file's narrowing guards name, written or recovered from a
+    /// body, computed on demand. See [`Self::guard_targets`].
+    guard_targets: Option<GuardTargets>,
     /// basedpython: whether the expression about to be visited is what an attribute is read from.
     visiting_attribute_object: bool,
 
@@ -472,7 +472,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             seen_submodule_imports: FxHashSet::default(),
             imported_modules: FxHashSet::default(),
             generator_functions: FxHashSet::default(),
-            basedpython_statement_calls: FxHashSet::default(),
+            statement_calls: FxHashSet::default(),
             async_comprehensions: FxHashSet::default(),
             annotations: Vec::new(),
 
@@ -490,7 +490,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             alias_predicates: FxHashMap::default(),
             destructures: FxHashMap::default(),
             case_names: FxHashMap::default(),
-            basedpython_guard_targets: None,
+            guard_targets: None,
             visiting_attribute_object: false,
 
             block_scoped_declarations: db.block_scoped_declarations(file.file(db)),
@@ -3203,10 +3203,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         scope: FileScopeId,
         function: &ast::StmtFunctionDef,
     ) -> Vec<ScopedPlaceId> {
-        // only a basedpython call statement narrows by assertion
-        if !self.source_type.is_basedpython() {
-            return Vec::new();
-        }
         let place_table = &self.place_tables[scope];
         let use_def = &self.use_def_maps[scope];
         place_table
@@ -3233,39 +3229,38 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .collect()
     }
 
-    /// basedpython: the places this file's narrowing return annotations name.
+    /// basedpython: the places this file's narrowing guards name, written in a return annotation
+    /// or recovered from a body.
     ///
-    /// `def f() -> a is int` narrows a place no call site mentions, and
-    /// `def m(self) -> asserts self.data` narrows a member of one, so neither target can be
-    /// read off a call's arguments. Resolving them needs the callee's signature, which isn't
-    /// available while the semantic index is being built, so every place and every member
-    /// chain a guard in this file names is a candidate at every call. A guard declared in
+    /// `def f() -> a is int` (or `def f(): assert a is int`) narrows a place no call site
+    /// mentions, and `def m(self) -> asserts self.data` narrows a member of one, so neither
+    /// target can be read off a call's arguments. Resolving them needs the callee's signature,
+    /// which isn't available while the semantic index is being built, so every place and every
+    /// member chain a guard in this file names is a candidate at every call. A guard declared in
     /// another file names a place in *that* module, which is a different symbol from a
     /// same-named place here, so it is not a candidate.
-    fn basedpython_guard_targets(&mut self) -> &GuardTargets {
-        if self.basedpython_guard_targets.is_none() {
+    fn guard_targets(&mut self) -> &GuardTargets {
+        if self.guard_targets.is_none() {
             let mut targets = GuardTargets::default();
-            if self.source_type.is_basedpython() {
-                walk_body(
-                    &mut GuardTargetCollector {
-                        targets: &mut targets,
-                    },
-                    &self.module.syntax().body,
-                );
-                targets.scope_places.sort_unstable();
-                targets.scope_places.dedup();
-                targets.member_chains.sort_unstable();
-                targets.member_chains.dedup();
-                targets.propagate_recovered_scope_places();
-            }
-            self.basedpython_guard_targets = Some(targets);
+            walk_body(
+                &mut GuardTargetCollector {
+                    targets: &mut targets,
+                },
+                &self.module.syntax().body,
+            );
+            targets.scope_places.sort_unstable();
+            targets.scope_places.dedup();
+            targets.member_chains.sort_unstable();
+            targets.member_chains.dedup();
+            targets.propagate_recovered_scope_places();
+            self.guard_targets = Some(targets);
         }
-        self.basedpython_guard_targets
+        self.guard_targets
             .as_ref()
             .expect("guard targets were just computed")
     }
 
-    /// Register the file's basedpython guard targets in the current scope so a call predicate
+    /// Register the file's guard targets in the current scope so a call predicate
     /// can narrow them, and return their places.
     fn possible_guard_target_places(
         &mut self,
@@ -3292,7 +3287,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .collect();
 
         let (scope_targets, member_chains) = {
-            let targets = self.basedpython_guard_targets();
+            let targets = self.guard_targets();
             if targets.is_empty() {
                 return Vec::new();
             }
@@ -5031,7 +5026,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             enclosing_snapshots: FrozenMap::from(self.enclosing_snapshots),
             semantic_syntax_errors,
             generator_functions: FrozenSet::from(self.generator_functions),
-            basedpython_statement_calls: FrozenSet::from(self.basedpython_statement_calls),
+            statement_calls: FrozenSet::from(self.statement_calls),
             async_comprehensions: FrozenSet::from(self.async_comprehensions),
             annotations: self.annotations.into_boxed_slice(),
             narrowing_alias_predicates: FrozenMap::from(self.alias_predicates),
@@ -7406,11 +7401,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     // assertion guard called on such a receiver (`a = A(); a.f()`) still has
                     // to narrow, so its predicate is recorded either way.
                     let is_terminal_call_candidate = !self.is_method_call_on_fluid_candidate(call);
-                    let is_guard_call_candidate = self.source_type.is_basedpython();
 
-                    if !self.source_type.is_stub()
-                        && (is_terminal_call_candidate || is_guard_call_candidate)
-                    {
+                    if !self.source_type.is_stub() {
                         let callable =
                             self.add_standalone_expression_impl(func, ExpressionKind::Callee, None);
                         let call_expr = self.add_standalone_expression(value);
@@ -7420,22 +7412,21 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         }
 
                         // basedpython: the same call may be a call to an assertion guard
-                        // (`def f(x) -> asserts x`), which narrows once it returns — that is,
-                        // for the rest of this flow rather than inside a branch
-                        if is_guard_call_candidate {
-                            // record the call itself, which is what a checker sees, rather
-                            // than the `await` around an awaited call
-                            self.basedpython_statement_calls
-                                .insert(ExpressionNodeKey::from(call));
-                            self.record_narrowing_constraint(PredicateOrLiteral::Predicate(
-                                Predicate {
-                                    node: PredicateNode::AssertsCall(CallableAndCallExpr::new(
-                                        self.db, callable, call_expr, is_await, false,
-                                    )),
-                                    is_positive: true,
-                                },
-                            ));
-                        }
+                        // (`def f(x) -> asserts x`, or a `def` whose body asserts), which
+                        // narrows once it returns — that is, for the rest of this flow rather
+                        // than inside a branch
+                        //
+                        // record the call itself, which is what a checker sees, rather than
+                        // the `await` around an awaited call
+                        self.statement_calls.insert(ExpressionNodeKey::from(call));
+                        self.record_narrowing_constraint(PredicateOrLiteral::Predicate(
+                            Predicate {
+                                node: PredicateNode::AssertsCall(CallableAndCallExpr::new(
+                                    self.db, callable, call_expr, is_await, false,
+                                )),
+                                is_positive: true,
+                            },
+                        ));
                     }
                 }
             }

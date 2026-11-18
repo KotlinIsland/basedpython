@@ -872,6 +872,14 @@ impl<'db> NarrowingGuardKind<'db> {
 }
 
 impl<'db> NarrowingGuard<'db> {
+    /// The narrowed place as it is written, `x` or `self.data`
+    pub(crate) fn place(&self) -> String {
+        std::iter::once(self.name.as_str())
+            .chain(self.members.iter().map(Name::as_str))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
     /// Whether this guard is a *written* assertion: one a return annotation declares, rather than
     /// one recovered from a body.
     pub(crate) fn is_written_assertion(&self) -> bool {
@@ -1453,21 +1461,24 @@ impl<'db> Signature<'db> {
         {
             return;
         }
-        let index = usize::from(skips_receiver);
-        let Some(name) = self
-            .parameters
-            .positional()
-            .nth(index)
-            .and_then(Parameter::name)
-        else {
+        let Some(name) = self.implicitly_narrowed_parameter(skips_receiver).cloned() else {
             return;
         };
         self.narrowing_guards = Box::new([NarrowingGuard {
-            name: name.clone(),
+            name,
             members: Box::default(),
-            root_is_first_parameter: index == 0,
+            root_is_first_parameter: !skips_receiver,
             kind: NarrowingGuardKind::Predicate,
         }]);
+    }
+
+    /// The parameter a `TypeIs` / `TypeGuard` return narrows when nothing names one: the first
+    /// positional parameter, or the one after the receiver when `skips_receiver`
+    pub(crate) fn implicitly_narrowed_parameter(&self, skips_receiver: bool) -> Option<&Name> {
+        self.parameters
+            .positional()
+            .nth(usize::from(skips_receiver))
+            .and_then(Parameter::name)
     }
 
     /// basedpython: what a call narrows through this signature's `TypeIs` / `TypeGuard`
