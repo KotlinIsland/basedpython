@@ -4034,9 +4034,16 @@ fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {
         .output()
         .expect("failed to spawn by");
 
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
     (
-        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim()
+            .to_owned(),
+        String::from_utf8_lossy(&output.stderr)
+            .replace("\r\n", "\n")
+            .trim()
+            .to_owned(),
         output.status.code().unwrap_or(-1),
     )
 }
