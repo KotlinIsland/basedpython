@@ -266,7 +266,9 @@ jobs:
 
   linux:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-build') }}
-    runs-on: ${{ github.repository != 'astral-sh/ruff' && 'ubuntu-latest' || (matrix.target == 'x86_64-unknown-linux-gnu' && 'depot-ubuntu-24.04-8' || 'depot-ubuntu-24.04-4') }}
+    # basedpython: ubuntu 24.04 rather than ubuntu-latest. on the 26.04 image the manylinux2014
+    # (centos 7) container resolves no host names, so its `yum install` of libatomic fails
+    runs-on: ${{ github.repository != 'astral-sh/ruff' && 'ubuntu-24.04' || (matrix.target == 'x86_64-unknown-linux-gnu' && 'depot-ubuntu-24.04-8' || 'depot-ubuntu-24.04-4') }}
     strategy:
       matrix:
         target:
