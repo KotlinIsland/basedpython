@@ -3037,23 +3037,21 @@ def _lazy_from_value(mod, attr):
         value = _by_sys.modules.get(submodule)
         if value is not None:
             return value
-    # worded as the import machinery words it, down to the module's file: a
-    # `from x import y` that fails is something programs catch and report, so the
-    # report must not say where the import was written
-    path = getattr(m, "__file__", None)
-    where = path if isinstance(path, str) else "unknown location"
-    if getattr(getattr(m, "__spec__", None), "_initializing", False):
-        message = (
-            f"cannot import name {attr!r} from partially initialized module {name!r} "
-            f"(most likely due to a circular import) ({where})"
-        )
+    # the error is the one the statement itself raises: a `from x import y` that
+    # fails is something programs catch and report, and its wording, down to the
+    # module's file and whether the module may shadow a library of the same name,
+    # changes between python versions and turns on the interpreter's own startup
+    # path. the module is loaded and the name is missing, so running the statement
+    # now raises it, and the traceback is dropped so that the report doesn't say
+    # where the statement was run
+    namespace = {}
+    try:
+        exec(f"from {mod} import {attr} as value", namespace)
+    except ImportError as error:
+        failure = error
     else:
-        message = f"cannot import name {attr!r} from {name!r} ({where})"
-    error = ImportError(message, name=name, path=path)
-    # `name_from` arrived in 3.12, and this polyfill runs on 3.9
-    if hasattr(error, "name_from"):
-        error.name_from = attr
-    raise error
+        return namespace["value"]
+    raise failure.with_traceback(None)
 
 
 # a `from` import: registers each name it binds, as `{bound: imported}`, with the
