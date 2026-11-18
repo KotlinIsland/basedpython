@@ -590,8 +590,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // basedpython: a `NotImplemented` a `.by` function returns is a value like any other,
             // so it has to be in the return type it declares. an operator dunder that hands back
-            // an operand of the right class says so there, and dispatch moves on past it
-            let checks_not_implemented = self.file().source_type(db).is_basedpython();
+            // an operand of the right class says so there, and dispatch moves on past it. a `.py`
+            // file whose operator dunders are checked is held to the same, but an operator dunder
+            // there needn't declare the `return NotImplemented` of its test, which sends an
+            // operand outside the domain on: those are read off the body, so `check_operand_exits`
+            // reports them. elsewhere a `.py` `return NotImplemented` is taken as python's other
+            // checkers take it
+            let file = self.file();
+            let checks_not_implemented = file.source_type(db).is_basedpython()
+                || (db.analysis_settings(file).checked_operator_operands
+                    && !crate::types::passed_operand::defers_not_implemented_returns(
+                        db,
+                        enclosing_function.literal(db).last_definition,
+                    ));
             for return_statement in
                 self.return_types_and_ranges
                     .iter()

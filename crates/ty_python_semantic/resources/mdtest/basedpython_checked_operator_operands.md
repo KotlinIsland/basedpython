@@ -93,11 +93,13 @@ class Loose:
 ## A `NotImplemented` for an operand inside the domain moves on
 
 a `return NotImplemented` reached with an operand the annotation takes hands that one back too, so
-the operation also takes whatever python asks next
+the operation also takes whatever python asks next. the method declares it in its return type
 
 ```py
+from types import NotImplementedType
+
 class Small:
-    def __add__(self, other: int) -> int:
+    def __add__(self, other: int) -> int | NotImplementedType:
         if not isinstance(other, int):
             return NotImplemented
         if other > 1:
@@ -244,14 +246,15 @@ class Fine:
 ## Only the operands a `NotImplemented` is reached with move on
 
 a `return NotImplemented` hands back only what the operand can be where it is reached, so the
-operation moves on only for those
+operation moves on only for those, whatever the return type says
 
 ```py
+from types import NotImplementedType
 from typing import final
 
 @final
 class Money:
-    def __add__(self, other: "Money | int") -> "Money":
+    def __add__(self, other: "Money | int") -> "Money | NotImplementedType":
         if isinstance(other, int):
             if other == 0:
                 return self
@@ -270,7 +273,7 @@ both, so it may be handed back too
 
 ```py
 class OpenMoney:
-    def __add__(self, other: "OpenMoney | int") -> "OpenMoney":
+    def __add__(self, other: "OpenMoney | int") -> "OpenMoney | NotImplementedType":
         if isinstance(other, int):
             if other == 0:
                 return self
@@ -296,6 +299,94 @@ class Point:
 reveal_type(Point() + Point())  # revealed: Point
 # error: [unsupported-operator]
 Point() + 1
+```
+
+## A `NotImplemented` a body may return without saying so is read off the return type
+
+where a `return` reached with an operand inside the domain returns `Any`, which may be
+`NotImplemented`, the body can't say whether it hands the operand back, and the return type does
+
+```py
+from types import NotImplementedType
+from typing import Any, final
+
+@final
+class R:
+    def __radd__(self, other: object) -> bytes:
+        return b""
+
+def untyped() -> Any:
+    return NotImplemented
+
+class A:
+    def __add__(self, other: R) -> str | NotImplementedType:
+        if not isinstance(other, R):
+            return NotImplemented
+        return untyped()
+
+reveal_type(A() + R())  # revealed: str | bytes
+```
+
+so is a method that only declares itself, which has no body to read
+
+```py
+from abc import ABC, abstractmethod
+from types import NotImplementedType
+from typing import Protocol, final
+
+@final
+class S:
+    def __radd__(self, other: object) -> bytes:
+        return b""
+
+class P(Protocol):
+    def __add__(self, other: object) -> str | NotImplementedType: ...
+
+class Base(ABC):
+    @abstractmethod
+    def __add__(self, other: object) -> str | NotImplementedType: ...
+
+def f(p: P, b: Base):
+    reveal_type(p + S())  # revealed: str | bytes
+    reveal_type(b + S())  # revealed: str | bytes
+```
+
+## A `NotImplemented` handed back through a call or an expression is declared
+
+```py
+from types import NotImplementedType
+
+class A:
+    def _compare(self, other: int) -> str | NotImplementedType:
+        return NotImplemented
+
+    def __add__(self, other: int) -> str:
+        if not isinstance(other, int):
+            return NotImplemented
+        # error: [invalid-return-type]
+        return self._compare(other)
+
+class B:
+    def __add__(self, other: int) -> str:
+        if not isinstance(other, int):
+            return NotImplemented
+        # error: [invalid-return-type]
+        return NotImplemented if other > 1 else ""
+```
+
+## An abstract method's body declares the `NotImplemented` it returns
+
+an abstract method's body isn't checked as a test of its operand, so every `NotImplemented` it
+returns is declared: a subclass may call it through `super()`
+
+```py
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def __add__(self, other: int) -> int:
+        # error: [invalid-return-type]
+        return NotImplemented
 ```
 
 ## A protocol's members are not checked

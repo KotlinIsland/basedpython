@@ -27,8 +27,8 @@ use ty_python_core::semantic_index;
 use super::check_order::InferredInCheckOrder;
 use super::function::{FunctionDecorators, OverloadLiteral};
 use super::inferred_narrowing::is_empty_body;
+use super::passed_operand::body_rejection;
 use super::passed_operand::is_protocol_member;
-use super::passed_operand::operand_rejected_by_value;
 use super::reified_infer::{ErasedTargetReason, ParametricIsPlan, type_test_plan};
 use super::runtime_spelling::RuntimeSite;
 use super::signatures::{CallableSignature, Parameter, ReturnCallableTypeVarScope};
@@ -361,11 +361,16 @@ impl<'db> Bindings<'db> {
     /// - with a return annotation that includes `NotImplementedType`
     /// - with a return type inferred from the body that is nothing else: whatever it takes, it
     ///   hands back
-    /// - in a checked `.py` dunder, with a `return NotImplemented` reached for an operand inside
-    ///   the domain, which is then handed back only where it could be `operand`
-    ///   ([`operand_rejected_by_value`]). a return type inferred from an unchecked body may
-    ///   include `NotImplementedType` only for the operands of the wrong class, which dispatch
-    ///   already moves past, so it says nothing more
+    ///
+    /// a return type inferred from an unchecked body may include `NotImplementedType` only for the
+    /// operands of the wrong class, which dispatch already moves past, so it says nothing more
+    ///
+    /// a checked `.py` dunder says it with a `return NotImplemented` reached for an operand inside
+    /// the domain, which is then handed back only where it could be `operand` ([`body_rejection`]).
+    /// its return type has to declare that too, but only the body says which operands, so the
+    /// body is read, and the return type only where the body can't say: where a `return` reached
+    /// with an operand inside the domain returns `Any`, say, and where the method only declares
+    /// itself
     pub(crate) fn may_reject_by_value(
         &self,
         db: &'db dyn Db,
@@ -383,14 +388,20 @@ impl<'db> Bindings<'db> {
             };
             let implementation = function.literal(db).last_definition;
             let writes_return = implementation.header(db).writes_return;
-            if binding.matching_overloads().any(|(_, overload)| {
-                overload.return_ty.includes_not_implemented(db)
-                    && (writes_return || overload.return_ty.without_not_implemented(db).is_never())
-            }) {
-                return true;
+            let declares = || {
+                binding.matching_overloads().any(|(_, overload)| {
+                    overload.return_ty.includes_not_implemented(db)
+                        && (writes_return
+                            || overload.return_ty.without_not_implemented(db).is_never())
+                })
+            };
+            match body_rejection(db, implementation) {
+                Some(body) => {
+                    (!body.rejected.is_never() && !operand.is_disjoint_from(db, env, body.rejected))
+                        || (body.opaque && declares())
+                }
+                None => declares(),
             }
-            let rejected = *operand_rejected_by_value(db, implementation);
-            !rejected.is_never() && !operand.is_disjoint_from(db, env, rejected)
         })
     }
 }

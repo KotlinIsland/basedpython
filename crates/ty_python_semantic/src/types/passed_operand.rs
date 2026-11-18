@@ -22,7 +22,9 @@
 //! - a body that returns a value, or raises, for an operand it hasn't tested into the domain is
 //!   reported as `unguarded-operand`: dispatch has already sent that operand somewhere else
 //! - a `return NotImplemented` reached with an operand inside the domain hands that one back too,
-//!   so the operation moves on with it ([`Bindings::may_reject_by_value`])
+//!   so the operation moves on with it ([`Bindings::may_reject_by_value`]), and the return type
+//!   has to declare it ([`report_undeclared_hand_backs`]). the test's own `return NotImplemented`
+//!   needn't be declared
 //!
 //! [`Bindings::operand_rejection`]: crate::types::call::bind::Bindings::operand_rejection
 //! [`Bindings::may_reject_by_value`]: crate::types::call::bind::Bindings::may_reject_by_value
@@ -38,7 +40,7 @@ use ty_python_core::definition::Definition;
 use ty_python_core::semantic_index;
 
 use crate::types::context::InferContext;
-use crate::types::diagnostic::UNGUARDED_OPERAND;
+use crate::types::diagnostic::{UNGUARDED_OPERAND, report_invalid_return_type};
 use crate::types::function::{FunctionDecorators, OverloadLiteral};
 use crate::types::inferred_narrowing::{
     NormalExit, exits_through_finally, holds_the_argument, is_declaration_body, is_empty_body,
@@ -47,7 +49,7 @@ use crate::types::inferred_narrowing::{
 use crate::types::operator_domain::tests_its_operand;
 use crate::types::signatures::{Parameter, ReturnCallableTypeVarScope};
 use crate::types::{
-    IntersectionBuilder, Type, TypeContext, UnionType, binding_type, infer_scope_types,
+    IntersectionBuilder, KnownClass, Type, TypeContext, UnionType, binding_type, infer_scope_types,
 };
 use crate::{Db, ProgramEnvironment};
 
@@ -174,6 +176,15 @@ pub(crate) struct OperandExits<'db> {
     /// the operands inside the domain a `return NotImplemented` can be reached with, which the
     /// method hands back too. `Never` when it hands back none
     rejected_by_value: Type<'db>,
+    /// the value of each `return` that hands back `NotImplemented` with an operand inside the
+    /// domain, rather than as the test that sends an operand outside it on
+    returned_by_value: Box<[TextRange]>,
+    /// a `return` reached with an operand inside the domain returns something that may be
+    /// `NotImplemented` without saying so, such as `Any` or `object`, so the body can't say
+    /// whether it hands the operand back
+    opaque_by_value: bool,
+    /// the body was read. a method that only declares itself, and the start of a cycle, aren't
+    read: bool,
 }
 
 impl OperandExits<'_> {
@@ -182,6 +193,9 @@ impl OperandExits<'_> {
             unguarded: Box::default(),
             rebinds: false,
             rejected_by_value: Type::Never,
+            returned_by_value: Box::default(),
+            opaque_by_value: false,
+            read: false,
         }
     }
 }
@@ -226,18 +240,26 @@ pub(crate) fn operand_exits<'db>(
     let use_def = index.use_def_map(file_scope_id);
     let inference = infer_scope_types(db, body_scope, TypeContext::default());
 
-    // what a `return` hands back: `None` for a bare one, and for falling off the end
-    let returned = |exit: NormalExit| match exit {
+    // the value a `return` is written with, where it has one
+    let value = |exit: NormalExit| match exit {
         NormalExit::Return { range, .. } => returns
             .returns
             .iter()
             .find(|statement| statement.range() == range)
-            .and_then(|statement| statement.value.as_deref())
-            .map_or_else(
-                || Type::none(db, env),
-                |value| inference.expression_type(value),
-            ),
-        NormalExit::EndOfBody => Type::none(db, env),
+            .and_then(|statement| statement.value.as_deref()),
+        NormalExit::EndOfBody => None,
+    };
+    // what a `return` hands back: `None` for a bare one, and for falling off the end
+    let returned = |exit: NormalExit| {
+        value(exit).map_or_else(
+            || Type::none(db, env),
+            |value| inference.expression_type(value),
+        )
+    };
+    let not_implemented = KnownClass::NotImplementedType.to_instance(db, env);
+    let opaque = |returned: Type<'db>| {
+        !returned.includes_not_implemented(db)
+            && not_implemented.is_assignable_to(db, env, returned)
     };
     // a `return` is read where it is written, even when a `finally` suite runs after it: that is
     // where what it hands back is decided
@@ -247,17 +269,22 @@ pub(crate) fn operand_exits<'db>(
     // is reported once, and every `NotImplemented` it might return is read as handing back an
     // operand inside the domain
     if !holds_the_argument(db, index, file_scope_id, &operand.name, &[]) {
-        let returns_not_implemented = exits
-            .into_iter()
-            .any(|exit| returned(exit).includes_not_implemented(db));
+        let returned_by_value: Box<[TextRange]> = exits
+            .iter()
+            .filter(|exit| returned(**exit).includes_not_implemented(db))
+            .filter_map(|exit| value(*exit).map(Ranged::range))
+            .collect();
         return OperandExits {
             unguarded: Box::default(),
             rebinds: true,
-            rejected_by_value: if returns_not_implemented {
-                operand.domain
-            } else {
+            rejected_by_value: if returned_by_value.is_empty() {
                 Type::Never
+            } else {
+                operand.domain
             },
+            returned_by_value,
+            opaque_by_value: exits.iter().any(|exit| opaque(returned(*exit))),
+            read: true,
         };
     }
 
@@ -282,6 +309,8 @@ pub(crate) fn operand_exits<'db>(
 
     let mut unguarded = Vec::new();
     let mut rejected_by_value = Vec::new();
+    let mut returned_by_value = Vec::new();
+    let mut opaque_by_value = false;
     for exit in exits {
         let returned = returned(exit);
         let established = narrowed_at_exit(db, env, use_def, exit, place, &start);
@@ -295,8 +324,17 @@ pub(crate) fn operand_exits<'db>(
                 NormalExit::EndOfBody => UnguardedExit::EndOfBody,
             });
         }
+        let inside = meet(established, operand.domain);
+        if opaque(returned) && !inside.is_never() {
+            opaque_by_value = true;
+        }
         if returned.includes_not_implemented(db) {
-            rejected_by_value.push(meet(established, operand.domain));
+            if !inside.is_never()
+                && let Some(value) = value(exit)
+            {
+                returned_by_value.push(value.range());
+            }
+            rejected_by_value.push(inside);
         }
     }
     // python stops at a raise, where dispatch would have moved on with an operand outside the
@@ -311,23 +349,76 @@ pub(crate) fn operand_exits<'db>(
         unguarded: unguarded.into_boxed_slice(),
         rebinds: false,
         rejected_by_value: UnionType::from_elements(db, env, rejected_by_value),
+        returned_by_value: returned_by_value.into_boxed_slice(),
+        opaque_by_value,
+        read: true,
     }
 }
 
-/// the operands inside its domain the `.py` operator dunder `implementation` hands back with a
-/// `return NotImplemented`: `Never` for a method that hands back none, or isn't checked
+/// what the body of a checked `.py` operator dunder hands back by value
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct BodyRejection<'db> {
+    /// the operands inside the domain a `return NotImplemented` is reached with. `Never` for a
+    /// body that hands back none
+    pub(crate) rejected: Type<'db>,
+    /// some `return` reached with an operand inside the domain may be `NotImplemented` without
+    /// saying so, so only the return type can say whether the body hands it back
+    pub(crate) opaque: bool,
+}
+
+/// what the body of the `.py` operator dunder `implementation` hands back by value: `None` for a
+/// method whose body isn't read, because it isn't checked or only declares itself
 ///
 /// kept apart from [`operand_exits`] so that an edit to the body that moves its `return`
 /// statements, without changing what they hand back, doesn't change what dispatch reads
 #[salsa::tracked(
-    cycle_initial = |_, _, _| Type::Never,
+    cycle_initial = |_, _, _| None,
     heap_size = ruff_memory_usage::heap_size,
 )]
-pub(crate) fn operand_rejected_by_value<'db>(
+pub(crate) fn body_rejection<'db>(
     db: &'db dyn Db,
     implementation: OverloadLiteral<'db>,
-) -> Type<'db> {
-    operand_exits(db, implementation).rejected_by_value
+) -> Option<BodyRejection<'db>> {
+    let exits = operand_exits(db, implementation);
+    exits.read.then_some(BodyRejection {
+        rejected: exits.rejected_by_value,
+        opaque: exits.opaque_by_value,
+    })
+}
+
+/// the `return` values of `implementation` a `NotImplemented` they return has to be declared at,
+/// where it is an operator dunder whose test of its operand dispatch reads: those reached with an
+/// operand inside the domain, which the method hands back by value. a `return NotImplemented`
+/// reached only with an operand outside it is that test, which dispatch already moves past, so
+/// it needn't be declared
+///
+/// ```python
+/// class A:
+///     def __add__(self, other: int) -> int:
+///         if not isinstance(other, int):
+///             return NotImplemented  # the test
+///         return NotImplemented  # hands back an `int`, which `-> int` doesn't say
+/// ```
+///
+/// `None` for any other function, and for a method whose body isn't read
+fn returned_by_value<'db>(
+    db: &'db dyn Db,
+    implementation: OverloadLiteral<'db>,
+) -> Option<&'db [TextRange]> {
+    let exits = operand_exits(db, implementation);
+    exits.read.then_some(&*exits.returned_by_value)
+}
+
+/// whether the return check of `implementation`, a function of a checked `.py` file, leaves
+/// its `return NotImplemented` statements to [`check_operand_exits`]: an operator dunder whose
+/// body is read, where only those reached with an operand inside the domain have to be declared.
+/// it can't ask which those are itself, because they are read off the body it is checking
+pub(crate) fn defers_not_implemented_returns<'db>(
+    db: &'db dyn Db,
+    implementation: OverloadLiteral<'db>,
+) -> bool {
+    passed_operand(db, implementation).is_some()
+        && !implementation.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
 }
 
 /// whether `implementation` is written in the body of a protocol class
@@ -349,6 +440,56 @@ pub(crate) fn is_protocol_member<'db>(
     )
 }
 
+/// report each `return NotImplemented` of the `.py` operator dunder `node` that hands back an
+/// operand inside the domain, where its return type doesn't say it may
+fn report_undeclared_hand_backs<'db>(
+    context: &InferContext<'db, '_>,
+    implementation: OverloadLiteral<'db>,
+    node: &ast::StmtFunctionDef,
+) {
+    let db = context.db();
+    let env = &context.program_environment();
+    let Some(returns) = node.returns.as_deref() else {
+        return;
+    };
+    if !defers_not_implemented_returns(db, implementation) {
+        return;
+    }
+    let (Some(operand), Some(returned_by_value)) = (
+        passed_operand(db, implementation),
+        returned_by_value(db, implementation),
+    ) else {
+        return;
+    };
+    let declared = implementation.signature(db).return_ty;
+    let not_implemented = KnownClass::NotImplementedType.to_instance(db, env);
+    if not_implemented.is_assignable_to(db, env, declared) {
+        return;
+    }
+    let method = node.name.as_str();
+    let name = &operand.name;
+    for range in returned_by_value {
+        let Some(mut diagnostic) =
+            report_invalid_return_type(context, *range, returns, declared, not_implemented)
+        else {
+            continue;
+        };
+        if operand.has_outside {
+            diagnostic.info(format_args!(
+                "this `return NotImplemented` is reached with `{name}` inside `{}`, so it hands \
+                 that operand back: declare `NotImplementedType` in the return type",
+                operand.domain.display(db, env),
+            ));
+        } else {
+            diagnostic.info(format_args!(
+                "`{name}` takes every operand, so this `return NotImplemented` hands back one \
+                 `{method}` was given: annotate `{name}` with what `{method}` takes, which makes \
+                 this its test, or declare `NotImplementedType` in the return type",
+            ));
+        }
+    }
+}
+
 /// report where the `.py` operator dunder `node` returns a value with an operand it hasn't tested
 /// into its domain, which dispatch has already sent somewhere else
 pub(crate) fn check_operand_exits<'db>(
@@ -362,6 +503,7 @@ pub(crate) fn check_operand_exits<'db>(
     let db = context.db();
     let env = &context.program_environment();
     let implementation = function.literal(db).last_definition;
+    report_undeclared_hand_backs(context, implementation, node);
     let Some(operand) = passed_operand(db, implementation)
         .as_ref()
         .filter(|operand| operand.has_outside)

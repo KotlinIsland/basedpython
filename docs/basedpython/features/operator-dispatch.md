@@ -343,15 +343,17 @@ the other operand. a `return` inside a `try` is checked where it is written, and
 operand takes its type from the method it overrides is checked against that type
 
 a `return NotImplemented` reached with an operand inside the domain [rejects it by
-value](#rejecting-by-value), without writing `NotImplementedType` in the return type. only the
-operands it can be reached with move on
+value](#rejecting-by-value), so the return type says so with `NotImplementedType`. the test's own
+`return NotImplemented` needn't be declared: it hands back only operands outside the domain, which
+dispatch already moves past. only the operands a `return NotImplemented` can be reached with move on
 
 ```python
+from types import NotImplementedType
 from typing import final
 
 @final
 class Money:
-    def __add__(self, other: "Money | int") -> "Money":
+    def __add__(self, other: "Money | int") -> "Money | NotImplementedType":
         if isinstance(other, int):
             if other == 0:
                 return self
@@ -368,8 +370,9 @@ without `@final`, a `Money` operand [may also be an `int`](#an-operand-that-may-
 class that inherits from both, so `Money() + Money()` may be handed back too, and is
 `unsupported-operator`
 
-an operand annotated `object`, or not annotated at all, claims nothing about what it takes, and
-nothing it returns is reported. a `NotImplemented` it returns still hands back whatever reaches it.
+an operand annotated `object`, or not annotated at all, claims nothing about what it takes, so it
+has no test to write, and nothing it returns is `unguarded-operand`. a `NotImplemented` it returns
+hands back whatever reaches it, so it has to be declared.
 this is `analysis.checked-operator-operands`, which is on under the `strict` preset and off under
 `ty-compatible`, where the body sees the annotation as if python only passed what it says
 
@@ -404,20 +407,36 @@ is the operation moving on
 a return type inferred from the body says this only when it is nothing but `NotImplementedType`.
 otherwise it may only count the `return NotImplemented` that rejects an operand of the wrong class,
 which the domain already covers. a `.py` dunder whose body is
-[checked](#a-py-dunder-tests-its-operand-itself) says it with a `return NotImplemented` reached for
-an operand inside the domain
+[checked](#a-py-dunder-tests-its-operand-itself) says it in its return type too, but its body says
+which operands: those a `return NotImplemented` is reached with. so the body is read, and the return
+type only where the body can't say, as where a `return` reached with an operand inside the domain
+returns `Any`, or where the method only declares itself, in a protocol or as an `@abstractmethod`
 
-### in a `.by` file
+### declaring it
 
 `NotImplemented` is a value like any other in a `.by` file, so a function that returns it has to
-declare it. in a `.py` file a `return NotImplemented` is still accepted whatever the function
-declares
+declare it
 
 ```by
 class A:
     def __add__(self, other: int) -> int:
         return NotImplemented  # error: [invalid-return-type]
 ```
+
+so it is in a `.py` file whose operator dunders are
+[checked](#a-py-dunder-tests-its-operand-itself), but for the `return NotImplemented` of a dunder's
+test, which is reached only with operands outside the domain
+
+```python
+class A:
+    def __add__(self, other: int) -> int:
+        if not isinstance(other, int):
+            return NotImplemented  # fine: the test
+        return NotImplemented  # error: [invalid-return-type]: an `int` is handed back
+```
+
+elsewhere a `.py` `return NotImplemented` is accepted whatever the function declares, as python's
+other checkers accept it
 
 ## `__eq__` and `__ne__` may take fewer operands
 

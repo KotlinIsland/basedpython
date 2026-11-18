@@ -1423,6 +1423,118 @@ class B:
         return NotImplemented  # no diagnostic
 ```
 
+## A checked `.py` dunder declares a `NotImplemented` it returns by value
+
+where a project checks `.py` operator dunders, a `return NotImplemented` reached with an operand
+inside the domain hands that operand back, so it has to be in the declared return type. the test
+that sends an operand outside the domain on needn't be: it is no value of the method's, and dispatch
+already moves past that operand
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+class A:
+    def __add__(self, other: int) -> int:
+        if not isinstance(other, int):
+            return NotImplemented  # no diagnostic
+        # snapshot: invalid-return-type
+        return NotImplemented
+```
+
+```snapshot
+error[invalid-return-type]: Return type does not match returned value
+ --> src/mdtest_snippet.py:6:16
+  |
+2 |     def __add__(self, other: int) -> int:
+  |                                      --- Expected `int` because of return type
+3 |         if not isinstance(other, int):
+4 |             return NotImplemented  # no diagnostic
+5 |         # snapshot: invalid-return-type
+6 |         return NotImplemented
+  |                ^^^^^^^^^^^^^^ expected `int`, found `NotImplementedType`
+info: this `return NotImplemented` is reached with `other` inside `int`, so it hands that operand back: declare `NotImplementedType` in the return type
+```
+
+```py
+from types import NotImplementedType
+
+class B:
+    def __add__(self, other: int) -> int | NotImplementedType:
+        if not isinstance(other, int):
+            return NotImplemented
+        if other > 1:
+            return NotImplemented  # no diagnostic
+        return 0
+```
+
+## A checked `.py` dunder that takes every operand declares every `NotImplemented` it returns
+
+with nothing outside its domain, a `return NotImplemented` always hands back an operand the method
+takes. one that narrows its operand, as an `__eq__` may, has a test instead
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+class A:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, A):
+            # snapshot: invalid-return-type
+            return NotImplemented
+        return True
+
+class B:
+    def __eq__(self, other: "B") -> bool:
+        if not isinstance(other, B):
+            return NotImplemented  # no diagnostic
+        return True
+```
+
+```snapshot
+error[invalid-return-type]: Return type does not match returned value
+ --> src/mdtest_snippet.py:5:20
+  |
+2 |     def __eq__(self, other: object) -> bool:
+  |                                        ---- Expected `bool` because of return type
+3 |         if not isinstance(other, A):
+4 |             # snapshot: invalid-return-type
+5 |             return NotImplemented
+  |                    ^^^^^^^^^^^^^^ expected `bool`, found `NotImplementedType`
+info: `other` takes every operand, so this `return NotImplemented` hands back one `__eq__` was given: annotate `other` with what `__eq__` takes, which makes this its test, or declare `NotImplementedType` in the return type
+```
+
+## A function that isn't an operator dunder declares the `NotImplemented` it returns
+
+in a checked `.py` file, nothing falls back from an ordinary function, so a `NotImplemented` it
+returns is a value like any other
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+def f() -> int:
+    # error: [invalid-return-type]
+    return NotImplemented
+```
+
+## An unchecked `.py` function may return `NotImplemented` whatever it declares
+
+```py
+def f() -> int:
+    return NotImplemented  # no diagnostic
+
+class A:
+    def __add__(self, other: int) -> int:
+        return NotImplemented  # no diagnostic
+```
+
 ## A `.by` dunder's operand is tested before its body runs
 
 a `.by` operator dunder hands back an operand outside its parameter's domain itself: the lowering

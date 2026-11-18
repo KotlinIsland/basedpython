@@ -6332,17 +6332,15 @@ pub(super) fn report_dynamic_function_decorator_return<'db>(
     }
 }
 
-pub(super) fn report_invalid_return_type(
-    context: &InferContext,
+pub(super) fn report_invalid_return_type<'db, 'env: 'db>(
+    context: &'env InferContext,
     object_range: impl Ranged,
     return_type_range: impl Ranged,
     expected_ty: Type,
     actual_ty: Type,
-) {
+) -> Option<LintDiagnosticGuard<'db, 'env>> {
     let db = context.db();
-    let Some(builder) = context.report_lint(&INVALID_RETURN_TYPE, object_range) else {
-        return;
-    };
+    let builder = context.report_lint(&INVALID_RETURN_TYPE, object_range)?;
 
     let env = &context.program_environment();
     let settings =
@@ -6364,6 +6362,7 @@ pub(super) fn report_invalid_return_type(
 
     let error_context = actual_ty.assignability_error_context(db, env, expected_ty);
     error_context.attach_to(db, env, &mut diag);
+    Some(diag)
 }
 
 pub(super) fn report_unsound_return_statement(
