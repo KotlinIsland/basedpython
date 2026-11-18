@@ -1866,3 +1866,31 @@ fn postfix_templates_can_be_switched_off() -> Result<()> {
     assert!(without.iter().any(|label| label == "append"), "{without:?}");
     Ok(())
 }
+
+/// A number being typed, `a = 1`, is answered with no completions, in a `.py` and a `.by` file,
+/// rather than every name and keyword in scope, which a client matching against an empty
+/// `textEdit` range showed as `False`, `None`, `True` and `and` under the `1`.
+#[test]
+fn no_completions_in_number_literal() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let content = "\
+def f():
+    a = 1
+";
+    for path in ["src/foo.py", "src/foo.by"] {
+        let path = SystemPath::new(path);
+        let mut server = TestServerBuilder::new()?
+            .with_initialization_options(&ClientOptions::default())
+            .with_workspace(workspace_root, None)?
+            .with_file(path, content)?
+            .build()
+            .wait_until_workspaces_are_initialized();
+
+        server.open_text_document(path, content, 1);
+
+        let completions = server.completion_request(&server.file_uri(path), Position::new(1, 9));
+        assert_eq!(completions, Vec::new(), "{path}");
+    }
+
+    Ok(())
+}

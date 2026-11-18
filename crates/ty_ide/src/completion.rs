@@ -1204,7 +1204,7 @@ impl<'m> Context<'m> {
         offset: TextSize,
     ) -> Option<Context<'m>> {
         let cursor = ContextCursor::new(parsed, source, offset);
-        if cursor.is_in_comment() {
+        if cursor.is_in_comment() || cursor.is_in_number_literal() {
             return None;
         }
 
@@ -1421,6 +1421,29 @@ impl<'m> ContextCursor<'m> {
         self.tokens_before
             .last()
             .is_some_and(|t| t.kind().is_comment())
+    }
+
+    /// Whether the cursor is in a number literal, where nothing can be written but more of the
+    /// number: `1‸`, `0x1f‸`, `1.‸`, `1j‸`, `12‸34`, and the ones the tokenizer cannot read yet,
+    /// `0b‸`, or splits in two, `1e‸` and `1.5e‸`, which are an int or a float with a name touching
+    /// it. A name can never touch a number, `1if x else y` being one that python deprecates, so
+    /// nothing in scope is offered there. Once a space ends the number an operator or a keyword
+    /// can follow it, `1 if`, and completions are back.
+    fn is_in_number_literal(&self) -> bool {
+        let source = self.source.as_str();
+        let is_number = |token: &Token| match token.kind() {
+            TokenKind::Int | TokenKind::Float | TokenKind::Complex => true,
+            TokenKind::Unknown => source[token.range()].starts_with(|c: char| c.is_ascii_digit()),
+            _ => false,
+        };
+        match self.tokens_before {
+            [.., last] if self.offset > last.end() => false,
+            [.., number, name] if is_name_like_token(name) => {
+                number.end() == name.start() && is_number(number)
+            }
+            [.., last] => is_number(last),
+            [] => false,
+        }
     }
 
     /// Whether the last token is positioned within a string token (regular, f-string, t-string, etc).
@@ -5044,14 +5067,6 @@ impl<'t> CompletionTargetTokens<'t> {
                     object,
                     attribute: Some(attribute),
                 }
-            } else if let Some([_]) = token_suffix_by_kinds(before, [TokenKind::Float]) {
-                // If we're writing a `float`, then we should
-                // specifically not offer completions. This wouldn't
-                // normally be an issue, but if completions are
-                // automatically triggered by a `.` (which is what we
-                // request as an LSP server), then we can get here
-                // in the course of just writing a decimal number.
-                return None;
             } else if let Some([_]) = token_suffix_by_kinds(before, [TokenKind::Ellipsis]) {
                 // Similarly as above. If we've just typed an ellipsis,
                 // then we shouldn't show completions. Note that
@@ -8739,6 +8754,53 @@ A().<CURSOR>
         );
 
         builder.build().contains("bit_length");
+    }
+
+    #[test]
+    fn no_completions_in_number_literal() {
+        for source in [
+            "def f():\n    a = 1<CURSOR>\n",
+            "a = 1j<CURSOR>\n",
+            "a = 0x1f<CURSOR>\n",
+            "a = 1_000<CURSOR>\n",
+            "a = 12<CURSOR>34\n",
+            "a = 1.5<CURSOR>\n",
+            "a = 1.<CURSOR>\n",
+            // the tokenizer cannot read these yet
+            "a = 0b<CURSOR>\n",
+            "a = 0x<CURSOR>\n",
+            // nor these, which it splits into a number and a name
+            "a = 1e<CURSOR>\n",
+            "a = 1.5e<CURSOR>\n",
+            "a = 1if<CURSOR>\n",
+            "a = f\"{1<CURSOR>}\"\n",
+        ] {
+            // a name for the `e` of `1e` and the `if` of `1if` to match, were they read as names
+            let builder = completion_test_builder(&format!("else_ = 1\n{source}"));
+            assert_eq!(
+                builder.build().snapshot(),
+                "<No completions found>",
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completions_after_number_literal_and_space() {
+        for source in [
+            "a = 1 <CURSOR>\n",
+            "a = 1.5 <CURSOR>\n",
+            "a = 1j <CURSOR>\n",
+        ] {
+            completion_test_builder(source).build().contains("if");
+        }
+    }
+
+    #[test]
+    fn completions_for_name_ending_in_digits() {
+        completion_test_builder("x10 = 1\na = x1<CURSOR>\n")
+            .build()
+            .contains("x10");
     }
 
     #[test]
