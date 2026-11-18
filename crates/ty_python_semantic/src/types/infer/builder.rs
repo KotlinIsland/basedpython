@@ -6510,8 +6510,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 return binary_return_ty(self, value_ty, state);
                             }
                             // the part of the operand inside the domain reaches the in-place
-                            // dunder, and the rest falls back
-                            OperandRejection::Partly { inside } => {
+                            // dunder, and the rest falls back, with the inside part too where the
+                            // dunder may hand it back
+                            OperandRejection::Partly { inside, outside } => {
                                 if let Ok(outcome) = target_type.try_call_dunder_with_policy(
                                     db,
                                     env,
@@ -6520,7 +6521,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     TypeContext::default(),
                                     MemberLookupPolicy::NO_INSTANCE_FALLBACK,
                                 ) {
-                                    return in_place_or_binary_ty(self, &outcome, value_ty, state);
+                                    let falls_back = if outcome.may_reject_by_value(db, env, inside)
+                                    {
+                                        UnionType::from_two_elements(db, env, inside, outside)
+                                    } else {
+                                        outside
+                                    };
+                                    return in_place_or_binary_ty(
+                                        self, &outcome, falls_back, state,
+                                    );
                                 }
                             }
                             OperandRejection::Reaches => {}

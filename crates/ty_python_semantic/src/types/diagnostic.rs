@@ -210,7 +210,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&UNESTABLISHED_ASSERTION_GUARD);
     registry.register_lint(&UNGUARDED_OPERAND);
-    registry.register_lint(&INVALID_REFLECTED_DUNDER);
+    registry.register_lint(&INVALID_OPERATOR_OVERRIDE);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&MUTABLE_STATE_VALUE);
     registry.register_lint(&SILENT_MUTATION);
@@ -2295,8 +2295,11 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks that a reflected operator dunder (`__radd__`, `__gt__`, ...) that python asks
-    /// before an ancestor's own dunder answers as that dunder does.
+    /// Checks that an operator dunder a subclass has, which python asks where code typed against an
+    /// ancestor expects another dunder, answers as that dunder does: a reflected dunder
+    /// (`__radd__`, `__gt__`, ...) asked before the ancestor's own, an in-place dunder
+    /// (`__iadd__`, ...) the ancestor doesn't have, and an override that takes operands the
+    /// overridden dunder hands back.
     ///
     /// ## Why is this bad?
     /// When the right operand's class is a subclass of the left operand's, python asks the right
@@ -2311,6 +2314,14 @@ declare_lint! {
     /// `B.__radd__` answers `A() + C()` before `A.__add__`. A class whose own `__lt__` and
     /// `__gt__` disagree is reported unless it is `@final`, since a subclass asks its inherited
     /// `__gt__` first.
+    ///
+    /// Likewise `x += y` asks `x`'s `__iadd__`, and only without one `x.__add__`. A class that adds
+    /// an `__iadd__` to an ancestor without one has to take only what the ancestor's `__add__`
+    /// takes, and answer as it does.
+    ///
+    /// And an operand an ancestor's dunder hands back is answered by what python asks next, so an
+    /// operator dunder override may take only what the dunder it overrides takes, though the
+    /// ordinary override check allows a wider parameter.
     ///
     /// ## Example
     ///
@@ -2335,8 +2346,8 @@ declare_lint! {
     ///     def __radd__(self, other: object) -> int:
     ///         return 2
     /// ```
-    pub(crate) static INVALID_REFLECTED_DUNDER = {
-        summary: "detects a reflected operator dunder that answers differently from an ancestor's dunder it is asked before",
+    pub(crate) static INVALID_OPERATOR_OVERRIDE = {
+        summary: "detects an operator dunder of a subclass that python asks in place of an ancestor's, and that answers differently",
         status: LintStatus::stable("0.0.2"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,

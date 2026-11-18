@@ -174,7 +174,7 @@ class Base:
         return 1
 
 class Child(Base):
-    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
 
 def f[T: Base](x: final T, c: Child):
@@ -214,7 +214,7 @@ class A:
         return 1
 
 class B(A):
-    # snapshot: invalid-reflected-dunder
+    # snapshot: invalid-operator-override
     def __radd__(self, other: object) -> str:
         return "s"
 
@@ -223,12 +223,12 @@ def f(a1: A, a2: A):
 ```
 
 ```snapshot
-error[invalid-reflected-dunder]: `B.__radd__` answers `A() + B()` with `str`, where `A.__add__` answers `int`
+error[invalid-operator-override]: `B.__radd__` answers `A() + B()` with `str`, where `A.__add__` answers `int`
  --> src/mdtest_snippet.by:7:9
   |
 7 |     def __radd__(self, other: object) -> str:
   |         ^^^^^^^^
-info: python asks a subclass's `__radd__` before `A.__add__`, so for an `A` it has to answer as `A.__add__` does, or not take an `A`
+info: python asks a subclass's `__radd__` before `A.__add__`, so for a left operand of exactly `A` it has to answer as `A.__add__` does, or hand the operand back
 ```
 
 ## A reflected dunder may answer with what the ancestor's dunder answers
@@ -270,17 +270,17 @@ class Mixin:
     def __radd__(self, other: object) -> str:
         return "s"
 
-# snapshot: invalid-reflected-dunder
+# snapshot: invalid-operator-override
 class Both(Mixin, A): ...
 ```
 
 ```snapshot
-error[invalid-reflected-dunder]: `Both.__radd__` answers `A() + Both()` with `str`, where `A.__add__` answers `int`
+error[invalid-operator-override]: `Both.__radd__` answers `A() + Both()` with `str`, where `A.__add__` answers `int`
   --> src/mdtest_snippet.by:10:7
    |
 10 | class Both(Mixin, A): ...
    |       ^^^^^^^^^^^^^^
-info: python asks a subclass's `__radd__` before `A.__add__`, so for an `A` it has to answer as `A.__add__` does, or not take an `A`
+info: python asks a subclass's `__radd__` before `A.__add__`, so for a left operand of exactly `A` it has to answer as `A.__add__` does, or hand the operand back
 ```
 
 ## A subclass of a class with a wrong reflected dunder isn't reported again
@@ -291,7 +291,7 @@ class A:
         return 1
 
 class B(A):
-    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
 
 class C(B): ...  # no diagnostic
@@ -308,7 +308,7 @@ class B[T](A):
     def __init__(self, t: T):
         self.t = t
 
-    def __radd__(self, other: object) -> T:  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: object) -> T:  # error: [invalid-operator-override]
         return self.t
 ```
 
@@ -338,7 +338,7 @@ class A[T]:
         return 1
 
 class B[T](A[T]):
-    def __radd__(self, other: A[int]) -> str:  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: A[int]) -> str:  # error: [invalid-operator-override]
         return "s"
 ```
 
@@ -351,10 +351,10 @@ is `@final`
 from typing import final
 
 class A:
-    def __lt__(self, other: object) -> int:  # error: [invalid-reflected-dunder]
+    def __lt__(self, other: object) -> int:  # error: [invalid-operator-override]
         return 1
 
-    def __gt__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __gt__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
 
 @final
@@ -377,10 +377,10 @@ class A:
         return 1
 
 class B(A):
-    def __radd__(self, other: object) -> str:  # ty: ignore[invalid-reflected-dunder]
+    def __radd__(self, other: object) -> str:  # ty: ignore[invalid-operator-override]
         return "s"
 
-    def __rsub__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __rsub__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
 ```
 
@@ -392,8 +392,590 @@ class A:
         return True
 
 class B(A):
-    def __gt__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __gt__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
+```
+
+## An in-place dunder a subclass adds answers as the ancestor's binary dunder does
+
+`foo += y` with `foo: Foo` is `Foo.__add__`, since `Foo` has no `__iadd__`. a `Bar` answers it with
+`Bar.__iadd__` instead, so that takes only what `Foo.__add__` takes, and answers as it does
+
+```by
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Bar(Foo):
+    # snapshot: invalid-operator-override
+    def __iadd__(self, x: object) -> int:
+        return 1
+
+def f(x: Foo):
+    foo = x
+    foo += "a"
+    reveal_type(foo)  # revealed: str
+```
+
+```snapshot
+error[invalid-operator-override]: `Bar.__iadd__` takes every operand, more than `Foo.__add__` takes (`str`)
+ --> src/mdtest_snippet.by:7:9
+  |
+7 |     def __iadd__(self, x: object) -> int:
+  |         ^^^^^^^^
+info: `x += y` with `x: Foo` is `Foo.__add__`, but for `x` of class `Bar` it is `Bar.__iadd__`, so that may take only what `Foo.__add__` takes, and answer as it does
+```
+
+## An in-place dunder a subclass adds returns what the binary dunder does
+
+of the operands it takes, it accepts each one `Foo.__add__` accepts, and answers it as `Foo.__add__`
+does
+
+```by
+from typing import overload
+
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Answers(Foo):
+    # snapshot: invalid-operator-override
+    def __iadd__(self, x: str) -> int:
+        return 1
+```
+
+```snapshot
+error[invalid-operator-override]: `Answers.__iadd__` is `(x: str) -> int`, which doesn't answer the operands it takes as `Foo.__add__` (`(x: str) -> str`) does
+ --> src/mdtest_snippet.by:9:9
+  |
+9 |     def __iadd__(self, x: str) -> int:
+  |         ^^^^^^^^
+info: `x += y` with `x: Foo` is `Foo.__add__`, but for `x` of class `Answers` it is `Answers.__iadd__`, so that may take only what `Foo.__add__` takes, and answer as it does
+info: incompatible return types: `int` is not assignable to `str`
+```
+
+a runtime test sees an operand's class, not its type arguments, so `StrItems.__iadd__` takes the
+`list[int]` that `Items.__add__` accepts, and doesn't accept it
+
+```by
+class Items:
+    def __add__(self, x: list[int]) -> int:
+        return 1
+
+class StrItems(Items):
+    def __iadd__(self, x: list[str]) -> int:  # error: [invalid-operator-override]
+        return 1
+```
+
+an overload of the binary dunder that answers an operand more narrowly holds the in-place dunder to
+that answer
+
+```by
+from typing import overload
+
+class Bar:
+    @overload
+    def __add__(self, x: bool) -> str: ...
+    @overload
+    def __add__(self, x: int) -> int: ...
+    def __add__(self, x: int) -> int | str:
+        return 1
+
+class Overloaded(Bar):
+    def __iadd__(self, x: int) -> int:  # error: [invalid-operator-override]
+        return 1
+```
+
+the overloads are compared as the override check compares them, which takes an overload of the
+binary dunder to be answered by any overload of the in-place dunder that fits it, though python
+calls the first that matches
+
+```by
+from typing import overload
+
+class Baz:
+    def __add__(self, x: int) -> int:
+        return 1
+
+class FirstMatches(Baz):
+    @overload
+    def __iadd__(self, x: bool) -> str: ...
+    @overload
+    def __iadd__(self, x: int) -> int: ...
+    # TODO: should be `invalid-operator-override`: `baz += True` is `str` for a `FirstMatches`
+    def __iadd__(self, x: int) -> int | str:
+        return 1
+```
+
+## An in-place dunder that isn't a plain method takes every operand
+
+nothing tests its operand, so it takes what `Foo.__add__` hands back
+
+```by
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Assigned(Foo):
+    __iadd__ = lambda self, x: 1  # error: [invalid-operator-override]
+```
+
+## An in-place dunder that isn't a plain method returns what the binary dunder does
+
+```by
+class Foo:
+    def __add__(self, x: object) -> str:
+        return "pear"
+
+class Assigned(Foo):
+    __iadd__ = lambda self, x: 1  # error: [invalid-operator-override]
+```
+
+## An in-place dunder fits a generic binary dunder as the override check fits it
+
+an in-place dunder generic in the same way fits, and so does one that takes only `str` operands and
+answers them as `G.__add__` does: the rest reach `G.__add__`
+
+```by
+class G:
+    def __add__[S](self, x: S) -> S:
+        return x
+
+class Same(G):
+    def __iadd__[S](self, x: S) -> S:  # no diagnostic
+        return x
+
+class Bound(G):
+    def __iadd__[S: str](self, x: S) -> S:  # no diagnostic
+        return x
+```
+
+the override check solves the binary dunder's type parameters rather than holding the in-place
+dunder to every one of them, so it misses one that answers a single type
+
+```by
+class G2:
+    def __add__[S](self, x: S) -> S:
+        return x
+
+class H(G2):
+    # TODO: should be `invalid-operator-override`: `g += "a"` is `int` for an `H`
+    def __iadd__(self, x: object) -> int:
+        return 1
+```
+
+## An in-place dunder that answers as the ancestor's binary dunder does
+
+it may take fewer operands: python asks the class's own `__add__` for the rest, which answers as the
+ancestor's does
+
+```by
+from typing import Self
+
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Same(Foo):
+    def __iadd__(self, x: str) -> str:  # no diagnostic
+        return "pear"
+
+class Vec:
+    def __add__(self, other: Vec) -> Vec:
+        return self
+
+class MutableVec(Vec):
+    def __iadd__(self, other: Vec) -> Self:  # no diagnostic
+        return self
+
+class Fl(float):
+    def __iadd__(self, other: float) -> float:  # no diagnostic
+        return 1.0
+```
+
+## An in-place dunder's operand may have another name
+
+python passes the operand positionally, so its name doesn't matter, and neither does whether it is
+positional-only
+
+```by
+from typing import Self
+
+class Vec:
+    def __add__(self, other: Vec) -> Vec:
+        return self
+
+class Renamed(Vec):
+    def __iadd__(self, rhs: Vec) -> Self:  # no diagnostic
+        return self
+
+class PositionalOnly(Vec):
+    def __iadd__(self, other: Vec, /) -> Self:  # no diagnostic
+        return self
+```
+
+## An in-place dunder's operand annotated `Self` is tested against the class
+
+the test of an operand annotated `Self` is a test of `SelfVec`, so a subclass of `SelfVec` would run
+with an operand that is a `SelfVec` but not its `Self`. `x += y` with `x: Vec` hands it one
+
+```by
+from typing import Self
+
+class Vec:
+    def __add__(self, other: Vec) -> Vec:
+        return self
+
+class SelfVec(Vec):
+    def __iadd__(self, other: Self) -> Self:  # error: [invalid-operator-override]
+        return self
+
+class ClassVec(Vec):
+    def __iadd__(self, other: ClassVec) -> Self:  # no diagnostic
+        return self
+```
+
+## An in-place dunder is called with one operand
+
+python passes the operand and nothing else, so a binary dunder's parameters with defaults after it
+never apply, and nor does a default for the operand
+
+```by
+class Power:
+    def __pow__(self, other: int, mod: int | None = None) -> int:
+        return 1
+
+class InPlacePower(Power):
+    def __ipow__(self, other: int) -> int:  # no diagnostic
+        return 1
+
+class Defaulted:
+    def __add__(self, other: str = "") -> str:
+        return other
+
+class InPlaceDefaulted(Defaulted):
+    def __iadd__(self, other: str) -> str:  # no diagnostic
+        return other
+```
+
+an in-place dunder whose operand is keyword-only can't be called with it at all
+
+```by
+class Foo:
+    def __add__(self, x: object) -> str:
+        return "s"
+
+class KeywordOnly(Foo):
+    def __iadd__(self, *, x: object = None) -> str:  # error: [invalid-operator-override]
+        return "b"
+```
+
+## An in-place dunder answers as the binary dunder does for every receiver of its class
+
+code typed with a type variable bound to `Vec`, or inside a `Vec` method, has `Self` as whatever
+class the value is, so `x += y` there is that class, which an `MV` has to answer with
+
+```by
+from typing import Self
+
+class Vec:
+    def __add__(self, other: Vec) -> Self:
+        return self
+
+class MV(Vec):
+    def __iadd__(self, other: Vec) -> Vec:  # error: [invalid-operator-override]
+        return Vec()
+
+def f[T: Vec](x: T, y: Vec) -> T:
+    x += y
+    reveal_type(x)  # revealed: T
+    return x
+```
+
+so does a class that may have subclasses: one that returns its own class answers a subclass's
+`x += y` with something other than the subclass
+
+```by
+from typing import Self
+
+class Foo:
+    def __add__(self, other: Foo) -> Self:
+        return self
+
+class Bar(Foo):
+    def __iadd__(self, other: Foo) -> Bar:  # error: [invalid-operator-override]
+        return Bar()
+
+class Baz(Bar): ...
+```
+
+a final class has no subclass, so it may return its own class
+
+```by
+from typing import Self, final
+
+class Node:
+    def __add__(self, other: Node) -> Self:
+        return self
+
+@final
+class Leaf(Node):
+    def __iadd__(self, other: Node) -> Leaf:  # no diagnostic
+        return Leaf()
+```
+
+## A stdlib class's in-place dunder is taken at its word
+
+`MutableSet.__ior__` answers what `Set.__or__` would differently, which a subclass isn't reported
+for, and an in-place dunder that answers as the stdlib's binary dunder does fits it
+
+```by
+from collections.abc import Iterator, MutableSet
+from fractions import Fraction
+
+class Bag(MutableSet[int]):  # no diagnostic
+    def __contains__(self, x: object) -> bool:
+        return False
+
+    def __iter__(self) -> Iterator[int]:
+        return iter([])
+
+    def __len__(self) -> int:
+        return 0
+
+    def add(self, value: int) -> None:
+        pass
+
+    def discard(self, value: int) -> None:
+        pass
+
+class Fr(Fraction):
+    def __iadd__(self, other: Fraction) -> Fraction:  # no diagnostic
+        return self
+```
+
+## A comparison override may take only what the overridden comparison takes
+
+```by
+class Base:
+    def __lt__(self, other: Base) -> bool:
+        return True
+
+class Sub(Base):
+    override def __lt__(self, other: object) -> bool:  # error: [invalid-operator-override]
+        return True
+```
+
+## An ancestor's synthesized comparison is read as taking every operand
+
+a `dataclass(order=True)` writes comparisons that hand back an operand of another class, but they
+are read as taking every operand, as dispatch reads them
+
+```by
+from dataclasses import dataclass
+
+class A:
+    def __lt__(self, other: A) -> bool:
+        return True
+
+# TODO: should be no diagnostic: the generated `__lt__` takes only a `B`
+@dataclass(order=True)
+class B(A):  # error: [invalid-operator-override]
+    x: int = 0
+```
+
+## An ancestor's overloads that annotate `self` aren't asked of a generic subclass
+
+the override check binds a generic subclass's ancestor at the subclass's own type parameter, which
+neither overload's `self` takes
+
+```by
+from typing import overload
+
+class Foo[T]:
+    @overload
+    def __add__(self: Foo[int], x: int) -> int: ...
+    @overload
+    def __add__(self: Foo[str], x: str) -> str: ...
+    def __add__(self, x: int | str) -> int | str:
+        return x
+
+class Bar[T](Foo[T]):
+    # TODO: should be `invalid-operator-override`: `z += 1` with `z: Foo[int]` is `bytes` for a
+    # `Bar[int]`
+    def __iadd__(self, x: int) -> bytes:
+        return b""
+```
+
+## A subclass of a class with a wrong in-place dunder isn't reported again
+
+nor is a subclass of a class that has a wrong in-place dunder from a mixin
+
+```by
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Bar(Foo):
+    def __iadd__(self, x: object) -> int:  # error: [invalid-operator-override]
+        return 1
+
+class Baz(Bar): ...  # no diagnostic
+
+class Mixin:
+    def __iadd__(self, x: object) -> int:
+        return 1
+
+class Mixed(Mixin, Foo): ...  # error: [invalid-operator-override]
+
+class Sub(Mixed): ...  # no diagnostic
+```
+
+## An operator dunder override may take only what the overridden dunder takes
+
+an operand `A.__add__` hands back is answered by what python asks next, `S.__radd__` here. a `Wide`
+answers it with its own `__add__` instead, though the override is otherwise valid
+
+```by
+from typing import final
+
+@final
+class S:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+class A:
+    def __add__(self, other: int) -> int:
+        return 1
+
+class Wide(A):
+    # snapshot: invalid-operator-override
+    override def __add__(self, other: object) -> int:
+        return 2
+
+def f(a: A, s: S):
+    reveal_type(a + s)  # revealed: str
+```
+
+```snapshot
+error[invalid-operator-override]: `Wide.__add__` takes every operand, more than `A.__add__` takes (`int`)
+  --> src/mdtest_snippet.by:14:18
+   |
+14 |     override def __add__(self, other: object) -> int:
+   |                  ^^^^^^^
+info: an operand `A.__add__` hands back is answered by what python asks next, but for a receiver of class `Wide` by `Wide.__add__`
+```
+
+## An in-place dunder override may take only what the overridden one takes
+
+```by
+class A:
+    def __iadd__(self, x: int) -> int:
+        return 1
+
+    def __add__(self, x: str) -> str:
+        return "a"
+
+class B(A):
+    override def __iadd__(self, x: object) -> int:  # error: [invalid-operator-override]
+        return 2
+```
+
+## An in-place dunder takes the part of a union operand inside its domain
+
+the `int` reaches `__iadd__`, and the `str` falls back to `__add__`
+
+```by
+class Foo:
+    def __iadd__(self, x: int) -> bytes:
+        return b""
+
+    def __add__(self, x: str) -> str:
+        return "s"
+
+def f(x: Foo, y: int | str):
+    foo = x
+    foo += y  # no diagnostic
+    reveal_type(foo)  # revealed: bytes | str
+```
+
+an in-place dunder that may hand the `int` back by value leaves it to `__add__` too, which here
+doesn't take it
+
+```by
+from types import NotImplementedType
+
+class MayHandBack:
+    def __iadd__(self, x: int) -> bytes | NotImplementedType:
+        if x > 1:
+            return NotImplemented
+        return b""
+
+    def __add__(self, x: str) -> str:
+        return "s"
+
+def g(x: MayHandBack, y: int | str):
+    z = x
+    z += y  # error: [unsupported-operator]
+```
+
+## An in-place dunder from another base is checked against the ancestor's binary dunder
+
+```by
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Mixin:
+    def __iadd__(self, x: object) -> int:
+        return 1
+
+class Both(Mixin, Foo): ...  # error: [invalid-operator-override]
+```
+
+## A class's own in-place and binary dunders may differ
+
+with no ancestor that answers `+=` with its `__add__`, a value of the class asks `__iadd__` from the
+start
+
+```by
+class Own:
+    def __add__(self, other: int) -> int:
+        return 1
+
+    def __iadd__(self, other: object) -> str:  # no diagnostic
+        return "own"
+```
+
+## A `.py` in-place dunder in a checked file answers as the ancestor's binary dunder does
+
+```toml
+[analysis]
+checked-operator-operands = true
+```
+
+```py
+class Foo:
+    def __add__(self, x: str) -> str:
+        if not isinstance(x, str):
+            return NotImplemented
+        return "pear"
+
+class Bar(Foo):
+    def __iadd__(self, x: object) -> int:  # error: [invalid-operator-override]
+        return 1
+```
+
+## A `.py` in-place dunder is checked only where its operands are checked
+
+```py
+class Foo:
+    def __add__(self, x: str) -> str:
+        return "pear"
+
+class Bar(Foo):
+    def __iadd__(self, x: object) -> int:  # no diagnostic
+        return 1
 ```
 
 ## A `.py` reflected dunder is checked only where its operands are checked
@@ -421,7 +1003,7 @@ class A:
         return 1
 
 class B(A):
-    def __radd__(self, other: object) -> str:  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: object) -> str:  # error: [invalid-operator-override]
         return "s"
 ```
 
@@ -936,7 +1518,7 @@ def f(box: Box[int]):
     box += "s"
 ```
 
-## A union operand reaches the method if any of its types is inside the domain
+## A union operand's type inside the domain reaches the method
 
 ```py
 class Box[T]:
@@ -952,6 +1534,26 @@ class A:
 def f(a: A, value: Box[str] | int):
     # error: [unsupported-operator]
     a += value
+```
+
+## A binary dunder takes the part of a union operand inside its domain
+
+the `int` reaches `A.__add__`, and `S.__radd__` answers the `S`
+
+```by
+from typing import final
+
+@final
+class S:
+    def __radd__(self, other: object) -> str:
+        return "s"
+
+class A:
+    def __add__(self, other: int) -> int:
+        return 1
+
+def f(a: A, y: int | S):
+    reveal_type(a + y)  # revealed: int | str
 ```
 
 ## Only a method that tests its operand hands it back

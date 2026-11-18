@@ -170,7 +170,7 @@ pub(crate) fn check_static_class_definitions<'db>(
 
     // basedpython: a reflected dunder python asks before an ancestor's own dunder has to answer
     // as that dunder does
-    crate::types::reflected_dunder::check_reflected_dunders(context, class, class_node);
+    crate::types::operator_override::check_operator_overrides(context, class, class_node);
 
     // Check that the class does not have a cyclic definition
     if let Some(inheritance_cycle) = class.inheritance_cycle(context.db()) {

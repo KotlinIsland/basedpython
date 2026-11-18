@@ -3366,6 +3366,39 @@ impl<'db> Signature<'db> {
         Self { return_ty, ..self }
     }
 
+    /// basedpython: this signature as python calls an operator dunder, with one operand passed
+    /// positionally: `(operand, /) -> R`. a variadic parameter takes the operand as one of its
+    /// arguments, and a parameter after it that has a default, or gathers what is left, is left
+    /// out, as is the operand's own default. `None` where the call can't bind: the operand is keyword-only, or another parameter
+    /// is required. a gradual parameter list takes it as it is
+    pub(crate) fn as_called_with_operand(&self) -> Option<Self> {
+        let kind = self.parameters.kind();
+        if !matches!(kind, ParametersKind::Standard) {
+            return Some(self.clone());
+        }
+        let mut parameters = self.parameters.iter();
+        let first = parameters.next()?;
+        // the operand is always passed, so a default it has never applies
+        let operand = match first.kind() {
+            ParameterKind::PositionalOnly { .. }
+            | ParameterKind::PositionalOrKeyword { .. }
+            | ParameterKind::Variadic { .. } => Parameter::positional_only(first.name().cloned())
+                .with_annotated_type(first.annotated_type()),
+            ParameterKind::KeywordOnly { .. } | ParameterKind::KeywordVariadic { .. } => {
+                return None;
+            }
+        };
+        if parameters.any(|parameter| {
+            !parameter.has_default() && !parameter.is_variadic() && !parameter.is_keyword_variadic()
+        }) {
+            return None;
+        }
+        Some(
+            self.clone()
+                .with_parameters(Parameters::new([operand], kind)),
+        )
+    }
+
     /// the same signature with the parameter at `index` annotated `annotated_type`
     pub(crate) fn with_parameter_type(self, index: usize, annotated_type: Type<'db>) -> Self {
         let kind = self.parameters.kind();

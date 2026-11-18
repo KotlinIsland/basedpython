@@ -164,7 +164,11 @@ pub(crate) enum OperandRejection<'db> {
     /// def f(w: Wallet, c: Coupon):
     ///     w + c  # a `class MoneyCoupon(Coupon, Money)` reaches `Wallet.__add__`
     /// ```
-    Partly { inside: Type<'db> },
+    Partly {
+        inside: Type<'db>,
+        /// the part that may be outside the domain, which python moves on with
+        outside: Type<'db>,
+    },
     /// the operand reaches the method whatever it is, so the call goes ahead with an operand it
     /// doesn't accept: a type error, with nothing to fall back to
     Reaches,
@@ -180,9 +184,9 @@ impl<'db> Bindings<'db> {
     /// a type of the operand is outside a domain only when nothing can be both: a final class,
     /// a literal, or a class whose instances are laid out differently. two other classes may
     /// share a subclass, which is inside, where the callee reads it
-    /// ([`reads_shared_subclasses`]). a union operand is wholly rejected only when each of
-    /// its types is: an `int | Box[str]` against a `Box` domain may be a `Box`, which reaches the
-    /// method, and the method runs with it
+    /// ([`reads_shared_subclasses`]). a union operand is split: of an `int | str` against an `int`
+    /// domain, the `int` reaches the method and the `str` is handed back. of an `int | Box[str]`
+    /// against a `Box[int]` parameter, the `Box[str]` reaches the method, which runs with it
     pub(crate) fn operand_rejection(
         &self,
         db: &'db dyn Db,
@@ -193,7 +197,9 @@ impl<'db> Bindings<'db> {
             Type::Union(union) => union.elements(db).to_vec(),
             _ => vec![operand],
         };
-        let mut overlapped = Vec::new();
+        // the parts of the operand that reach the method, and the parts that may not
+        let mut inside = Vec::new();
+        let mut outside = Vec::new();
         for (callee, parameters) in self.failed_operand_parameters() {
             let Some(domain) = rejected_domain(db, env, callee, &parameters) else {
                 return OperandRejection::Reaches;
@@ -201,26 +207,25 @@ impl<'db> Bindings<'db> {
             let reads_shared_subclasses = reads_shared_subclasses(db, callee);
             for operand in &operands {
                 if operand.is_assignable_to(db, env, domain) {
-                    return OperandRejection::Reaches;
+                    inside.push(*operand);
+                    continue;
                 }
-                if reads_shared_subclasses
-                    && !overlapped.contains(&domain)
-                    && !operand.is_disjoint_from(db, env, domain)
-                {
-                    overlapped.push(domain);
+                outside.push(*operand);
+                if reads_shared_subclasses && !operand.is_disjoint_from(db, env, domain) {
+                    inside.push(IntersectionType::from_two_elements(
+                        db, env, *operand, domain,
+                    ));
                 }
             }
         }
-        if overlapped.is_empty() {
+        if outside.is_empty() {
+            OperandRejection::Reaches
+        } else if inside.is_empty() {
             OperandRejection::Whole
         } else {
             OperandRejection::Partly {
-                inside: IntersectionType::from_two_elements(
-                    db,
-                    env,
-                    operand,
-                    UnionType::from_elements(db, env, overlapped),
-                ),
+                inside: UnionType::from_elements(db, env, inside),
+                outside: UnionType::from_elements(db, env, outside),
             }
         }
     }
@@ -299,7 +304,10 @@ fn rejected_domain<'db>(
 ///   for, and what a checked `.py` dunder is checked for. a function bound to a dunder under
 ///   another name, a `@staticmethod` or `@classmethod`, an operand gathered into `*args`, and a
 ///   method of an extension, which is called directly rather than dispatched to, have none
-#[salsa::tracked(heap_size = ruff_memory_usage::heap_size)]
+///
+/// reading the operand parameter's signature can lead back here through a protocol whose own
+/// dunders mention the class, so a cycle starts from no test and iterates to a fixpoint
+#[salsa::tracked(cycle_initial = |_, _, _| false, heap_size = ruff_memory_usage::heap_size)]
 pub(crate) fn tests_its_operand<'db>(
     db: &'db dyn Db,
     implementation: OverloadLiteral<'db>,
@@ -515,7 +523,7 @@ impl<'db, T> DunderStep<'db, T> {
             Ok((answer, may_reject)) => DunderStep::Accepts { answer, may_reject },
             Err(error) => match error.operand_rejection(db, env, operand) {
                 OperandRejection::Whole => DunderStep::Rejects,
-                OperandRejection::Partly { inside } => match call(inside) {
+                OperandRejection::Partly { inside, .. } => match call(inside) {
                     Ok((answer, _)) => DunderStep::Accepts {
                         answer,
                         may_reject: true,

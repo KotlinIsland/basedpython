@@ -34,9 +34,9 @@ so each parameter is read two ways:
 
 a literal, `None`, and a protocol are their own domains. a type variable's domain is that of its
 bound, and that includes the class's own type parameters: in `Box[int]`, a `__add__(self, other: T)`
-can't see the `int`, so it runs with every operand `T`'s bound takes. a union operand is rejected
-only when each of its types is outside the domain, since one that may be inside it reaches the
-method
+can't see the `int`, so it runs with every operand `T`'s bound takes. a union operand is split: its
+types inside the domain reach the method, and the rest are rejected. a type that may share a
+subclass with the domain is both, as [below](#an-operand-that-may-be-both)
 
 ```python
 class V[T]:
@@ -92,14 +92,14 @@ read as ty reads it: an operand that isn't assignable to the domain is outside i
 python asks the right operand first when its class is a subclass of the left operand's and, for a
 binary operator, answers the reflected dunder differently. code typed against the ancestor can't see
 that coming, so the reflected dunder has to answer as the ancestor's own dunder does, or it is
-`invalid-reflected-dunder`
+`invalid-operator-override`
 
 ```by
 class A:
     def __add__(self, other: object) -> int: ...
 
 class B(A):
-    def __radd__(self, other: object) -> str: ...  # error: [invalid-reflected-dunder]
+    def __radd__(self, other: object) -> str: ...  # error: [invalid-operator-override]
 
 def f(a1: A, a2: A):
     reveal_type(a1 + a2)  # int, which a `B` in `a2` would make `B.__radd__`'s `str`
@@ -115,6 +115,106 @@ whose `__lt__` and `__gt__` disagree is reported too, unless it is `@final`
 
 in a `.py` file this applies where the file's operator dunders are checked
 (`analysis.checked-operator-operands`)
+
+## a subclass's in-place dunder answers as its ancestor's binary dunder does
+
+`x += y` asks `x`'s `__iadd__`, and only without one `x.__add__`. so a class that adds an
+`__iadd__` to an ancestor without one changes what `+=` does to a value typed as the ancestor. the
+in-place dunder may take only operands the ancestor's `__add__` takes, and has to answer them as it
+does, or it is `invalid-operator-override`
+
+```by
+class Foo:
+    def __add__(self, x: str) -> str: ...
+
+class Bar(Foo):
+    def __iadd__(self, x: object) -> int: ...  # error: [invalid-operator-override]
+
+def f(x: Foo):
+    foo = x
+    foo += "a"
+    reveal_type(foo)  # str, which a `Bar` in `x` would make `Bar.__iadd__`'s `int`
+```
+
+it may take fewer operands: one it hands back reaches the class's own `__add__`, which answers as the
+ancestor's does. so the two are compared as an override is compared with the method it overrides,
+but only on the operands the `__iadd__` takes, and called as python calls it, with one operand passed
+positionally. that lets it take fewer operands, and holds it to the type arguments of an operand it
+can't tell apart
+
+```by
+class Vec:
+    def __add__(self, other: Vec) -> Vec: ...
+
+class MutableVec(Vec):
+    def __iadd__(self, other: MutableVec) -> Self: ...  # fine: another `Vec` reaches `Vec.__add__`
+
+class Items:
+    def __add__(self, other: list[int]) -> int: ...
+
+class StrItems(Items):
+    def __iadd__(self, other: list[str]) -> int: ...  # error: [invalid-operator-override]
+```
+
+`StrItems.__iadd__` takes every `list`, so `x += [1]` with `x: Items` hands it a `list[int]`
+
+`Self` in the ancestor's `__add__` is the ancestor for code typed against it, but whatever class the
+value is for code typed with a type variable bound to it, or inside one of its methods, so the
+`__iadd__` has to answer both ways: a `-> MutableVec` there would answer a subclass of `MutableVec`
+with something else. an operand annotated `Self` is tested against the class, so it may be of the
+class without being the `Self` of a subclass, and `other: Self` doesn't fit. an `__iadd__` that
+isn't a plain method tests nothing, so it takes every operand
+
+## an operator dunder override takes only what the overridden dunder takes
+
+an operand an ancestor's dunder hands back is answered by what python asks next, and the operation is
+typed that way. an override that takes the operand answers it instead, so an operator dunder may take
+only what the dunder it overrides takes, or it is `invalid-operator-override`. the ordinary override
+check allows a wider parameter, and this is the one place where that changes what an operation does
+
+```by
+@final
+class S:
+    def __radd__(self, other: object) -> str: ...
+
+class A:
+    def __add__(self, other: int) -> int: ...
+
+class Wide(A):
+    override def __add__(self, other: object) -> int: ...  # error: [invalid-operator-override]
+
+def f(a: A, s: S):
+    reveal_type(a + s)  # str, which a `Wide` in `a` would make `Wide.__add__`'s `int`
+```
+
+`__eq__` and `__ne__` keep [their own rule](#__eq__-and-__ne__-may-take-fewer-operands)
+
+## what isn't checked
+
+a dunder the left operand's type doesn't have at all may still be on its runtime class. `o + t` with
+`o: object` is answered by `t`'s `__radd__`, but a subclass of `object` that defines `__add__`
+answers it first, and `foo += y` with `foo` typed as a protocol that has `__add__` and no `__iadd__`
+is answered by whatever `__iadd__` the runtime class has. no class definition can see every such
+operation, so this isn't reported. an operand of an exact class (`final T`, or a value made by a
+constructor in a `.by` file) has no subclass to worry about
+
+the stdlib's classes are taken at their word: `MutableSet.__ior__` answers what `Set.__or__` would
+differently, and a class that inherits it isn't reported for it
+
+a subclass's in-place dunder is compared with its ancestor's binary dunder as the override check
+compares an override with the method it overrides, so it has that check's gaps:
+
+- an overload of the ancestor's dunder is fitted with any overload of the in-place dunder that
+    matches it, though python calls the first that matches
+- the type parameters of a generic ancestor dunder are solved rather than holding the in-place
+    dunder to every one of them, so `__iadd__(self, other: object) -> int` passes against
+    `__add__[S](self, other: S) -> S`, and against `__add__[S](self: S, other: object) -> S`
+- a generic subclass doesn't see an ancestor's overloads that annotate `self`, such as
+    `__add__(self: Foo[int], x: int) -> int`
+
+a comparison a `dataclass(order=True)` writes is read as taking every operand, though it hands back
+an operand of another class, so a dataclass with `order=True` that subclasses a class with its own
+`__lt__` is reported
 
 ## why `list` is the motivating case
 

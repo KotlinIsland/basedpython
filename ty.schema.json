@@ -1575,6 +1575,16 @@
             }
           ]
         },
+        "invalid-operator-override": {
+          "title": "detects an operator dunder of a subclass that python asks in place of an ancestor's, and that answers differently",
+          "description": "## What it does\nChecks that an operator dunder a subclass has, which python asks where code typed against an\nancestor expects another dunder, answers as that dunder does: a reflected dunder\n(`__radd__`, `__gt__`, ...) asked before the ancestor's own, an in-place dunder\n(`__iadd__`, ...) the ancestor doesn't have, and an override that takes operands the\noverridden dunder hands back.\n\n## Why is this bad?\nWhen the right operand's class is a subclass of the left operand's, python asks the right\noperand first: for a binary operator where the subclass answers the reflected dunder\ndifferently, and for a comparison even where it inherits it. Code typed against the\nancestor can't see that coming: `a1 + a2`, with both typed `A`, is what `A.__add__`\nreturns, but a `B` in `a2` answers with `B.__radd__`. So the reflected dunder has to return\nwhat the ancestor's dunder returns, or hand the operand back with `NotImplemented`, after\nwhich python asks the ancestor's dunder.\n\nThe check applies to a reflected dunder a class inherits too: in `class C(B, A)`,\n`B.__radd__` answers `A() + C()` before `A.__add__`. A class whose own `__lt__` and\n`__gt__` disagree is reported unless it is `@final`, since a subclass asks its inherited\n`__gt__` first.\n\nLikewise `x += y` asks `x`'s `__iadd__`, and only without one `x.__add__`. A class that adds\nan `__iadd__` to an ancestor without one has to take only what the ancestor's `__add__`\ntakes, and answer as it does.\n\nAnd an operand an ancestor's dunder hands back is answered by what python asks next, so an\noperator dunder override may take only what the dunder it overrides takes, though the\nordinary override check allows a wider parameter.\n\n## Example\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> str:  # error: `A.__add__` answers `int`\n        return \"s\"\n```\n\nUse instead:\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> int:\n        return 2\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-overload": {
           "title": "detects invalid `@overload` usages",
           "description": "## What it does\n\nChecks for various invalid `@overload` usages.\n\n## Why is this bad?\n\nThe `@overload` decorator is used to define functions and methods that accepts different\ncombinations of arguments and return different types based on the arguments passed. This is mainly\nbeneficial for type checkers. But, if the `@overload` usage is invalid, the type checker may not be\nable to provide correct type information.\n\n## Examples\n\n### Single overload\n\n```py\nfrom typing import overload\n\n\n@overload\ndef foo(x: int) -> int: ...  # error\ndef foo(x: int | None) -> int | None:\n    return x\n```\n\n### Missing implementation\n\n```py\nfrom typing import overload\n\n\n@overload\ndef foo() -> None: ...  # error\n@overload\ndef foo(x: int) -> int: ...\n```\n\n### Implementation default an overload's default doesn't describe\n\nA call matching an overload that leaves an argument out is solved from the overload's default, but\nthe implementation runs with its own.\n\n```py\nfrom typing import TypeVar, overload\n\nT = TypeVar(\"T\")\n\n\n@overload\ndef foo(x: T = 1) -> T: ...  # error\n@overload\ndef foo(x: int, y: int) -> int: ...\ndef foo(x: object = \"a\", y: int = 0) -> object:\n    return x\n```\n\n## References\n\n- [Python documentation: `@overload`](https://docs.python.org/3/library/typing.html#typing.overload)",
@@ -1658,16 +1668,6 @@
         "invalid-raises-clause": {
           "title": "detects a `raises` clause that is not a set of exceptions",
           "description": "## What it does\nChecks for a basedpython `raises` clause that does not describe a set of\nexceptions.\n\n## Why is this bad?\nOnly a `BaseException` subclass can be raised, so a clause with no\nexception in it can never be satisfied by anything the function does.\n\nA type parameter in a clause stands for one type the caller chooses, so\nit has to be declared an exception as well — a parameter with no bound\ncan be `int` as easily as `OSError`.\n\n## Example\n\n```by\ndef f() raises int:  # error: `int` is not an exception\n    ...\n\ndef g[T](value: T) raises T:  # error: `T@g` is not always an exception\n    ...\n```",
-          "default": "error",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-        "invalid-reflected-dunder": {
-          "title": "detects a reflected operator dunder that answers differently from an ancestor's dunder it is asked before",
-          "description": "## What it does\nChecks that a reflected operator dunder (`__radd__`, `__gt__`, ...) that python asks\nbefore an ancestor's own dunder answers as that dunder does.\n\n## Why is this bad?\nWhen the right operand's class is a subclass of the left operand's, python asks the right\noperand first: for a binary operator where the subclass answers the reflected dunder\ndifferently, and for a comparison even where it inherits it. Code typed against the\nancestor can't see that coming: `a1 + a2`, with both typed `A`, is what `A.__add__`\nreturns, but a `B` in `a2` answers with `B.__radd__`. So the reflected dunder has to return\nwhat the ancestor's dunder returns, or hand the operand back with `NotImplemented`, after\nwhich python asks the ancestor's dunder.\n\nThe check applies to a reflected dunder a class inherits too: in `class C(B, A)`,\n`B.__radd__` answers `A() + C()` before `A.__add__`. A class whose own `__lt__` and\n`__gt__` disagree is reported unless it is `@final`, since a subclass asks its inherited\n`__gt__` first.\n\n## Example\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> str:  # error: `A.__add__` answers `int`\n        return \"s\"\n```\n\nUse instead:\n\n```python\nclass A:\n    def __add__(self, other: object) -> int:\n        return 1\n\nclass B(A):\n    def __radd__(self, other: object) -> int:\n        return 2\n```",
           "default": "error",
           "oneOf": [
             {
