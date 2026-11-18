@@ -224,9 +224,11 @@ fn scaffold(
         &format!("{python_version}\n"),
     )?;
     write_new(&root.join("README.md"), &format!("# {project_name}\n"))?;
-    write_new(&package_root.join("__init__.by"), "")?;
-    if kind == ProjectKind::Application {
-        write_new(&package_root.join("main.by"), MAIN)?;
+    // a directory holding a module is a package without an `__init__.by`, so an application's
+    // `main.by` is enough. a library starts with nothing but the module importing it runs
+    match kind {
+        ProjectKind::Application => write_new(&package_root.join("main.by"), MAIN)?,
+        ProjectKind::Library => write_new(&package_root.join("__init__.by"), "")?,
     }
 
     eprintln!("initialized `{project_name}` at {}", root.display());

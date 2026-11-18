@@ -7,8 +7,8 @@ use std::ops::ControlFlow;
 
 use crate::lint::LintId;
 use crate::place::{
-    ConsideredDefinitions, Place, RequiresExplicitReExport, implicit_builtins_symbol_scope,
-    imported_symbol, place_by_id, place_from_bindings,
+    ConsideredDefinitions, ModuleGlobals, Place, RequiresExplicitReExport,
+    implicit_builtins_symbol_scope, imported_symbol, place_by_id, place_from_bindings,
 };
 use crate::place_load::{
     ImplicitPlaceLoad, PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind,
@@ -5414,16 +5414,10 @@ pub fn instance_of_class<'db>(
     let module =
         resolve_module_confident(db, env.resolver_environment(db), &ModuleName::new(module)?)?;
 
-    imported_symbol(
-        db,
-        env,
-        module.file(db).map(|file| db.program_file(file)),
-        name,
-        None,
-    )
-    .place
-    .ignore_possibly_undefined()?
-    .to_instance_approximation(db, env)
+    imported_symbol(db, env, ModuleGlobals::of(db, env, module), name, None)
+        .place
+        .ignore_possibly_undefined()?
+        .to_instance_approximation(db, env)
 }
 
 /// Whether `ty` is a function django would try to call and could not.

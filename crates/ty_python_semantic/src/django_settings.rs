@@ -21,7 +21,7 @@ use ruff_python_ast::{Expr, Stmt};
 use ty_module_resolver::{ModuleName, file_to_module, resolve_module};
 
 use crate::Db;
-use crate::place::imported_symbol;
+use crate::place::{ModuleGlobals, imported_symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::{ClassType, Type};
 use ty_module_resolver::ImportingFile;
@@ -203,12 +203,18 @@ pub(crate) fn settings_member<'db>(
     }
 
     let module = db.django_settings_file()?;
-    let member = imported_symbol(db, env, Some(db.program_file(module)), name, None)
-        .place
-        .ignore_possibly_undefined()?
-        // the module assigns one deployment's value; what the setting *is* is the
-        // type of that value, not the value
-        .promote(db, env);
+    let member = imported_symbol(
+        db,
+        env,
+        ModuleGlobals::File(db.program_file(module)),
+        name,
+        None,
+    )
+    .place
+    .ignore_possibly_undefined()?
+    // the module assigns one deployment's value; what the setting *is* is the
+    // type of that value, not the value
+    .promote(db, env);
 
     describes_the_setting(db, env, member).then_some(member)
 }

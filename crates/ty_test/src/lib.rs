@@ -294,11 +294,21 @@ fn run_test(
             .python_platform()
             .unwrap_or(PythonPlatform::Identifier("linux".to_string())),
         search_paths: SearchPathSettings {
-            src_roots: vec![src_path],
+            src_roots: vec![src_path.clone()],
             extra_paths,
             custom_typeshed: custom_typeshed_path.map(SystemPath::to_path_buf),
             site_packages_paths,
             real_stdlib_path: None,
+            package_roots: configuration.package_roots().map_or_else(
+                || vec![src_path.clone()],
+                |roots| roots.iter().map(|root| src_path.join(root)).collect(),
+            ),
+            namespace_packages: configuration
+                .namespace_packages()
+                .unwrap_or_default()
+                .iter()
+                .map(|package| src_path.join(package))
+                .collect(),
         }
         .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
         .expect("Failed to resolve search path settings"),

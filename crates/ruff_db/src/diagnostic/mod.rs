@@ -1112,6 +1112,47 @@ pub enum DiagnosticId {
     /// ```
     InvalidClassName,
 
+    /// An `environment.package-roots` entry that is not a module root.
+    ///
+    /// ## Why is this bad?
+    /// A package root makes packages of the directories below it that are modules of the
+    /// project, and below a directory that is not a module root, none are.
+    ///
+    /// ## Example
+    /// ```toml
+    /// [environment]
+    /// package-roots = ["lib"]  # but `lib` is not in `root`
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```toml
+    /// [environment]
+    /// root = ["lib"]
+    /// package-roots = ["lib"]
+    /// ```
+    InvalidPackageRoot,
+
+    /// An `environment.namespace-packages` entry that is not a directory below a package root.
+    ///
+    /// ## Why is this bad?
+    /// Outside a package root a directory without an initializer is a namespace package already,
+    /// and an entry naming no directory, a misspelt one say, declares nothing.
+    ///
+    /// ## Example
+    /// ```toml
+    /// [environment]
+    /// namespace-packages = ["src/acme/plugin"]  # the directory is `plugins`
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```toml
+    /// [environment]
+    /// namespace-packages = ["src/acme/plugins"]
+    /// ```
+    InvalidNamespacePackage,
+
     /// An `include` glob without any patterns.
     ///
     /// ## Why is this bad?
@@ -1287,6 +1328,8 @@ impl DiagnosticId {
             DiagnosticId::InvalidScriptMetadata => "invalid-script-metadata",
             DiagnosticId::UvMetadata => "uv-metadata",
             DiagnosticId::InvalidClassName => "invalid-class-name",
+            DiagnosticId::InvalidPackageRoot => "invalid-package-root",
+            DiagnosticId::InvalidNamespacePackage => "invalid-namespace-package",
             DiagnosticId::EmptyInclude => "empty-include",
             DiagnosticId::UnreachableExcludeNegation => "unreachable-exclude-negation",
             DiagnosticId::UnnecessaryOverridesSection => "unnecessary-overrides-section",

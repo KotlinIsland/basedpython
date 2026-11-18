@@ -99,6 +99,14 @@ impl MarkdownTestConfig {
         self.environment.as_ref()?.python.as_deref()
     }
 
+    pub(crate) fn package_roots(&self) -> Option<&[SystemPathBuf]> {
+        self.environment.as_ref()?.package_roots.as_deref()
+    }
+
+    pub(crate) fn namespace_packages(&self) -> Option<&[SystemPathBuf]> {
+        self.environment.as_ref()?.namespace_packages.as_deref()
+    }
+
     pub(crate) fn dependencies(&self) -> Option<&[String]> {
         self.project.as_ref()?.dependencies.as_deref()
     }
@@ -222,6 +230,13 @@ pub(crate) struct Environment {
 
     /// Additional search paths to consider when resolving modules.
     extra_paths: Option<Vec<SystemPathBuf>>,
+
+    /// The module roots below which a directory holding a basedpython module is a package
+    /// without an initializer. Defaults to the source root.
+    package_roots: Option<Vec<SystemPathBuf>>,
+
+    /// Directories below a package root that stay namespace packages.
+    namespace_packages: Option<Vec<SystemPathBuf>>,
 
     /// Path to the Python environment.
     ///

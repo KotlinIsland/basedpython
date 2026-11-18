@@ -14,8 +14,8 @@ use rustc_hash::FxHashSet;
 use crate::{
     Db,
     place::{
-        DefinedPlace, Place, PlaceWithDefinition, imported_symbol, place_from_bindings,
-        place_from_declarations,
+        DefinedPlace, ModuleGlobals, Place, PlaceWithDefinition, imported_symbol,
+        place_from_bindings, place_from_declarations,
     },
     reachability::ReachabilityConstraintsExtension,
     types::{
@@ -468,11 +468,7 @@ impl<'db> AllMembers<'db> {
                 // Looking up `__file__` on `types.ModuleType` will not give as precise a type
                 // as we infer in type inference, but it's confusing if autocomplete etc.
                 // shows a different type in the tooltip to the one inferred by the type checker.
-                let dunder_file_type = if module.file(db).is_some() {
-                    KnownClass::Str.to_instance(db, env)
-                } else {
-                    Type::none(db, env)
-                };
+                let dunder_file_type = ModuleGlobals::of(db, env, module).dunder_file_type(db, env);
                 self.members.insert(Member {
                     name: Name::new_static("__file__"),
                     ty: dunder_file_type,
@@ -492,8 +488,14 @@ impl<'db> AllMembers<'db> {
 
                 for (symbol_id, _) in use_def_map.all_end_of_scope_symbol_declarations() {
                     let symbol_name = place_table.symbol(symbol_id).name();
-                    let Place::Defined(defined) =
-                        imported_symbol(db, env, Some(program_file), symbol_name, None).place
+                    let Place::Defined(defined) = imported_symbol(
+                        db,
+                        env,
+                        ModuleGlobals::File(program_file),
+                        symbol_name,
+                        None,
+                    )
+                    .place
                     else {
                         continue;
                     };

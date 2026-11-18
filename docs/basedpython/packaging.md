@@ -34,8 +34,10 @@ my-library/README.md
 my-library/src/my_library/__init__.by
 ```
 
-leave off `--lib` and you also get a `main.by` and a configured entry point, so
-`by run` works immediately
+leave off `--lib` and you get a `main.by` in place of the `__init__.by`, and a
+configured entry point, so `by run` works immediately. below `src/`, a directory
+holding a module is a package without an `__init__.by` (see
+[packages without `__init__.by`](features/packages.md))
 
 it then runs `uv sync` in the new project, which creates its `.venv` on the python
 `.python-version` names, fetching that python if it isn't installed, and installs the

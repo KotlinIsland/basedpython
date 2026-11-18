@@ -20,7 +20,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use ruff_linter::fs;
 use ruff_linter::package::PackageRoot;
-use ruff_linter::packaging::is_package;
+use ruff_linter::packaging::{PackageLookups, is_package};
+use ruff_linter::settings::LinterSettings;
 
 use crate::configuration::Configuration;
 use crate::files::{ConfigurationFiles, HostFiles};
@@ -210,24 +211,19 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Determine whether any of the settings require namespace packages. If not, we can save
-        // a lookup for every file.
-        let has_namespace_packages = self
-            .settings()
-            .any(|settings| !settings.linter.namespace_packages.is_empty());
-
         // Search for the package root for each file.
+        let lookups = PackageLookups::default();
         let mut package_roots: FxHashMap<&Path, Option<PackageRoot<'_>>> = FxHashMap::default();
         for file in files {
             if let Some(package) = file.parent() {
                 package_roots.entry(package).or_insert_with(|| {
-                    let namespace_packages = if has_namespace_packages {
-                        self.resolve(file).linter.namespace_packages.as_slice()
-                    } else {
-                        &[]
-                    };
-                    detect_package_root_with_cache(package, namespace_packages, &mut package_cache)
-                        .map(|path| PackageRoot::Root { path })
+                    detect_package_root_with_cache(
+                        package,
+                        &self.resolve(file).linter,
+                        &mut package_cache,
+                        &lookups,
+                    )
+                    .map(|path| PackageRoot::Root { path })
                 });
             }
         }
@@ -273,12 +269,13 @@ impl<'a> Resolver<'a> {
 /// A wrapper around `detect_package_root` to cache filesystem lookups.
 fn detect_package_root_with_cache<'a>(
     path: &'a Path,
-    namespace_packages: &[PathBuf],
+    settings: &LinterSettings,
     package_cache: &mut FxHashMap<&'a Path, bool>,
+    lookups: &PackageLookups,
 ) -> Option<&'a Path> {
     let mut current = None;
     for parent in path.ancestors() {
-        if !is_package_with_cache(parent, namespace_packages, package_cache) {
+        if !is_package_with_cache(parent, settings, package_cache, lookups) {
             return current;
         }
         current = Some(parent);
@@ -289,12 +286,13 @@ fn detect_package_root_with_cache<'a>(
 /// A wrapper around `is_package` to cache filesystem lookups.
 fn is_package_with_cache<'a>(
     path: &'a Path,
-    namespace_packages: &[PathBuf],
+    settings: &LinterSettings,
     package_cache: &mut FxHashMap<&'a Path, bool>,
+    lookups: &PackageLookups,
 ) -> bool {
     *package_cache
         .entry(path)
-        .or_insert_with(|| is_package(path, namespace_packages))
+        .or_insert_with(|| is_package(path, settings, lookups))
 }
 
 /// Applies a transformation to a [`Configuration`].

@@ -23,10 +23,12 @@ use walkdir::WalkDir;
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_lowering::SettledLowering;
+use crate::by_reverse_packages::{NamespacePackages, redundant_initializers};
 use crate::by_signals::Forwarding;
 use by_stage::emit::{
     CheckGate, Emit, Transpiled, is_unusable_source, transpile_failure_diagnostic,
 };
+use by_stage::packages::{directory_packages, stage_package_initializers};
 use by_stage::project::{
     BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, build_project_db_for,
     may_contain_sources, module_roots, source_files,
@@ -308,6 +310,7 @@ pub(crate) fn stage_run(
     // json file it opens, a template it renders. running out of a directory
     // holding only the transpiled half fails on the first of them
     stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_package_initializers(&db, &mut staging)?;
     stage_runtime(&mut staging, &layout, &requirements)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_traceback_runtime(&mut staging, &traceback_entries, &layout)?;
@@ -597,14 +600,18 @@ fn packaging_roots(roots: &[PathBuf], root: &Path) -> Vec<PathBuf> {
 /// The top-level packages the build produced, as a distribution would ship them.
 fn staged_packages(staging: &Staging, roots: &[PathBuf], root: &Path) -> Vec<String> {
     let packaging = packaging_roots(roots, root);
-    let mut packages: Vec<String> = staging
+    // what each path was produced from, which says the root it came out of: the file it was
+    // written from, or for a directory package's initializer, which is produced from no file,
+    // the directory it initializes
+    let origins = staging
         .entries()
-        .filter(|(_, source)| {
-            source.is_some_and(|source| {
-                packaging
-                    .iter()
-                    .any(|candidate| source.starts_with(candidate))
-            })
+        .filter_map(|(destination, source)| Some((destination, source?)))
+        .chain(staging.initializers());
+    let mut packages: Vec<String> = origins
+        .filter(|(_, origin)| {
+            packaging
+                .iter()
+                .any(|candidate| origin.starts_with(candidate))
         })
         .filter_map(|(destination, _)| {
             let mut components = destination.components();
@@ -1224,6 +1231,7 @@ pub(crate) fn cmd_build(
     // so they are staged whether or not something was reported — a `build/` a
     // debugger cannot read is worse than one built from a partial check
     stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_package_initializers(&db, &mut staging)?;
     stage_runtime(&mut staging, &layout, &requirements)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     // a build is not started through anything of by's: it is imported, or run as python runs
@@ -1640,7 +1648,7 @@ pub(crate) fn cmd_compile(
                 .chain(built.artifact.annotation.as_ref())
             {
                 if let Ok(relative) = produced.strip_prefix(&out_dir)
-                    && let Err(error) = staging.record(relative)
+                    && let Err(error) = staging.record(relative, path)
                 {
                     break 'compiling Err(error);
                 }
@@ -1674,6 +1682,9 @@ pub(crate) fn cmd_compile(
         // is where a file the project keeps on top of an artefact is reported,
         // which is a failure this change deliberately introduced
         if let Err(error) = stage_verbatim(&db, &root, &roots, &mut staging) {
+            break 'compiling Err(error);
+        }
+        if let Err(error) = stage_package_initializers(&db, &mut staging) {
             break 'compiling Err(error);
         }
         if let Err(error) = stage_runtime(&mut staging, &layout, &requirements) {
@@ -1908,7 +1919,25 @@ fn reverse_dir_converting(
         return Ok(ExitStatus::Success);
     }
 
+    // declared before anything is converted: a directory that is a namespace package already
+    // stays one, so the declaration changes nothing until the conversion would have
+    let namespace_packages = NamespacePackages::of(dir, &files)?;
+    if let Some(configuration) = namespace_packages.declare()? {
+        eprintln!(
+            "declared {} in `environment.namespace-packages` in {}, to keep them namespace \
+             packages: in basedpython, a directory below a package root holding a module is a \
+             regular package",
+            namespace_packages
+                .paths()
+                .map(|path| format!("`{path}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            configuration.display()
+        );
+    }
+
     let mut count = 0usize;
+    let mut written: Vec<PathBuf> = Vec::new();
     let mut skipped: Vec<(&Path, String)> = Vec::new();
     let mut recoded: Vec<(&Path, String)> = Vec::new();
     for py in &files {
@@ -1956,6 +1985,7 @@ fn reverse_dir_converting(
         let by = py.with_extension(if is_stub { "byi" } else { "by" });
         fs::write(&by, output).with_context(|| format!("{}", by.display()))?;
         fs::remove_file(py).with_context(|| format!("{}", py.display()))?;
+        written.push(by);
         count += 1;
     }
 
@@ -1966,6 +1996,16 @@ fn reverse_dir_converting(
         eprintln!("skipped {}: {message}", py.display());
     }
     eprintln!("reversed {count} file(s) to basedpython");
+
+    // a directory holding a basedpython module is a package without an `__init__.by`
+    for initializer in redundant_initializers(dir, &written)? {
+        fs::remove_file(&initializer).with_context(|| format!("{}", initializer.display()))?;
+        eprintln!(
+            "left out {}, which was empty and is not needed in basedpython",
+            initializer.display()
+        );
+    }
+
     if skipped.is_empty() {
         return Ok(ExitStatus::Success);
     }
@@ -1985,7 +2025,8 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     }
 
     let roots = module_roots(&db, &root);
-    render_check_and_transpile(
+    let mut transpiled: Vec<PathBuf> = Vec::new();
+    let status = render_check_and_transpile(
         &db,
         &handles,
         OutputFormat::Full,
@@ -2004,9 +2045,19 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
         |emitted| {
             let py = emitted.by_path.with_extension("py");
             fs::write(&py, emitted.python).with_context(|| format!("{}", py.display()))?;
+            transpiled.push(emitted.by_path.to_path_buf());
             Ok(())
         },
-    )
+    )?;
+    // a directory holding a basedpython module is a package, and the python beside it is read
+    // as one only with an `__init__.py`. it is empty, so it says nothing to `by check`, and
+    // `by transpile --reverse` converts it back to nothing. only the directories of the python
+    // that was written get one
+    for package in directory_packages(&db, &roots, transpiled.iter().map(PathBuf::as_path)) {
+        let initializer = package.join("__init__.py");
+        fs::write(&initializer, "").with_context(|| format!("{}", initializer.display()))?;
+    }
+    Ok(status)
 }
 
 /// Every first-party `.py`/`.pyi` file under `root`, skipping non-source
@@ -4547,6 +4598,128 @@ mod tests {
         // left exactly as it was found: neither converted nor deleted
         assert!(exploding.is_file());
         assert!(!dir.path().join("exploding.by").exists());
+        Ok(())
+    }
+
+    /// a python directory without an `__init__.py` is a namespace package, and a basedpython
+    /// one holding a module is not, so the conversion declares the namespace packages it finds
+    #[test]
+    fn reversing_declares_the_namespace_packages_it_would_change() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let pyproject = dir.path().join("pyproject.toml");
+        std::fs::write(&pyproject, "[project]\nname = \"p\"\nversion = \"0.1.0\"\n")?;
+        let core = dir.path().join("src/plugins/core");
+        std::fs::create_dir_all(&core)?;
+        std::fs::write(core.join("c.py"), "z = 3\n")?;
+        let package = dir.path().join("src/pkg");
+        std::fs::create_dir_all(&package)?;
+        std::fs::write(package.join("__init__.py"), "x = 1\n")?;
+        std::fs::write(package.join("a.py"), "y = 2\n")?;
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Success));
+        let configuration: toml::Table = std::fs::read_to_string(&pyproject)?.parse()?;
+        assert_eq!(
+            configuration["tool"]["basedpython"]["environment"]["namespace-packages"],
+            toml::Value::Array(vec!["src/plugins".into(), "src/plugins/core".into()]),
+            "a package with an initializer is a regular package already"
+        );
+        Ok(())
+    }
+
+    /// a directory holding a basedpython module is a package without its `__init__.by`, so an
+    /// empty `__init__.py` converts to nothing. one that says something, or that is all the
+    /// directory holds, stays
+    #[test]
+    fn reversing_leaves_out_an_initializer_a_package_does_not_need() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"p\"\nversion = \"0.1.0\"\n",
+        )?;
+        for (path, text) in [
+            ("src/empty/__init__.py", ""),
+            ("src/empty/a.py", "x = 1\n"),
+            ("src/documented/__init__.py", "\"\"\"a package\"\"\"\n"),
+            ("src/documented/a.py", "x = 1\n"),
+            ("src/alone/__init__.py", ""),
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
+            std::fs::write(path, text)?;
+        }
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Success));
+        assert!(!dir.path().join("src/empty/__init__.by").exists());
+        assert!(!dir.path().join("src/empty/__init__.py").exists());
+        assert!(dir.path().join("src/documented/__init__.by").is_file());
+        assert!(dir.path().join("src/alone/__init__.by").is_file());
+        Ok(())
+    }
+
+    /// a directory python cannot import by name holds no package to declare, nor does one outside
+    /// a package root, a namespace package already declared is not declared twice, and a table
+    /// written inline is written into
+    #[test]
+    fn reversing_declares_only_what_is_missing() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let pyproject = dir.path().join("pyproject.toml");
+        std::fs::write(
+            &pyproject,
+            "[project]\nname = \"p\"\nversion = \"0.1.0\"\n\n\
+             [tool.ty.environment]\nnamespace-packages = [\"src/plugins\"]\n\n\
+             [tool.basedpython]\nenvironment = { python-version = \"3.13\" }\n",
+        )?;
+        for path in [
+            "src/my-scripts/helpers/h.py",
+            "src/plugins/a/m.py",
+            "src/other/n.py",
+            "tools/t.py",
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
+            std::fs::write(path, "x = 1\n")?;
+        }
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Success));
+        let configuration: toml::Table = std::fs::read_to_string(&pyproject)?.parse()?;
+        assert_eq!(
+            configuration["tool"]["basedpython"]["environment"]["namespace-packages"],
+            toml::Value::Array(vec!["src/other".into(), "src/plugins/a".into()]),
+        );
+        assert_eq!(
+            configuration["tool"]["basedpython"]["environment"]["python-version"],
+            toml::Value::from("3.13"),
+        );
+        Ok(())
+    }
+
+    /// a stub-only `__init__.pyi` makes a package of the directory to a type checker alone:
+    /// python runs no initializer of it, so it stays a namespace package, and keeps its stub
+    #[test]
+    fn reversing_keeps_a_stub_only_package_a_namespace_package() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let pyproject = dir.path().join("pyproject.toml");
+        std::fs::write(&pyproject, "[project]\nname = \"p\"\nversion = \"0.1.0\"\n")?;
+        let package = dir.path().join("src/pkg");
+        std::fs::create_dir_all(&package)?;
+        std::fs::write(package.join("__init__.pyi"), "")?;
+        std::fs::write(package.join("a.py"), "x = 1\n")?;
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Success));
+        assert!(package.join("__init__.byi").is_file());
+        let configuration: toml::Table = std::fs::read_to_string(&pyproject)?.parse()?;
+        assert_eq!(
+            configuration["tool"]["basedpython"]["environment"]["namespace-packages"],
+            toml::Value::Array(vec!["src/pkg".into()]),
+        );
         Ok(())
     }
 }

@@ -180,7 +180,7 @@ fn check_python(
             file_path
                 .parent()
                 .expect("a path to a document should have a parent path"),
-            &settings.linter.namespace_packages,
+            &settings.linter,
         )
         .map(PackageRoot::root)
     } else {

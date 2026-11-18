@@ -2,8 +2,9 @@
 //!
 //! # one copy per package, not one at the root
 //!
-//! a distribution ships packages — directories with an `__init__` — so each
-//! package carries a copy of its own. a copy at the tree root would be a
+//! a distribution ships packages — directories with an `__init__`, or below a
+//! package root holding a basedpython module, which the build writes one — so
+//! each package carries a copy of its own. a copy at the tree root would be a
 //! top-level module: a distribution that ships root modules would ship it as one,
 //! and a second basedpython wheel, built by another version whose helpers differ,
 //! overwrites it on install
@@ -11,9 +12,9 @@
 //! # a module in no package
 //!
 //! so a module at a module root gets the definitions pasted in. so does a module
-//! in a directory that is not a package — a `scripts/` folder, a namespace
-//! package — which has no import that works both when it is run as a script and
-//! when it is imported
+//! in a directory that is not a package — a `scripts/` folder beside `src/`, a
+//! declared namespace package — which has no import that works both when it is
+//! run as a script and when it is imported
 //!
 //! # a tree nothing ships
 //!
@@ -33,7 +34,9 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
-use ruff_db::system::{System, SystemPath};
+use ty_project::ProjectDatabase;
+
+use crate::packages::is_package;
 
 /// the copies a build writes
 ///
@@ -76,9 +79,9 @@ impl RuntimeLayout {
         &self,
         relative: &Path,
         source: &Path,
-        system: &dyn System,
+        db: &ProjectDatabase,
     ) -> Option<RuntimePackage> {
-        RuntimePackage::of(relative, source, system)
+        RuntimePackage::of(relative, source, db)
             .or_else(|| self.root_copy.then(|| RuntimePackage(String::new())))
     }
 
@@ -104,7 +107,7 @@ impl RuntimePackage {
     /// the package `source`, landing at `relative` in the module tree, imports the
     /// runtime from — or `None` for a module in no package, which gets the
     /// definitions pasted in
-    fn of(relative: &Path, source: &Path, system: &dyn System) -> Option<Self> {
+    fn of(relative: &Path, source: &Path, db: &ProjectDatabase) -> Option<Self> {
         let mut components = relative.components();
         let first = components.next()?;
         // a `relative` of one component is the module's own file name: it sits at
@@ -114,10 +117,15 @@ impl RuntimePackage {
             return None;
         };
         let package = package.to_str()?;
-        if !is_package(&module_tree_base(relative, source).join(package), system) {
+        if !is_package(db, &module_tree_base(relative, source).join(package)) {
             return None;
         }
         Some(Self(package.to_owned()))
+    }
+
+    /// where the copy is within the module tree
+    pub(crate) fn file(&self) -> PathBuf {
+        Path::new(&self.0).join(by_transforms::runtime::FILE_NAME)
     }
 
     /// the module the copy is imported as
@@ -141,49 +149,49 @@ fn module_tree_base(relative: &Path, source: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-/// whether `directory` is a regular package, the kind a distribution ships
-fn is_package(directory: &Path, system: &dyn System) -> bool {
-    let Some(directory) = SystemPath::from_std_path(directory) else {
-        return false;
-    };
-    ["__init__.py", "__init__.pyi", "__init__.by", "__init__.byi"]
-        .iter()
-        .any(|init| system.is_file(&directory.join(init)))
-}
-
 #[cfg(test)]
 mod tests {
-    use ruff_db::system::OsSystem;
+    use crate::project::{BY_SOURCES, FrozenProjectDatabase, build_project_db};
 
     use super::*;
 
     struct Project {
-        root: tempfile::TempDir,
-        system: OsSystem,
+        _directory: tempfile::TempDir,
+        root: PathBuf,
+        db: FrozenProjectDatabase,
     }
 
     impl Project {
         fn with(files: &[&str]) -> Self {
-            let root = tempfile::tempdir().expect("tempdir");
+            Self::configured(files, "")
+        }
+
+        /// a project whose `pyproject.toml` holds `configuration` under `[tool.ty]`
+        fn configured(files: &[&str], configuration: &str) -> Self {
+            let directory = tempfile::tempdir().expect("tempdir");
+            let root = dunce::canonicalize(directory.path()).expect("canonical tempdir");
+            std::fs::write(
+                root.join("pyproject.toml"),
+                format!("[project]\nname = \"p\"\n[tool.ty]\n{configuration}\n"),
+            )
+            .expect("write");
             for file in files {
-                let path = root.path().join(file);
+                let path = root.join(file);
                 std::fs::create_dir_all(path.parent().expect("a file has a parent"))
                     .expect("create");
                 std::fs::write(&path, "").expect("write");
             }
-            let system =
-                OsSystem::new(SystemPath::from_std_path(root.path()).expect("utf-8 tempdir"));
-            Self { root, system }
+            let (db, ..) = build_project_db(&root, BY_SOURCES, None).expect("a project db");
+            Self {
+                _directory: directory,
+                root,
+                db,
+            }
         }
 
         fn record(&self, layout: &mut RuntimeLayout, relative: &str) -> Option<String> {
-            let source = self
-                .root
-                .path()
-                .join("src")
-                .join(relative)
-                .with_extension("by");
-            let package = layout.package_of(Path::new(relative), &source, &self.system)?;
+            let source = self.root.join("src").join(relative).with_extension("by");
+            let package = layout.package_of(Path::new(relative), &source, &self.db)?;
             layout.record(&package);
             Some(package.module())
         }
@@ -223,13 +231,28 @@ mod tests {
         );
     }
 
-    /// `scripts/tool.py` run as a script has `scripts/` on its path and not the
-    /// directory above, so `scripts._by_runtime` would not import
+    /// a directory holding a basedpython module is a package without an `__init__.by`, and the
+    /// build writes it the initializer
+    #[test]
+    fn a_directory_of_basedpython_modules_makes_a_package() {
+        let project = Project::with(&["src/pkg/a.by"]);
+        let mut layout = RuntimeLayout::default();
+        assert_eq!(
+            project.record(&mut layout, "pkg/a.py").as_deref(),
+            Some("pkg._by_runtime")
+        );
+    }
+
+    /// `plugins/tool.py` in a namespace package has no package of its own to hold a copy, so
+    /// `plugins._by_runtime` would be a module every distribution adding to it claims
     #[test]
     fn a_module_in_no_package_gets_the_definitions_pasted_in() {
-        let project = Project::with(&["src/scripts/tool.by"]);
+        let project = Project::configured(
+            &["src/plugins/tool.by"],
+            "environment.namespace-packages = [\"src/plugins\"]",
+        );
         let mut layout = RuntimeLayout::default();
-        assert_eq!(project.record(&mut layout, "scripts/tool.py"), None);
+        assert_eq!(project.record(&mut layout, "plugins/tool.py"), None);
         assert_eq!(layout.files().count(), 0);
     }
 
@@ -283,10 +306,13 @@ mod tests {
     /// directory on `sys.path` reaches the root copy from all the same
     #[test]
     fn an_unshipped_module_in_no_package_imports_the_root_copy() {
-        let project = Project::with(&["src/scripts/tool.by"]);
+        let project = Project::configured(
+            &["src/plugins/tool.by"],
+            "environment.namespace-packages = [\"src/plugins\"]",
+        );
         let mut layout = RuntimeLayout::unshipped();
         assert_eq!(
-            project.record(&mut layout, "scripts/tool.py").as_deref(),
+            project.record(&mut layout, "plugins/tool.py").as_deref(),
             Some("_by_runtime")
         );
     }

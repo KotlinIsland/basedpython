@@ -34,11 +34,14 @@ pub struct Staging {
     out: PathBuf,
     /// relative destination -> the source it came from, for collision reporting
     written: BTreeMap<PathBuf, Option<PathBuf>>,
-    /// destinations another writer produced, held apart from `written` so a
-    /// source that would land on one is reported rather than overwriting it
-    recorded: BTreeSet<PathBuf>,
+    /// destinations another writer produced -> the source each was produced from, held apart
+    /// from `written` so a source that would land on one is reported rather than overwriting it
+    recorded: BTreeMap<PathBuf, PathBuf>,
     /// whether the tree is known to carry a manifest already — see [`Self::mark_as_output`]
     marked: bool,
+    /// relative destination of each initializer written for a directory package -> the
+    /// project directory it is the package of
+    initializers: BTreeMap<PathBuf, PathBuf>,
 }
 
 impl Staging {
@@ -46,8 +49,9 @@ impl Staging {
         Self {
             out: out.to_path_buf(),
             written: BTreeMap::new(),
-            recorded: BTreeSet::new(),
+            recorded: BTreeMap::new(),
             marked: false,
+            initializers: BTreeMap::new(),
         }
     }
 
@@ -109,6 +113,19 @@ impl Staging {
             .map(|(destination, source)| (destination.as_path(), source.as_deref()))
     }
 
+    /// Every path in the tree produced from a project file, paired with that file: what was
+    /// written from a source, and what another writer recorded.
+    pub(crate) fn laid_out(&self) -> impl Iterator<Item = (&Path, &Path)> {
+        self.written
+            .iter()
+            .filter_map(|(destination, source)| Some((destination.as_path(), source.as_deref()?)))
+            .chain(
+                self.recorded
+                    .iter()
+                    .map(|(destination, source)| (destination.as_path(), source.as_path())),
+            )
+    }
+
     /// Write `contents` to `relative`, recording it as produced from `source`.
     ///
     /// Two sources landing on one destination is an error rather than a
@@ -129,6 +146,29 @@ impl Staging {
             .with_context(|| format!("could not write {}", destination.display()))
     }
 
+    /// Write the empty initializer at `relative` of the directory package `directory`.
+    ///
+    /// It is produced from no file, so it is not one of [`Self::inputs`], but it is a package's
+    /// all the same: see [`Self::initializers`].
+    pub(crate) fn write_initializer(
+        &mut self,
+        relative: &Path,
+        directory: &Path,
+    ) -> anyhow::Result<()> {
+        self.write(relative, None, "")?;
+        self.initializers
+            .insert(relative.to_path_buf(), directory.to_path_buf());
+        Ok(())
+    }
+
+    /// Every initializer written for a directory package, paired with the project directory it
+    /// is the package of.
+    pub fn initializers(&self) -> impl Iterator<Item = (&Path, &Path)> {
+        self.initializers
+            .iter()
+            .map(|(destination, directory)| (destination.as_path(), directory.as_path()))
+    }
+
     /// Record a file another writer put into the tree at `relative`.
     ///
     /// `by compile` writes its extensions through `by_build`, which lays them out
@@ -142,7 +182,7 @@ impl Staging {
     /// both directions for whichever order the caller happens to use; today
     /// `compile` records every artifact before it stages anything, so in practice
     /// it is the staging side that reports.
-    pub fn record(&mut self, relative: &Path) -> anyhow::Result<()> {
+    pub fn record(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         if let Some((previous, source)) = self.written.get_key_value(relative) {
             anyhow::bail!(
                 "the compiler wrote an artifact to `{}`, where {} is already staged \
@@ -152,7 +192,8 @@ impl Staging {
             );
         }
         self.mark_as_output()?;
-        self.recorded.insert(relative.to_path_buf());
+        self.recorded
+            .insert(relative.to_path_buf(), source.to_path_buf());
         Ok(())
     }
 
@@ -177,7 +218,7 @@ impl Staging {
         // hand-written `main.c` beside `main.by`, say. copying over it would
         // leave a tree whose generated half is somebody else's file, and say
         // nothing about it
-        if self.recorded.contains(relative) {
+        if self.recorded.contains_key(relative) {
             anyhow::bail!(
                 "{} would be carried over to `{}`, where the compiler \
                  already wrote an artifact of that name — rename one of them, or \
@@ -210,7 +251,7 @@ impl Staging {
         let current: BTreeSet<&Path> = self
             .written
             .keys()
-            .chain(self.recorded.iter())
+            .chain(self.recorded.keys())
             .map(PathBuf::as_path)
             .collect();
 
@@ -503,7 +544,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let out = directory.path().join("build");
         let mut staging = Staging::new(&out);
-        staging.record(Path::new("a.so")).expect("record");
+        staging
+            .record(Path::new("a.so"), Path::new("a.by"))
+            .expect("record");
         assert!(
             ty_project::build_output::is_build_output(
                 &ruff_db::system::OsSystem::new(

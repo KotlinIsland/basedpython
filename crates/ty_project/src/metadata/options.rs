@@ -27,6 +27,7 @@ use ruff_db::vendored::VendoredFileSystem;
 use ruff_macros::{Combine, OptionsMetadata, RustDoc};
 use ruff_options_metadata::{OptionSet, OptionSetKind, OptionsMetadata, Visit};
 use ruff_python_ast::PythonVersion;
+use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_ranged_value::{RangedValue, ValueSource, ValueSourceGuard};
 use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
@@ -356,18 +357,76 @@ impl Options {
             .and_then(|resolution| resolution.into_program_version(&mut diagnostics))
             .unwrap_or_default();
 
+        let configured_package_roots: Vec<(&RelativePathBuf, SystemPathBuf)> = environment
+            .package_roots
+            .iter()
+            .flatten()
+            .map(|root| (root, root.absolute(context.configuration_root(), system)))
+            .collect();
+        let package_roots: Vec<SystemPathBuf> = match &environment.package_roots {
+            Some(_) => configured_package_roots
+                .iter()
+                .map(|(_, root)| root.clone())
+                .collect(),
+            // a script has no module roots unless it names some, and so no package roots either
+            None => context
+                .project_root()
+                .map(|root| root.join(DEFAULT_PACKAGE_ROOT))
+                .into_iter()
+                .collect(),
+        };
+        let configured_namespace_packages: Vec<(&RelativePathBuf, SystemPathBuf)> = environment
+            .namespace_packages
+            .iter()
+            .flatten()
+            .map(|package| {
+                (
+                    package,
+                    package.absolute(context.configuration_root(), system),
+                )
+            })
+            .collect();
+
         let search_paths = strategy.map_err(
             self.to_search_paths(
                 context,
                 project_name,
                 site_packages_paths,
                 real_stdlib_path,
+                package_roots.clone(),
+                configured_namespace_packages
+                    .iter()
+                    .map(|(_, package)| package.clone())
+                    .collect(),
                 system,
                 vendored,
                 strategy,
             ),
             ToProgramSettingsError::SearchPaths,
         )?;
+
+        // a package root that is no module root lays nothing out, and a namespace package that
+        // is no directory below a package root would be one already
+        for (configured, root) in &configured_package_roots {
+            if !search_paths
+                .first_party_roots()
+                .any(|module_root| module_root == root.as_path())
+            {
+                diagnostics.push(ProgramSettingsDiagnostic::InvalidPackageRoot(
+                    (*configured).clone(),
+                ));
+            }
+        }
+        for (configured, package) in &configured_namespace_packages {
+            if !package_roots
+                .iter()
+                .any(|root| names_package_directory(system, root, package))
+            {
+                diagnostics.push(ProgramSettingsDiagnostic::InvalidNamespacePackage(
+                    (*configured).clone(),
+                ));
+            }
+        }
 
         tracing::info!(
             "Python version: Python {python_version}, platform: {python_platform}",
@@ -424,6 +483,8 @@ impl Options {
         project_name: &str,
         site_packages_paths: SitePackagesPaths,
         real_stdlib_path: Option<SystemPathBuf>,
+        package_roots: Vec<SystemPathBuf>,
+        namespace_packages: Vec<SystemPathBuf>,
         system: &dyn System,
         vendored: &VendoredFileSystem,
         strategy: &Strategy,
@@ -543,6 +604,8 @@ impl Options {
                 .map(|path| path.absolute(context.configuration_root(), system)),
             site_packages_paths: site_packages_paths.into_vec(),
             real_stdlib_path,
+            package_roots,
+            namespace_packages,
         };
 
         settings.to_search_paths(system, vendored, strategy)
@@ -808,6 +871,10 @@ impl PythonVersionResolution {
 pub enum ProgramSettingsDiagnostic {
     /// The Python version inferred from the environment is newer than ty supports.
     UnsupportedInferredPythonVersion(PythonVersionWithSource),
+    /// An `environment.package-roots` entry that is not a module root.
+    InvalidPackageRoot(RelativePathBuf),
+    /// An `environment.namespace-packages` entry that is not a directory below a package root.
+    InvalidNamespacePackage(RelativePathBuf),
 }
 
 impl ProgramSettingsDiagnostic {
@@ -817,6 +884,35 @@ impl ProgramSettingsDiagnostic {
             Self::UnsupportedInferredPythonVersion(python_version) => {
                 unsupported_inferred_python_version_diagnostic(db, &python_version)
             }
+            Self::InvalidPackageRoot(root) => OptionDiagnostic::new(
+                DiagnosticId::InvalidPackageRoot,
+                format!("`{}` is not a module root", root.path()),
+                Severity::Warning,
+            )
+            .with_source_sub(
+                db,
+                root.ranged(),
+                "package root",
+                "environment.package-roots",
+                "Expected a module root, `src` or the project root when `environment.root` is \
+                 not set, so that the directories below it are modules of the project",
+            ),
+            Self::InvalidNamespacePackage(package) => OptionDiagnostic::new(
+                DiagnosticId::InvalidNamespacePackage,
+                format!(
+                    "`{}` is not a directory below a package root",
+                    package.path()
+                ),
+                Severity::Warning,
+            )
+            .with_source_sub(
+                db,
+                package.ranged(),
+                "namespace package",
+                "environment.namespace-packages",
+                "Expected a directory below one of `environment.package-roots`: anywhere else, a \
+                 directory without an initializer is a namespace package already",
+            ),
         }
     }
 }
@@ -1060,6 +1156,46 @@ pub struct EnvironmentOptions {
         "#
     )]
     pub extra_paths: Option<Vec<RelativePathBuf>>,
+
+    /// The module roots below which a directory holding a basedpython module is a package
+    /// without an `__init__.by`.
+    ///
+    /// Below a package root, a directory holding a basedpython module, at any depth, is a
+    /// regular package, and `by build` writes it the empty `__init__.py` python needs. Anywhere
+    /// else, a directory needs an initializer of its own to be a regular package, as in python,
+    /// so `tests/` and `scripts/` beside `src/` stay folders of modules.
+    ///
+    /// Each entry has to be a module root (see `root`). For a project without a `src/` layout,
+    /// name the project root, `"."`. The linter reads this setting too, so the two agree on
+    /// which directories are packages. Scripts with inline metadata have no package roots by
+    /// default, as they have no module roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"["src"]"#,
+        value_type = "list[str]",
+        example = r#"
+            package-roots = ["."]
+        "#
+    )]
+    pub package_roots: Option<Vec<RelativePathBuf>>,
+
+    /// Directories below a package root that stay namespace packages.
+    ///
+    /// A directory named here keeps python's meaning whatever it holds: it is a namespace
+    /// package, which python assembles from every directory of that name on the search path, as
+    /// it does a plugin directory several distributions add to. `by build` writes it no
+    /// `__init__.py`. A directory below it holding a module is still a package of its own.
+    ///
+    /// A directory with an initializer of its own is a regular package either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"[]"#,
+        value_type = "list[str]",
+        example = r#"
+            namespace-packages = ["src/acme/plugins"]
+        "#
+    )]
+    pub namespace_packages: Option<Vec<RelativePathBuf>>,
 
     /// Optional path to a "typeshed" directory on disk for us to use for standard-library types.
     /// If this is not provided, we will fallback to our vendored typeshed stubs for the stdlib,
@@ -1378,6 +1514,37 @@ impl Rules {
         self.inner.is_empty()
     }
 }
+
+/// whether `package` is a directory strictly below `root` that python can import a module through:
+/// each component below `root` is an identifier naming a directory, spelt as the file system
+/// spells it, since a package is matched by its path exactly
+fn names_package_directory(system: &dyn System, root: &SystemPath, package: &SystemPath) -> bool {
+    let Ok(relative) = package.strip_prefix(root) else {
+        return false;
+    };
+    let mut directory = root.to_path_buf();
+    let mut components = relative.components().peekable();
+    if components.peek().is_none() {
+        return false;
+    }
+    components.all(|component| {
+        let name = component.as_str();
+        let found = is_identifier(name)
+            && system.read_directory(&directory).is_ok_and(|mut entries| {
+                entries.any(|entry| {
+                    entry.is_ok_and(|entry| {
+                        entry.file_type().is_directory() && entry.path().file_name() == Some(name)
+                    })
+                })
+            });
+        directory.push(name);
+        found
+    })
+}
+
+/// the module root below which a directory holding a basedpython module is a package, unless
+/// `environment.package-roots` says otherwise
+const DEFAULT_PACKAGE_ROOT: &str = "src";
 
 /// Default exclude patterns for src options.
 pub(crate) const DEFAULT_SRC_EXCLUDES: &[&str] = &[

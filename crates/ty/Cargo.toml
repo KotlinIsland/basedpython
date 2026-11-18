@@ -31,6 +31,7 @@ ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
 ruff_diagnostics = { workspace = true }
 ruff_python_parser = { workspace = true, features = ["stacker"] }
+ruff_python_stdlib = { workspace = true }
 ruff_python_trivia = { workspace = true }
 by_build = { workspace = true }
 by_ir = { workspace = true }
@@ -63,6 +64,7 @@ salsa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 tracing-flame = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -268,7 +268,7 @@ pub fn test_contents<'a>(
     let messages = check_path(
         path,
         path.parent()
-            .and_then(|parent| detect_package_root(parent, &settings.namespace_packages))
+            .and_then(|parent| detect_package_root(parent, settings))
             .map(|path| PackageRoot::Root { path }),
         &locator,
         &stylist,

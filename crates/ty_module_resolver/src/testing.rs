@@ -250,6 +250,7 @@ impl TestCaseBuilder<MockedTypeshed> {
 
         let search_paths = SearchPathSettings {
             src_roots: vec![src.clone()],
+            package_roots: vec![src.clone()],
             custom_typeshed: Some(typeshed),
             site_packages_paths: vec![site_packages.clone()],
             extra_paths,
@@ -323,6 +324,7 @@ impl TestCaseBuilder<VendoredTypeshed> {
             .collect();
         let search_paths = SearchPathSettings {
             src_roots: vec![src.clone()],
+            package_roots: vec![src.clone()],
             site_packages_paths: vec![site_packages.clone()],
             extra_paths,
             ..SearchPathSettings::empty()
@@ -359,6 +361,9 @@ impl std::fmt::Debug for ModuleDebugSnapshot<'_> {
         match self.module {
             Module::Namespace(pkg) => {
                 write!(f, "Module::Namespace({name:?})", name = pkg.name(self.db))
+            }
+            Module::Directory(pkg) => {
+                write!(f, "Module::Directory({name:?})", name = pkg.name(self.db))
             }
             Module::File(module) => {
                 // For snapshots, just normalize all paths to using

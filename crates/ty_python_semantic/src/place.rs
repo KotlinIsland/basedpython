@@ -1202,22 +1202,60 @@ fn carries_type_checking<'db>(db: &'db dyn Db, definition: Definition<'db>) -> b
     })
 }
 
+/// Where the globals of an imported module come from.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ModuleGlobals<'db> {
+    /// The module's source or stub file.
+    File(ProgramFile<'db>),
+    /// A basedpython package with no initializer, which the build gives an empty one: it has
+    /// only the attributes every module has.
+    DirectoryPackage,
+    /// A namespace package, which has no initializer at all.
+    NamespacePackage,
+}
+
+impl<'db> ModuleGlobals<'db> {
+    /// the globals of `module`, imported into `env`'s program
+    pub(crate) fn of(db: &'db dyn Db, env: &ProgramEnvironment<'db>, module: Module<'db>) -> Self {
+        match module.file(db) {
+            Some(file) => Self::File(ProgramFile::new(db, file, env.program(db))),
+            None if module.is_namespace_package() => Self::NamespacePackage,
+            None => Self::DirectoryPackage,
+        }
+    }
+
+    /// the type of the module's `__file__` when it does not assign one itself: a namespace
+    /// package's is `None`, and a module run from a file's is that file's path
+    pub(crate) fn dunder_file_type(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
+        match self {
+            Self::NamespacePackage => Type::none(db, env),
+            Self::File(_) | Self::DirectoryPackage => KnownClass::Str.to_instance(db, env),
+        }
+    }
+}
+
 /// Infers the public type of an imported symbol.
 ///
 /// If `requires_explicit_reexport` is [`None`], it will be inferred from the file's source type.
 /// For stub files, explicit re-export will be required, while for non-stub files, it will not.
-///
-/// `None` should be passed for the `file` parameter if looking up a symbol on a namespace package.
 pub(crate) fn imported_symbol<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    file: Option<ProgramFile<'db>>,
+    globals: ModuleGlobals<'db>,
     name: &str,
     requires_explicit_reexport: Option<RequiresExplicitReExport>,
 ) -> PlaceAndQualifiers<'db> {
-    if let Some(file) = file {
-        debug_assert_eq!(file.program(db), env.program(db));
-    }
+    let file = match globals {
+        ModuleGlobals::File(file) => {
+            debug_assert_eq!(file.program(db), env.program(db));
+            Some(file)
+        }
+        ModuleGlobals::DirectoryPackage | ModuleGlobals::NamespacePackage => None,
+    };
 
     // If it's not found in the global scope, check if it's present as an instance on
     // `types.ModuleType` or `builtins.object`.
@@ -1258,7 +1296,8 @@ pub(crate) fn imported_symbol<'db>(
                 // We special-case `__file__` here because we know that for a successfully imported
                 // non-namespace-package Python module, that hasn't been explicitly overridden it
                 // is always a string, even though typeshed says `str | None`. For a namespace package,
-                // meanwhile, it will always be `None`.
+                // meanwhile, it will always be `None`. A basedpython package with no initializer is
+                // not a namespace package: the build gives it an empty `__init__.py`.
                 //
                 // Note that C-extension modules (stdlib examples include `sys`, `itertools`, etc.)
                 //  may not have a `__file__` attribute at runtime at all, but that doesn't really
@@ -1266,11 +1305,7 @@ pub(crate) fn imported_symbol<'db>(
                 // to know right now whether a stub represents a C extension or not, so for now we
                 // do not attempt to detect this; we just infer `str` still. This matches the
                 // behaviour of other major type checkers.
-                if file.is_some() {
-                    Place::bound(KnownClass::Str.to_instance(db, env)).into()
-                } else {
-                    Place::bound(Type::none(db, env)).into()
-                }
+                Place::bound(globals.dunder_file_type(db, env)).into()
             }
             "__getattr__" => Place::Undefined.into(),
             "__builtins__" => Place::bound(Type::any()).into(),
@@ -1403,7 +1438,13 @@ pub(crate) fn known_module_symbol<'db>(
     resolve_module_confident(db, env.resolver_environment(db), &known_module.name())
         .and_then(|module| {
             let file = ProgramFile::new(db, module.file(db)?, env.program(db));
-            Some(imported_symbol(db, env, Some(file), symbol, None))
+            Some(imported_symbol(
+                db,
+                env,
+                ModuleGlobals::File(file),
+                symbol,
+                None,
+            ))
         })
         .unwrap_or_default()
 }
@@ -1517,7 +1558,7 @@ pub fn basedpython_module_symbol<'db>(
     let module = ModuleName::new(module)?;
     let module = resolve_module_confident(db, env.resolver_environment(db), &module)?;
     let file = ProgramFile::new(db, module.file(db)?, env.program(db));
-    imported_symbol(db, env, Some(file), name, None)
+    imported_symbol(db, env, ModuleGlobals::File(file), name, None)
         .place
         .ignore_possibly_undefined()
 }

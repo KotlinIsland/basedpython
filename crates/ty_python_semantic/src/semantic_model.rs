@@ -21,7 +21,7 @@ use crate::Db;
 use crate::RuntimeSpelling;
 use crate::place::definitions::DefinitionResolution;
 use crate::place::implicit_globals::all_implicit_module_globals;
-use crate::place::imported_symbol;
+use crate::place::{ModuleGlobals, imported_symbol};
 use crate::place::{
     builtins_module_scope, class_body_implicit_symbol, implicit_builtins_symbol_scope,
     loop_header_reachability, place_from_bindings,
@@ -1895,7 +1895,7 @@ impl<'db> SemanticModel<'db> {
         imported_symbol(
             db,
             &self.program_environment(),
-            Some(program_file),
+            ModuleGlobals::File(program_file),
             name,
             None,
         )

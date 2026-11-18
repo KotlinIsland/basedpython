@@ -12,6 +12,7 @@ mod tests {
 
     use crate::assert_diagnostics;
     use crate::settings::LinterSettings;
+    use crate::settings::rule_table::RuleTable;
     use crate::test::{test_path, test_resource_path};
 
     #[test_case(Path::new("test_fail_empty"), Path::new("example.py"))]
@@ -37,6 +38,29 @@ mod tests {
                     "fixtures/flake8_no_pep420/test_pass_namespace_package",
                 )],
                 ..LinterSettings::for_rule(Rule::ImplicitNamespacePackage)
+            },
+        )?;
+        insta::with_settings!({filters => vec![(r"\\", "/")]}, {
+            assert_diagnostics!(snapshot, diagnostics);
+        });
+        Ok(())
+    }
+
+    /// a directory below the package root holding a basedpython module is a package, as the
+    /// basedpython build writes it an `__init__.py`, but one elsewhere is not
+    #[test_case(Path::new("src/pkg/a.by"))]
+    #[test_case(Path::new("tools/a.by"))]
+    fn package_roots(filename: &Path) -> Result<()> {
+        let snapshot = format!(
+            "package_roots_{}",
+            filename.to_string_lossy().replace('/', "_")
+        );
+        let project_root = test_resource_path("fixtures/flake8_no_pep420/test_package_roots");
+        let diagnostics = test_path(
+            Path::new("flake8_no_pep420/test_package_roots").join(filename),
+            &LinterSettings {
+                rules: RuleTable::from_iter([Rule::ImplicitNamespacePackage]),
+                ..LinterSettings::new(&project_root)
             },
         )?;
         insta::with_settings!({filters => vec![(r"\\", "/")]}, {

@@ -19,9 +19,7 @@
 
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
 
-/// the file a build writes at the top of its output, recording what it wrote there, and, by
-/// being there, marking the directory as an output
-pub const BUILD_MANIFEST: &str = ".by-manifest";
+pub use ty_module_resolver::BUILD_MANIFEST;
 
 /// whether `directory` is the top of a build output
 pub fn is_build_output(system: &dyn System, directory: &SystemPath) -> bool {

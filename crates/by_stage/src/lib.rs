@@ -39,6 +39,8 @@
 //!   back.
 //! - [`verbatim`] — everything the transpiler did not produce, carried over
 //!   unchanged.
+//! - [`packages`] — the empty `__init__.py` of each directory basedpython reads
+//!   as a package without one.
 //! - [`sourcemap`] — `_by_sourcemap.py`, written whole by a build and edited one
 //!   entry at a time by a re-stage.
 //! - [`record`] — `_by_build.json`, what a tree says about the build that wrote
@@ -54,6 +56,7 @@
 
 pub mod emit;
 pub mod layout;
+pub mod packages;
 pub mod project;
 pub mod record;
 pub mod restage;

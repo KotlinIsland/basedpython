@@ -26,11 +26,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use ruff_db::file_revision::FileRevision;
-use ruff_db::files::{FileError, system_path_to_file};
+use ruff_db::files::{DirectoryListing, FileError, directory_listing, system_path_to_file};
 use ruff_db::parsed::ParsedModuleRef;
-use ruff_db::system::{System, SystemPath, SystemPathBuf};
+use ruff_db::system::{FileType, System, SystemPath, SystemPathBuf};
 use ruff_linter::package::PackageRoot;
-use ruff_linter::packaging::{PackageFiles, detect_package_root_in};
+use ruff_linter::packaging::{DirectoryEntry, EntryKind, PackageFiles, detect_package_root_in};
 use ruff_linter::rules::isort::placement::{ImportOrder, sort_import_statements_in};
 use ruff_linter::settings::LinterSettings;
 use ruff_python_ast::{PySourceType, PythonVersion};
@@ -118,8 +118,8 @@ impl<'a> IsortConfig<'a> {
         project_root: &Path,
     ) -> Self {
         let settings = settings_for(system, directory, project_root);
-        let package_root = detect_package_root_in(files, directory, &settings.namespace_packages)
-            .map(Path::to_path_buf);
+        let package_root =
+            detect_package_root_in(files, directory, &settings).map(Path::to_path_buf);
         let target_version = file
             .map_or(settings.unresolved_target_version, |file| {
                 settings.resolve_target_version(file)
@@ -194,6 +194,24 @@ impl PackageFiles for ProjectFiles<'_> {
             )
         })
     }
+
+    fn read_directory(&self, path: &Path) -> Vec<DirectoryEntry> {
+        SystemPath::from_std_path(path)
+            .and_then(|path| directory_listing(self.0, path).ok())
+            .into_iter()
+            .flat_map(DirectoryListing::iter)
+            .map(|(name, file_type)| DirectoryEntry {
+                name: name.to_string(),
+                kind: entry_kind(file_type),
+            })
+            .collect()
+    }
+
+    /// read through the database's [`System`] but not tracked by it, as the configuration files
+    /// are: a basedpython configuration can be in a directory above the project
+    fn read_to_string(&self, path: &Path) -> Option<String> {
+        read_to_string(self.0.system(), path)
+    }
 }
 
 /// the files of a [`System`], looked at each time they are asked about
@@ -207,6 +225,37 @@ impl PackageFiles for SystemFiles<'_> {
     fn is_directory(&self, path: &Path) -> bool {
         SystemPath::from_std_path(path).is_some_and(|path| self.0.is_directory(path))
     }
+
+    fn read_directory(&self, path: &Path) -> Vec<DirectoryEntry> {
+        SystemPath::from_std_path(path)
+            .and_then(|path| self.0.read_directory(path).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                Some(DirectoryEntry {
+                    name: entry.path().file_name()?.to_string(),
+                    kind: entry_kind(entry.file_type()),
+                })
+            })
+            .collect()
+    }
+
+    fn read_to_string(&self, path: &Path) -> Option<String> {
+        read_to_string(self.0, path)
+    }
+}
+
+fn entry_kind(file_type: FileType) -> EntryKind {
+    match file_type {
+        FileType::File => EntryKind::File,
+        FileType::Directory => EntryKind::Directory,
+        FileType::Symlink => EntryKind::Symlink,
+    }
+}
+
+fn read_to_string(system: &dyn System, path: &Path) -> Option<String> {
+    SystemPath::from_std_path(path).and_then(|path| system.read_to_string(path).ok())
 }
 
 /// the configuration files of a [`System`], recording the revision of every file looked at:

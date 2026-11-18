@@ -20,6 +20,7 @@ pub use violation::{AlwaysFixableViolation, FixAvailability, Violation, Violatio
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod basedpython_project;
 mod checkers;
 pub mod codes;
 mod comments;

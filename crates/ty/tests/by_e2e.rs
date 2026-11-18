@@ -8599,6 +8599,121 @@ fn build_reports_what_it_read_and_what_it_produced() {
     );
 }
 
+/// below a package root, `src` by default, a directory holding a basedpython module is a
+/// package without an `__init__.by`: the build writes it the `__init__.py` python needs, and a
+/// wheel ships it. a directory declared a namespace package gets none, and so does a directory
+/// outside the package roots
+#[test]
+fn build_writes_the_initializer_of_a_package_without_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+         [tool.basedpython.environment]\nnamespace-packages = [\"src/plugins\"]\n",
+    )
+    .unwrap();
+    let src = dir.path().join("src");
+    for (path, text) in [
+        (
+            "app/main.by",
+            "from app.util.text import shout\nprint(shout('hi'))\n",
+        ),
+        (
+            "app/util/text.by",
+            "def shout(s: str) -> str:\n    return s.upper()\n",
+        ),
+        ("plugins/extra/tool.by", "x = 1\n"),
+    ] {
+        let path = src.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let tests = dir.path().join("tests");
+    fs::create_dir_all(&tests).unwrap();
+    fs::write(tests.join("test_it.by"), "def test_x(): pass\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["build", "--print-manifest"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let listed: Vec<&str> = stdout.lines().collect();
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let build = dir.path().join("build");
+    for package in ["app", "app/util", "plugins/extra"] {
+        assert_eq!(
+            fs::read_to_string(build.join(package).join("__init__.py")).ok(),
+            Some(String::new()),
+            "`{package}` is a package"
+        );
+    }
+    assert!(
+        !build.join("plugins/__init__.py").exists(),
+        "`plugins` is declared a namespace package"
+    );
+    assert!(
+        !build.join("tests/__init__.py").exists(),
+        "`tests` beside `src` is no package root"
+    );
+    assert!(listed.contains(&"package app"), "{stdout}");
+    assert!(
+        !listed.contains(&"package tests"),
+        "`tests` is not part of the distribution:\n{stdout}"
+    );
+    // an initializer is produced from no file, so the source distribution carries nothing for it
+    assert!(
+        !listed
+            .iter()
+            .any(|line| line.starts_with("input") && !line.contains('.')),
+        "only files are inputs:\n{stdout}"
+    );
+}
+
+/// two module roots holding a directory of the same name build into one directory, which has
+/// the initializer either of them brought, and is given one only when neither did
+#[test]
+fn build_writes_no_initializer_where_another_root_brings_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+         [tool.basedpython.environment]\nroot = [\"src\", \"lib\"]\n",
+    )
+    .unwrap();
+    for (path, text) in [
+        ("src/app/Consts.by", "x = 1\n"),
+        ("lib/app/__init__.py", "V = 'lib init'\n"),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("build/app/__init__.py")).ok(),
+        Some("V = 'lib init'\n".to_owned())
+    );
+}
+
 /// `tests` beside `src` is a package python can import and a package nobody
 /// installs. a wheel that shipped it would put a top-level `tests` module into
 /// every environment the project is installed into
@@ -10064,7 +10179,9 @@ fn init_writes_a_project_that_builds_and_runs() {
     let project = dir.path().join("demo");
     let pyproject = fs::read_to_string(project.join("pyproject.toml")).unwrap();
     assert!(pyproject.contains("build-backend = \"basedpython.build\""));
-    assert!(project.join("src/demo/__init__.by").exists());
+    assert!(project.join("src/demo/main.by").exists());
+    // a directory holding a module is a package without one
+    assert!(!project.join("src/demo/__init__.by").exists());
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -10895,6 +11012,44 @@ fn transpiling_a_directory_in_place_writes_no_runtime_file() {
             &["-c", "from app.main import main; main()"]
         ),
         "{} {}{} 2"
+    );
+}
+
+/// the python a directory transpiles to in place reads the packages the checker did: a
+/// directory holding a basedpython module is given the `__init__.py` it has no `.by` for
+#[test]
+fn transpiling_a_directory_in_place_writes_the_initializer_of_a_package_without_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let inner = dir.path().join("src/app/inner");
+    fs::create_dir_all(&inner).unwrap();
+    fs::write(inner.join("a.by"), "x = 1\n").unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["transpile", "src"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by transpile failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    for package in ["src/app", "src/app/inner"] {
+        assert_eq!(
+            fs::read_to_string(dir.path().join(package).join("__init__.py")).ok(),
+            Some(String::new()),
+            "`{package}` is a package"
+        );
+    }
+    assert!(
+        !dir.path().join("src/__init__.py").exists(),
+        "a module root is no package"
     );
 }
 

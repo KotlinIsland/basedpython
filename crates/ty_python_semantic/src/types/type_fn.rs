@@ -40,7 +40,7 @@ use ruff_db::source::source_text;
 use ruff_text_size::Ranged;
 
 use crate::Db;
-use crate::place::{builtins_symbol, imported_symbol};
+use crate::place::{ModuleGlobals, builtins_symbol, imported_symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::function::FunctionType;
 use crate::types::literal::LiteralValueTypeKind;
@@ -545,7 +545,14 @@ fn resolve_qualified_name<'db>(
         Some((module, name)) => {
             let module_name = ModuleName::new(module)?;
             let module = resolve_module_confident(db, env.resolver_environment(db), &module_name)?;
-            imported_symbol(db, env, Some(db.program_file(module.file(db)?)), name, None).place
+            imported_symbol(
+                db,
+                env,
+                ModuleGlobals::File(db.program_file(module.file(db)?)),
+                name,
+                None,
+            )
+            .place
         }
     };
     match place.ignore_possibly_undefined() {

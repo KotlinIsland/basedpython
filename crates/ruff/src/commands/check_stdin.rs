@@ -42,7 +42,7 @@ pub(crate) fn check_stdin(
     }
     let stdin = read_from_stdin()?;
     let package_root = filename.and_then(Path::parent).and_then(|path| {
-        packaging::detect_package_root(path, &resolver.base_settings().linter.namespace_packages)
+        packaging::detect_package_root(path, &resolver.base_settings().linter)
             .map(PackageRoot::root)
     });
     let mut diagnostics = lint_stdin(

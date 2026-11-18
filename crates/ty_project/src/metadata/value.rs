@@ -61,6 +61,11 @@ impl RelativePathBuf {
         self.0.range()
     }
 
+    /// the path as configured, with where it was configured
+    pub(crate) fn ranged(&self) -> &RangedValue<SystemPathBuf> {
+        &self.0
+    }
+
     /// Resolves the absolute path for `self` based on its origin.
     pub fn absolute(&self, configuration_root: &SystemPath, system: &dyn System) -> SystemPathBuf {
         let relative_to = match self.0.source() {

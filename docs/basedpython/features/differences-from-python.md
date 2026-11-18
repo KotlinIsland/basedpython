@@ -77,6 +77,17 @@ stay eager. below python 3.15 a name imported with `from` is read off its module
 on first use, and is in the importing module's namespace only from then on. see
 [lazy imports](lazy-imports.md)
 
+### below `src/`, a directory holding a module is a regular package
+
+python needs an `__init__.py` to make a directory a regular package, and without
+one it is a namespace package. in basedpython a directory below a package root,
+`src/` by default, holding a `.by` module is a regular package whether or not it
+has an `__init__.by`, and the build writes the `__init__.py`. so it shadows a
+package of the same name installed in the environment, it outranks a module of
+its name, and its `__file__` is a string rather than `None`. a directory declared
+in `environment.namespace-packages` stays a namespace package. see
+[packages without `__init__.by`](packages.md)
+
 ### an annotation read at runtime is its python spelling
 
 a program that reads its own annotations reads the python they were lowered to:

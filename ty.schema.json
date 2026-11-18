@@ -445,6 +445,26 @@
             "$ref": "#/definitions/RelativePathBuf"
           }
         },
+        "namespace-packages": {
+          "description": "Directories below a package root that stay namespace packages.\n\nA directory named here keeps python's meaning whatever it holds: it is a namespace\npackage, which python assembles from every directory of that name on the search path, as\nit does a plugin directory several distributions add to. `by build` writes it no\n`__init__.py`. A directory below it holding a module is still a package of its own.\n\nA directory with an initializer of its own is a regular package either way.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/RelativePathBuf"
+          }
+        },
+        "package-roots": {
+          "description": "The module roots below which a directory holding a basedpython module is a package\nwithout an `__init__.by`.\n\nBelow a package root, a directory holding a basedpython module, at any depth, is a\nregular package, and `by build` writes it the empty `__init__.py` python needs. Anywhere\nelse, a directory needs an initializer of its own to be a regular package, as in python,\nso `tests/` and `scripts/` beside `src/` stay folders of modules.\n\nEach entry has to be a module root (see `root`). For a project without a `src/` layout,\nname the project root, `\".\"`. The linter reads this setting too, so the two agree on\nwhich directories are packages. Scripts with inline metadata have no package roots by\ndefault, as they have no module roots.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/RelativePathBuf"
+          }
+        },
         "python": {
           "description": "Path to your project's Python environment or interpreter.\n\nty uses the `site-packages` directory of your project's Python environment\nto resolve third-party (and, in some cases, first-party) imports in your code.\n\nThis can be a path to:\n\n- A Python interpreter, e.g. `.venv/bin/python3`\n- A virtual environment directory, e.g. `.venv`\n- A system Python [`sys.prefix`] directory, e.g. `/usr`\n\nIf you're using a project management tool such as uv, you should not generally need to\nspecify this option, as commands such as `uv run` will set the `VIRTUAL_ENV` environment\nvariable to point to your project's virtual environment. ty can also infer the location of\nyour environment from an activated Conda environment, and will look for a `.venv` directory\nin the project root if none of the above apply. Failing that, ty will look for a `python3`\nor `python` binary available in `PATH`.\n\nScripts with inline metadata use their own Python environment. They can use an explicitly\nconfigured environment, an activated environment, or an environment selected by the editor.\nUnlike projects, they do not automatically use a `.venv` directory.\n\n[`sys.prefix`]: https://docs.python.org/3/library/sys.html#sys.prefix",
           "anyOf": [

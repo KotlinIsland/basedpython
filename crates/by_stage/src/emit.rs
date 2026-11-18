@@ -215,7 +215,6 @@ pub fn check_and_transpile(
     // the helpers a module calls come from a copy written beside it, and which
     // copy depends on where it lands, so the config is settled per file rather
     // than once for the build
-    let system = ruff_db::Db::system(db);
     let layout = runtime.as_deref();
     let jobs: Vec<Job<'_>> = handles
         .iter()
@@ -224,11 +223,7 @@ pub fn check_and_transpile(
             by_path,
             file: *file,
             runtime_package: layout.and_then(|layout| {
-                layout.package_of(
-                    &transpiled_destination(roots, root, by_path),
-                    by_path,
-                    system,
-                )
+                layout.package_of(&transpiled_destination(roots, root, by_path), by_path, db)
             }),
         })
         .collect();

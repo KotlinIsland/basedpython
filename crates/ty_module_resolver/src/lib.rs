@@ -11,9 +11,11 @@ pub use module::Module;
 pub use module_name::{ImportingFile, ModuleName, ModuleNameResolutionError};
 pub use path::{SearchPath, SearchPathError};
 pub use resolve::{
-    SearchPaths, editable_search_paths, file_to_module, resolve_module, resolve_module_confident,
-    resolve_module_for_import_from, resolve_real_module, resolve_real_module_confident,
-    resolve_real_shadowable_module, runtime_file_to_module, stub_file_to_real_module,
+    BUILD_MANIFEST, PACKAGE_INITIALIZERS, SearchPaths, editable_search_paths, file_to_module,
+    is_directory_package_at, is_package_without_initializer_at, resolve_module,
+    resolve_module_confident, resolve_module_for_import_from, resolve_real_module,
+    resolve_real_module_confident, resolve_real_shadowable_module, runtime_file_to_module,
+    stub_file_to_real_module,
 };
 pub use settings::{SearchPathSettings, SearchPathSettingsError};
 pub use strategy::{FallibleStrategy, MisconfigurationStrategy, UseDefaultStrategy};

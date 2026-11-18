@@ -5464,3 +5464,182 @@ fn ruff_toml_is_linted() -> Result<()> {
 
     Ok(())
 }
+
+/// which directories are packages is the basedpython project's to say: below its package roots,
+/// `src` by default, a directory holding a basedpython module is a package without an
+/// `__init__.by`. `buff` finds that project as `by` does, whatever configuration of its own it
+/// reads, so the `INP001` it reports agrees with the packages `by` resolves
+impl CliTest {
+    fn implicit_namespace_packages(&self) -> Command {
+        let mut command = self.check_command();
+        command.args(["--select", "INP001"]);
+        command
+    }
+}
+
+#[test]
+fn package_roots_without_a_ruff_configuration() -> Result<()> {
+    let test = CliTest::with_files([
+        ("pyproject.toml", "[project]\nname = \"p\"\n"),
+        ("pkg/a.by", ""),
+        ("src/app/b.by", ""),
+        ("tools/c.by", ""),
+    ])?;
+    assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    pkg/a.by:1:1: INP001 File `pkg/a.by` is part of an implicit namespace package. Add an `__init__.py`.
+    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 2 errors.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+#[test]
+fn package_roots_beside_a_ruff_section() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "pyproject.toml",
+            "[project]\nname = \"p\"\n\n[tool.ruff]\nline-length = 100\n\n\
+             [tool.basedpython.environment]\npackage-roots = [\".\", \"src\"]\n",
+        ),
+        ("pkg/a.by", ""),
+        ("src/app/b.by", ""),
+        ("my-tools/c.by", ""),
+    ])?;
+    assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    my-tools/c.by:1:1: INP001 File `my-tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+/// the `ruff.toml` in `lib` is not where the project's configuration is
+#[test]
+fn package_roots_with_a_ruff_toml_below_the_project() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "pyproject.toml",
+            "[project]\nname = \"p\"\n\n[tool.basedpython.environment]\npackage-roots = [\".\"]\n",
+        ),
+        ("lib/ruff.toml", "line-length = 100\n"),
+        ("lib/pkg/a.by", ""),
+        ("lib/my-tools/c.by", ""),
+    ])?;
+    assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    lib/my-tools/c.by:1:1: INP001 File `lib/my-tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+/// a project with a basedpython configuration of its own, below the `[tool.ruff]` that configures
+/// the linter, has its own package roots
+#[test]
+fn package_roots_of_a_nested_project() -> Result<()> {
+    let test = CliTest::with_files(nested_project())?;
+    assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+/// `inner` is a basedpython project of its own, its package root its root, below a project
+/// configuring the linter and taking basedpython's defaults
+fn nested_project() -> [(&'static str, &'static str); 5] {
+    [
+        (
+            "pyproject.toml",
+            "[project]\nname = \"p\"\n\n[tool.ruff]\nline-length = 100\n",
+        ),
+        (
+            "inner/basedpython.toml",
+            "[environment]\npackage-roots = [\".\"]\n",
+        ),
+        ("inner/pkg/a.by", ""),
+        ("src/app/b.by", ""),
+        ("tools/c.by", ""),
+    ]
+}
+
+#[test]
+fn package_roots_with_an_inline_configuration() -> Result<()> {
+    let test = CliTest::with_files(nested_project())?;
+    assert_cmd_snapshot!(test
+        .implicit_namespace_packages()
+        .args(["--config", "line-length=90", "."]), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+#[test]
+fn package_roots_when_isolated() -> Result<()> {
+    let test = CliTest::with_files(nested_project())?;
+    assert_cmd_snapshot!(test
+        .implicit_namespace_packages()
+        .args(["--isolated", "."]), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+/// the configuration `app` extends is in a basedpython project of its own, whose package roots
+/// are not `app`'s
+#[test]
+fn package_roots_with_an_extended_configuration() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "shared/basedpython.toml",
+            "[environment]\npackage-roots = [\".\"]\n",
+        ),
+        ("shared/ruff.toml", "line-length = 100\n"),
+        (
+            "app/pyproject.toml",
+            "[project]\nname = \"app\"\n\n[tool.ruff]\nextend = \"../shared/ruff.toml\"\n",
+        ),
+        ("app/src/pkg/a.by", ""),
+        ("app/tools/c.by", ""),
+    ])?;
+    assert_cmd_snapshot!(test.implicit_namespace_packages().arg("app"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    app/tools/c.by:1:1: INP001 File `app/tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    Found 1 error.
+
+    ----- stderr -----
+    ");
+    Ok(())
+}

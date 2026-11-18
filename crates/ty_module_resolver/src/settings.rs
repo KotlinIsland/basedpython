@@ -32,6 +32,14 @@ pub struct SearchPathSettings {
     /// We should ideally only ever use this for things like goto-definition,
     /// where typeshed isn't the right answer.
     pub real_stdlib_path: Option<SystemPathBuf>,
+
+    /// The first-party roots below which a directory holding a basedpython module is a regular
+    /// package without an initializer of its own.
+    pub package_roots: Vec<SystemPathBuf>,
+
+    /// Directories below a package root that stay namespace packages: a directory named here
+    /// keeps python's meaning, whatever it holds.
+    pub namespace_packages: Vec<SystemPathBuf>,
 }
 
 impl SearchPathSettings {
@@ -49,6 +57,8 @@ impl SearchPathSettings {
             custom_typeshed: None,
             site_packages_paths: vec![],
             real_stdlib_path: None,
+            package_roots: vec![],
+            namespace_packages: vec![],
         }
     }
 

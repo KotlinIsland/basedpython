@@ -115,13 +115,15 @@ already run, so a module that reads a class the copy doesn't hold says so itself
 
 - `by build`, `by run` and `by compile` stage a tree of their own. they write
     `_by_runtime.py` into each package they stage — a directory with an
-    `__init__` — and each module imports what it calls from its package's copy
+    `__init__`, or one below a package root holding a basedpython module, which
+    the build writes an empty `__init__.py` — and each module imports what it
+    calls from its package's copy
 - in a `by build` or `by compile` tree, a module at a module root gets the
     definitions pasted in. a copy at the root would be a top-level module, which
     a second basedpython wheel built by another version overwrites on install
 - so does a module in a directory that is not a package, a `scripts/` folder
-    say, which has no import that works both when it is run and when it is
-    imported
+    beside `src/` say, which has no import that works both when it is run and
+    when it is imported
 - a tree `by run` stages is run and thrown away, and nothing installs it, so
     neither reason holds there: `by run` writes a copy at the tree's root, and
     every module in no package imports from it, which the runner's directory on

@@ -50,7 +50,7 @@ fn fixed_python_source(
             file_path
                 .parent()
                 .expect("a path to a document should have a parent path"),
-            &linter_settings.namespace_packages,
+            linter_settings,
         )
         .map(PackageRoot::root)
     } else {

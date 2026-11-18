@@ -16,6 +16,7 @@ use crate::{Db, ResolverEnvironment};
 #[derive(Clone, Copy, Eq, Hash, PartialEq, salsa::Supertype, salsa::SalsaValue)]
 pub enum Module<'db> {
     File(FileModule<'db>),
+    Directory(DirectoryPackage<'db>),
     Namespace(NamespacePackage<'db>),
 }
 
@@ -53,10 +54,25 @@ impl<'db> Module<'db> {
         Self::Namespace(NamespacePackage::new(db, resolver_environment, name))
     }
 
+    pub(crate) fn directory_package(
+        db: &'db dyn Db,
+        resolver_environment: ResolverEnvironment<'db>,
+        name: Cow<'_, ModuleName>,
+        search_path: SearchPath,
+    ) -> Self {
+        Self::Directory(DirectoryPackage::new(
+            db,
+            resolver_environment,
+            name,
+            search_path,
+        ))
+    }
+
     /// The resolver environment used to resolve this module.
     pub(crate) fn resolver_environment(self, db: &'db dyn Database) -> ResolverEnvironment<'db> {
         match self {
             Module::File(module) => module.resolver_environment(db),
+            Module::Directory(module) => module.resolver_environment(db),
             Module::Namespace(module) => module.resolver_environment(db),
         }
     }
@@ -65,18 +81,26 @@ impl<'db> Module<'db> {
     pub fn name(self, db: &'db dyn Database) -> &'db ModuleName {
         match self {
             Module::File(module) => module.name(db),
+            Module::Directory(package) => package.name(db),
             Module::Namespace(ref package) => package.name(db),
         }
     }
 
     /// The file to the source code that defines this module
     ///
-    /// This is `None` for namespace packages.
+    /// This is `None` for a package with no initializer: a namespace package, or a basedpython
+    /// directory package.
     pub fn file(self, db: &'db dyn Database) -> Option<File> {
         match self {
             Module::File(module) => Some(module.file(db)),
-            Module::Namespace(_) => None,
+            Module::Directory(_) | Module::Namespace(_) => None,
         }
+    }
+
+    /// Whether this is a namespace package, which python assembles from every directory of its
+    /// name on the search path.
+    pub fn is_namespace_package(self) -> bool {
+        matches!(self, Module::Namespace(_))
     }
 
     /// The Python version used to resolve this module.
@@ -88,7 +112,7 @@ impl<'db> Module<'db> {
     pub fn known(self, db: &'db dyn Database) -> Option<KnownModule> {
         match self {
             Module::File(module) => module.known(db),
-            Module::Namespace(_) => None,
+            Module::Directory(_) | Module::Namespace(_) => None,
         }
     }
 
@@ -104,6 +128,7 @@ impl<'db> Module<'db> {
     pub fn search_path(self, db: &'db dyn Database) -> Option<&'db SearchPath> {
         match self {
             Module::File(module) => Some(module.search_path(db)),
+            Module::Directory(package) => Some(package.search_path(db)),
             Module::Namespace(_) => None,
         }
     }
@@ -135,7 +160,7 @@ impl<'db> Module<'db> {
     pub fn kind(self, db: &'db dyn Database) -> ModuleKind {
         match self {
             Module::File(module) => module.kind(db),
-            Module::Namespace(_) => ModuleKind::Package,
+            Module::Directory(_) | Module::Namespace(_) => ModuleKind::Package,
         }
     }
 
@@ -180,6 +205,23 @@ pub struct FileModule<'db> {
     pub(super) resolver_environment: ResolverEnvironment<'db>,
     #[returns(copy)]
     pub(super) known: Option<KnownModule>,
+}
+
+/// A regular package with no initializer.
+///
+/// In basedpython a directory below a package root holding a basedpython module is a regular
+/// package whether or not it has an `__init__.by`: the build writes the empty `__init__.py`
+/// python needs.
+/// It has no globals of its own, but unlike a namespace package it has one location, and it
+/// shadows a package of the same name later on the search path.
+#[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
+pub struct DirectoryPackage<'db> {
+    #[returns(copy)]
+    pub(super) resolver_environment: ResolverEnvironment<'db>,
+    #[returns(ref)]
+    pub(super) name: ModuleName,
+    #[returns(ref)]
+    pub(super) search_path: SearchPath,
 }
 
 /// A namespace package.

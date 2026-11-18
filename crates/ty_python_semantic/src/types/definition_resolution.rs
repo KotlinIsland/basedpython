@@ -967,7 +967,8 @@ pub(crate) fn resolve_from_import_definitions<'db>(
         .map(|file| ProgramFile::new(db, file, env.program(db)));
 
     let Some(module_file) = module_file else {
-        // No file means this is a namespace package, try to import the submodule
+        // No file means a package with no initializer, which has no globals: try to import the
+        // submodule
         return Vec::from_iter(resolve_from_import_submodule_definitions(
             db,
             env,

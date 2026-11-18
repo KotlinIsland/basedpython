@@ -2340,3 +2340,42 @@ home = ./
 
     Ok(())
 }
+
+/// a package root that is no module root, and a namespace package that is no directory below a
+/// package root, each say nothing, so each is reported
+#[test]
+fn package_roots_and_namespace_packages_that_do_nothing_are_reported() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [project]
+            name = "p"
+            version = "0.1.0"
+
+            [tool.basedpython.environment]
+            package-roots = ["src", "lib"]
+            namespace-packages = ["src/Plugins", "src/my-plugins", "tools"]
+            "#,
+        ),
+        ("src/plugins/a.by", ""),
+        ("src/my-plugins/b.by", ""),
+        ("lib/c.by", ""),
+        ("tools/d.by", ""),
+    ])?;
+
+    assert_cmd_snapshot!(case.command().arg("--output-format").arg("concise"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    pyproject.toml:7:25: warning[invalid-package-root] `lib` is not a module root
+    pyproject.toml:8:23: warning[invalid-namespace-package] `src/Plugins` is not a directory below a package root
+    pyproject.toml:8:38: warning[invalid-namespace-package] `src/my-plugins` is not a directory below a package root
+    pyproject.toml:8:56: warning[invalid-namespace-package] `tools` is not a directory below a package root
+    Found 4 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}

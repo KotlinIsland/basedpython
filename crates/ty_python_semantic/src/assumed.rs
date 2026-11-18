@@ -30,7 +30,7 @@ use ty_python_core::{
 };
 
 use crate::Db;
-use crate::place::{Place, imported_symbol};
+use crate::place::{ModuleGlobals, Place, imported_symbol};
 use crate::types::context::ProgramEnvironment;
 use crate::types::{EnumLiteralType, Type};
 
@@ -103,14 +103,21 @@ fn resolved_class<'db>(
     let resolved = resolve_module_confident(db, env.resolver_environment(db), &module)?;
     let file = ProgramFile::new(db, resolved.file(db)?, env.program(db));
 
-    let Place::Defined(defined) = imported_symbol(db, env, Some(file), &class.qualname, None).place
+    let Place::Defined(defined) =
+        imported_symbol(db, env, ModuleGlobals::File(file), &class.qualname, None).place
     else {
         // what the debugger saw is the *generated* python's name, and basedpython renames a
         // `private` declaration on the way out. so a `_Helper` the source does not have is looked
         // up as the `Helper` it came from — see [`private_renames`]
         let source_name = private_renames(db, file).get(&class.qualname)?;
-        let Place::Defined(defined) =
-            imported_symbol(db, env, Some(file), source_name.as_str(), None).place
+        let Place::Defined(defined) = imported_symbol(
+            db,
+            env,
+            ModuleGlobals::File(file),
+            source_name.as_str(),
+            None,
+        )
+        .place
         else {
             return None;
         };

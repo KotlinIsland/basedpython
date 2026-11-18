@@ -1364,6 +1364,76 @@ configuration setting.
 
 ---
 
+### `namespace-packages`
+
+Directories below a package root that stay namespace packages.
+
+A directory named here keeps python's meaning whatever it holds: it is a namespace
+package, which python assembles from every directory of that name on the search path, as
+it does a plugin directory several distributions add to. `by build` writes it no
+`__init__.py`. A directory below it holding a module is still a package of its own.
+
+A directory with an initializer of its own is a regular package either way.
+
+**Default value**: `[]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.environment]
+    namespace-packages = ["src/acme/plugins"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [environment]
+    namespace-packages = ["src/acme/plugins"]
+    ```
+
+---
+
+### `package-roots`
+
+The module roots below which a directory holding a basedpython module is a package
+without an `__init__.by`.
+
+Below a package root, a directory holding a basedpython module, at any depth, is a
+regular package, and `by build` writes it the empty `__init__.py` python needs. Anywhere
+else, a directory needs an initializer of its own to be a regular package, as in python,
+so `tests/` and `scripts/` beside `src/` stay folders of modules.
+
+Each entry has to be a module root (see `root`). For a project without a `src/` layout,
+name the project root, `"."`. The linter reads this setting too, so the two agree on
+which directories are packages. Scripts with inline metadata have no package roots by
+default, as they have no module roots.
+
+**Default value**: `["src"]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.environment]
+    package-roots = ["."]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [environment]
+    package-roots = ["."]
+    ```
+
+---
+
 ### `python`
 
 Path to your project's Python environment or interpreter.

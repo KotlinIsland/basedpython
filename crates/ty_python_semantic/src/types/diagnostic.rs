@@ -13,7 +13,7 @@ use crate::dependency::is_direct_dependency;
 use crate::diagnostic::{did_you_mean, format_enumeration};
 use crate::importer::{ImportAction, ImportRequest, MembersInScope};
 use crate::lint::{Level, LintRegistryBuilder, LintStatus, TyCompat};
-use crate::place::{DefinedPlace, Place, imported_symbol, place_from_bindings};
+use crate::place::{DefinedPlace, ModuleGlobals, Place, imported_symbol, place_from_bindings};
 use crate::suppression::FileSuppressionId;
 use crate::types::UntestableOperand;
 use crate::types::abstract_methods::AbstractMethods;
@@ -7058,7 +7058,7 @@ pub(super) fn typing_module_for_fix(
             &module.name(),
         )?;
         let runtime_file = env.program(db).program_file(db, runtime_module.file(db)?);
-        if !imported_symbol(db, env, Some(runtime_file), member, None)
+        if !imported_symbol(db, env, ModuleGlobals::File(runtime_file), member, None)
             .place
             .is_definitely_bound()
         {

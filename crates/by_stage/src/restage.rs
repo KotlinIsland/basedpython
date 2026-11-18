@@ -386,6 +386,28 @@ fn restage_transpiled(
         )));
     };
 
+    // which copy of the runtime a module imports depends on whether its directory is a package,
+    // and a module added beside it since the build can make it one. the module would import a
+    // copy, and a package, the tree does not have
+    if let Some(package) = tree
+        .record
+        .runtime_layout()
+        .package_of(&relative, source, db)
+        && !tree.directory.join(package.file()).is_file()
+    {
+        return Ok(Err(refuse_file(
+            file,
+            format!(
+                "`{}` imports the runtime from `{}`, which `{}` was built without: its directory \
+                 has become a package since the build — rebuild it",
+                file.display(),
+                package.module(),
+                tree.directory.display(),
+            ),
+            Vec::new(),
+        )));
+    }
+
     // the generated text travels with its description, because the two are one
     // transpile: a caller that re-read either of them separately could pair a line
     // table with bytes it does not describe

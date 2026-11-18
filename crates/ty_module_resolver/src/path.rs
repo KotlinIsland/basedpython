@@ -12,6 +12,7 @@ use ruff_db::files::{
 use ruff_db::source::source_text;
 use ruff_db::system::{FileType, System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::{VendoredPath, VendoredPathBuf};
+use ruff_python_stdlib::identifiers::is_identifier;
 
 use crate::Db;
 use crate::module_name::ModuleName;
@@ -42,7 +43,7 @@ impl ModulePath {
         )
     }
 
-    fn push(&mut self, component: &str) {
+    pub(crate) fn push(&mut self, component: &str) {
         if let Some(component_extension) = camino::Utf8Path::new(component).extension() {
             assert!(
                 self.relative_path.extension().is_none(),
@@ -66,6 +67,13 @@ impl ModulePath {
 
     pub(super) fn search_path(&self) -> &SearchPath {
         &self.search_path
+    }
+
+    /// Whether every component below the search root names a directory python can import.
+    pub(super) fn is_importable_directory(&self) -> bool {
+        self.relative_path
+            .components()
+            .all(|component| is_identifier(component.as_str()))
     }
 
     #[must_use]

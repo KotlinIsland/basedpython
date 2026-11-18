@@ -204,7 +204,9 @@ use crate::types::normal_completion::{body_recovered_call_returns, nested_call_r
 use crate::{
     Db,
     dunder_all::dunder_all_names,
-    place::{DefinedPlace, Definedness, Place, RequiresExplicitReExport, imported_symbol},
+    place::{
+        DefinedPlace, Definedness, ModuleGlobals, Place, RequiresExplicitReExport, imported_symbol,
+    },
     types::{
         CallableType, ComparisonSoundnessPolicy, EnumClassLiteral, KnownInstanceType,
         NarrowingConstraint, SpecialFormType, TruthinessAnalyzer, Type, TypeContext, UnionType,
@@ -2343,7 +2345,7 @@ fn analyze_predicate<'db>(
             match imported_symbol(
                 db,
                 env,
-                Some(program_file),
+                ModuleGlobals::File(program_file),
                 symbol.name(),
                 requires_explicit_reexport,
             )

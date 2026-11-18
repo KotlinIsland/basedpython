@@ -50,6 +50,8 @@ features that apply to a project rather than to a file
     source
 - [unused imports](unused-imports.md) — an import nothing uses, counting the extensions it brings
     into scope
+- [packages without `__init__.by`](packages.md) — below `src/`, a directory
+    holding a module is a package, and the build writes its `__init__.py`
 - [the project server](project-server.md) — `by check` answered out of the
     language server's warm state
 - [the repl](repl.md) — an interactive session in basedpython, checked as one

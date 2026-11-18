@@ -41,12 +41,15 @@ use std::sync::LazyLock;
 
 use compact_str::format_compact;
 use memchr::memmem::Finder;
+use ruff_python_stdlib::identifiers::is_identifier;
 use rustc_hash::{FxBuildHasher, FxHashSet};
 
 use ruff_db::PythonFile;
-use ruff_db::files::{File, FilePath, FileRootKind, directory_listing, system_path_to_file};
+use ruff_db::files::{
+    File, FilePath, FileRootKind, directory_listing, system_path_to_directory, system_path_to_file,
+};
 use ruff_db::source::source_text;
-use ruff_db::system::{System, SystemPath, SystemPathBuf};
+use ruff_db::system::{FileType, System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_python_ast::{
     self as ast,
@@ -56,7 +59,9 @@ use ruff_python_ast::{
 use crate::db::Db;
 use crate::module::{Module, ModuleKind};
 use crate::module_name::{ImportingFile, ModuleName};
-use crate::path::{ModuleDirectory, ModulePath, SearchPath, SystemOrVendoredPathRef};
+use crate::path::{
+    ModuleDirectory, ModulePath, SearchPath, SystemOrVendoredPathRef, directory_contains_file,
+};
 use crate::strategy::MisconfigurationStrategy;
 use crate::typeshed::{TypeshedVersions, vendored_typeshed_versions};
 use crate::{ResolverEnvironment, ResolverFile, SearchPathSettings, SearchPathSettingsError};
@@ -599,7 +604,7 @@ fn search_path_may_contain_stub_package(db: &dyn Db, search_path: &SearchPath) -
 
 /// Get the search-paths for desperate resolution of absolute imports in this file.
 ///
-/// Currently this is "all ancestor directories that don't contain an `__init__.py(i)`"
+/// Currently this is "all ancestor directories that aren't regular packages"
 /// (from closest-to-importing-file to farthest).
 ///
 /// (For paranoia purposes, all relative desperate search-paths are also absolute
@@ -639,10 +644,13 @@ fn absolute_desperate_search_paths(
         // added as a search-path at runtime. Notably this reflects pytest's default mode where
         // it adds every dir with a .py to the search-paths (making all test files root modules),
         // unless they see an `__init__.py`, in which case they assume you don't want that.
-        let isnt_regular_package = !listing.entry_is_file(db, &candidate_path, "__init__.py")
-            && !listing.entry_is_file(db, &candidate_path, "__init__.pyi")
-            && !listing.entry_is_file(db, &candidate_path, "__init__.by")
-            && !listing.entry_is_file(db, &candidate_path, "__init__.byi");
+        //
+        // A basedpython directory package is a regular package too: the build gives it an
+        // `__init__.py`, so pytest treats it as one.
+        let isnt_regular_package = !PACKAGE_INITIALIZERS
+            .iter()
+            .any(|initializer| listing.entry_is_file(db, &candidate_path, initializer))
+            && !is_directory_package_at(db, resolver_environment, &candidate_path);
         // Any dir with a pyproject.toml or ty.toml is a valid relative desperate search-path and
         // we want all of those to also be valid absolute desperate search-paths. It doesn't
         // make any sense for a folder to have `pyproject.toml` and `__init__.py` but let's
@@ -741,6 +749,13 @@ pub struct SearchPaths {
     site_packages: Vec<SearchPath>,
 
     typeshed_versions: TypeshedVersions,
+
+    /// the first-party roots below which a directory holding a basedpython module is a regular
+    /// package without an initializer
+    package_roots: Box<[SystemPathBuf]>,
+
+    /// directories below a package root declared to stay namespace packages
+    namespace_packages: Box<[SystemPathBuf]>,
 }
 
 impl fmt::Debug for SearchPaths {
@@ -753,6 +768,8 @@ impl fmt::Debug for SearchPaths {
             // Omit `typeshed_versions` because its debug representation spans thousands of lines,
             // making even simple `Type` debug representations impractically large.
             typeshed_versions: _,
+            package_roots,
+            namespace_packages,
         } = self;
 
         f.debug_struct("SearchPaths")
@@ -760,6 +777,8 @@ impl fmt::Debug for SearchPaths {
             .field("stdlib_path", stdlib_path)
             .field("real_stdlib_path", real_stdlib_path)
             .field("site_packages", site_packages)
+            .field("package_roots", package_roots)
+            .field("namespace_packages", namespace_packages)
             .finish_non_exhaustive()
     }
 }
@@ -789,6 +808,8 @@ impl SearchPaths {
             custom_typeshed: typeshed,
             site_packages_paths,
             real_stdlib_path,
+            package_roots,
+            namespace_packages,
         } = settings;
 
         let mut static_paths = vec![];
@@ -931,6 +952,8 @@ impl SearchPaths {
             real_stdlib_path,
             site_packages,
             typeshed_versions,
+            package_roots: package_roots.clone().into_boxed_slice(),
+            namespace_packages: namespace_packages.clone().into_boxed_slice(),
         })
     }
 
@@ -944,6 +967,8 @@ impl SearchPaths {
             real_stdlib_path: None,
             site_packages: vec![],
             typeshed_versions: vendored_typeshed_versions(vendored),
+            package_roots: Box::default(),
+            namespace_packages: Box::default(),
         }
     }
 
@@ -1003,6 +1028,17 @@ impl SearchPaths {
 
     pub fn typeshed_versions(&self) -> &TypeshedVersions {
         &self.typeshed_versions
+    }
+
+    /// Returns the first-party roots below which a directory holding a basedpython module is a
+    /// regular package without an initializer.
+    pub fn package_roots(&self) -> &[SystemPathBuf] {
+        &self.package_roots
+    }
+
+    /// Returns the directories below a package root declared to stay namespace packages.
+    pub fn namespace_packages(&self) -> &[SystemPathBuf] {
+        &self.namespace_packages
     }
 }
 
@@ -1278,6 +1314,8 @@ fn desperately_resolve_name<'db>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize)]
 enum ResolvedModule {
     NamespacePackage,
+    /// a regular package with no initializer, see [`is_directory_package`]
+    DirectoryPackage,
     Package(File),
     Module(File),
 }
@@ -1360,6 +1398,7 @@ impl<'db> ModuleResolutionCandidate<'db> {
     fn is_any_namespace_package(&self, context: &ResolverContext) -> bool {
         match self.module {
             ResolvedModule::NamespacePackage => true,
+            ResolvedModule::DirectoryPackage => false,
             ResolvedModule::Package(init) => {
                 is_legacy_namespace_package(self.directory.path(), context, init)
             }
@@ -1378,6 +1417,15 @@ impl<'db> ModuleResolutionCandidate<'db> {
             ResolvedModule::NamespacePackage => {
                 tracing::trace!("Resolve namespace package `{name}`");
                 Module::namespace_package(db, resolver_environment, Cow::Borrowed(name))
+            }
+            ResolvedModule::DirectoryPackage => {
+                tracing::trace!("Resolve directory package `{name}`");
+                Module::directory_package(
+                    db,
+                    resolver_environment,
+                    Cow::Borrowed(name),
+                    self.directory.into_search_path(),
+                )
             }
             ResolvedModule::Package(file) => {
                 // Legacy namespace packages also use their defining file when resolved directly.
@@ -1422,7 +1470,7 @@ impl<'db> ModuleResolutionCandidate<'db> {
 
     fn to_str<'a>(&self, db: &'a dyn Db) -> Cow<'a, str> {
         match self.module {
-            ResolvedModule::NamespacePackage => Cow::Owned(
+            ResolvedModule::NamespacePackage | ResolvedModule::DirectoryPackage => Cow::Owned(
                 self.directory
                     .path()
                     .to_system_path()
@@ -1575,6 +1623,17 @@ fn resolve_component<'db>(
             .py_typed(context)
             .inherit_parent(candidate.py_typed);
         candidate.by_typed = by_typed || subdirectory.path().declares_by_typed(context);
+    } else if file_filter != ComponentFileFilter::StubOnly
+        && let Some(subdirectory) = &subdirectory
+        && is_directory_package(context, subdirectory.path())
+    {
+        // the build gives a directory package the initializer it has no source for, and python
+        // looks for a package with an initializer before a module of the same name
+        candidate.module = ResolvedModule::DirectoryPackage;
+        candidate.py_typed = subdirectory
+            .path()
+            .py_typed(context)
+            .inherit_parent(candidate.py_typed);
     } else if let Some(file_module) = resolve_file_module_with_filter(
         module_directory,
         context,
@@ -1692,6 +1751,193 @@ fn resolve_file_module_with_filter(
 
     stub.or(source)
 }
+
+/// Whether `directory`, which has no initializer, is a regular package all the same.
+///
+/// basedpython has no need for an `__init__.by`: a directory below a package root
+/// (`environment.package-roots`, `src` by default) that holds a basedpython module, at any depth,
+/// is a regular package, and the build writes it the empty `__init__.py` python needs. A
+/// directory declared in `environment.namespace-packages` keeps python's meaning, and so does a
+/// package root itself, which the build lays out as the top of its tree rather than as a
+/// package.
+fn is_directory_package(context: &ResolverContext, directory: &ModulePath) -> bool {
+    // only an initializer python runs counts: a stub-only `__init__.byi` describes the package
+    // the build makes of the directory, and the build still has to write the `__init__.py`
+    directory.to_system_path().is_some_and(|path| {
+        !directory_contains_file(context.db, &path, &RUNTIME_PACKAGE_INITIALIZERS)
+    }) && is_package_without_initializer(context, directory)
+}
+
+/// Whether `directory` would be a regular package if it had no initializer of its own.
+fn is_package_without_initializer(context: &ResolverContext, directory: &ModulePath) -> bool {
+    if !directory.search_path().is_first_party() || !directory.is_importable_directory() {
+        return false;
+    }
+    let Some(path) = directory.to_system_path() else {
+        return false;
+    };
+    let Some(search_root) = directory.search_path().as_system_path() else {
+        return false;
+    };
+    let search_paths = context.resolver_environment.search_paths(context.db);
+    // the build lays a directory out below the deepest root holding it, so that is the root
+    // whose directories are packages or not. a root is never a package itself: the deepest root
+    // holding it is itself, and not the root it was reached from
+    let deepest_root = search_paths
+        .first_party_roots()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count());
+    if deepest_root != Some(search_root)
+        || !search_paths
+            .package_roots
+            .iter()
+            .any(|root| root.as_path() == search_root)
+    {
+        return false;
+    }
+    if search_paths.namespace_packages.contains(&path) {
+        return false;
+    }
+    // the directory's own initializer is not counted: during resolution it has none, and asked
+    // of a path, the answer is the one it would have without
+    system_path_to_directory(context.db, &path).is_ok_and(|directory| {
+        holds_basedpython_module(context.db, directory, Initializer::Uncounted)
+    })
+}
+
+/// Whether the build writes `directory` the initializer of a regular package it lacks.
+///
+/// A directory below a package root holding a basedpython module is a regular package without an
+/// initializer of its own, and resolution reads it as one. This asks the same of a path: the build
+/// lays out the project's directories and must give exactly the ones the checker resolved as
+/// regular packages an `__init__.py`.
+pub fn is_directory_package_at<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+    directory: &SystemPath,
+) -> bool {
+    !directory_contains_file(db, directory, &RUNTIME_PACKAGE_INITIALIZERS)
+        && is_package_without_initializer_at(db, resolver_environment, directory)
+}
+
+/// Whether `directory` would be a regular package if it had no initializer of its own.
+///
+/// A directory whose only basedpython module is its own `__init__.by` holds nothing without it,
+/// so that initializer is not counted. Converting python to basedpython asks this of a directory
+/// with an empty `__init__.py`, which it can leave out exactly when the answer is yes.
+pub fn is_package_without_initializer_at<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+    directory: &SystemPath,
+) -> bool {
+    let search_paths = resolver_environment.search_paths(db);
+    // a nested root shadows the one containing it, so the deepest one is the directory's root
+    let Some(root) = search_paths
+        .static_paths
+        .iter()
+        .filter(|search_path| search_path.is_first_party())
+        .filter(|search_path| {
+            search_path
+                .as_system_path()
+                .is_some_and(|root| root != directory && directory.starts_with(root))
+        })
+        .max_by_key(|search_path| {
+            search_path
+                .as_system_path()
+                .map_or(0, |root| root.components().count())
+        })
+    else {
+        return false;
+    };
+    let Some(relative) = root
+        .as_system_path()
+        .and_then(|root| directory.strip_prefix(root).ok())
+    else {
+        return false;
+    };
+    if !relative
+        .components()
+        .all(|component| is_identifier(component.as_str()))
+    {
+        return false;
+    }
+    let mut path = root.to_module_path();
+    for component in relative.components() {
+        path.push(component.as_str());
+    }
+    let context = ResolverContext::new(db, resolver_environment, ModuleResolveMode::Typing);
+    is_package_without_initializer(&context, &path)
+}
+
+/// The names a package's initializer is looked for under.
+pub const PACKAGE_INITIALIZERS: [&str; 4] =
+    ["__init__.py", "__init__.pyi", "__init__.by", "__init__.byi"];
+
+/// The names of an initializer python runs, or the basedpython source of one.
+const RUNTIME_PACKAGE_INITIALIZERS: [&str; 2] = ["__init__.py", "__init__.by"];
+
+/// Whether `directory` holds an importable basedpython module, other than its own initializer
+/// when `initializer` is [`Initializer::Uncounted`], at any depth.
+///
+/// Only importable directories are looked into: a module in a directory whose name is not an
+/// identifier cannot be imported through this one. That also leaves out hidden directories, and a
+/// build's own output, which holds a copy of every source it built, is not looked into either.
+fn holds_basedpython_module(db: &dyn Db, directory: File, initializer: Initializer) -> bool {
+    let FilePath::System(path) = directory.path(db) else {
+        return false;
+    };
+    let Ok(listing) = directory_listing(db, path) else {
+        return false;
+    };
+    if listing.file_type(BUILD_MANIFEST).is_some() {
+        return false;
+    }
+    let mut subdirectories = Vec::new();
+    for (name, file_type) in listing.iter() {
+        match file_type {
+            FileType::File | FileType::Symlink => {
+                let file = camino::Utf8Path::new(name);
+                if matches!(file.extension(), Some("by" | "byi"))
+                    && file.file_stem().is_some_and(is_identifier)
+                    && !(initializer == Initializer::Uncounted
+                        && file.file_stem() == Some("__init__"))
+                    && listing.entry_is_file(db, path, name)
+                {
+                    return true;
+                }
+            }
+            // a symlinked directory is not looked into: it can point back up the tree, and a walk
+            // following it would not end
+            FileType::Directory => {
+                if is_identifier(name) {
+                    subdirectories.push(name);
+                }
+            }
+        }
+    }
+    subdirectories.into_iter().any(|name| {
+        system_path_to_directory(db, path.join(name))
+            .is_ok_and(|subdirectory| holds_any_basedpython_module(db, subdirectory))
+    })
+}
+
+/// [`holds_basedpython_module`] counting every module, which below the directory asked about
+/// includes a subpackage's initializer
+#[salsa::tracked(returns(copy))]
+fn holds_any_basedpython_module(db: &dyn Db, directory: File) -> bool {
+    holds_basedpython_module(db, directory, Initializer::Counted)
+}
+
+/// Whether a directory's own initializer counts as one of the modules it holds.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Initializer {
+    Counted,
+    Uncounted,
+}
+
+/// The file a build writes at the top of its output, recording what it wrote there, and, by
+/// being there, marking the directory as an output.
+pub const BUILD_MANIFEST: &str = ".by-manifest";
 
 /// Determines whether a package is a legacy namespace package.
 ///
@@ -3558,5 +3804,303 @@ not_a_directory
         )
         .unwrap();
         assert_eq!(module.search_path(&db).unwrap(), &site_packages);
+    }
+
+    /// basedpython has no need for an `__init__.by`: a first-party directory holding a
+    /// basedpython module is a regular package, which the build gives an `__init__.py`
+    #[test]
+    fn a_directory_of_basedpython_modules_is_a_regular_package() {
+        let TestCase { db, src, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg/a.by", "")])
+            .build();
+
+        let pkg = resolve_module_confident(&db, &ModuleName::new_static("pkg").unwrap()).unwrap();
+        assert_matches!(pkg, Module::Directory(_));
+        assert_eq!(pkg.kind(&db), ModuleKind::Package);
+        assert_eq!(pkg.file(&db), None);
+        assert_eq!(pkg.search_path(&db).unwrap().as_system_path(), Some(&*src));
+        assert!(is_directory_package_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg")
+        ));
+    }
+
+    /// a module at any depth below it makes a directory a package, as it does each directory on
+    /// the way down
+    #[test]
+    fn a_basedpython_module_at_any_depth_makes_a_package() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("outer/inner/a.by", "")])
+            .build();
+
+        for name in ["outer", "outer.inner"] {
+            let module =
+                resolve_module_confident(&db, &ModuleName::new_static(name).unwrap()).unwrap();
+            assert_matches!(module, Module::Directory(_), "{name}");
+        }
+    }
+
+    /// unlike a namespace package, a regular package is the only package of its name: python
+    /// does not look on down the path for the rest of it
+    #[test]
+    fn a_directory_package_shadows_a_package_later_on_the_path() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg/a.by", "")])
+            .with_site_packages_files(&[("pkg/__init__.py", ""), ("pkg/b.py", "")])
+            .build();
+
+        let pkg = resolve_module_confident(&db, &ModuleName::new_static("pkg").unwrap()).unwrap();
+        assert_matches!(pkg, Module::Directory(_));
+        assert!(resolve_module_confident(&db, &ModuleName::new_static("pkg.a").unwrap()).is_some());
+        assert!(resolve_module_confident(&db, &ModuleName::new_static("pkg.b").unwrap()).is_none());
+    }
+
+    /// a package's initializer is still its own: a directory with one resolves to it
+    #[test]
+    fn a_directory_with_an_initializer_resolves_to_it() {
+        let TestCase { db, src, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg/__init__.by", ""), ("pkg/a.by", "")])
+            .build();
+
+        let pkg = resolve_module_confident(&db, &ModuleName::new_static("pkg").unwrap()).unwrap();
+        assert_eq!(
+            pkg.file(&db).unwrap().path(&db),
+            &FilePath::System(src.join("pkg/__init__.by").into())
+        );
+        assert!(!is_directory_package_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg")
+        ));
+        assert!(is_package_without_initializer_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg")
+        ));
+    }
+
+    /// a directory whose only module is its initializer holds nothing without it
+    #[test]
+    fn an_initializer_alone_makes_no_package_without_it() {
+        let TestCase { db, src, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg/__init__.by", ""), ("pkg/sub/__init__.by", "")])
+            .build();
+
+        assert!(!is_package_without_initializer_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg/sub")
+        ));
+        // the subpackage's initializer is a module of the package above it
+        assert!(is_package_without_initializer_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg")
+        ));
+    }
+
+    /// the build gives a directory package an initializer, and python looks for a package with
+    /// one before a module of the same name: `pkg.by` beside `pkg/` is not what `import pkg` runs
+    #[test]
+    fn a_directory_package_outranks_a_module_of_its_name() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg.by", "x = 1"), ("pkg/a.by", "")])
+            .build();
+
+        let pkg = resolve_module_confident(&db, &ModuleName::new_static("pkg").unwrap()).unwrap();
+        assert_matches!(pkg, Module::Directory(_));
+        assert!(resolve_module_confident(&db, &ModuleName::new_static("pkg.a").unwrap()).is_some());
+    }
+
+    /// a stub-only initializer describes the package the build makes of the directory, which
+    /// still writes it the `__init__.py` python runs: a type checker reads the stub, and the
+    /// runtime the directory package
+    #[test]
+    fn a_stub_only_initializer_leaves_a_directory_package_to_python() {
+        let TestCase { db, src, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("pkg/__init__.byi", "x: int"), ("pkg/a.by", "")])
+            .build();
+        let name = ModuleName::new_static("pkg").unwrap();
+
+        let typing = resolve_module_confident(&db, &name).unwrap();
+        assert_eq!(
+            typing.file(&db).unwrap().path(&db),
+            &FilePath::System(src.join("pkg/__init__.byi").into())
+        );
+        let runtime = resolve_real_module_confident(&db, &name).unwrap();
+        assert_matches!(runtime, Module::Directory(_));
+        assert!(is_directory_package_at(
+            &db,
+            db.resolver_environment(),
+            &src.join("pkg")
+        ));
+    }
+
+    /// python keeps its meaning for a directory with no basedpython in it
+    #[test]
+    fn a_directory_of_python_modules_stays_a_namespace_package() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("ns/a.py", "")])
+            .build();
+
+        let ns = resolve_module_confident(&db, &ModuleName::new_static("ns").unwrap()).unwrap();
+        assert_matches!(ns, Module::Namespace(_));
+    }
+
+    /// only what the project builds is laid out as packages: an installed directory with no
+    /// initializer is a namespace package however it was written
+    #[test]
+    fn a_third_party_directory_stays_a_namespace_package() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_site_packages_files(&[("lib/a.by", "")])
+            .build();
+
+        let lib = resolve_module_confident(&db, &ModuleName::new_static("lib").unwrap()).unwrap();
+        assert_matches!(lib, Module::Namespace(_));
+    }
+
+    /// a module python cannot import through a directory does not make that directory a
+    /// package, and neither does one it cannot import at all
+    #[test]
+    fn an_unimportable_module_makes_no_package() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[("one/data-files/a.by", ""), ("two/my-script.by", "")])
+            .build();
+
+        for name in ["one", "two"] {
+            let module =
+                resolve_module_confident(&db, &ModuleName::new_static(name).unwrap()).unwrap();
+            assert_matches!(module, Module::Namespace(_), "{name}");
+        }
+    }
+
+    /// a build's output holds a copy of every source it built, and is not a package for it
+    #[test]
+    fn a_build_output_is_not_a_package() {
+        let TestCase { db, .. } = TestCaseBuilder::new()
+            .with_src_files(&[
+                ("build/.by-manifest", ""),
+                ("build/app/__init__.py", ""),
+                ("build/app/main.by", ""),
+            ])
+            .build();
+
+        let build =
+            resolve_module_confident(&db, &ModuleName::new_static("build").unwrap()).unwrap();
+        assert_matches!(build, Module::Namespace(_));
+    }
+
+    /// a first-party root nested in another is the top of a module tree, not a package of the
+    /// root around it
+    #[test]
+    fn a_nested_root_is_not_a_package() {
+        let TestCase { mut db, .. } = TestCaseBuilder::new().with_vendored_typeshed().build();
+        db.write_file("/project/src/app/main.by", "").unwrap();
+        let paths = SearchPathSettings {
+            src_roots: vec![
+                SystemPathBuf::from("/project/src"),
+                SystemPathBuf::from("/project"),
+            ],
+            package_roots: vec![
+                SystemPathBuf::from("/project/src"),
+                SystemPathBuf::from("/project"),
+            ],
+            ..SearchPathSettings::empty()
+        }
+        .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
+        .unwrap();
+        paths.try_register_static_roots(&db);
+        let environment = ResolverEnvironment::new(&db, PythonVersion::default(), &paths);
+
+        let src = super::resolve_module_confident(
+            &db,
+            environment,
+            &ModuleName::new_static("src").unwrap(),
+        )
+        .unwrap();
+        assert_matches!(src, Module::Namespace(_));
+        let app = super::resolve_module_confident(
+            &db,
+            environment,
+            &ModuleName::new_static("app").unwrap(),
+        )
+        .unwrap();
+        assert_matches!(app, Module::Directory(_));
+    }
+
+    /// only below a package root is a directory of basedpython modules a package: `tests/` beside
+    /// `src/` keeps python's meaning, and needs an initializer to be a regular package
+    #[test]
+    fn a_directory_outside_the_package_roots_keeps_pythons_meaning() {
+        let TestCase { mut db, .. } = TestCaseBuilder::new().with_vendored_typeshed().build();
+        db.write_file("/project/src/app/main.by", "").unwrap();
+        db.write_file("/project/tests/test_app.by", "").unwrap();
+        let paths = SearchPathSettings {
+            src_roots: vec![
+                SystemPathBuf::from("/project/src"),
+                SystemPathBuf::from("/project"),
+            ],
+            package_roots: vec![SystemPathBuf::from("/project/src")],
+            ..SearchPathSettings::empty()
+        }
+        .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
+        .unwrap();
+        paths.try_register_static_roots(&db);
+        let environment = ResolverEnvironment::new(&db, PythonVersion::default(), &paths);
+        let resolve = |name| {
+            super::resolve_module_confident(
+                &db,
+                environment,
+                &ModuleName::new_static(name).unwrap(),
+            )
+            .unwrap()
+        };
+
+        assert_matches!(resolve("app"), Module::Directory(_));
+        assert_matches!(resolve("tests"), Module::Namespace(_));
+        assert!(!is_directory_package_at(
+            &db,
+            environment,
+            SystemPath::new("/project/tests")
+        ));
+    }
+
+    /// `environment.namespace-packages` keeps a directory a namespace package, and only that
+    /// directory: one below it is a package of its own
+    #[test]
+    fn a_declared_namespace_package_stays_one() {
+        let TestCase { mut db, .. } = TestCaseBuilder::new().with_vendored_typeshed().build();
+        db.write_file("/project/plugins/one/a.by", "").unwrap();
+        let paths = SearchPathSettings {
+            src_roots: vec![SystemPathBuf::from("/project")],
+            package_roots: vec![SystemPathBuf::from("/project")],
+            namespace_packages: vec![SystemPathBuf::from("/project/plugins")],
+            ..SearchPathSettings::empty()
+        }
+        .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
+        .unwrap();
+        paths.try_register_static_roots(&db);
+        let environment = ResolverEnvironment::new(&db, PythonVersion::default(), &paths);
+
+        let plugins = super::resolve_module_confident(
+            &db,
+            environment,
+            &ModuleName::new_static("plugins").unwrap(),
+        )
+        .unwrap();
+        assert_matches!(plugins, Module::Namespace(_));
+        let one = super::resolve_module_confident(
+            &db,
+            environment,
+            &ModuleName::new_static("plugins.one").unwrap(),
+        )
+        .unwrap();
+        assert_matches!(one, Module::Directory(_));
+        assert!(!is_directory_package_at(
+            &db,
+            environment,
+            SystemPath::new("/project/plugins")
+        ));
     }
 }

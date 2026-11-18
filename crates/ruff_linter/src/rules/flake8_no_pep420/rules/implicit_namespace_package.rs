@@ -30,6 +30,16 @@ use crate::package::PackageRoot;
 /// `__init__.py` file is typically meant to be a regular package, and
 /// the absence of the `__init__.py` file is probably an oversight.
 ///
+/// In a basedpython project, a directory below one of the project's package
+/// roots (`environment.package-roots`, `src` by default) that holds a
+/// basedpython module needs no `__init__.by`: the basedpython build writes it
+/// an `__init__.py`. A directory the project lists in
+/// `environment.namespace-packages` is an intended namespace package, as one
+/// listed in `namespace-packages` is. Both settings are read from the
+/// project's basedpython configuration (a `basedpython.toml`, a `ty.toml`, or
+/// the `[tool.basedpython]` or `[tool.ty]` table of a `pyproject.toml`), found
+/// the way `by` finds it, whichever configuration the linter itself reads.
+///
 /// ## Options
 /// - `namespace-packages`
 #[derive(ViolationMetadata)]

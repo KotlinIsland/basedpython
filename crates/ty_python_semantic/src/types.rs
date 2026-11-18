@@ -79,7 +79,7 @@ pub use self::visibility::NameResolution;
 pub(crate) use crate::diagnostic::add_inferred_python_version_hint_to_diagnostic;
 use crate::django_settings;
 use crate::place::{
-    DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, TypeOrigin,
+    DefinedPlace, Definedness, ModuleGlobals, Place, PlaceAndQualifiers, Provenance, TypeOrigin,
     builtins_module_scope, imported_symbol, known_module_symbol, place_from_bindings,
 };
 use crate::semantic_model::NameKind;
@@ -14460,7 +14460,7 @@ impl<'db> ModuleLiteralType<'db> {
             .file(db)
             .map(|file| ProgramFile::new(db, file, env.program(db)))
             && let Place::Defined(place) =
-                imported_symbol(db, env, Some(file), "__getattr__", None).place
+                imported_symbol(db, env, ModuleGlobals::File(file), "__getattr__", None).place
         {
             let name_type = Type::string_literal(db, name);
             let (return_type, error) =
@@ -14532,10 +14532,8 @@ impl<'db> ModuleLiteralType<'db> {
             return Place::bound(submodule).into();
         }
 
-        let file = module
-            .file(db)
-            .map(|file| ProgramFile::new(db, file, env.program(db)));
-        let place_and_qualifiers = imported_symbol(db, env, file, name, None);
+        let place_and_qualifiers =
+            imported_symbol(db, env, ModuleGlobals::of(db, env, module), name, None);
 
         // If the normal lookup failed, try to call the module's `__getattr__` function
         if place_and_qualifiers.place.is_undefined() {
