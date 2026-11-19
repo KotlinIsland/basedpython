@@ -2363,6 +2363,39 @@ fn run_reports_a_scripts_uncaught_exception_as_python_does() {
     }
 }
 
+/// a file run by its path gets what python gives a script: `sys.argv[0]` as typed, `__file__`
+/// as typed and made absolute, a symbolic link named as the link, `__builtins__` as the module,
+/// and the names python puts in a script's namespace, `__annotations__` on the pythons that
+/// put it there
+#[cfg(unix)]
+#[test]
+fn run_gives_a_script_what_python_gives_one() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dunce::canonicalize(dir.path()).unwrap();
+    fs::write(dir.join("main.by"), "x = 1\n").unwrap();
+    fs::create_dir_all(dir.join("tools")).unwrap();
+    fs::write(
+        dir.join("tools").join("show.py"),
+        "import sys\n\n\
+         print(sys.argv[0])\n\
+         print(__file__)\n\
+         print(type(globals()['__builtins__']).__name__)\n\
+         print(sorted(name for name in globals() if name.startswith('__')))\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("tools/show.py", dir.join("linked.py")).unwrap();
+
+    for typed in ["tools/show.py", "./tools/../tools/show.py", "linked.py"] {
+        let by = ran(
+            Command::new(env!("CARGO_BIN_EXE_by")).args(["run", "--python", &python, typed]),
+            &dir,
+        );
+        let python = ran(Command::new(&python).arg(typed), &dir);
+        assert_eq!((by.0, &by.1), (python.0, &python.1), "{typed}\n{}", by.2);
+    }
+}
+
 /// with `--in-build` the program runs in the tree, where a path typed relative to the directory
 /// `by run` was run in names nothing, so `sys.argv[0]` is the file's path in the tree, which is
 /// the file that runs
