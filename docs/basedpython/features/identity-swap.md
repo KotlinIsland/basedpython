@@ -154,9 +154,11 @@ class object the same source spells as a value
 
 a type test may not join a chained comparison. python chains `a is int is str`
 into `a is int and int is str`, whose second half asks whether the *class* `int`
-has the type `str` — never what the writer meant, so it is a syntax error. split
-it into separate tests joined with `and`. a chain of `===` / `!==` is ordinary
-python and stays legal
+has the type `str` — never what the writer meant, so it is a syntax error. so is
+a type test at the end of a chain: `x < 1 is int` would be `x < 1 and 1 is int`,
+testing the operand the two comparisons share. split it into separate tests
+joined with `and`, or parenthesize the comparison the test is about,
+`(x < 1) is bool`. a chain of `===` / `!==` is ordinary python and stays legal
 
 ## interaction with `==`
 

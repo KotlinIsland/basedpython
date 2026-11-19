@@ -376,6 +376,21 @@ pub(crate) fn literal_comparisons(checker: &Checker, compare: &ast::ExprCompare)
             .copied()
             .collect::<Vec<_>>();
 
+        // basedpython: the `is` keyword is a type test, which never chains, so an
+        // operator written into a chain has to be the identity spelling `===`
+        let identity_ops = if checker.source_type.is_basedpython() && ops.len() > 1 {
+            ast::IdentityOperators::into_stored(
+                (0..ops.len())
+                    .map(|index| {
+                        compare.is_identity_operator(index) || bad_ops.contains_key(&index)
+                    })
+                    .collect(),
+                ops.len(),
+            )
+        } else {
+            compare.identity_ops.clone()
+        };
+
         let tokens = checker.tokens();
         let source = checker.source();
 
@@ -394,7 +409,7 @@ pub(crate) fn literal_comparisons(checker: &Checker, compare: &ast::ExprCompare)
                         left,
                         &ops,
                         comparators,
-                        compare.identity_ops.as_deref(),
+                        identity_ops.as_deref(),
                         compare.into(),
                         tokens,
                         source,
@@ -405,7 +420,7 @@ pub(crate) fn literal_comparisons(checker: &Checker, compare: &ast::ExprCompare)
                 left,
                 &ops,
                 comparators,
-                compare.identity_ops.as_deref(),
+                identity_ops.as_deref(),
                 compare.into(),
                 tokens,
                 source,

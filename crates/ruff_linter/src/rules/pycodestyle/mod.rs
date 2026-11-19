@@ -61,6 +61,8 @@ mod tests {
     #[test_case(Rule::MissingNewlineAtEndOfFile, Path::new("W292_2.py"))]
     #[test_case(Rule::MissingNewlineAtEndOfFile, Path::new("W292_3.py"))]
     #[test_case(Rule::NoneComparison, Path::new("E711.py"))]
+    #[test_case(Rule::NoneComparison, Path::new("E711_E712_basedpython.by"))]
+    #[test_case(Rule::TrueFalseComparison, Path::new("E711_E712_basedpython.by"))]
     #[test_case(Rule::NotInTest, Path::new("E713.py"))]
     #[test_case(Rule::NotIsTest, Path::new("E714.py"))]
     #[test_case(Rule::NotIsTest, Path::new("E714_basedpython.by"))]

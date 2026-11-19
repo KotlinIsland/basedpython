@@ -2423,6 +2423,7 @@ impl<'src> Parser<'src> {
         }
         record_identity(&mut identity_ops, 0, self.at_identity_operator(op));
         let mut at_type_test = self.at_type_test(op);
+        let mut has_type_test = at_type_test;
         self.bump_cmp_op(op);
 
         let operands_snapshot = self.expr_scratch.snapshot();
@@ -2461,27 +2462,17 @@ impl<'src> Parser<'src> {
                 self.at_identity_operator(next_op),
             );
             at_type_test = self.at_type_test(next_op);
+            has_type_test |= at_type_test;
             self.bump_cmp_op(next_op);
             operators.push(next_op);
         }
 
         let range = self.node_range(start);
-        // a type test's right-hand side is a type expression, and python's
-        // chaining rule makes each operand the *next* comparison's left operand
-        // — so `a is int is str` becomes `a is int and int is str`, where the
-        // class `int` is asked whether it has the type `str`. only a type test
-        // that something follows creates that conflict; a trailing one
-        // (`a < b is None`) hands nothing on, and chains as it always did
-        if self.options.is_basedpython
-            && operators
-                .iter()
-                .enumerate()
-                .take(operators.len().saturating_sub(1))
-                .any(|(index, op)| {
-                    matches!(op, CmpOp::Is | CmpOp::IsNot)
-                        && !identity_ops.get(index).copied().unwrap_or(false)
-                })
-        {
+        // a type test never chains. its right-hand side is a type expression, and
+        // python's chaining rule shares each operand with the next comparison, so
+        // `a is int is str` would ask whether the class `int` has the type `str`,
+        // and `x < 1 is int` whether `1` is an `int`, which no one reading it sees
+        if has_type_test && operators.len() > 1 {
             self.add_error(ParseErrorType::ChainedTypeTest, range);
         }
         let operator_count = operators.len();

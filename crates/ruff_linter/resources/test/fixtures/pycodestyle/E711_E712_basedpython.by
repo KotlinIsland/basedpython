@@ -1,0 +1,14 @@
+# the `is` keyword is a type test, which never chains, so a fix writing into a
+# chain writes the identity spelling
+def chains(a: int | None, b: int, c: bool) -> None:
+    print(b < a == None)  # E711
+    print(b < a != None)  # E711
+    print(b == c == False)  # E712
+    print(a == None == b)  # E711
+
+
+# a lone comparison takes `is None`, a test for the type `None`, which holds one object
+def single(a: int | None, c: bool) -> None:
+    print(a == None)  # E711
+    print(a != None)  # E711
+    print(c == True)  # E712

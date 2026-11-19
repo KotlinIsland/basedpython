@@ -1,0 +1,93 @@
+---
+source: crates/ruff_linter/src/rules/pycodestyle/mod.rs
+---
+E711 [*] Comparison to `None` should be `cond is None`
+ --> E711_E712_basedpython.by:4:20
+  |
+2 | # chain writes the identity spelling
+3 | def chains(a: int | None, b: int, c: bool) -> None:
+4 |     print(b < a == None)  # E711
+  |                    ^^^^
+5 |     print(b < a != None)  # E711
+6 |     print(b == c == False)  # E712
+  |
+help: Replace with `cond is None`
+  |
+3 | def chains(a: int | None, b: int, c: bool) -> None:
+  -     print(b < a == None)  # E711
+4 +     print(b < a === None)  # E711
+5 |     print(b < a != None)  # E711
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+E711 [*] Comparison to `None` should be `cond is not None`
+ --> E711_E712_basedpython.by:5:20
+  |
+3 | def chains(a: int | None, b: int, c: bool) -> None:
+4 |     print(b < a == None)  # E711
+5 |     print(b < a != None)  # E711
+  |                    ^^^^
+6 |     print(b == c == False)  # E712
+7 |     print(a == None == b)  # E711
+  |
+help: Replace with `cond is not None`
+  |
+4 |     print(b < a == None)  # E711
+  -     print(b < a != None)  # E711
+5 +     print(b < a !== None)  # E711
+6 |     print(b == c == False)  # E712
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+E711 [*] Comparison to `None` should be `cond is None`
+ --> E711_E712_basedpython.by:7:16
+  |
+5 |     print(b < a != None)  # E711
+6 |     print(b == c == False)  # E712
+7 |     print(a == None == b)  # E711
+  |                ^^^^
+help: Replace with `cond is None`
+  |
+6 |     print(b == c == False)  # E712
+  -     print(a == None == b)  # E711
+7 +     print(a === None == b)  # E711
+8 |
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+E711 [*] Comparison to `None` should be `cond is None`
+  --> E711_E712_basedpython.by:12:16
+   |
+10 | # a lone comparison takes `is None`, a test for the type `None`, which holds one object
+11 | def single(a: int | None, c: bool) -> None:
+12 |     print(a == None)  # E711
+   |                ^^^^
+13 |     print(a != None)  # E711
+14 |     print(c == True)  # E712
+   |
+help: Replace with `cond is None`
+   |
+11 | def single(a: int | None, c: bool) -> None:
+   -     print(a == None)  # E711
+12 +     print(a is None)  # E711
+13 |     print(a != None)  # E711
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+E711 [*] Comparison to `None` should be `cond is not None`
+  --> E711_E712_basedpython.by:13:16
+   |
+11 | def single(a: int | None, c: bool) -> None:
+12 |     print(a == None)  # E711
+13 |     print(a != None)  # E711
+   |                ^^^^
+14 |     print(c == True)  # E712
+   |
+help: Replace with `cond is not None`
+   |
+12 |     print(a == None)  # E711
+   -     print(a != None)  # E711
+13 +     print(a is not None)  # E711
+14 |     print(c == True)  # E712
+   |
+note: This is an unsafe fix and may change runtime behavior

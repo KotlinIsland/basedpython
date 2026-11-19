@@ -111,18 +111,40 @@ fn a_type_test_may_not_be_chained() {
 }
 
 #[test]
-fn a_trailing_type_test_still_chains() {
-    // nothing follows it, so no type expression becomes the next comparison's
-    // left operand — the conflict the rejection exists for
-    let parsed = parse_basedpython_module_with_errors("a < b is None\n");
-    assert!(
-        !parsed
-            .errors()
-            .iter()
-            .any(|error| matches!(error.error, ParseErrorType::ChainedTypeTest)),
-        "a trailing type test is not a chained one: {:?}",
-        parsed.errors()
-    );
+fn a_trailing_type_test_may_not_be_chained() {
+    // python reads `x < 1 is int` as `x < 1 and 1 is int`, testing the operand the
+    // two comparisons share
+    for source in ["x < 1 is int\n", "a == b is not None\n", "a === b is int\n"] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| matches!(error.error, ParseErrorType::ChainedTypeTest)),
+            "expected a chained-type-test error for {source:?}, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn a_parenthesized_type_test_is_not_chained() {
+    // parentheses make a type test an operand of its own, and a chain of identity
+    // comparisons is ordinary python
+    for source in [
+        "(a < b) is int\n",
+        "a < (b is int)\n",
+        "(a is int) == (b is int)\n",
+        "a === b < c\n",
+        "a is int and b < c\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().is_empty(),
+            "expected {source:?} to parse, got {:?}",
+            parsed.errors()
+        );
+    }
 }
 
 /// the single expression statement of `source`, parsed as basedpython

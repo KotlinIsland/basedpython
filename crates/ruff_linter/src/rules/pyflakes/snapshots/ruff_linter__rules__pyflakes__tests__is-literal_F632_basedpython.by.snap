@@ -34,118 +34,118 @@ help: Replace `!==` with `!=`
   |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:35:9
+  --> F632_basedpython.by:28:9
    |
-33 | # source between the operands, so it survives everything that can sit there
-34 | def spelling_survives_what_sits_between(x: object) -> None:
-35 |     a = (1) === (1)  # F632
+26 | # source between the operands, so it survives everything that can sit there
+27 | def spelling_survives_what_sits_between(x: object) -> None:
+28 |     a = (1) === (1)  # F632
    |         ^^^^^^^^^^^
-36 |     b = 1 \
-37 |         === 1  # F632
+29 |     b = 1 \
+30 |         === 1  # F632
    |
 help: Replace `===` with `==`
    |
-34 | def spelling_survives_what_sits_between(x: object) -> None:
+27 | def spelling_survives_what_sits_between(x: object) -> None:
    -     a = (1) === (1)  # F632
-35 +     a = (1) == (1)  # F632
-36 |     b = 1 \
+28 +     a = (1) == (1)  # F632
+29 |     b = 1 \
    |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:36:9
+  --> F632_basedpython.by:29:9
    |
-34 |   def spelling_survives_what_sits_between(x: object) -> None:
-35 |       a = (1) === (1)  # F632
-36 |       b = 1 \
+27 |   def spelling_survives_what_sits_between(x: object) -> None:
+28 |       a = (1) === (1)  # F632
+29 |       b = 1 \
    |  _________^
-37 | |         === 1  # F632
+30 | |         === 1  # F632
    | |_____________^
-38 |       c = (1 ===  # a comment between the operands
-39 |            1)  # F632
+31 |       c = (1 ===  # a comment between the operands
+32 |            1)  # F632
    |
 help: Replace `===` with `==`
    |
-36 |     b = 1 \
+29 |     b = 1 \
    -         === 1  # F632
-37 +         == 1  # F632
-38 |     c = (1 ===  # a comment between the operands
+30 +         == 1  # F632
+31 |     c = (1 ===  # a comment between the operands
    |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:38:10
+  --> F632_basedpython.by:31:10
    |
-36 |       b = 1 \
-37 |           === 1  # F632
-38 |       c = (1 ===  # a comment between the operands
+29 |       b = 1 \
+30 |           === 1  # F632
+31 |       c = (1 ===  # a comment between the operands
    |  __________^
-39 | |          1)  # F632
+32 | |          1)  # F632
    | |__________^
-40 |       d = 1===1  # F632
+33 |       d = 1===1  # F632
    |
 help: Replace `===` with `==`
    |
-37 |         === 1  # F632
+30 |         === 1  # F632
    -     c = (1 ===  # a comment between the operands
-38 +     c = (1 ==  # a comment between the operands
-39 |          1)  # F632
+31 +     c = (1 ==  # a comment between the operands
+32 |          1)  # F632
    |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:40:9
+  --> F632_basedpython.by:33:9
    |
-38 |     c = (1 ===  # a comment between the operands
-39 |          1)  # F632
-40 |     d = 1===1  # F632
+31 |     c = (1 ===  # a comment between the operands
+32 |          1)  # F632
+33 |     d = 1===1  # F632
    |         ^^^^^
 help: Replace `===` with `==`
    |
-39 |          1)  # F632
+32 |          1)  # F632
    -     d = 1===1  # F632
-40 +     d = 1==1  # F632
-41 |
+33 +     d = 1==1  # F632
+34 |
    |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:45:9
+  --> F632_basedpython.by:38:9
    |
-43 | # each operator of a chain answers for its own spelling
-44 | def chained(x: object) -> None:
-45 |     e = x < 1 === 1  # F632
+36 | # each operator of a chain answers for its own spelling
+37 | def chained(x: object) -> None:
+38 |     e = x < 1 === 1  # F632
    |         ^^^^^^^^^^^
-46 |     f = 1 === 1 !== 2  # F632
+39 |     f = 1 === 1 !== 2  # F632
    |
 help: Replace `===` with `==`
    |
-44 | def chained(x: object) -> None:
+37 | def chained(x: object) -> None:
    -     e = x < 1 === 1  # F632
-45 +     e = x < 1 == 1  # F632
-46 |     f = 1 === 1 !== 2  # F632
+38 +     e = x < 1 == 1  # F632
+39 |     f = 1 === 1 !== 2  # F632
    |
 
 F632 [*] Use `==` to compare constant literals
-  --> F632_basedpython.by:46:9
+  --> F632_basedpython.by:39:9
    |
-44 | def chained(x: object) -> None:
-45 |     e = x < 1 === 1  # F632
-46 |     f = 1 === 1 !== 2  # F632
+37 | def chained(x: object) -> None:
+38 |     e = x < 1 === 1  # F632
+39 |     f = 1 === 1 !== 2  # F632
    |         ^^^^^^^^^^^^^
 help: Replace `===` with `==`
    |
-45 |     e = x < 1 === 1  # F632
+38 |     e = x < 1 === 1  # F632
    -     f = 1 === 1 !== 2  # F632
-46 +     f = 1 == 1 !== 2  # F632
+39 +     f = 1 == 1 !== 2  # F632
    |
 
 F632 [*] Use `!=` to compare constant literals
-  --> F632_basedpython.by:46:9
+  --> F632_basedpython.by:39:9
    |
-44 | def chained(x: object) -> None:
-45 |     e = x < 1 === 1  # F632
-46 |     f = 1 === 1 !== 2  # F632
+37 | def chained(x: object) -> None:
+38 |     e = x < 1 === 1  # F632
+39 |     f = 1 === 1 !== 2  # F632
    |         ^^^^^^^^^^^^^
 help: Replace `!==` with `!=`
    |
-45 |     e = x < 1 === 1  # F632
+38 |     e = x < 1 === 1  # F632
    -     f = 1 === 1 !== 2  # F632
-46 +     f = 1 === 1 != 2  # F632
+39 +     f = 1 === 1 != 2  # F632
    |

@@ -260,6 +260,16 @@ def f(a: object):
     b = a is int is str
 ```
 
+The same goes for a type test at the end of a chain. Python reads `x < 1 is int` as
+`x < 1 and 1 is int`, testing the operand the two comparisons share, which is not what it appears to
+ask either.
+
+```by
+def f(x: int):
+    # error: [invalid-syntax] "`is` type test cannot be chained with another comparison; split it into separate tests joined with `and`"
+    b = x < 1 is int
+```
+
 A chain of identity comparisons is ordinary Python and stays legal.
 
 ```by

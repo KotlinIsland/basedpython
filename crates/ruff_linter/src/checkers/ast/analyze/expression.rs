@@ -1689,11 +1689,8 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
         // expression. it compares no two values, so the rules of the next arm, each
         // reasoning about what a comparison operator does to its operands, would read
         // it as the python identity comparison it looks like. a rule joins this arm
-        // only when its premise holds for a type test too
-        //
-        // that includes a chain ending in one, `a < b is int`: the type test shares
-        // `b` with the comparison before it, so a rule rewriting that comparison as
-        // if it stood alone, `b < a` for `a > b`, would change what is tested
+        // only when its premise holds for a type test too. a type test never chains,
+        // so it is the whole comparison
         Expr::Compare(compare) if compare.has_type_test(checker.source_type) => {
             // `password is "hunter2"` checks the value against the literal at
             // runtime, so the secret is written there all the same

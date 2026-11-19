@@ -249,6 +249,15 @@ mod tests {
         check("y = a is not 1\n", "y = a !== 1\n");
     }
 
+    /// a chain keeps the identity spelling too, which is the only one that
+    /// can chain: a type test never does
+    #[test]
+    fn chained_identity_takes_the_identity_operator() {
+        check("y = a == b is None\n", "y = a == b === None\n");
+        check("y = a < b is not c\n", "y = a < b !== c\n");
+        check("y = a is b is c\n", "y = a === b === c\n");
+    }
+
     /// `x is int` folds wherever `x`'s type decides it, so a call keeps the
     /// check python wrote
     #[test]

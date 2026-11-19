@@ -22,13 +22,6 @@ def type_tests[T](x: T, xs: list[int]) -> None:
     print([] is [])
 
 
-# a type test may end a chain, sharing its value with the comparison before it, so
-# that comparison is not rewritten as if it stood alone
-def chain_ending_in_a_type_test(x: object) -> None:
-    print(1 === 1 is int)
-    print((1) === (x) is int)
-
-
 # which spelling was written is recorded on the comparison, not recovered from the
 # source between the operands, so it survives everything that can sit there
 def spelling_survives_what_sits_between(x: object) -> None:

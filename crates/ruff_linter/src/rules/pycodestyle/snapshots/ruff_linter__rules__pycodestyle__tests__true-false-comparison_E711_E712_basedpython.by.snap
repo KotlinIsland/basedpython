@@ -1,0 +1,35 @@
+---
+source: crates/ruff_linter/src/rules/pycodestyle/mod.rs
+---
+E712 [*] Avoid equality comparisons to `True` or `False`
+ --> E711_E712_basedpython.by:6:11
+  |
+4 |     print(b < a == None)  # E711
+5 |     print(b < a != None)  # E711
+6 |     print(b == c == False)  # E712
+  |           ^^^^^^^^^^^^^^^
+7 |     print(a == None == b)  # E711
+  |
+help: Replace comparison
+  |
+5 |     print(b < a != None)  # E711
+  -     print(b == c == False)  # E712
+6 +     print(b == c === False)  # E712
+7 |     print(a == None == b)  # E711
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+E712 [*] Avoid equality comparisons to `True`; use `c:` for truth checks
+  --> E711_E712_basedpython.by:14:11
+   |
+12 |     print(a == None)  # E711
+13 |     print(a != None)  # E711
+14 |     print(c == True)  # E712
+   |           ^^^^^^^^^
+help: Replace with `c`
+   |
+13 |     print(a != None)  # E711
+   -     print(c == True)  # E712
+14 +     print(c)  # E712
+   |
+note: This is an unsafe fix and may change runtime behavior

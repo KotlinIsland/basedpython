@@ -38,17 +38,6 @@ def class_types(value: object, items: list[int]) -> tuple[bool, ...]:
     )
 
 
-def chains(count: int, items: dict[int, int], value: object) -> tuple[bool, ...]:
-    """Test values at the end of a chain, sharing them with a comparison."""
-    return (
-        1 < count is int,
-        count in items.keys() is int,
-        count in [1, 2] is int,
-        count == True is int,
-        "text" == value is str,
-    )
-
-
 def positions(value: object, values: list[object]) -> list[object]:
     """Test values in every position a test can take."""
     if value is 5000:

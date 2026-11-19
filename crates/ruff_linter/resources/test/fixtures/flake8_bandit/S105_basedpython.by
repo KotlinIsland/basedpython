@@ -6,5 +6,3 @@ def check(password: str, token: object) -> None:
     print(password === "s3cr3t")  # S105
     print(password is str)
     print(password is "")
-    # a chain ending in a type test compares the value with each literal in it
-    print(password == "s3cr3t" is str)  # S105
