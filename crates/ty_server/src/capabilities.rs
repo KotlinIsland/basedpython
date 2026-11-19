@@ -692,7 +692,10 @@ impl ResolvedClientCapabilities {
 /// ```
 pub const COMMAND_LINE_FLAGS: [(&str, &[&str]); 2] = [
     ("repl", &["events", "module", "sessionFile"]),
-    ("run", &["coverage", "inBuild", "launcher", "profile"]),
+    (
+        "run",
+        &["coverage", "inBuild", "launcher", "notes", "profile"],
+    ),
 ];
 
 /// [`COMMAND_LINE_FLAGS`], as `initialize` answers with them

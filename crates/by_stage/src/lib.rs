@@ -55,6 +55,8 @@
 //!   is a whole input yet
 //! - [`write_back`] — what a program run out of a staged tree wrote there, carried back to the
 //!   project
+//! - [`run_notes`] — what `by run` says once the program has ended, for an editor to read apart
+//!   from the program's own output
 
 pub mod emit;
 pub mod layout;
@@ -63,6 +65,7 @@ pub mod project;
 pub mod record;
 pub mod restage;
 pub mod run_module;
+pub mod run_notes;
 pub mod runtime;
 pub mod session;
 pub mod sourcemap;

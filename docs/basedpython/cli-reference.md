@@ -287,6 +287,21 @@ not be read or written, which makes a program that exited 0 exit 1. with
 `--in-build` the program's working directory is the tree, so a relative path it
 writes is carried back the same way
 
+`--notes PATH` writes those lines, and the note that a coverage report or a
+profile was not written, to `PATH` instead of stderr, one JSON object a line,
+for an editor that sums up what came of a command with the last line the
+command wrote — `OK`, `No changes detected` — which on stderr would be `by run`'s instead:
+
+```json
+{"level":"note","message":"wrote back app/migrations/0001_initial.py"}
+```
+
+the level is `note` for what was written or deleted, `warning` for what was not
+written back, or a report that was not written, and why, and `error` for a file
+that could not be read or written. the file is replaced when `by run` starts, so a
+run that ends before the program does leaves none, and a file that cannot be
+written makes a program that exited 0 exit 1
+
 hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
 treated as project source: they are neither checked nor transpiled, by `run`
 and `build` alike

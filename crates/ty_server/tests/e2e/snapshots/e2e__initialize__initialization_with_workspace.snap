@@ -196,6 +196,7 @@ expression: initialization_result
         "coverage": true,
         "inBuild": true,
         "launcher": true,
+        "notes": true,
         "profile": true
       }
     }

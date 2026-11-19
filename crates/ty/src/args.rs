@@ -148,6 +148,17 @@ pub(crate) enum Command {
         /// import machinery, which called it
         #[arg(long, value_name = "PATH", conflicts_with = "coverage")]
         profile: Option<PathBuf>,
+        /// write what `by run` says once the program has ended — what it wrote back to the
+        /// project, what it did not, a coverage report or profile it did not write — to PATH
+        /// instead of stderr, one JSON object a line
+        ///
+        /// for an editor that shows the last line a command wrote as what came of it: on
+        /// stderr, `by run`'s own lines would come after the program's. each line is
+        /// `{"level":"note","message":"wrote back app/migrations/0001_initial.py"}`, its level
+        /// `note`, `warning` or `error`. a file that cannot be written makes a program that
+        /// exited 0 exit 1
+        #[arg(long, value_name = "PATH")]
+        notes: Option<PathBuf>,
     },
 
     /// start an interactive session in basedpython

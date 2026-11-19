@@ -1259,7 +1259,7 @@ camelCase, `true`
 ```json
 {
   "repl": { "events": true, "module": true, "sessionFile": true },
-  "run": { "coverage": true, "inBuild": true, "launcher": true, "profile": true }
+  "run": { "coverage": true, "inBuild": true, "launcher": true, "notes": true, "profile": true }
 }
 ```
 

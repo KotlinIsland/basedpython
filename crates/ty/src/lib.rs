@@ -142,6 +142,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             in_build,
             coverage,
             profile,
+            notes,
         } => by_commands::cmd_run(
             module.as_deref(),
             &args,
@@ -154,6 +155,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 launcher: launcher.as_deref(),
                 coverage: coverage.as_deref(),
                 profile: profile.as_deref(),
+                notes: notes.as_deref(),
             },
         ),
         Command::Repl {

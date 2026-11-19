@@ -135,7 +135,7 @@ fn initialization_names_the_command_line_flags_an_editor_starts_by_with() -> Res
         initialization_result.capabilities.experimental,
         Some(json!({
             "repl": { "events": true, "module": true, "sessionFile": true },
-            "run": { "coverage": true, "inBuild": true, "launcher": true, "profile": true },
+            "run": { "coverage": true, "inBuild": true, "launcher": true, "notes": true, "profile": true },
         }))
     );
 

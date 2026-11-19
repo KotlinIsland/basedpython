@@ -34,6 +34,7 @@ use by_stage::project::{
     may_contain_sources, module_roots, source_files,
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
+use by_stage::run_notes::{Level, Note};
 use by_stage::runtime::RuntimeLayout;
 use by_stage::sourcemap::{OwnCode, TracebackEntry, stage_module, write_sourcemap_module};
 use by_stage::staging::{Staging, transpiled_destination};
@@ -150,6 +151,9 @@ pub(crate) struct RunFlags<'a> {
     pub(crate) coverage: Option<&'a Path>,
     /// `--profile`: where to write a `pstats` snapshot of where the time went
     pub(crate) profile: Option<&'a Path>,
+    /// `--notes`: where to write what `by run` says once the program has ended, rather than
+    /// on stderr
+    pub(crate) notes: Option<&'a Path>,
 }
 
 /// what `by run` and `by repl` both start from: the project checked, transpiled and staged
@@ -373,7 +377,30 @@ pub(crate) fn cmd_run(
         launcher,
         coverage,
         profile,
+        notes: notes_file,
     } = flags;
+    // notes left from an earlier run would read as this run's when this one ends before the
+    // program does, as one whose project does not check does
+    let notes_file = match notes_file {
+        Some(file) => {
+            let file = std::env::current_dir()
+                .context("failed to get current directory")?
+                .join(file);
+            if let Some(parent) = file.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("could not create {}", parent.display()))?;
+            }
+            match fs::remove_file(&file) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    return Err(error)
+                        .with_context(|| format!("could not replace {}", file.display()));
+                }
+                _ => {}
+            }
+            Some(file)
+        }
+        None => None,
+    };
     // from before the program is staged, so that `by` can be stopped while it stages, and the
     // program once it runs; see `by_signals`
     let signals = Forwarding::install().context("could not handle the signals that end a run")?;
@@ -542,7 +569,8 @@ pub(crate) fn cmd_run(
         })?;
 
     let mut code = exit_code(status);
-    if !carry_back(&inventory, &cwd) && code == 0 {
+    let mut notes = Vec::new();
+    if !carry_back(&inventory, &cwd, &mut notes) && code == 0 {
         code = 1;
     }
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
@@ -551,7 +579,10 @@ pub(crate) fn cmd_run(
             if let Err(error) =
                 crate::by_coverage::write_report(file, &report, tmp.path(), &carried)
             {
-                eprintln!("error: no coverage report was written: {error:#}");
+                notes.push(Note::new(
+                    Level::Error,
+                    format!("no coverage report was written: {error:#}"),
+                ));
                 if code == 0 {
                     code = 1;
                 }
@@ -559,21 +590,26 @@ pub(crate) fn cmd_run(
         } else if code != 2 {
             // 2 is the runner refusing to start without coverage.py, which it has
             // said already
-            eprintln!(
-                "note: no coverage report was written: the program ended without returning \
+            notes.push(Note::new(
+                Level::Warning,
+                "no coverage report was written: the program ended without returning \
                  to `by run`, as one that calls `os._exit`, replaces itself with `os.exec*` or \
-                 is killed by a signal does"
-            );
+                 is killed by a signal does",
+            ));
         }
     }
     if let Some(snapshot) = &snapshot
         && !snapshot.is_file()
     {
-        eprintln!(
-            "note: no profile was written: the program ended without returning to `by run`, \
+        notes.push(Note::new(
+            Level::Warning,
+            "no profile was written: the program ended without returning to `by run`, \
              as one that calls `os._exit`, replaces itself with `os.exec*` or is killed by a \
-             signal does"
-        );
+             signal does",
+        ));
+    }
+    if !tell(&notes, notes_file.as_deref()) && code == 0 {
+        code = 1;
     }
     drop(measured);
     // drop the temp dir explicitly: `process::exit` skips destructors, so
@@ -583,16 +619,38 @@ pub(crate) fn cmd_run(
     std::process::exit(code);
 }
 
-/// carry what the program changed in the staged tree back to the project, saying on stderr
+/// carry what the program changed in the staged tree back to the project, adding to `notes`
 /// what was written and what was not. `false` when a file could not be read or written
-#[expect(clippy::print_stderr)]
-pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path) -> bool {
+pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path, notes: &mut Vec<Note>) -> bool {
     let mut written = true;
     for outcome in inventory.write_back() {
-        eprintln!("{}", outcome.describe(cwd));
+        notes.push(outcome.note(cwd));
         written &= !outcome.is_error();
     }
     written
+}
+
+/// say `notes` on stderr, or write them to `file`, one json object a line, when there is one.
+/// a file that cannot be written gets them on stderr instead, after saying why, and `false`
+#[expect(clippy::print_stderr)]
+pub(crate) fn tell(notes: &[Note], file: Option<&Path>) -> bool {
+    if let Some(file) = file {
+        let written = notes
+            .iter()
+            .map(|note| note.to_json_line().map(|line| line + "\n"))
+            .collect::<Result<String, _>>()
+            .map_err(io::Error::other)
+            .and_then(|lines| fs::write(file, lines));
+        if let Err(error) = written {
+            eprintln!("error: could not write {}: {error}", file.display());
+        } else {
+            return true;
+        }
+    }
+    for note in notes {
+        eprintln!("{note}");
+    }
+    file.is_none()
 }
 
 /// the status `by` exits with for a program that ended with `status`: the program's own, or

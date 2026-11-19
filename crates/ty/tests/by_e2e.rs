@@ -1584,6 +1584,73 @@ fn run_writes_back_a_file_the_program_made_in_its_package() {
     assert!(cached.is_empty(), "{cached:?}\n{stderr}");
 }
 
+/// `--notes` writes what `by run` says once the program has ended to a file of its own, one json
+/// object a line, so that what the program wrote last is what stderr ends on. the program here
+/// also edits the project file behind a copy it changes, which is then not written back
+#[test]
+fn run_writes_its_notes_to_the_file_it_is_given() {
+    let dir = Scratch::new("run_writes_its_notes");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "import sys\n\n\
+         with open(place('made.txt'), 'w') as file:\n    \
+         _ = file.write('made\\n')\n\
+         with open(place('notes.txt'), 'w') as file:\n    \
+         _ = file.write('changed\\n')\n\
+         with open(os.path.join('app', 'notes.txt'), 'w') as file:\n    \
+         _ = file.write('edited meanwhile\\n')\n\
+         _ = sys.stderr.write('the program is done\\n')\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--notes", "notes.jsonl", "main"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.ends_with("the program is done\n"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.join("notes.jsonl")).ok().as_deref(),
+        Some(
+            "{\"level\":\"note\",\"message\":\"wrote back app/made.txt\"}\n\
+             {\"level\":\"warning\",\"message\":\"not written back: app/notes.txt was changed in \
+             the project while the program ran\"}\n"
+        ),
+        "{stderr}"
+    );
+}
+
+/// a notes file left by an earlier run is gone once `by run` starts, so a run that stops before
+/// the program, here on a project that does not check, is not read as having said it
+#[test]
+fn run_replaces_the_notes_an_earlier_run_left() {
+    let dir = Scratch::new("run_replaces_earlier_notes");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(&dir, "count: int = 'one'\n");
+    let notes = dir.join("out").join("notes.jsonl");
+    fs::create_dir_all(notes.parent().unwrap()).unwrap();
+    fs::write(
+        &notes,
+        "{\"level\":\"note\",\"message\":\"wrote back stale\"}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--notes", "out/notes.jsonl", "main"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid-assignment"), "{stderr}");
+    assert!(!notes.exists(), "{stderr}");
+}
+
 /// a directory the build itself never stages from, as it never stages a `build/`, is still
 /// where the program wrote, and what it wrote there is carried back like anything else
 #[test]

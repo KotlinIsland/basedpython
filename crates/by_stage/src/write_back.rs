@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
+use crate::run_notes::{Level, Note};
 use crate::sourcemap::{BY_SOURCEMAP_FILENAME, map_digest, parse_digest, restaged_files, tree_key};
 use crate::staging::{Staging, placement_base};
 
@@ -453,17 +454,32 @@ pub enum Outcome {
 impl Outcome {
     /// Whether this is an I/O error rather than a decision.
     pub fn is_error(&self) -> bool {
-        matches!(self, Self::Unreadable { .. } | Self::Failed { .. })
+        self.level() == Level::Error
+    }
+
+    /// Whether this did what the program asked, did not, or could not.
+    pub(crate) fn level(&self) -> Level {
+        match self {
+            Self::Wrote(_) | Self::Deleted(_) => Level::Note,
+            Self::Unreadable { .. } | Self::Failed { .. } => Level::Error,
+            Self::Lost { .. }
+            | Self::ChangedMeanwhile { .. }
+            | Self::Occupied(_)
+            | Self::Ambiguous { .. }
+            | Self::Unmapped(_)
+            | Self::NotAFile(_)
+            | Self::Linked(_) => Level::Warning,
+        }
     }
 
     /// One line saying what happened, naming project files relative to `cwd` when they are
     /// below it and files of the tree by their place in it.
-    pub fn describe(&self, cwd: &Path) -> String {
+    pub fn note(&self, cwd: &Path) -> Note {
         let shown = |path: &Path| path.strip_prefix(cwd).unwrap_or(path).display().to_string();
-        match self {
-            Self::Wrote(project) => format!("note: wrote back {}", shown(project)),
+        let message = match self {
+            Self::Wrote(project) => format!("wrote back {}", shown(project)),
             Self::Deleted(project) => format!(
-                "note: deleted {}, as the program deleted its copy",
+                "deleted {}, as the program deleted its copy",
                 shown(project)
             ),
             Self::Lost {
@@ -477,24 +493,24 @@ impl Outcome {
                     None => "written by `by`".to_owned(),
                 };
                 format!(
-                    "warning: not written back: the program {did} {}, which is {made}",
+                    "not written back: the program {did} {}, which is {made}",
                     shown_in_tree(staged)
                 )
             }
             Self::ChangedMeanwhile { project, deleted } => format!(
-                "warning: not written back: {} was {} in the project while the program ran",
+                "not written back: {} was {} in the project while the program ran",
                 shown(project),
                 if *deleted { "deleted" } else { "changed" }
             ),
             Self::Occupied(project) => format!(
-                "warning: not written back: {} is already in the project, holding something else",
+                "not written back: {} is already in the project, holding something else",
                 shown(project)
             ),
             Self::Ambiguous {
                 staged,
                 directories,
             } => format!(
-                "warning: not written back: {}, whose directory in the staged tree was staged \
+                "not written back: {}, whose directory in the staged tree was staged \
                  from more than one in the project: {}",
                 shown_in_tree(staged),
                 directories
@@ -509,26 +525,27 @@ impl Outcome {
                     .join(", ")
             ),
             Self::Unmapped(staged) => format!(
-                "warning: not written back: {}, whose directory in the staged tree no project \
+                "not written back: {}, whose directory in the staged tree no project \
                  directory was staged into",
                 shown_in_tree(staged)
             ),
             Self::NotAFile(staged) => format!(
-                "warning: not written back: {}, which is not a regular file",
+                "not written back: {}, which is not a regular file",
                 shown_in_tree(staged)
             ),
             Self::Linked(project) => format!(
-                "warning: not written back: {} is reached through a symbolic link in the project",
+                "not written back: {} is reached through a symbolic link in the project",
                 shown(project)
             ),
             Self::Unreadable { staged, error } => format!(
-                "error: could not read {} in the staged tree to write it back: {error}",
+                "could not read {} in the staged tree to write it back: {error}",
                 shown_in_tree(staged)
             ),
             Self::Failed { project, error } => {
-                format!("error: could not write back {}: {error}", shown(project))
+                format!("could not write back {}: {error}", shown(project))
             }
-        }
+        };
+        Note::new(self.level(), message)
     }
 }
 
