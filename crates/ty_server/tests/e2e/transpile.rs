@@ -291,13 +291,15 @@ fn stale_build(server: &TestServer, build: &SystemPath) -> Result<SystemPathBuf>
     };
     let (main_map, main_digests, main_columns) = entry("main");
     let (other_map, other_digests, other_columns) = entry("other");
-    // the map names the build that wrote it, which is the one the record names
+    // the map names the build that wrote it, which is the one the record names, and lists no
+    // file a re-stage wrote, as a build writes it
     let identity = serde_json::to_value(&record)?["byBuild"].clone();
     std::fs::write(
         build.join("_by_sourcemap.py").as_std_path(),
         format!(
             "SOURCEMAP = {{\n{main_map}{other_map}}}\n\nDIGESTS = {{\n{main_digests}{other_digests}}}\n\n\
-             COLUMNS = {{\n{main_columns}{other_columns}}}\n\nBY_BUILD = {identity}\n"
+             COLUMNS = {{\n{main_columns}{other_columns}}}\n\nBY_BUILD = {identity}\n\n\
+             RESTAGED = {{}}\n"
         ),
     )?;
     Ok(build)

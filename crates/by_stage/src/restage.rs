@@ -46,10 +46,11 @@ use crate::emit::{CheckGate, Emit, Transpiled, check_and_transpile};
 use crate::project::{BY_SOURCES, Rebuilder, project_sources};
 use crate::record::{BY_BUILD_FILENAME, BuildRecord, build_identity};
 use crate::sourcemap::{
-    BY_SOURCEMAP_FILENAME, RewriteRefusal, content_digest, describe_module,
-    rewrite_sourcemap_entry, sourcemap_build, sourcemap_key_for,
+    BY_SOURCEMAP_FILENAME, RewriteRefusal, content_digest, describe_module, map_digest,
+    restaged_files, rewrite_sourcemap_entry, sourcemap_build, sourcemap_key_for,
+    with_restaged_files,
 };
-use crate::staging::transpiled_destination;
+use crate::staging::{portable, transpiled_destination};
 use crate::verbatim::verbatim_destination;
 
 /// What one file's slot in the tree should now contain.
@@ -83,9 +84,8 @@ pub struct RestagedSet {
     /// one per distinct file asked about, in the order they were asked
     files: Vec<Restaged>,
     /// the full new text of `_by_sourcemap.py` with the entry of every
-    /// transpiled file of the set moved in it, or `None` when nothing about the
-    /// map changed — which includes a set of nothing but files the build copied
-    /// rather than transpiled, since none of those has an entry
+    /// transpiled file of the set moved in it, and every file of the set listed
+    /// as one a re-stage wrote, or `None` when the set changes nothing in the tree
     sourcemap: Option<String>,
 }
 
@@ -238,28 +238,24 @@ pub fn restage(
         .map(PathBuf::as_path)
         .collect();
 
-    // read once for the set, and only when the set holds something the map
-    // describes: a set of copied files has no line table to move
-    let existing_map = if files.iter().any(|file| is_source(file)) {
-        match std::fs::read_to_string(build_directory.join(BY_SOURCEMAP_FILENAME)) {
-            Ok(existing) => Some(existing),
-            Err(error) => {
-                return Ok(Restage::refuse(format!(
-                    "`{}` has no {BY_SOURCEMAP_FILENAME}, so a reloaded module would have no \
-                     line table: {error}",
-                    build_directory.display(),
-                )));
-            }
+    // read once for the set. a set of copied files has no line table to move, but the map is
+    // still where the tree is told which files a re-stage wrote
+    let existing_map = match std::fs::read_to_string(build_directory.join(BY_SOURCEMAP_FILENAME)) {
+        Ok(existing) => existing,
+        Err(error) => {
+            return Ok(Restage::refuse(format!(
+                "`{}` has no {BY_SOURCEMAP_FILENAME}, so a reloaded module would have no line \
+                 table: {error}",
+                build_directory.display(),
+            )));
         }
-    } else {
-        None
     };
     // the record and the map are written by one build, and only that build's map is one
     // whose entries this `by` knows how to move. a tree holding the map of one build and the
     // record of another was written into twice, and its map describes modules the record's
     // build did not write
-    if let Some(existing) = &existing_map {
-        let map_build = sourcemap_build(existing);
+    {
+        let map_build = sourcemap_build(&existing_map);
         if map_build.as_deref() != Some(record.by_build.as_str()) {
             return Ok(Restage::refuse(format!(
                 "`{}` has a {BY_SOURCEMAP_FILENAME} written by {} and a {BY_BUILD_FILENAME} \
@@ -300,13 +296,7 @@ pub fn restage(
         // which of the two a file goes through is decided by the file, never by whether a map
         // happened to be read: a `.by` staged verbatim would copy basedpython into the tree
         let outcome = if is_source(file) {
-            let Some(map) = merged.as_mut() else {
-                return Ok(Restage::refuse(format!(
-                    "`{}` is a source file and the set was read without a {BY_SOURCEMAP_FILENAME}",
-                    file.display(),
-                )));
-            };
-            restage_transpiled(&tree, file, map)?
+            restage_transpiled(&tree, file, &mut merged)?
         } else {
             restage_verbatim(&tree, file)?
         };
@@ -319,10 +309,36 @@ pub fn restage(
     if !refusals.is_empty() {
         return Ok(Restage::Refused(Refused { refusals }));
     }
+    // a set that changes the tree says so in the map, which is written with it: a program
+    // running from the tree did not write these, and `by run` must not carry them back to the
+    // project as though it had
+    if restaged.iter().any(|one| one.changed) || merged != existing_map {
+        let Some(recorded) = record_restaged(&merged, build_directory, &restaged) else {
+            return Ok(Restage::refuse(format!(
+                "`{}` has a {BY_SOURCEMAP_FILENAME} with no table of what a re-stage wrote — \
+                 rebuild it before reloading into it",
+                build_directory.display(),
+            )));
+        };
+        merged = recorded;
+    }
     Ok(Restage::Ready(RestagedSet {
         files: restaged,
-        sourcemap: merged.filter(|merged| Some(merged) != existing_map.as_ref()),
+        sourcemap: Some(merged).filter(|merged| *merged != existing_map),
     }))
+}
+
+/// `map` with every file of `restaged` added to its table of what a re-stage wrote, at the
+/// digest of the bytes it is written with, and the map itself at its own digest. `None` for a map
+/// with no such table
+fn record_restaged(map: &str, build_directory: &Path, restaged: &[Restaged]) -> Option<String> {
+    let mut table = restaged_files(map)?;
+    for one in restaged {
+        let relative = one.generated.strip_prefix(build_directory).ok()?;
+        table.insert(portable(relative), one.py_digest.clone());
+    }
+    table.insert(BY_SOURCEMAP_FILENAME.to_owned(), map_digest(map)?);
+    with_restaged_files(map, &table)
 }
 
 /// Whether the build transpiled `file` rather than copying it.

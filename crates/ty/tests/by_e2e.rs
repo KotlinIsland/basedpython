@@ -1584,6 +1584,30 @@ fn run_writes_back_a_file_the_program_made_in_its_package() {
     assert!(cached.is_empty(), "{cached:?}\n{stderr}");
 }
 
+/// a directory the build itself never stages from, as it never stages a `build/`, is still
+/// where the program wrote, and what it wrote there is carried back like anything else
+#[test]
+fn run_writes_back_a_file_under_a_build_directory_in_its_package() {
+    let dir = Scratch::new("run_writes_back_under_build");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "os.makedirs(place('build'), exist_ok=True)\n\
+         with open(place('build/report.txt'), 'w') as file:\n    \
+         _ = file.write('report\\n')\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("build").join("report.txt"))
+            .ok()
+            .as_deref(),
+        Some("report\n"),
+        "{stderr}"
+    );
+}
+
 /// a program that fails has still written what it wrote, and `by run` still exits as it did
 #[test]
 fn run_writes_back_what_a_failing_program_wrote() {
@@ -1613,6 +1637,139 @@ fn run_writes_back_what_a_failing_program_wrote() {
         Some("made\n"),
         "{stderr}"
     );
+}
+
+/// a debugger replacing code in the running program writes the re-staged bytes into the tree,
+/// as the editor does with what `by restage` answers. those are by's writes, not the program's:
+/// a re-staged transpiled module is not reported as lost, and a re-staged `.py` is not carried
+/// back over the project file the user has since taken the edit back in
+#[test]
+fn run_does_not_write_back_what_a_restage_wrote_into_its_tree() {
+    let dir = Scratch::new("run_does_not_write_back_a_restage");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "import time\nimport app.store\nimport app.helper\n\n\
+         print(os.path.dirname(app.__path__[0]), flush=True)\n\
+         deadline = time.time() + 120\n\
+         while not os.path.exists('go') and time.time() < deadline:\n    \
+         time.sleep(0.05)\n",
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(&*dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn by");
+    let mut tree = String::new();
+    BufReader::new(child.stdout.take().expect("stdout"))
+        .read_line(&mut tree)
+        .expect("the program names its tree");
+    let tree = PathBuf::from(tree.trim());
+
+    // the user edits a `.py` and a `.by`, and the debugger re-stages both into the tree
+    let helper = dir.join("app").join("helper.py");
+    fs::write(&helper, "VALUE = 'edited'\n").unwrap();
+    fs::write(dir.join("app").join("store.by"), "VALUE = 'edited'\n").unwrap();
+    let restage = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("restage")
+        .arg(&tree)
+        .args(["app/helper.py", "app/store.by"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    if !restage.status.success() {
+        // let the program end rather than leave it waiting
+        fs::write(dir.join("go"), "").unwrap();
+        panic!(
+            "by restage failed:\n{}{}",
+            String::from_utf8_lossy(&restage.stdout),
+            String::from_utf8_lossy(&restage.stderr)
+        );
+    }
+    let answer: serde_json::Value = serde_json::from_slice(&restage.stdout).expect("json");
+    let files = answer["files"].as_array().expect("files");
+    // written before the program is let go, as the editor writes them while it runs
+    for file in files {
+        fs::write(
+            file["generated"].as_str().expect("generated"),
+            file["content"].as_str().expect("content"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        tree.join("_by_sourcemap.py"),
+        answer["sourcemap"].as_str().expect("a new sourcemap"),
+    )
+    .unwrap();
+    // and then takes the `.py` edit back
+    fs::write(&helper, "VALUE = 'staged'\n").unwrap();
+    fs::write(dir.join("go"), "").unwrap();
+
+    let output = child.wait_with_output().expect("by run ends");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(&helper).ok().as_deref(),
+        Some("VALUE = 'staged'\n"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("written back") && !stderr.contains("wrote back"),
+        "{stderr}"
+    );
+}
+
+/// the tree is inventoried after `--compiled` has built the project's extensions into it, so
+/// they are by's like the rest of what it staged, and not carried into the project as files the
+/// program made
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn run_compiled_does_not_write_back_the_extensions_it_built() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough for a native build");
+        return;
+    };
+    let dir = Scratch::new("run_compiled_does_not_write_back_extensions");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(&dir, "import app.store\n\nprint(app.store.VALUE)\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--compiled", "--python"])
+        .arg(&python)
+        .arg("main")
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("C toolchain") || stderr.contains("no working C compiler") {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "by run --compiled failed:\n{stderr}"
+    );
+    assert!(!stderr.contains("wrote back"), "{stderr}");
+    let extensions: Vec<_> = walkdir::WalkDir::new(&*dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "so" || extension == "pyd")
+        })
+        .map(|entry| entry.path().to_path_buf())
+        .collect();
+    assert!(extensions.is_empty(), "{extensions:?}\n{stderr}");
 }
 
 /// a program that changes its copy of a `.py` of the project changes the project's

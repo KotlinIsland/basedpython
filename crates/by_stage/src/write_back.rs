@@ -20,12 +20,18 @@
 //! src-layout project's tree is (its `src/` and the project root both land there), says nothing
 //! about where a new file in it belongs, so the file is reported rather than written.
 //!
-//! Directories the build never descends into — hidden ones, `__pycache__`, `build` and the rest
-//! `may_hold_build_content_named` turns away — are not part of the mirror in either
-//! direction: nothing in them is staged, and nothing a program writes into them is carried back.
-//! That is also what keeps the bytecode python caches in `__pycache__` out of the project.
+//! A debugger that replaces code in the running program writes the new bytes into the tree too,
+//! through a re-stage ([`crate::restage`]), which lists each file it wrote in the tree's
+//! sourcemap with the digest of what it wrote. A file still holding what the re-stage listed is
+//! `by`'s, not the program's, and is neither carried back nor reported.
+//!
+//! The one thing in the tree that is never carried back is the bytecode python caches beside
+//! the modules it imports: a `.pyc` in a `__pycache__` directory, the place
+//! `importlib.util.cache_from_source` names (PEP 3147). The interpreter writes it, not the program,
+//! and it describes the tree's modules rather than the project's.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,8 +39,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
-use crate::project::may_hold_build_content_named;
-use crate::staging::{Staging, placement_base};
+use crate::sourcemap::{BY_SOURCEMAP_FILENAME, map_digest, restaged_files};
+use crate::staging::{Staging, placement_base, portable};
 
 type ContentDigest = [u8; 32];
 
@@ -189,7 +195,11 @@ impl Inventory {
                 outcomes.extend(self.deleted(relative, *before));
             }
         }
+        let restaged = Restaged::read(&self.tree);
         for (relative, now) in differing {
+            if restaged.wrote(&relative, now) {
+                continue;
+            }
             let outcome = match self.files.get(&relative) {
                 Some(before) => self.changed(&relative, *before, now),
                 None => self.created(&relative, now),
@@ -336,6 +346,49 @@ impl Inventory {
     }
 }
 
+/// What a re-stage wrote into the tree while the program ran from it, as the tree's sourcemap
+/// lists it (see [`crate::restage`]): what the debugger put there, not the program.
+#[derive(Debug, Default)]
+struct Restaged {
+    /// each file, relative to the tree with `/` separators, and the digest of what was written
+    files: BTreeMap<String, String>,
+    /// the digest the map is listed at when it is what a re-stage wrote
+    map: Option<String>,
+}
+
+impl Restaged {
+    fn read(tree: &Path) -> Self {
+        let Ok(map) = fs::read_to_string(tree.join(BY_SOURCEMAP_FILENAME)) else {
+            return Self::default();
+        };
+        Self {
+            files: restaged_files(&map).unwrap_or_default(),
+            map: map_digest(&map),
+        }
+    }
+
+    /// whether the file at `relative`, holding what digests to `now`, is what a re-stage wrote
+    fn wrote(&self, relative: &Path, now: ContentDigest) -> bool {
+        let Some(listed) = self.files.get(&portable(relative)) else {
+            return false;
+        };
+        if relative == Path::new(BY_SOURCEMAP_FILENAME) {
+            self.map.as_ref() == Some(listed)
+        } else {
+            *listed == spelled(&now)
+        }
+    }
+}
+
+/// a digest as the sourcemap spells one
+fn spelled(digest: &ContentDigest) -> String {
+    let mut spelled = String::from("sha256:");
+    for byte in digest {
+        let _ = write!(spelled, "{byte:02x}");
+    }
+    spelled
+}
+
 /// What carrying one file of the tree back to the project came to.
 #[derive(Debug)]
 pub enum Outcome {
@@ -402,7 +455,7 @@ impl Outcome {
                 };
                 format!(
                     "warning: not written back: the program {did} {}, which is {made}",
-                    portable(staged)
+                    shown_in_tree(staged)
                 )
             }
             Self::ChangedMeanwhile { project, deleted } => format!(
@@ -420,7 +473,7 @@ impl Outcome {
             } => format!(
                 "warning: not written back: {}, whose directory in the staged tree was staged \
                  from more than one in the project: {}",
-                portable(staged),
+                shown_in_tree(staged),
                 directories
                     .iter()
                     .map(|directory| shown(directory))
@@ -435,11 +488,11 @@ impl Outcome {
             Self::Unmapped(staged) => format!(
                 "warning: not written back: {}, whose directory in the staged tree no project \
                  directory was staged into",
-                portable(staged)
+                shown_in_tree(staged)
             ),
             Self::NotAFile(staged) => format!(
                 "warning: not written back: {}, which is not a regular file",
-                portable(staged)
+                shown_in_tree(staged)
             ),
             Self::Linked(project) => format!(
                 "warning: not written back: {} is reached through a symbolic link in the project",
@@ -447,7 +500,7 @@ impl Outcome {
             ),
             Self::Unreadable { staged, error } => format!(
                 "error: could not read {} in the staged tree to write it back: {error}",
-                portable(staged)
+                shown_in_tree(staged)
             ),
             Self::Failed { project, error } => {
                 format!("error: could not write back {}: {error}", shown(project))
@@ -456,20 +509,28 @@ impl Outcome {
     }
 }
 
-/// The tree, without the directories the build never descends into.
+/// The tree, without the bytecode python caches in it.
 fn walk(tree: &Path) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> {
     WalkDir::new(tree)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
-        .filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry.file_type().is_dir()
-                || entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(may_hold_build_content_named)
-        })
+        .filter(|entry| !entry.as_ref().is_ok_and(is_bytecode_cache))
+}
+
+/// whether `entry` is a file python wrote as the bytecode cache of a module: a `.pyc` in a
+/// `__pycache__` directory
+fn is_bytecode_cache(entry: &walkdir::DirEntry) -> bool {
+    entry.file_type().is_file()
+        && entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "pyc")
+        && entry
+            .path()
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|directory| directory == "__pycache__")
 }
 
 fn relative_to(tree: &Path, path: &Path) -> PathBuf {
@@ -520,8 +581,8 @@ fn write(from: &Path, to: &Path) -> io::Result<()> {
     written
 }
 
-/// a path of the tree with `/` separators, whatever the platform
-fn portable(path: &Path) -> String {
+/// a path of the tree with `/` separators, whatever the platform, to show
+fn shown_in_tree(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

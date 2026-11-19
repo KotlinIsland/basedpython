@@ -265,8 +265,9 @@ fn a_source_saved_without_a_trailing_newline_re_stages_a_whole_line_table() {
 }
 
 /// A hand-written `.py` is in the tree because it was **copied**, not transpiled — so its slot is
-/// its own bytes and the map says nothing about it. Answering with a map entry for one would be
-/// inventing a file the transpiler never produced.
+/// its own bytes and the map's tables say nothing about it. Answering with a map entry for one
+/// would be inventing a file the transpiler never produced. The map only lists it as a file a
+/// re-stage wrote, so that `by run` does not take it for something the program wrote
 #[test]
 fn a_hand_written_python_is_its_own_bytes_and_has_no_map_entry() {
     let dir = tempfile::tempdir().unwrap();
@@ -286,7 +287,15 @@ fn a_hand_written_python_is_its_own_bytes_and_has_no_map_entry() {
         "def h() -> int:\n    return 3\n"
     );
     assert_eq!(answer.get("changed").as_bool(), Some(true));
-    assert!(answer.get("sourcemap").is_null(), "{answer}");
+    let map = answer
+        .get("sourcemap")
+        .as_str()
+        .expect("the map lists the write");
+    let (tables, restaged) = map
+        .split_once("RESTAGED = ")
+        .expect("a table of re-staged files");
+    assert!(!tables.contains("helper.py"), "{map}");
+    assert!(restaged.contains("\"helper.py\":\"sha256:"), "{map}");
 }
 
 /// A file that does not check must not reach a running program: the transpiler would emit for a

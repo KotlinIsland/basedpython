@@ -20,6 +20,7 @@
 //! byte-identical, and the only way to promise that without qualification is never
 //! to have regenerated them.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -231,7 +232,59 @@ pub(crate) fn render_sourcemap_module(
         "\n# the build of by that wrote this map, as _by_build.json names it\nBY_BUILD = {}",
         py_str_literal(build)
     );
+
+    // `by run` carries what a program wrote into its tree back to the project, and a re-stage
+    // writes into that tree while the program runs: this is how the two are told apart
+    map_src.push_str(
+        "\n# the files a re-stage wrote into this tree after it was built, relative to it, each\n\
+         # with the digest of the bytes it wrote: a file at that digest is by's, not the program's.\n\
+         # this map is one of them once a re-stage writes it, at the digest of its text with this\n\
+         # table empty\n",
+    );
+    let _ = writeln!(map_src, "{RESTAGED_PREFIX}{{}}");
     map_src
+}
+
+/// the start of the map's line listing what a re-stage wrote, a json object on one line, which
+/// is a python dict literal too
+const RESTAGED_PREFIX: &str = "RESTAGED = ";
+
+/// what an existing map says a re-stage wrote into its tree: each file relative to the tree with
+/// `/` separators, and the digest of the bytes it was written with. `None` for a map without
+/// the table
+pub(crate) fn restaged_files(existing: &str) -> Option<BTreeMap<String, String>> {
+    let table = existing
+        .lines()
+        .find_map(|line| line.strip_prefix(RESTAGED_PREFIX))?;
+    serde_json::from_str(table).ok()
+}
+
+/// `existing` with its table of what a re-stage wrote holding `files`, and every other byte as
+/// it was. `None` for a map without the table
+pub(crate) fn with_restaged_files(
+    existing: &str,
+    files: &BTreeMap<String, String>,
+) -> Option<String> {
+    let table = serde_json::to_string(files).ok()?;
+    let mut found = false;
+    let mut out = String::with_capacity(existing.len() + table.len());
+    for line in existing.split_inclusive('\n') {
+        if !found && line.starts_with(RESTAGED_PREFIX) {
+            found = true;
+            out.push_str(RESTAGED_PREFIX);
+            out.push_str(&table);
+            out.push('\n');
+        } else {
+            out.push_str(line);
+        }
+    }
+    found.then_some(out)
+}
+
+/// the digest a map is listed at in its own table of what a re-stage wrote: of its text with
+/// that table empty, which a digest of the map can be listed in without changing what it is over
+pub(crate) fn map_digest(existing: &str) -> Option<String> {
+    with_restaged_files(existing, &BTreeMap::new()).map(|blank| content_digest(blank.as_bytes()))
 }
 
 /// One entry's line in the `SOURCEMAP` table, newline included.
