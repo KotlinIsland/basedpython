@@ -321,7 +321,6 @@ dependencies = [
  "ruff_python_ast",
  "ruff_python_parser",
  "ruff_text_size",
- "same-file",
  "seahash",
  "serde",
  "serde_json",

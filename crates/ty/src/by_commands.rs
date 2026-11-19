@@ -612,10 +612,9 @@ pub(crate) fn cmd_run(
 
     let mut code = exit_code(status);
     let mut notes = Vec::new();
-    let written_back = carry_back(&inventory, &cwd, &mut notes);
-    if !written_back && code == 0 {
-        code = 1;
-    }
+    // what was not written back is in the tree, which is kept for it, so the run still exits as
+    // the program did: a test run whose cache is refused has still passed
+    let keeps_tree = carry_back(&inventory, &cwd, &mut notes);
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
         if file.is_file() {
             let report = cwd.join(report);
@@ -653,10 +652,10 @@ pub(crate) fn cmd_run(
     }
     // drop the temp dir explicitly: `process::exit` skips destructors, so
     // exiting while it's still in scope would leak the directory
-    if written_back {
-        drop(tmp);
-    } else {
+    if keeps_tree {
         keep_tree(tmp, &mut notes);
+    } else {
+        drop(tmp);
     }
     if !tell(&notes, notes_file.as_deref()) && code == 0 {
         code = 1;
@@ -666,16 +665,16 @@ pub(crate) fn cmd_run(
     std::process::exit(code);
 }
 
-/// carry what the program changed in the staged tree back to the project, adding to `notes`
-/// what was written and what was not. `false` when anything was not carried back, which the
-/// tree is then the only place holding: see [`keep_tree`]
+/// carry what the program wrote in the staged tree back to the project, adding to `notes`
+/// what was written and what was not. `true` when anything the program wrote was not carried
+/// back, which the tree is then the only place holding: see [`keep_tree`]
 pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path, notes: &mut Vec<Note>) -> bool {
-    let mut carried = true;
+    let mut keeps_tree = false;
     for outcome in inventory.write_back() {
         notes.push(outcome.note(cwd));
-        carried &= outcome.is_carried();
+        keeps_tree |= outcome.keeps_tree();
     }
-    carried
+    keeps_tree
 }
 
 /// keep `tree` rather than delete it, as it holds what was not carried back, and add to `notes`

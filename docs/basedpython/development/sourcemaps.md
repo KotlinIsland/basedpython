@@ -301,8 +301,8 @@ still holding what a re-stage wrote is by's, a debugger's replacement rather
 than something the program wrote, so it is not carried back to the project, and
 what the program then writes over a re-staged copy is measured against what the
 re-stage wrote. a file a re-stage added, which was not in the tree as it was
-built, is by's like a transpiled module: what the program writes over it or
-deletes is not carried back, and `by run` says so. a set of nothing but copied
+built, is by's like a transpiled module: what the program writes over it is not
+carried back, and `by run` says so. a set of nothing but copied
 files has no entry to move, and
 still rewrites the map for this table
 

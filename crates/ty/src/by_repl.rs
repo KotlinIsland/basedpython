@@ -163,16 +163,13 @@ pub(crate) fn cmd_repl(
         .wait(&mut child)
         .context("the session's interpreter could not be waited for")?;
     drop(repl);
-    let mut code = crate::by_commands::exit_code(status);
+    let code = crate::by_commands::exit_code(status);
     let mut notes = Vec::new();
     if crate::by_commands::carry_back(&inventory, &cwd, &mut notes) {
+        crate::by_commands::keep_tree(tree, &mut notes);
+    } else {
         // `process::exit` skips destructors, and the tree is a temporary directory
         drop(tree);
-    } else {
-        crate::by_commands::keep_tree(tree, &mut notes);
-        if code == 0 {
-            code = 1;
-        }
     }
     let _ = crate::by_commands::tell(&notes, None);
     drop(signals);

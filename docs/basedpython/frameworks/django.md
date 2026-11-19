@@ -335,9 +335,10 @@ exits, and with no standard input: a command that asks a question, as
 `makemigrations` asks whether a field was renamed, reads no answer. through `by run`, the run is named
 `by run manage.py …`, and what `by run` wrote back is logged after the
 command's output. a file it did not write back is shown after the command's
-last line, and as `by run` then keeps the tree it staged and exits 1, the
-command is shown as failed, with where the tree is in the log:
-`by run manage.py makemigrations app in /path/to/site failed (exit status: 1): + Create model Widget; warning: not written back: app/migrations/0001_initial.py is already in the project, holding something else (and 1 more in the log)`
+last line, with `Warning`, and where the tree `by run` kept for it is in the
+log. `by run` exits as the command did, so a command that succeeded is still
+shown as having succeeded:
+`by run manage.py makemigrations app in /path/to/site succeeded: + Create model Widget; warning: not written back: app/migrations/0001_initial.py, where the project already holds something else (and 1 more in the log)`
 
 a command the server will not run — one that needs a terminal, such as
 `runserver` or `shell`, one no lens offers, or any of them in a workspace the

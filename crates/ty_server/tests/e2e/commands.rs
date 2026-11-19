@@ -273,7 +273,7 @@ fn what_uv_installed_is_picked_up_when_it_finishes() -> Result<()> {
 ///
 /// as `by`, it writes the notes `by run --notes` writes: what it wrote back to the project. with
 /// a file `refuse` beside it, it also says what `by run` says of a file it did not write back,
-/// and of the staged tree it kept for it, and exits 1, as `by run` then does
+/// and of the staged tree it kept for it, and still exits 0, as `by run` exits as the program did
 #[cfg(unix)]
 const MANAGE_STUB: &str = r#"#!/bin/sh
 { pwd -P; printf '%s\n' "$@"; } > "$(dirname "$0")/recorded"
@@ -284,7 +284,6 @@ while [ $# -gt 0 ]; do
 done
 echo "Migrations for 'app':"
 echo "  app/migrations/0001_initial.py"
-status=0
 if [ -n "$notes" ]; then
     printf '%s\n' '{"level":"note","message":"wrote back app/migrations/0001_initial.py"}' > "$notes"
     if [ -e "$(dirname "$0")/refuse" ]; then
@@ -292,10 +291,9 @@ if [ -n "$notes" ]; then
             '{"level":"warning","message":"not written back: app/admin.py was changed in the project while the program ran"}' \
             '{"level":"warning","message":"kept the staged tree at /tmp/.tmpTree, which holds what was not written back"}' \
             >> "$notes"
-        status=1
     fi
 fi
-exit $status
+exit 0
 "#;
 
 /// a django project whose models module is `models`, with an interpreter the editor chose, as
@@ -428,7 +426,7 @@ fn run_manage_command(
 /// command runs through `by run`, from the directory `manage.py` is in, told the environment
 /// the editor chose, which `by run` could not find for itself. what `by run` wrote back is
 /// logged, and the outcome shown is the command's own last line, with what was not written back
-/// after it, which `by run` fails for. the directory `by run` wrote its notes into is gone by then
+/// after it, which makes it a warning. the directory `by run` wrote its notes into is gone by then
 #[cfg(unix)]
 #[test]
 fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Result<()> {
@@ -446,12 +444,12 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
     assert_eq!(
         shown.message,
         format!(
-            "{line} failed (exit status: 1): app/migrations/0001_initial.py; \
+            "{line} succeeded: app/migrations/0001_initial.py; \
              warning: not written back: app/admin.py was changed in the project while the program ran \
              (and 1 more in the log)"
         )
     );
-    assert_eq!(shown.kind, lsp_types::MessageType::Error);
+    assert_eq!(shown.kind, lsp_types::MessageType::Warning);
     assert_eq!(
         logged,
         [
@@ -460,7 +458,7 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
             "note: wrote back app/migrations/0001_initial.py".to_string(),
             "warning: not written back: app/admin.py was changed in the project while the program ran".to_string(),
             "warning: kept the staged tree at /tmp/.tmpTree, which holds what was not written back".to_string(),
-            format!("{line} failed (exit status: 1)"),
+            format!("{line} succeeded"),
         ]
     );
 

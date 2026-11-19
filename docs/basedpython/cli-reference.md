@@ -264,8 +264,8 @@ is not deleted with it. a module's `__file__` names its file in the project, so
 a program writing beside `__file__` writes the project directly, but a package's
 `__path__` is its directory in the tree — and that is where django's
 `makemigrations` writes `migrations/0001_initial.py`. so once the program has
-ended, `by run` carries what changed in the tree back to the project, and says
-on stderr what it wrote, deleted or left:
+ended, `by run` carries what the program wrote in the tree back to the project,
+and says on stderr what it wrote and what it left:
 
 ```console
 $ by run manage.py makemigrations app
@@ -279,15 +279,22 @@ note: wrote back app/migrations/__init__.py
 - a new file goes to the project directory its directory in the tree was staged
     from, and a new directory goes where its parent's would, an empty one included
 - a changed copy of a project file — a `.py`, a template, a data file — is
-    written over that file, and a deleted one deletes it. a file is written back
-    with the permissions the program left it with, and a copy whose permissions
-    alone the program changed has them carried to its project file
+    written over that file. a file is written back with the permissions the
+    program left it with, and a copy whose permissions alone the program changed
+    has them carried to its project file
+- nothing in the project is deleted or displaced. a copy the program deleted,
+    renamed away or replaced with a directory leaves its project file as it is,
+    and `by run` says so: a program that renames `a.txt` to `b.txt` has `b.txt`
+    written back, and `a.txt` kept
 - a file `by` wrote — a transpiled module, the runtime, the runner — has no
-    project file to go back to. what the program does to one is lost, and `by run`
-    says so
+    project file to go back to. what the program writes over one is not written
+    back, and `by run` says so
 - a project file that changed while the program ran is left as it is, and so is
-    one already where the program made a new file. a project file that already is
-    what the program left is not mentioned
+    anything already where the program made a new file, a file where it made a
+    directory or a directory where it made a file. a project file that already is
+    what the program left is not mentioned: on a file system that folds case, as
+    macOS's and windows' do by default, `data.txt` is already in the project as
+    `Data.txt`, so a rename only in case writes nothing
 - a file the program made in a directory of the tree that files from more than
     one project directory were staged into has no one place to go, and is reported
     rather than written. the root of a src-layout project's tree is one: `src/` and
@@ -303,8 +310,8 @@ note: wrote back app/migrations/__init__.py
     not the program's, and is neither written back nor reported: the tree's
     sourcemap lists each file a re-stage wrote, at what it wrote (see
     [sourcemaps](development/sourcemaps.md)). a file a re-stage added to the
-    tree is `by`'s, as a transpiled module is: what the program does to one is
-    lost, and `by run` says so
+    tree is `by`'s, as a transpiled module is: what the program writes over one
+    is not written back, and `by run` says so
 
 the tree is compared by content and permissions, as it was just before the
 program started, and this happens however the program ends: a non-zero exit, or
@@ -315,24 +322,55 @@ program makes there, as a test runner makes its report and `.pytest_cache`, goes
 to the project root, a src-layout project's included. one in a directory that was
 staged goes where that directory was staged from, as always
 
-nothing the project or the program held is lost on the way. what happens to
-every file is decided before anything is written, and a project file whose copy
-the program deleted is deleted only once everything else has been written back,
-since a file the program renamed has its only other copy in the tree. so when
-anything is not written back, for any of the reasons above or because a file
-could not be read or written, no project file is deleted, and the tree is kept
-rather than deleted, holding what the program left:
+with `--in-build`, a program writing a file staging left out of the tree finds no
+copy of it there, and makes a new one: hidden directories are never staged, so
+a test runner writes a new `.pytest_cache` in the tree whatever the project
+holds. a new file where the project already has one holding something else is
+refused like any other
+
+nothing the project or the program held is lost on the way. what the program
+wrote that is not written back, for any of the reasons above or because a file
+could not be read or written, is in the tree, which is then kept rather than
+deleted:
 
 ```console
 $ by run main
 moved
+note: not deleted in the project: src/app/data.txt, which the program deleted (what a program writes is carried back, not what it deletes)
 warning: not written back: moved.txt, whose directory in the staged tree was staged from more than one in the project: src, .
-warning: not deleted: src/app/data.txt, whose copy the program deleted, since not everything else it changed was written back
 warning: kept the staged tree at /tmp/.tmpYhI9rV, which holds what was not written back
 ```
 
-`by run` exits as the program did, unless anything was not written back, which
-makes a program that exited 0 exit 1
+`by run` exits as the program did, whatever was written back or not: the tree
+holds what was not, and a test run whose cache was not written back has still
+passed
+
+the project can change while the program runs and while what it wrote is carried
+back, as it does when an editor saves a file. a changed copy is written over its
+project file only if that file holds what was staged at the moment the copy takes
+its place, and a new file only if nothing is there at that moment; anything else
+is left, and reported like any other. each file is written whole and on disk
+before it takes that place, so a crash never leaves one half written:
+
+- on macOS and linux, putting the file in place and checking what was there are
+    one step. a new file is renamed into place by a rename that refuses to replace
+    anything, and a changed copy is exchanged with its project file, which is then
+    checked and exchanged back if it is not what was staged
+- elsewhere, and on a file system without those renames, a new file is hard
+    linked into place, which refuses the same, and a project file is renamed aside
+    to be checked before the copy is linked into place where nothing is, so for
+    that moment its path names nothing. a file system without hard links either
+    has nothing written back, and the tree is kept
+
+what this does not cover:
+
+- a program that already has the project file open and writes into it, rather
+    than saving a new file over it, as the copy takes its place, can write into
+    the file the copy replaces, which is then deleted
+- a directory of the project replaced with a symbolic link just as a file is
+    written into it can be written through, where one there a moment before is
+    refused (see above): anything that can write the project directory can
+    already write the code `by run` runs
 
 `--notes PATH` writes those lines, and the note that a coverage report or a
 profile was not written, to `PATH` instead of stderr, one JSON object a line,
@@ -343,8 +381,9 @@ command wrote — `OK`, `No changes detected` — which on stderr would be `by r
 {"level":"note","message":"wrote back app/migrations/0001_initial.py"}
 ```
 
-the level is `note` for what was written or deleted, `warning` for what was not
-written back, the tree kept for it, or a report that was not written, and why,
+the level is `note` for what was written back and for a deletion that was not
+carried back, `warning` for what was not written back, the tree kept for it, or
+a report that was not written, and why,
 and `error` for a file that could not be read or written. the file is replaced when `by run` starts, so a
 run that ends before the program does leaves none, and a file that cannot be
 written makes a program that exited 0 exit 1

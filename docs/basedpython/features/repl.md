@@ -30,7 +30,9 @@ project's interpreter (`--python` names another), with the project's modules sta
 error raised inside it is reported at its `.by` line. like `by run`, it does not start while
 the project has check errors, and what it writes into the staged tree — a file in a package's
 `__path__`, say — is carried back to the project when the session ends, as
-[`by run`](../cli-reference.md#by-run) carries a program's
+[`by run`](../cli-reference.md#by-run) carries a program's: nothing in the project is deleted,
+and what is not carried back is kept in the staged tree, whose path is said, with the session
+still exiting as its interpreter did
 
 ## a session is a module
 

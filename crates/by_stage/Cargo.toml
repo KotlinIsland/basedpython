@@ -36,9 +36,6 @@ walkdir = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
-[target.'cfg(not(unix))'.dependencies]
-same-file = { workspace = true }
-
 [dev-dependencies]
 salsa = { workspace = true }
 tempfile = { workspace = true }

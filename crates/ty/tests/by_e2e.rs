@@ -1552,9 +1552,10 @@ fn run_writing_into_the_tree(dir: &Path) -> String {
     stderr
 }
 
-/// `by run main` in `dir`, for a program that leaves something the run does not write back:
-/// what it wrote on stderr, and the staged tree it kept for that, named there, which goes when
-/// the test passes
+/// `by run main` in `dir`, for a program that exits 0 and leaves something the run does not
+/// write back: what it wrote on stderr, and the staged tree it kept for that, named there, which
+/// goes when the test passes. the run exits as the program did, since nothing is lost: the tree
+/// holds it
 fn run_not_writing_back(dir: &Path) -> (String, Scratch) {
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
@@ -1564,7 +1565,7 @@ fn run_not_writing_back(dir: &Path) -> (String, Scratch) {
         .expect("failed to spawn by");
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let tree = kept_tree(&stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
     (stderr, tree)
 }
 
@@ -1656,14 +1657,14 @@ fn run_writes_its_notes_to_the_file_it_is_given() {
     }
     let _tree = kept_tree(&said);
 
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stderr.ends_with("the program is done\n"), "{stderr}");
     assert_eq!(
         lines[..2],
         [
+            "{\"level\":\"note\",\"message\":\"wrote back app/made.txt\"}",
             "{\"level\":\"warning\",\"message\":\"not written back: app/notes.txt was changed in \
              the project while the program ran\"}",
-            "{\"level\":\"note\",\"message\":\"wrote back app/made.txt\"}",
         ],
         "{notes}\n{stderr}"
     );
@@ -1911,17 +1912,139 @@ fn run_writes_back_a_change_to_a_carried_file() {
     );
 }
 
-/// a program that deletes its copy of a project file deletes the project's
+/// a program that deletes its copy of a project file leaves the project's, as a deletion is
+/// never carried back, and says so. nothing the program wrote is left in the tree, which goes
 #[test]
-fn run_deletes_a_carried_file_the_program_deleted() {
-    let dir = Scratch::new("run_deletes_a_deleted_copy");
+fn run_keeps_a_carried_file_the_program_deleted() {
+    let dir = Scratch::new("run_keeps_a_deleted_copy");
     fs::create_dir_all(&*dir).unwrap();
     project_writing_into_its_package(&dir, "os.remove(place('notes.txt'))\n");
 
     let stderr = run_writing_into_the_tree(&dir);
 
-    assert!(!dir.join("app").join("notes.txt").exists(), "{stderr}");
-    assert!(stderr.contains("deleted"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("notes.txt"))
+            .ok()
+            .as_deref(),
+        Some("staged\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "note: not deleted in the project: {}, which the program deleted (what a program \
+             writes is carried back, not what it deletes)",
+            Path::new("app").join("notes.txt").display()
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("kept the staged tree"), "{stderr}");
+}
+
+/// a directory the program renamed only in case is, on a file system that folds case, the
+/// project's directory still: every file in it is already in the project as the program left it,
+/// so nothing is written, and the old names, which are the same files, are not deleted
+#[test]
+fn run_keeps_the_files_of_a_directory_the_program_renamed_in_case() {
+    let dir = Scratch::new("run_keeps_a_directory_renamed_in_case");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(&dir, "os.rename(place('Pkg'), place('pkg'))\n");
+    let package = dir.join("app").join("Pkg");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("m.txt"), "m\n").unwrap();
+    fs::write(package.join("n.txt"), "n\n").unwrap();
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(package.join("m.txt")).ok().as_deref(),
+        Some("m\n"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(package.join("n.txt")).ok().as_deref(),
+        Some("n\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("note: not deleted in the project"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("kept the staged tree"), "{stderr}");
+}
+
+/// a file whose name is as long as a name can be, renamed only in case, is left as it is: on a
+/// file system that folds case it is already in the project under its new name
+#[test]
+fn run_keeps_a_file_with_a_long_name_the_program_renamed_in_case() {
+    let dir = Scratch::new("run_keeps_a_long_name_renamed_in_case");
+    fs::create_dir_all(&*dir).unwrap();
+    let name = format!("D{}", "x".repeat(250));
+    project_writing_into_its_package(
+        &dir,
+        &format!(
+            "os.rename(place('{name}'), place('{}'))\n",
+            name.to_lowercase()
+        ),
+    );
+    fs::write(dir.join("app").join(&name), "long\n").unwrap();
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join(&name))
+            .ok()
+            .as_deref(),
+        Some("long\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("kept the staged tree"), "{stderr}");
+}
+
+/// the file a write goes through has a short name of its own, so a file whose name is as long as
+/// a name can be is written back
+#[test]
+fn run_writes_back_a_file_with_the_longest_name_a_file_system_allows() {
+    let dir = Scratch::new("run_writes_back_a_long_name");
+    fs::create_dir_all(&*dir).unwrap();
+    let name = "a".repeat(255);
+    project_writing_into_its_package(
+        &dir,
+        &format!("with open(place('{name}'), 'w') as file:\n    _ = file.write('new\\n')\n"),
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join(&name))
+            .ok()
+            .as_deref(),
+        Some("new\n"),
+        "{stderr}"
+    );
+}
+
+/// a file the program moved into a `__pycache__` directory is not carried back, as nothing there
+/// is, and its project file is not deleted
+#[test]
+fn run_keeps_a_file_the_program_moved_into_pycache() {
+    let dir = Scratch::new("run_keeps_a_file_moved_into_pycache");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "os.makedirs(place('__pycache__'), exist_ok=True)\n\
+         os.rename(place('notes.txt'), os.path.join(place('__pycache__'), 'notes.txt'))\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("notes.txt"))
+            .ok()
+            .as_deref(),
+        Some("staged\n"),
+        "{stderr}"
+    );
+    assert!(!dir.join("app").join("__pycache__").exists(), "{stderr}");
 }
 
 /// a transpiled module has no project file of its own: what the program writes over it is not
@@ -2105,9 +2228,8 @@ fn project_moving_a_file_out_of_reach(dir: &Path) {
     .unwrap();
 }
 
-/// a file the program renamed to where it cannot be written back is not deleted from the project
-/// either, and the tree, the only place holding it under its new name, is kept and named, with
-/// `by run` exiting 1: the file is never in no place at all
+/// a file the program renamed to where it cannot be written back is not deleted from the project,
+/// as nothing is, and the tree, the only place holding it under its new name, is kept and named
 #[test]
 fn run_deletes_nothing_when_a_renamed_file_cannot_be_written_back() {
     let dir = Scratch::new("run_deletes_nothing_for_a_refused_rename");
@@ -2128,7 +2250,10 @@ fn run_deletes_nothing_when_a_renamed_file_cannot_be_written_back() {
         Some("precious data\n"),
         "{stderr}"
     );
-    assert!(stderr.contains("not deleted: src"), "{stderr}");
+    assert!(
+        stderr.contains("not deleted in the project: src"),
+        "{stderr}"
+    );
 }
 
 /// the program renamed a file onto a name the project got while it ran: the new name is not
@@ -2166,14 +2291,11 @@ fn run_deletes_nothing_when_a_rename_lands_on_a_file_made_meanwhile() {
     );
 }
 
-/// a deletion is followed by the write it made room for, which can still be refused: here the
-/// directory the program replaced with a file cannot be removed from the project, whose package
-/// directory cannot be written. the tree, holding the file, is kept
-#[cfg(unix)]
+/// a directory the program replaced with a file stays a directory in the project, as nothing in
+/// the project is deleted, so the file is not written, and the tree holding it is kept
 #[test]
-fn run_keeps_the_tree_when_a_write_after_a_deletion_is_refused() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let dir = Scratch::new("run_keeps_the_tree_after_a_deletion");
+fn run_keeps_the_tree_for_a_file_that_would_take_the_place_of_a_directory() {
+    let dir = Scratch::new("run_keeps_the_tree_for_a_displacing_file");
     fs::create_dir_all(&*dir).unwrap();
     project_writing_into_its_package(
         &dir,
@@ -2185,19 +2307,16 @@ fn run_keeps_the_tree_when_a_write_after_a_deletion_is_refused() {
     let app = dir.join("app");
     fs::create_dir_all(app.join("sub")).unwrap();
     fs::write(app.join("sub").join("x.txt"), "x\n").unwrap();
-    fs::set_permissions(&app, fs::Permissions::from_mode(0o555)).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_by"))
-        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
-        .args(["run", "main"])
-        .current_dir(&*dir)
-        .output()
-        .expect("failed to spawn by");
-    fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (stderr, tree) = run_not_writing_back(&dir);
 
-    let tree = kept_tree(&stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(app.join("sub").join("x.txt"))
+            .ok()
+            .as_deref(),
+        Some("x\n"),
+        "{stderr}"
+    );
     assert_eq!(
         fs::read_to_string(tree.join("app").join("sub"))
             .ok()
@@ -2205,6 +2324,31 @@ fn run_keeps_the_tree_when_a_write_after_a_deletion_is_refused() {
         Some("now a file\n"),
         "{stderr}"
     );
+}
+
+/// a refusal leaves the run's exit status the program's, whatever it was
+#[test]
+fn run_exits_as_the_program_did_when_a_file_is_not_written_back() {
+    let dir = Scratch::new("run_exits_as_the_program_did_after_a_refusal");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "import sys\n\n\
+         with open(place('store.py'), 'w') as file:\n    \
+         _ = file.write(\"VALUE = 'changed'\\n\")\n\
+         sys.exit(3)\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let _tree = kept_tree(&stderr);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
 }
 
 /// an argument with a path separator in it is a path, as no module name has one, and a path
@@ -2394,6 +2538,63 @@ fn run_gives_a_script_what_python_gives_one() {
         let python = ran(Command::new(&python).arg(typed), &dir);
         assert_eq!((by.0, &by.1), (python.0, &python.1), "{typed}\n{}", by.2);
     }
+}
+
+/// a hidden directory is never staged, so a test runner run with `--in-build` never sees the
+/// cache the project already has, and writes a new one in the tree. one holding something else is
+/// not written over the project's: the tree holding it is kept and named, and the run still exits
+/// as the program did, as a test run whose cache was refused has still passed
+#[test]
+fn run_in_build_keeps_the_tree_for_a_file_staging_left_out_of_it() {
+    let dir = Scratch::new("run_in_build_keeps_the_tree_for_an_unstaged_file");
+    let cache = dir.join(".pytest_cache").join("v").join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(cache.join("nodeids"), "[\"a\"]\n").unwrap();
+    fs::write(
+        dir.join("main.by"),
+        "import os\n\n\
+         os.makedirs(os.path.join('.pytest_cache', 'v', 'cache'), exist_ok=True)\n\
+         with open(os.path.join('.pytest_cache', 'v', 'cache', 'nodeids'), 'w') as file:\n    \
+         _ = file.write('[\"a\", \"b\"]\\n')\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--in-build", "main"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let tree = kept_tree(&stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(cache.join("nodeids")).ok().as_deref(),
+        Some("[\"a\"]\n"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            tree.join(".pytest_cache")
+                .join("v")
+                .join("cache")
+                .join("nodeids")
+        )
+        .ok()
+        .as_deref(),
+        Some("[\"a\", \"b\"]\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("where the project already holds something else"),
+        "{stderr}"
+    );
 }
 
 /// with `--in-build` the program runs in the tree, where a path typed relative to the directory
@@ -3686,6 +3887,32 @@ fn repl_writes_back_what_the_session_wrote_into_its_tree() {
             .ok()
             .as_deref(),
         Some("made\n"),
+        "{stderr}"
+    );
+}
+
+/// what a session wrote that is not carried back keeps the tree it was staged into, and the
+/// session still exits as its interpreter did
+#[test]
+fn repl_keeps_the_tree_and_its_exit_status_when_a_file_is_not_written_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_module(dir.path());
+    let (status, _, stderr) = repl_session(
+        dir.path(),
+        "import os\n\
+         import pkg\n\
+         with open(os.path.join(pkg.__path__[0], 'calc.py'), 'w') as file:\n    \
+         _ = file.write('mine\\n')\n\n",
+        &[],
+    );
+    let tree = kept_tree(&stderr);
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!dir.path().join("pkg").join("calc.py").exists(), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(tree.join("pkg").join("calc.py"))
+            .ok()
+            .as_deref(),
+        Some("mine\n"),
         "{stderr}"
     );
 }
@@ -6753,7 +6980,7 @@ print('verified', checked)
     // the tree holding it
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _tree = kept_tree(&stderr);
-    assert_eq!(output.status.code(), Some(1), "by run failed:\n{stderr}");
+    assert!(output.status.success(), "by run failed:\n{stderr}");
     assert!(
         stderr.contains("not written back: the program changed main.py"),
         "{stderr}"
