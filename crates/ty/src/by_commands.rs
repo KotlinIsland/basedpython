@@ -3167,8 +3167,8 @@ def _still_current(key, by_path, checked):
 
 
 def _rewrite(frames, checked):
-    # drop the runner/runpy bootstrap above the first user frame. an input to a `by repl`
-    # session is the program's own as much as a module of the project is
+    # drop what ran before the program's first frame. an input to a `by repl` session is the
+    # program's own as much as a module of the project is
     first = next(
         (
             i
@@ -3180,12 +3180,12 @@ def _rewrite(frames, checked):
         None,
     )
     if first is not None:
-        # below the program's first frame, by's own are what the program called without
-        # knowing it: the loader the runner puts on every staged module, and the standard
-        # input `by repl` reads the program's lines through
-        frames = [
-            f for f in frames[first:] if os.path.realpath(f.filename) not in _MACHINERY
-        ]
+        frames = frames[first:]
+    # by's own frames are never the program's, whether or not one of the program's was told
+    # apart above, as a hand-written `.py` run as `__main__` is not: above the program's frames
+    # they are what started it, and below, what it called without knowing it, the loader the
+    # runner puts on every staged module and the standard input `by repl` reads its lines through
+    frames = [f for f in frames if os.path.realpath(f.filename) not in _MACHINERY]
     out = []
     for f in frames:
         compiled_from = _BY_SOURCES.get(os.path.realpath(f.filename))

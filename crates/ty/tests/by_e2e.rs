@@ -2321,6 +2321,48 @@ fn ran(command: &mut Command, dir: &Path) -> (Option<i32>, String, String) {
     )
 }
 
+/// a hand-written `.py` run by its path ends in an uncaught exception as it does run by python:
+/// the same traceback, chained exceptions and all, with none of the runner's frames above it
+#[test]
+fn run_reports_a_scripts_uncaught_exception_as_python_does() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dunce::canonicalize(dir.path()).unwrap();
+    fs::write(dir.join("main.by"), "x = 1\n").unwrap();
+    fs::create_dir_all(dir.join("tools")).unwrap();
+    fs::write(
+        dir.join("tools").join("exc.py"),
+        "import sys\n\n\n\
+         def recurse(n: int) -> int:\n    if n < 30:\n        return recurse(n + 1)\n    raise ValueError('deep')\n\n\n\
+         def inner() -> None:\n    raise ValueError('inner')\n\n\n\
+         def chained() -> None:\n    try:\n        inner()\n    except ValueError as error:\n        \
+         raise RuntimeError('outer') from error\n\n\n\
+         class Unprintable(Exception):\n    def __str__(self) -> str:\n        \
+         raise RuntimeError('no str')\n\n\n\
+         mode = sys.argv[1]\n\
+         if mode == 'chain':\n    try:\n        chained()\n    except RuntimeError:\n        \
+         raise TypeError('while handling')\n\
+         elif mode == 'recurse':\n    recurse(0)\n\
+         else:\n    raise Unprintable()\n",
+    )
+    .unwrap();
+
+    for mode in ["chain", "recurse", "unprintable"] {
+        let by = ran(
+            Command::new(env!("CARGO_BIN_EXE_by")).args([
+                "run",
+                "--python",
+                &python,
+                "tools/exc.py",
+                mode,
+            ]),
+            &dir,
+        );
+        let python = ran(Command::new(&python).args(["tools/exc.py", mode]), &dir);
+        assert_eq!(by, python, "{mode}");
+    }
+}
+
 /// with `--in-build` the program runs in the tree, where a path typed relative to the directory
 /// `by run` was run in names nothing, so `sys.argv[0]` is the file's path in the tree, which is
 /// the file that runs
