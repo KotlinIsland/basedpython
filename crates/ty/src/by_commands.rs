@@ -589,7 +589,7 @@ pub(crate) fn cmd_run(
         Entry::Script(script) => command
             .arg("--script")
             .arg(&script.staged)
-            .arg(cwd.join(&script.argument))
+            .arg(&script.absolute)
             .arg(if in_build {
                 &script.staged
             } else {
@@ -669,9 +669,12 @@ pub(crate) fn cmd_run(
 /// what was written and what was not. `true` when anything the program wrote was not carried
 /// back, which the tree is then the only place holding: see [`keep_tree`]
 pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path, notes: &mut Vec<Note>) -> bool {
+    // the project's paths are canonical, and a working directory need not be: on windows it
+    // keeps the short (`RUNNER~1`) names it was entered by, which canonicalizing expands
+    let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let mut keeps_tree = false;
     for outcome in inventory.write_back() {
-        notes.push(outcome.note(cwd));
+        notes.push(outcome.note(&cwd));
         keeps_tree |= outcome.keeps_tree();
     }
     keeps_tree
@@ -2456,7 +2459,7 @@ def _start_in(session, main_module, start):
         # as python gives a script them: the path as it was typed, and that path made absolute,
         # which through a symbolic link names the link
         sys.argv = [start["argument"]]
-        main_module.__file__ = os.path.join(os.getcwd(), start["argument"])
+        main_module.__file__ = start["absolute"]
     else:
         sys.argv = [by_path]
         main_module.__file__ = by_path

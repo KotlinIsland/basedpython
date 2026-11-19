@@ -1515,6 +1515,10 @@ fn run_in_build_runs_in_the_tree_it_staged() {
 /// a program reaches the package's staged directory through `app.__path__`, as django does to
 /// find an app's migrations: a module's `__file__` names its file in the project, but the
 /// package's search path is the tree the run staged
+///
+/// a program writing a file a test reads back opens it with `newline='\n'`, here and in the
+/// tests below, so that it writes the same bytes everywhere: python's text mode ends a line
+/// with `\r\n` on windows, and what is written back is the bytes the program wrote
 fn project_writing_into_its_package(dir: &Path, program: &str) {
     fs::write(
         dir.join("pyproject.toml"),
@@ -1593,7 +1597,7 @@ fn run_writes_back_a_file_the_program_made_in_its_package() {
     project_writing_into_its_package(
         &dir,
         "os.makedirs(place('migrations'), exist_ok=True)\n\
-         with open(place('migrations/0001_initial.py'), 'w') as file:\n    \
+         with open(place('migrations/0001_initial.py'), 'w', newline='\\n') as file:\n    \
          _ = file.write('made = True\\n')\n",
     );
 
@@ -1640,7 +1644,8 @@ fn run_writes_its_notes_to_the_file_it_is_given() {
         .current_dir(&*dir)
         .output()
         .expect("failed to spawn by");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
     let notes = fs::read_to_string(dir.join("notes.jsonl")).unwrap_or_default();
     let lines: Vec<&str> = notes.lines().collect();
     let mut said = String::new();
@@ -1659,12 +1664,28 @@ fn run_writes_its_notes_to_the_file_it_is_given() {
 
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stderr.ends_with("the program is done\n"), "{stderr}");
+    // a project file is named relative to the working directory, in the platform's own spelling
+    let line = |level: &str, message: String| {
+        format!(
+            "{{\"level\":\"{level}\",\"message\":{}}}",
+            serde_json::Value::String(message)
+        )
+    };
+    let app = Path::new("app");
     assert_eq!(
         lines[..2],
         [
-            "{\"level\":\"note\",\"message\":\"wrote back app/made.txt\"}",
-            "{\"level\":\"warning\",\"message\":\"not written back: app/notes.txt was changed in \
-             the project while the program ran\"}",
+            line(
+                "note",
+                format!("wrote back {}", app.join("made.txt").display())
+            ),
+            line(
+                "warning",
+                format!(
+                    "not written back: {} was changed in the project while the program ran",
+                    app.join("notes.txt").display()
+                )
+            ),
         ],
         "{notes}\n{stderr}"
     );
@@ -1707,7 +1728,7 @@ fn run_writes_back_a_file_under_a_build_directory_in_its_package() {
     project_writing_into_its_package(
         &dir,
         "os.makedirs(place('build'), exist_ok=True)\n\
-         with open(place('build/report.txt'), 'w') as file:\n    \
+         with open(place('build/report.txt'), 'w', newline='\\n') as file:\n    \
          _ = file.write('report\\n')\n",
     );
 
@@ -1730,7 +1751,7 @@ fn run_writes_back_what_a_failing_program_wrote() {
     project_writing_into_its_package(
         &dir,
         "import sys\n\n\
-         with open(place('made.txt'), 'w') as file:\n    \
+         with open(place('made.txt'), 'w', newline='\\n') as file:\n    \
          _ = file.write('made\\n')\n\
          sys.exit(3)\n",
     );
@@ -1897,7 +1918,7 @@ fn run_writes_back_a_change_to_a_carried_file() {
     fs::create_dir_all(&*dir).unwrap();
     project_writing_into_its_package(
         &dir,
-        "with open(place('helper.py'), 'w') as file:\n    \
+        "with open(place('helper.py'), 'w', newline='\\n') as file:\n    \
          _ = file.write(\"VALUE = 'changed'\\n\")\n",
     );
 
@@ -2009,7 +2030,9 @@ fn run_writes_back_a_file_with_the_longest_name_a_file_system_allows() {
     let name = "a".repeat(255);
     project_writing_into_its_package(
         &dir,
-        &format!("with open(place('{name}'), 'w') as file:\n    _ = file.write('new\\n')\n"),
+        &format!(
+            "with open(place('{name}'), 'w', newline='\\n') as file:\n    _ = file.write('new\\n')\n"
+        ),
     );
 
     let stderr = run_writing_into_the_tree(&dir);
@@ -2055,7 +2078,7 @@ fn run_does_not_write_back_a_change_to_a_transpiled_module() {
     fs::create_dir_all(&*dir).unwrap();
     project_writing_into_its_package(
         &dir,
-        "with open(place('store.py'), 'w') as file:\n    \
+        "with open(place('store.py'), 'w', newline='\\n') as file:\n    \
          _ = file.write(\"VALUE = 'changed'\\n\")\n",
     );
 
@@ -2092,9 +2115,9 @@ fn run_leaves_a_project_file_that_changed_while_the_program_ran() {
     // the program runs in the project, so a relative path is the project's own file
     project_writing_into_its_package(
         &dir,
-        "with open('app/helper.py', 'w') as file:\n    \
+        "with open('app/helper.py', 'w', newline='\\n') as file:\n    \
          _ = file.write(\"VALUE = 'project'\\n\")\n\
-         with open(place('helper.py'), 'w') as file:\n    \
+         with open(place('helper.py'), 'w', newline='\\n') as file:\n    \
          _ = file.write(\"VALUE = 'tree'\\n\")\n",
     );
 
@@ -2137,7 +2160,7 @@ fn run_does_not_write_back_a_file_whose_directory_came_from_two_places() {
     fs::write(
         dir.join("main.by"),
         "import os\nimport app\n\n\
-         with open(os.path.join(os.path.dirname(app.__path__[0]), 'made.txt'), 'w') as file:\n    \
+         with open(os.path.join(os.path.dirname(app.__path__[0]), 'made.txt'), 'w', newline='\\n') as file:\n    \
          _ = file.write('made\\n')\n",
     )
     .unwrap();
@@ -2176,9 +2199,9 @@ fn run_in_build_writes_back_to_the_project_root_what_the_program_wrote_at_the_tr
     fs::write(
         dir.join("main.by"),
         "import os\nimport sys\n\n\
-         with open('report.xml', 'w') as file:\n    _ = file.write('<report/>\\n')\n\
+         with open('report.xml', 'w', newline='\\n') as file:\n    _ = file.write('<report/>\\n')\n\
          os.makedirs(os.path.join('.pytest_cache', 'v'))\n\
-         with open(os.path.join('.pytest_cache', 'v', 'lastfailed'), 'w') as file:\n    \
+         with open(os.path.join('.pytest_cache', 'v', 'lastfailed'), 'w', newline='\\n') as file:\n    \
          _ = file.write('{}\\n')\n\
          sys.exit(3)\n",
     )
@@ -2264,7 +2287,7 @@ fn run_deletes_nothing_when_a_rename_lands_on_a_file_made_meanwhile() {
     fs::create_dir_all(&*dir).unwrap();
     project_writing_into_its_package(
         &dir,
-        "with open(os.path.join('app', 'made.txt'), 'w') as file:\n    \
+        "with open(os.path.join('app', 'made.txt'), 'w', newline='\\n') as file:\n    \
          _ = file.write('someone else\\n')\n\
          os.rename(place('notes.txt'), place('made.txt'))\n",
     );
@@ -2301,7 +2324,7 @@ fn run_keeps_the_tree_for_a_file_that_would_take_the_place_of_a_directory() {
         &dir,
         "import shutil\n\n\
          shutil.rmtree(place('sub'))\n\
-         with open(place('sub'), 'w') as file:\n    \
+         with open(place('sub'), 'w', newline='\\n') as file:\n    \
          _ = file.write('now a file\\n')\n",
     );
     let app = dir.join("app");
@@ -2369,12 +2392,17 @@ fn run_refuses_a_path_naming_no_file_before_checking() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
+    // named as python names it, by the `repr` of the path made absolute, which on windows
+    // spells each separator `\` and doubles it
+    let named = cwd
+        .join("tools")
+        .join("nothere.py")
+        .display()
+        .to_string()
+        .replace('\\', "\\\\");
     assert_eq!(
         stderr,
-        format!(
-            "by: can't open file '{}': [Errno 2] No such file or directory\n",
-            cwd.join("tools/nothere.py").display()
-        )
+        format!("by: can't open file '{named}': [Errno 2] No such file or directory\n")
     );
 }
 
@@ -2559,7 +2587,7 @@ fn run_in_build_keeps_the_tree_for_a_file_staging_left_out_of_it() {
         dir.join("main.by"),
         "import os\n\n\
          os.makedirs(os.path.join('.pytest_cache', 'v', 'cache'), exist_ok=True)\n\
-         with open(os.path.join('.pytest_cache', 'v', 'cache', 'nodeids'), 'w') as file:\n    \
+         with open(os.path.join('.pytest_cache', 'v', 'cache', 'nodeids'), 'w', newline='\\n') as file:\n    \
          _ = file.write('[\"a\", \"b\"]\\n')\n",
     )
     .unwrap();
@@ -2617,19 +2645,24 @@ fn run_in_build_gives_a_script_its_path_in_the_tree_as_argv0() {
     .unwrap();
     let tools = dir.path().join("tools");
 
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
     let (code, stdout, stderr) = ran(
         Command::new(env!("CARGO_BIN_EXE_by")).args(["run", "show.py"]),
         &tools,
     );
     assert_eq!(code, Some(0), "{stderr}");
-    assert_eq!(stdout, "show.py\nTrue\n", "{stderr}");
+    assert_eq!(stdout.replace("\r\n", "\n"), "show.py\nTrue\n", "{stderr}");
 
     let (code, stdout, stderr) = ran(
         Command::new(env!("CARGO_BIN_EXE_by")).args(["run", "--in-build", "show.py"]),
         &tools,
     );
     assert_eq!(code, Some(0), "{stderr}");
-    assert_eq!(stdout, "tools/show.py\nTrue\n", "{stderr}");
+    assert_eq!(
+        stdout.replace("\r\n", "\n"),
+        format!("{}\nTrue\n", Path::new("tools").join("show.py").display()),
+        "{stderr}"
+    );
 }
 
 /// the modules, separated by whitespace, that whoever installed them says the interpreter
@@ -3877,7 +3910,7 @@ fn repl_writes_back_what_the_session_wrote_into_its_tree() {
         dir.path(),
         "import os\n\
          import pkg\n\
-         with open(os.path.join(pkg.__path__[0], 'made.txt'), 'w') as file:\n    \
+         with open(os.path.join(pkg.__path__[0], 'made.txt'), 'w', newline='\\n') as file:\n    \
          _ = file.write('made\\n')\n\n",
         &[],
     );
@@ -3901,7 +3934,7 @@ fn repl_keeps_the_tree_and_its_exit_status_when_a_file_is_not_written_back() {
         dir.path(),
         "import os\n\
          import pkg\n\
-         with open(os.path.join(pkg.__path__[0], 'calc.py'), 'w') as file:\n    \
+         with open(os.path.join(pkg.__path__[0], 'calc.py'), 'w', newline='\\n') as file:\n    \
          _ = file.write('mine\\n')\n\n",
         &[],
     );

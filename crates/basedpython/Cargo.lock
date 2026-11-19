@@ -319,6 +319,7 @@ dependencies = [
  "rayon",
  "ruff_db",
  "ruff_python_ast",
+ "ruff_python_literal",
  "ruff_python_parser",
  "ruff_text_size",
  "seahash",

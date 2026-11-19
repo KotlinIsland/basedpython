@@ -510,8 +510,20 @@ impl Found {
     fn at(path: &Path) -> io::Result<Self> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::Absent),
-            Err(error) if error.kind() == io::ErrorKind::NotADirectory => return Ok(Self::Other),
+            // nothing is there, or a file is above it: unix tells the two apart, but windows
+            // answers a path below a file as not found, so what is above it is asked
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(if is_below_a_file(path) {
+                    Self::Other
+                } else {
+                    Self::Absent
+                });
+            }
             Err(error) => return Err(error),
         };
         if metadata.is_dir() {
@@ -572,6 +584,15 @@ fn judge_now(project: &Path, known: &Path, expected: Option<&Held>, wanted: &Wan
             deleted: found == Found::Absent,
         },
     })
+}
+
+/// whether the nearest path above `path` that anything is at is not a directory, so that
+/// nothing can be made at `path`
+fn is_below_a_file(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .find_map(|above| fs::metadata(above).ok())
+        .is_some_and(|metadata| !metadata.is_dir())
 }
 
 /// whether nothing is at `path`, a broken symbolic link being something
@@ -743,7 +764,8 @@ impl Outcome {
     }
 
     /// one line saying what happened, naming project files relative to `cwd` when they are
-    /// below it and files of the tree by their place in it
+    /// below it and files of the tree by their place in it. `cwd` is canonical, as the project's
+    /// paths are, or none of them is found below it
     pub fn note(&self, cwd: &Path) -> Note {
         let shown = |path: &Path| path.strip_prefix(cwd).unwrap_or(path).display().to_string();
         let message = match self {

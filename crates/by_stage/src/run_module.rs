@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 
 use ruff_db::files::File;
 use ruff_python_ast::PySourceType;
+use ruff_python_ast::str::TripleQuotes;
+use ruff_python_literal::escape::UnicodeEscape;
 use ty_module_resolver::{ModuleName, file_to_module, resolve_module_confident};
 use ty_project::{Db as _, ProjectDatabase};
 use ty_python_semantic::Db as _;
@@ -94,9 +96,11 @@ pub struct Script {
     /// Where the build stages it, relative to the tree.
     pub staged: PathBuf,
     /// The path to it `by run` was given, as it was typed, which python keeps for
-    /// `sys.argv[0]` and, joined to the working directory, for `__file__`: through a symbolic
-    /// link, it names the link rather than the file.
+    /// `sys.argv[0]`.
     pub argument: PathBuf,
+    /// That path made absolute, as python makes it for `__file__` (see `absolute_as_typed`):
+    /// through a symbolic link, it names the link rather than the file.
+    pub absolute: PathBuf,
 }
 
 /// Whether `argument` of `by run` is a path rather than a module name: one with a path
@@ -115,6 +119,22 @@ fn is_script(cwd: &Path, argument: &str) -> bool {
     path.is_file() && PySourceType::try_from_path(&path).is_some_and(PySourceType::is_py_file)
 }
 
+/// The path to a script, typed as `argument` in `cwd`, made absolute as python makes it, which
+/// is the path it opens the script by, names it by when it cannot, and gives the script as its
+/// `__file__`. It is not resolved: through a symbolic link it names the link.
+///
+/// Python makes it absolute as the platform does: on windows by `GetFullPathNameW`, which
+/// `std::path::absolute` calls there, and which writes each separator as `\` and takes out
+/// `.` and `..`; elsewhere by joining it to the working directory as it was typed.
+fn absolute_as_typed(cwd: &Path, argument: &str) -> PathBuf {
+    let joined = cwd.join(argument);
+    #[cfg(windows)]
+    if let Ok(absolute) = std::path::absolute(&joined) {
+        return absolute;
+    }
+    joined
+}
+
 /// Why `by run` cannot run `argument`, typed in `cwd`, as python cannot open it, said as python
 /// says it, or `None` when it runs as a module or names a file that can be opened.
 ///
@@ -124,8 +144,7 @@ pub fn unopenable(cwd: &Path, argument: &str) -> Option<String> {
     if !is_script(cwd, argument) {
         return None;
     }
-    // joined, not resolved: python names the file as it was typed, made absolute
-    let path = cwd.join(argument);
+    let path = absolute_as_typed(cwd, argument);
     if std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
         return Some(format!(
             "`by run` runs a file or a module, and '{}' is a directory",
@@ -140,24 +159,93 @@ pub fn unopenable(cwd: &Path, argument: &str) -> Option<String> {
     std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
     match options.open(&path) {
         Ok(_) => None,
+        // named by its `repr`, as python names it, which doubles each `\` of a windows path
         Err(error) => Some(format!(
-            "can't open file '{}': {}",
-            path.display(),
+            "can't open file {}: {}",
+            UnicodeEscape::new_repr(&path.to_string_lossy()).str_repr(TripleQuotes::No),
             python_os_error(&error)
         )),
     }
 }
 
-/// `error` as python prints an `OSError`: `[Errno 2] No such file or directory`.
+/// `error` from opening a file, as python prints the C library's error from opening one:
+/// `[Errno 2] No such file or directory`.
 fn python_os_error(error: &io::Error) -> String {
     let Some(code) = error.raw_os_error() else {
         return error.to_string();
     };
-    let described = error.to_string();
-    let described = described
-        .strip_suffix(&format!(" (os error {code})"))
-        .unwrap_or(&described);
+    // the error windows answers is not the C library's, which maps it to one of its own
+    #[cfg(windows)]
+    let (code, described) = {
+        let (code, described) = c_runtime_error(code);
+        (code, described.to_owned())
+    };
+    #[cfg(not(windows))]
+    let described = {
+        let described = error.to_string();
+        match described.strip_suffix(&format!(" (os error {code})")) {
+            Some(stripped) => stripped.to_owned(),
+            None => described,
+        }
+    };
     format!("[Errno {code}] {described}")
+}
+
+/// The `errno` the microsoft C runtime sets for the windows error `code`, as its `_dosmaperr`
+/// maps one, and the message its `strerror` gives that `errno`. Python's `fopen` of a script it
+/// is to run goes through the C runtime, whose `errno` it prints.
+#[cfg(any(windows, test))]
+fn c_runtime_error(code: i32) -> (i32, &'static str) {
+    const ENOENT: i32 = 2;
+    const E2BIG: i32 = 7;
+    const ENOEXEC: i32 = 8;
+    const EBADF: i32 = 9;
+    const ECHILD: i32 = 10;
+    const EAGAIN: i32 = 11;
+    const ENOMEM: i32 = 12;
+    const EACCES: i32 = 13;
+    const EEXIST: i32 = 17;
+    const EXDEV: i32 = 18;
+    const EINVAL: i32 = 22;
+    const EMFILE: i32 = 24;
+    const ENOSPC: i32 = 28;
+    const EPIPE: i32 = 32;
+    const ENOTEMPTY: i32 = 41;
+    let errno = match code {
+        2 | 3 | 15 | 18 | 53 | 67 | 161 | 206 => ENOENT,
+        4 => EMFILE,
+        5 | 16 | 19..=36 | 65 | 82 | 83 | 108 | 132 | 158 | 167 => EACCES,
+        6 | 114 | 130 => EBADF,
+        7..=9 | 1816 => ENOMEM,
+        10 => E2BIG,
+        11 | 188..=202 => ENOEXEC,
+        17 => EXDEV,
+        80 | 183 => EEXIST,
+        89 | 164 | 215 => EAGAIN,
+        109 => EPIPE,
+        112 => ENOSPC,
+        128 | 129 => ECHILD,
+        145 => ENOTEMPTY,
+        _ => EINVAL,
+    };
+    let described = match errno {
+        ENOENT => "No such file or directory",
+        E2BIG => "Arg list too long",
+        ENOEXEC => "Exec format error",
+        EBADF => "Bad file descriptor",
+        ECHILD => "No child processes",
+        EAGAIN => "Resource temporarily unavailable",
+        ENOMEM => "Not enough space",
+        EACCES => "Permission denied",
+        EEXIST => "File exists",
+        EXDEV => "Improper link",
+        EMFILE => "Too many open files",
+        ENOSPC => "No space left on device",
+        EPIPE => "Broken pipe",
+        ENOTEMPTY => "Directory not empty",
+        _ => "Invalid argument",
+    };
+    (errno, described)
 }
 
 /// What `by run` runs for `argument`, as it was typed in `cwd`, out of a tree a project rooted
@@ -180,10 +268,10 @@ pub fn run_argument(
     if !is_script(cwd, argument) {
         return Ok(Entry::Module(argument.to_owned()));
     }
-    let path = cwd.join(argument);
+    let absolute = absolute_as_typed(cwd, argument);
     // canonical, as the project's files are, so a file of the project is found among them
     // however the path to it was written
-    let file = dunce::canonicalize(&path).unwrap_or(path);
+    let file = dunce::canonicalize(&absolute).unwrap_or_else(|_| absolute.clone());
     let staged =
         staged_destination(db, root, roots, tree, &file).ok_or_else(|| UnrunnableFile {
             path: PathBuf::from(argument),
@@ -192,6 +280,7 @@ pub fn run_argument(
         file,
         staged,
         argument: PathBuf::from(argument),
+        absolute,
     }))
 }
 
@@ -249,4 +338,29 @@ fn is_staged(db: &ProjectDatabase, file: File) -> bool {
     module_roots(db, root)
         .iter()
         .any(|candidate| Path::new(path.as_str()).starts_with(candidate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::c_runtime_error;
+
+    /// a script in a directory that is not there is a file that is not there, as python on
+    /// windows says it, which windows tells apart and the C runtime does not
+    #[test]
+    fn a_windows_error_for_a_missing_path_is_the_c_runtime_s_missing_file() {
+        assert_eq!(c_runtime_error(2), (2, "No such file or directory"));
+        assert_eq!(c_runtime_error(3), (2, "No such file or directory"));
+    }
+
+    #[test]
+    fn a_windows_error_refusing_access_is_the_c_runtime_s_permission_denied() {
+        assert_eq!(c_runtime_error(5), (13, "Permission denied"));
+        assert_eq!(c_runtime_error(32), (13, "Permission denied"));
+    }
+
+    /// what the C runtime has no `errno` of its own for, it calls an invalid argument
+    #[test]
+    fn a_windows_error_the_c_runtime_does_not_map_is_an_invalid_argument() {
+        assert_eq!(c_runtime_error(1), (22, "Invalid argument"));
+    }
 }

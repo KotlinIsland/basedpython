@@ -456,6 +456,7 @@ impl Repl {
             Entry::Script(script) => {
                 reply["script"] = json!(script.staged);
                 reply["argument"] = json!(script.argument);
+                reply["absolute"] = json!(script.absolute);
             }
         }
         reply["file"] = json!(path);

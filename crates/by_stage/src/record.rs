@@ -568,6 +568,7 @@ mod tests {
                 file: PathBuf::from("/p/backend/manage.py"),
                 staged: PathBuf::from("backend/manage.py"),
                 argument: PathBuf::from("backend/manage.py"),
+                absolute: PathBuf::from("/p/backend/manage.py"),
             })),
             false,
             &RuntimeLayout::unshipped(),
