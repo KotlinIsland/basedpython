@@ -657,11 +657,26 @@ fn transparent_callable_decorator_result<'db>(
         return None;
     }
 
-    match decorated_ty {
-        Type::FunctionLiteral(function) => Some(Type::Callable(function.into_callable_type(db))),
-        Type::Callable(_) => Some(decorated_ty),
-        _ => None,
-    }
+    let callable = match decorated_ty {
+        Type::FunctionLiteral(function) => function.into_callable_type(db),
+        Type::Callable(callable) => callable,
+        _ => return None,
+    };
+    // basedpython: the decorator's type says it hands back something with the function's
+    // parameters and return type, which is all it says. what else the function's signature
+    // carries — that it asserts something about an argument, or what a `bool` it returns means —
+    // is about its body, which the wrapper need not run
+    Some(Type::Callable(
+        callable.with_signatures(
+            db,
+            CallableSignature::from_overloads(
+                callable
+                    .signatures(db)
+                    .iter()
+                    .map(|signature| signature.clone().without_body_guards()),
+            ),
+        ),
+    ))
 }
 
 /// basedpython: what an underscore name names, which decides the keyword that

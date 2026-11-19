@@ -189,6 +189,14 @@ pub(crate) enum ErrorContext<'db> {
         source: Vec<String>,
         target: String,
     },
+    /// basedpython: a predicate that narrows a place less far than the one it stands in for,
+    /// where the call is truthy (`truthy`) or where it is falsy
+    WeakerPredicate {
+        place: String,
+        truthy: bool,
+        source: Option<Type<'db>>,
+        target: Type<'db>,
+    },
     IncompatibleParameterTypes {
         source: Type<'db>,
         target: Type<'db>,
@@ -594,6 +602,26 @@ impl<'db> ErrorContext<'db> {
                         "the function asserts {place} is {source}, where {target} is expected",
                         source = source.join(" and ")
                     )
+                }
+            }
+            Self::WeakerPredicate {
+                place,
+                truthy,
+                source,
+                target,
+            } => {
+                let side = if *truthy { "true" } else { "false" };
+                let target = target.display(db, env);
+                match source {
+                    Some(source) => format!(
+                        "where the function is {side}, it narrows {place} to `{source}`, where \
+                         `{target}` is expected",
+                        source = source.display(db, env),
+                    ),
+                    None => format!(
+                        "where the function is {side}, it narrows nothing about {place}, where \
+                         `{target}` is expected"
+                    ),
                 }
             }
             Self::IncompatibleParameterTypes {

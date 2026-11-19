@@ -571,7 +571,12 @@ impl InlayHint {
         let place = predicate.map(|predicate| format!("{} is {open}", predicate.place));
         let place = place.as_deref().unwrap_or_default();
 
-        let text_edits = if spelled.editable {
+        // a written `-> place is T` is typed as a `TypeIs`, which is read as being about the
+        // first argument wherever it goes without its function, so only a predicate about that
+        // argument is written that way unchanged
+        let editable =
+            spelled.editable && predicate.is_none_or(|predicate| predicate.is_type_is_parameter);
+        let text_edits = if editable {
             let mut text_edits = vec![InlayHintTextEdit {
                 range: TextRange::empty(position),
                 new_text: format!(" -> {place}{}{close}", spelled.edit_label),
@@ -15019,8 +15024,9 @@ def each(fn: (int) -> None) -> None:
         ");
     }
 
-    /// A recovered predicate is typed `TypeIs[T]`, which narrows a call's first argument, so the
-    /// hint names the place the body actually narrows.
+    /// a recovered predicate is shown as the place its body narrows. only one about the first
+    /// argument, which a `TypeIs` narrows, can be written down unchanged, so only that hint
+    /// offers its text
     #[test]
     fn basedpython_inferred_predicate_return_names_its_place() {
         let mut test = basedpython_inlay_hint_test(
@@ -15111,14 +15117,6 @@ def each(fn: (int) -> None) -> None:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.by:1:1
            |
-        4  |
-           - def member(a: A):
-        5  + def member(a: A) -> a.a is int:
-        6  |     return a.a is int
-        7  |
-           - def second(x: object, y: object):
-        8  + def second(x: object, y: object) -> y is int:
-        9  |     return y is int
         10 |
            - def first(x: object):
         11 + def first(x: object) -> x is int:
@@ -15127,8 +15125,8 @@ def each(fn: (int) -> None) -> None:
         ");
     }
 
-    /// Python has no spelling for a predicate on anything but the first argument, so only that
-    /// one is hinted, as the `TypeIs[T]` that narrows it.
+    /// python has no spelling for a predicate on anything but the first argument, so only that
+    /// one is hinted, as the `TypeIs[T]` that narrows it
     #[test]
     fn inferred_predicate_return_types() {
         let mut test = return_type_hint_test(

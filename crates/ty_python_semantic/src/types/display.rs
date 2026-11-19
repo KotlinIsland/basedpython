@@ -4022,22 +4022,31 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
                 }
                 return self.close_top(&mut f);
             }
-            if let Type::TypeIs(type_is) = self.return_ty
-                && type_is.place_name(db).is_none()
-                && let Some(guard) = self.narrowing_guards.iter().find(|guard| {
-                    matches!(
-                        guard.kind,
-                        NarrowingGuardKind::Predicate
-                            | NarrowingGuardKind::InferredPredicate { .. }
-                    )
-                })
-            {
+            // a recovered predicate about any place but the one a `TypeIs` narrows returns a
+            // `bool`, and its guard alone says what it narrows
+            let predicate = match (self.return_ty, self.narrowing_guards) {
+                (Type::TypeIs(type_is), guards) if type_is.place_name(db).is_none() => guards
+                    .iter()
+                    .find(|guard| {
+                        matches!(
+                            guard.kind,
+                            NarrowingGuardKind::Predicate
+                                | NarrowingGuardKind::InferredPredicate { .. }
+                        )
+                    })
+                    .map(|guard| (guard, type_is.type_argument(db))),
+                (_, [guard]) => guard
+                    .kind
+                    .symmetric_narrowing(db, env)
+                    .map(|narrowed| (guard, narrowed)),
+                _ => None,
+            };
+            if let Some((guard, narrowed)) = predicate {
                 // a callable type's return binds tighter than a comparison, so its predicate is
                 // parenthesized, as it is written
                 f.write_str(if is_declaration { " -> " } else { " -> (" })?;
                 fmt_guard_place(guard, &mut f)?;
                 f.write_str(" is ")?;
-                let narrowed = type_is.type_argument(db);
                 // `x is not int` is a negated predicate, which is not what this is
                 let is_negation = reads_as_negation(db, narrowed);
                 if is_negation {

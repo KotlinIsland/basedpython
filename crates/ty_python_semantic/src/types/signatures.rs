@@ -56,9 +56,10 @@ use crate::types::visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
     CallableType, ClassLiteral, ErrorContext, ErrorContextTree, FindLegacyTypeVarsVisitor,
-    MaterializationKind, ParamSpecAttrKind, ParameterDescription, SelfBinding, SelfTypeVarOrigin,
-    TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarNonce, TypedDictType, UnionBuilder,
-    VarianceInferable, VarianceTerm, infer_complete_scope_types, todo_type,
+    KnownClass, MaterializationKind, ParamSpecAttrKind, ParameterDescription, SelfBinding,
+    SelfTypeVarOrigin, TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarNonce,
+    TypedDictType, UnionBuilder, VarianceInferable, VarianceTerm, infer_complete_scope_types,
+    todo_type,
 };
 use crate::{Db, FxOrderSet};
 use ruff_db::parsed::parsed_module;
@@ -821,6 +822,26 @@ impl<'db> NarrowingGuardKind<'db> {
         )
     }
 
+    /// basedpython: the `T` a recovered predicate narrows its place to where the call is truthy,
+    /// when it narrows it to everything but `T` where the call is falsy — which is what a written
+    /// `-> place is T` says
+    pub(crate) fn symmetric_narrowing(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        let NarrowingGuardKind::InferredPredicate {
+            positive: Some(positive),
+            negative: Some(negative),
+        } = self
+        else {
+            return None;
+        };
+        negative
+            .is_equivalent_to(db, env, positive.negate(db, env))
+            .then_some(positive)
+    }
+
     /// What an assertion guard establishes about its place once the call returns.
     pub(crate) fn asserted_type(
         self,
@@ -1354,11 +1375,26 @@ impl<'db> Signature<'db> {
 
     pub(super) fn into_paramspec_value(mut self) -> Self {
         self.return_ty = Type::unknown();
+        self = self.without_body_guards();
         if let Some(extras) = self.extras.as_mut() {
             extras.is_paramspec_value = true;
         } else {
             self.extras = SignatureExtras::new(None, None, true);
         }
+        self
+    }
+
+    /// basedpython: this signature without what it says about the function's body
+    ///
+    /// a callable typed `Callable[P, R]` takes the parameters from `P` and the return type from
+    /// `R`, and says nothing about what the function does beyond that, so a wrapper typed that way
+    /// may well swallow an assertion the function makes (`except AssertionError`), or test
+    /// something else. a `TypeIs` return comes back through `R`, and narrows the parameter a
+    /// `TypeIs` narrows with or without a guard naming it: a recovered one is only written as a
+    /// `TypeIs` when it is about that parameter
+    pub(crate) fn without_body_guards(mut self) -> Self {
+        self.narrowing_guards = Box::default();
+        self.deferred_assertions = None;
         self
     }
 
@@ -1495,6 +1531,32 @@ impl<'db> Signature<'db> {
             });
         };
         Some(self.guarded_argument(guard))
+    }
+
+    /// basedpython: the `T` of a `TypeIs[T]` this signature returns about a place other than its
+    /// first argument, which only a written `-> b is int` names.
+    ///
+    /// such a function is a `bool` that narrows that place, as a recovered predicate about it is
+    fn place_type_is(&self, db: &'db dyn Db) -> Option<(&NarrowingGuard<'db>, Type<'db>)> {
+        let Type::TypeIs(type_is) = self.return_ty else {
+            return None;
+        };
+        if type_is.place_info(db).is_some() {
+            return None;
+        }
+        let guard = self
+            .narrowing_guards
+            .iter()
+            .find(|guard| matches!(guard.kind, NarrowingGuardKind::Predicate))?;
+        let about_first_argument = matches!(
+            self.guarded_argument(guard),
+            NarrowedArgument::Parameter {
+                position: Some(0),
+                members: [],
+                ..
+            }
+        );
+        (!about_first_argument).then(|| (guard, type_is.type_argument(db)))
     }
 
     /// basedpython: what a call through this signature reaches with `guard`, which names a
@@ -4123,6 +4185,127 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         result
     }
 
+    /// basedpython: whether `source` narrows everything `target`'s recovered predicates narrow.
+    ///
+    /// a predicate about any place but the one a `TypeIs` narrows returns a `bool`, so its return
+    /// type says nothing about it. a caller calling through `target` narrows each place it names
+    /// where the call is truthy, and where it is falsy, so the function actually called has to
+    /// narrow the same argument at least as far on each side: by a recovered predicate of its own,
+    /// or by the `TypeIs` or `TypeGuard` it returns
+    fn check_predicate_pair(
+        &self,
+        db: &'db dyn Db,
+        source: &Signature<'db>,
+        target: &Signature<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let env = self.env;
+        // a `TypeIs` about the first argument, or a `TypeGuard`, is compared as a return type
+        let place_type_is = target.place_type_is(db);
+        if place_type_is.is_none()
+            && matches!(target.return_ty, Type::TypeIs(_) | Type::TypeGuard(_))
+        {
+            return self.always();
+        }
+        let mut target_claims: Vec<_> = target
+            .narrowing_guards
+            .iter()
+            .filter_map(|guard| match guard.kind {
+                NarrowingGuardKind::InferredPredicate { positive, negative } => {
+                    Some((target.guarded_argument(guard), positive, negative))
+                }
+                _ => None,
+            })
+            .collect();
+        if let Some((guard, narrowed)) = place_type_is {
+            target_claims.push((
+                target.guarded_argument(guard),
+                Some(narrowed),
+                Some(narrowed.negate(db, env)),
+            ));
+        }
+        if target_claims.is_empty() {
+            return self.always();
+        }
+
+        let mut source_claims: Vec<_> = source
+            .narrowing_guards
+            .iter()
+            .filter_map(|guard| match guard.kind {
+                NarrowingGuardKind::InferredPredicate { positive, negative } => {
+                    Some((source.guarded_argument(guard), positive, negative))
+                }
+                _ => None,
+            })
+            .collect();
+        match source.return_ty {
+            Type::TypeIs(type_is) if type_is.place_info(db).is_none() => {
+                if let Some(argument) = source.narrowed_argument() {
+                    let narrowed = type_is.type_argument(db);
+                    source_claims.push((argument, Some(narrowed), Some(narrowed.negate(db, env))));
+                }
+            }
+            Type::TypeGuard(type_guard) if type_guard.place_info(db).is_none() => {
+                if let Some(argument) = source.narrowed_argument() {
+                    source_claims.push((argument, Some(type_guard.return_type(db)), None));
+                }
+            }
+            _ => {}
+        }
+
+        // a side the function never returns on is one it says nothing false about: a function
+        // that only returns `False` narrows whatever its truthy side is said to
+        let truthiness = source.return_ty.bool(db, env);
+        let mut result = self.always();
+        for (place, target_positive, target_negative) in target_claims {
+            let matching: Vec<_> = source_claims
+                .iter()
+                .filter(|(source_place, ..)| place.is_narrowed_by(source_place))
+                .collect();
+            for (truthy, target_side) in [(true, target_positive), (false, target_negative)] {
+                let Some(target_side) = target_side else {
+                    continue;
+                };
+                let reachable = if truthy {
+                    truthiness.may_be_true()
+                } else {
+                    truthiness.may_be_false()
+                };
+                if !reachable {
+                    continue;
+                }
+                let established = matching
+                    .iter()
+                    .filter_map(
+                        |(_, positive, negative)| if truthy { *positive } else { *negative },
+                    )
+                    .reduce(|left, right| {
+                        IntersectionType::from_two_elements(db, env, left, right)
+                    });
+                let holds = established.is_some_and(|established| {
+                    !result
+                        .intersect(
+                            db,
+                            self.constraints,
+                            self.check_type_pair(db, established, target_side),
+                        )
+                        .is_never_satisfied(db, env, self.inferable)
+                });
+                if !holds {
+                    if let Some(context) = self.report_context() {
+                        context.push(ErrorContext::WeakerPredicate {
+                            place: place.to_string(),
+                            truthy,
+                            source: established,
+                            target: target_side,
+                        });
+                    }
+                    return self.never();
+                }
+            }
+        }
+        result
+    }
+
     fn check_signature_return_pair(
         &self,
         db: &'db dyn Db,
@@ -4131,6 +4314,16 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
     ) -> ConstraintSet<'db, 'c> {
         if source.is_paramspec_value() || target.is_paramspec_value() {
             self.always()
+        } else if target.place_type_is(db).is_some()
+            && !matches!(source.return_ty, Type::TypeIs(_) | Type::TypeGuard(_))
+        {
+            // basedpython: a `TypeIs` about a place other than the first argument is a `bool` that
+            // narrows that place, which `check_predicate_pair` compares
+            self.check_type_pair(
+                db,
+                source.return_ty,
+                KnownClass::Bool.to_instance(db, self.env),
+            )
         } else {
             self.check_type_pair(db, source.return_ty, target.return_ty)
         }
@@ -4522,6 +4715,16 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             let assertions = self.check_assertion_pair(db, source, target);
             if result
                 .intersect(db, self.constraints, assertions)
+                .is_never_satisfied(db, env, self.inferable)
+            {
+                return_type_checks = false;
+            }
+        }
+
+        if return_type_checks {
+            let predicates = self.check_predicate_pair(db, source, target);
+            if result
+                .intersect(db, self.constraints, predicates)
                 .is_never_satisfied(db, env, self.inferable)
             {
                 return_type_checks = false;

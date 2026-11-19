@@ -5,15 +5,17 @@
 //! names a member of the receiver, so `h.ensure()` narrows `h.data`. A name that isn't a
 //! parameter at all names a place in the calling scope.
 
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 use ty_python_core::place::{PlaceExpr, ScopedPlaceId};
 use ty_python_core::place_table;
-use ty_python_core::scope::ScopeId;
+use ty_python_core::scope::{NodeWithScopeKind, ScopeId};
 
 use crate::Db;
 use crate::types::Type;
 use crate::types::function::FunctionDecorators;
+use crate::types::inferred_narrowing::variable_scope_of;
 use crate::types::signatures::{NarrowingGuard, NarrowingGuardKind, Parameters};
 
 /// What a guard's root name refers to at a call site.
@@ -86,6 +88,57 @@ pub(crate) fn narrowed_place<'db>(
 ) -> Option<ScopedPlaceId> {
     let place = PlaceExpr::try_from_expr_with_members(root, &guard.members)?;
     place_table(db, scope).place_id(&place)
+}
+
+/// The place `guard` narrows below `receiver`, the value a bound call was made on.
+///
+/// a call through `super()` is made on the value the method that calls it was: zero-argument
+/// `super()` binds that method's first argument, and `super(C, obj)` binds `obj`. so an override
+/// that delegates to the method it overrides establishes what that method asserts:
+///
+/// ```python
+/// class Child(Base):
+///     def check(self):
+///         super().check()  # narrows `self.x` as `Base.check` asserts
+/// ```
+pub(crate) fn narrowed_receiver_place<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    guard: &NarrowingGuard<'db>,
+    receiver: &ast::Expr,
+) -> Option<ScopedPlaceId> {
+    let Some(arguments) = super_call_arguments(db, scope, receiver) else {
+        return narrowed_place(db, scope, guard, receiver);
+    };
+    match &*arguments.args {
+        [] if arguments.keywords.is_empty() => {
+            let NodeWithScopeKind::Function(function) = scope.node(db) else {
+                return None;
+            };
+            if !scope.is_method_scope(db) {
+                return None;
+            }
+            let module = parsed_module(db, scope.program_file(db).python_file(db)).load(db);
+            let first = function.node(&module).parameters.iter().next()?;
+            let place = PlaceExpr::from_symbol_with_members(&first.name().id, &guard.members)?;
+            place_table(db, scope).place_id(&place)
+        }
+        [_, object] if arguments.keywords.is_empty() => narrowed_place(db, scope, guard, object),
+        _ => None,
+    }
+}
+
+/// the arguments of `expr` when it is a call to the builtin `super`, which nothing in the file
+/// rebinds
+fn super_call_arguments<'a>(
+    db: &dyn Db,
+    scope: ScopeId<'_>,
+    expr: &'a ast::Expr,
+) -> Option<&'a ast::Arguments> {
+    let call = expr.as_call_expr()?;
+    let name = call.func.as_name_expr()?;
+    (name.id == "super" && variable_scope_of(db, scope, &name.id).is_none())
+        .then_some(&call.arguments)
 }
 
 /// The place `guard` narrows in the calling scope, for a root that is not a parameter.

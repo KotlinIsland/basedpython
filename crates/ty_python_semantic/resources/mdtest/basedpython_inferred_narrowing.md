@@ -317,6 +317,120 @@ def f(x: object):
         reveal_type(x)  # revealed: int
 ```
 
+## a predicate about another place returns a `bool`
+
+A `TypeIs` is about the first argument wherever the type goes without its function, so a predicate
+about any other place is typed as a `bool`. It narrows where the call is tested, and where a
+variable that holds its result is.
+
+```by
+def second_is_int(a: object, b: object):
+    return b is int
+
+def f(x: object, y: object):
+    reveal_type(second_is_int)  # revealed: def second_is_int(a: object, b: object) -> b is int
+    if second_is_int(x, y):
+        reveal_type(y)  # revealed: int
+    result = second_is_int(x, y)
+    reveal_type(result)  # revealed: bool
+    if result:
+        reveal_type(y)  # revealed: int
+```
+
+## a function stands in for a predicate only if it narrows as far
+
+A call through a predicate's type narrows each place the predicate narrows, so a function that
+narrows a different place, or less, cannot stand in for it, and a method that does so cannot
+override it. One that narrows more can.
+
+```by
+from ty_extensions import static_assert
+from ty_extensions._internal import CallableTypeOf, is_assignable_to
+
+def second_is_int(a: object, b: object):
+    return b is int
+
+def second_is_str(a: object, b: object):
+    return b is str
+
+def first_is_int(a: object, b: object):
+    return a is int
+
+def plain(a: object, b: object) -> bool:
+    return True
+
+static_assert(not is_assignable_to(CallableTypeOf[second_is_str], CallableTypeOf[second_is_int]))
+static_assert(not is_assignable_to(CallableTypeOf[first_is_int], CallableTypeOf[second_is_int]))
+static_assert(not is_assignable_to(CallableTypeOf[plain], CallableTypeOf[second_is_int]))
+static_assert(is_assignable_to(CallableTypeOf[second_is_int], CallableTypeOf[plain]))
+```
+
+So two of them in a list keep apart, and a call through either narrows nothing.
+
+```by
+def f(x: object, y: object):
+    for check in [second_is_int, second_is_str]:
+        if check(x, y):
+            reveal_type(y)  # revealed: object
+```
+
+```by
+from typing import override
+
+class Base:
+    def check(self, a: object, b: object):
+        return b is int
+
+class Child(Base):
+    @override
+    # error: [invalid-method-override]
+    def check(self, a: object, b: object):
+        return a is int
+
+class Same(Base):
+    @override
+    def check(self, a: object, b: object):  # no diagnostic
+        return b is int
+```
+
+A written `-> b is int` is the same claim, so either stands in for the other.
+
+```by
+from ty_extensions import static_assert
+from ty_extensions._internal import CallableTypeOf, is_assignable_to
+
+def written(a: object, b: object) -> b is int:
+    return b is int
+
+def recovered(a: object, b: object):
+    return b is int
+
+static_assert(is_assignable_to(CallableTypeOf[recovered], CallableTypeOf[written]))
+static_assert(is_assignable_to(CallableTypeOf[written], CallableTypeOf[recovered]))
+```
+
+A side the function never returns on is one it says nothing false about, so one that only returns
+`False` stands in for a predicate that narrows where it is true alone, though not for one that
+narrows where it is false too.
+
+```by
+from typing import Literal
+from ty_extensions import static_assert
+from ty_extensions._internal import CallableTypeOf, is_assignable_to
+
+def never_true(a: object, b: object) -> Literal[False]:
+    return False
+
+def int_and_flag(a: bool, b: object):
+    return b is int and a
+
+def is_int_or_not(a: object, b: object):
+    return b is int
+
+static_assert(is_assignable_to(CallableTypeOf[never_true], CallableTypeOf[int_and_flag]))
+static_assert(not is_assignable_to(CallableTypeOf[never_true], CallableTypeOf[is_int_or_not]))
+```
+
 ## an unannotated parameter is recovered alongside the guard
 
 The parameter's own type is recovered from what the body does with it, and the guard is recovered
@@ -756,6 +870,54 @@ def f(x: int | None):
     reveal_type(x)  # revealed: int | None
 ```
 
+## a `break` that leaves a `finally` suite asserts nothing
+
+A `break` or `continue` that leaves a `finally` suite discards the exception the suite was running
+for, so the body carries on past an assertion that failed.
+
+```by
+def check(a: int | None):
+    while True:
+        try:
+            assert a is not None
+        finally:
+            break
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int | None
+```
+
+`continue` leaves the suite the same way.
+
+```by
+def check_continue(a: int | None):
+    for _ in range(3):
+        try:
+            assert a is not None
+        finally:
+            continue
+
+def h(x: int | None):
+    check_continue(x)
+    reveal_type(x)  # revealed: int | None
+```
+
+A loop inside the suite is left by its own `break`, which leaves the suite running.
+
+```by
+def check_with_loop(a: int | None):
+    try:
+        assert a is not None
+    finally:
+        for _ in range(3):
+            break
+
+def g(x: int | None):
+    check_with_loop(x)
+    reveal_type(x)  # revealed: int
+```
+
 ## a member the body asserts narrows the argument's member
 
 ```by
@@ -794,6 +956,55 @@ def f(base: Base, silent: Silent, a: int | None, b: int | None):
     reveal_type(a)  # revealed: int & not AlwaysFalsy
     silent.ensure(b)
     reveal_type(b)  # revealed: int & not AlwaysFalsy
+```
+
+## an override that is not a `def` has to carry the assertion
+
+An override is checked against what its base asserts by reading its body, and only a `def` has one.
+Anything else that overrides the method — a `lambda`, a callable from elsewhere — is checked by its
+type instead, which has to carry the same assertion.
+
+```by
+class Base:
+    x: int | None = None
+
+    def check(self):
+        assert self.x is not None
+
+class Lambda(Base):
+    # error: [unestablished-assertion-guard] "`Lambda.check` is not a `def`, so nothing checks that it establishes what `Base.check`, which it overrides, asserts"
+    check = lambda self: None
+```
+
+The same holds for one that comes from a base ahead of the asserting method's.
+
+```by
+class Mixin:
+    check = lambda self: None
+
+# error: [unestablished-assertion-guard] "`Mixin.check`, which `Combined` inherits, is not a `def`, so nothing checks that it establishes what `Base.check`, which it hides, asserts"
+class Combined(Mixin, Base):
+    pass
+```
+
+## an override that delegates to `super()` establishes what it delegates to
+
+A call through `super()` is made on the method's own first argument, so it narrows that.
+
+```by
+from typing import override
+
+class Base:
+    x: int | None = None
+
+    def check(self):
+        assert self.x is not None
+
+class Child(Base):
+    @override
+    def check(self):
+        super().check()  # no diagnostic
+        reveal_type(self.x)  # revealed: int
 ```
 
 ## a body that tests a variable it reads asserts it too
@@ -1122,4 +1333,189 @@ def h():
     reveal_type(a)  # revealed: int | None
     check()
     reveal_type(a)  # revealed: int
+```
+
+## a decorator typed with a `ParamSpec` keeps only the parameters and the return type
+
+`Callable[P, R]` says the decorated function takes the parameters it took and returns what it
+returned, and nothing about what its body does: the wrapper may catch the `AssertionError`, or test
+something else. So no assertion survives the decorator, and no predicate except one typed as a
+`TypeIs`, which comes back through `R`.
+
+```toml
+[environment]
+python-version = "3.12"
+
+[analysis]
+sound-types = true
+
+[rules]
+truthiness-test-of-none-union = "ignore"
+```
+
+```py
+from typing import Callable
+
+def wrap[**P, R](function: Callable[P, R]) -> Callable[P, R]:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        return function(*args, **kwargs)
+    return wrapper
+
+@wrap
+def check(a: int | None):
+    assert a is not None
+
+@wrap
+def first(a: object, b: object):
+    return isinstance(a, int)
+
+@wrap
+def second(a: object, b: object):
+    return isinstance(b, int)
+
+def f(x: int | None, y: object, z: object):
+    check(x)
+    reveal_type(x)  # revealed: int | None
+    if first(y, z):
+        reveal_type(y)  # revealed: int
+    if second(y, z):
+        reveal_type(z)  # revealed: object
+```
+
+## a `TypeIs` a decorator declares narrows the first argument
+
+A `TypeIs` the decorator declares itself narrows the first argument, as it says, whatever the
+function's own body tested.
+
+```toml
+[environment]
+python-version = "3.12"
+
+[analysis]
+sound-types = true
+```
+
+`lib.pyi`:
+
+```pyi
+from typing import Callable
+from typing_extensions import TypeIs
+
+def first_is_int[**P](function: Callable[P, object]) -> Callable[P, TypeIs[int]]: ...
+```
+
+`main.py`:
+
+```py
+from lib import first_is_int
+
+@first_is_int
+def tests_second(a: object, b: object):
+    return isinstance(b, str)
+
+def g(y: object, z: object):
+    if tests_second(y, z):
+        reveal_type(y)  # revealed: int
+        reveal_type(z)  # revealed: object
+```
+
+## an override is checked against an assertion whichever override rules are on
+
+Whether an override establishes what its base asserts is a question of soundness, so it is asked
+even where the rules about overrides in general are off.
+
+```toml
+[rules]
+invalid-method-override = "ignore"
+invalid-attribute-override = "ignore"
+```
+
+```by
+class Base:
+    x: int | None = None
+
+    def check(self):
+        assert self.x is not None
+
+def nothing(self: Base):
+    pass
+
+class Assigned(Base):
+    # error: [unestablished-assertion-guard] "`Assigned.check` is a function defined elsewhere, so nothing checks that it establishes what `Base.check`, which it overrides, asserts"
+    check = nothing
+
+class Mixin:
+    def check(self):
+        pass
+
+# error: [unestablished-assertion-guard] "`Mixin.check`, which `Combined` inherits, is not a method of a subclass of it, so nothing checks that it establishes what `Base.check`, which it hides, asserts"
+class Combined(Mixin, Base):
+    pass
+
+# a member declared to be something that cannot be called never returns from a call, so it
+# leaves nothing unestablished
+class Disabled(Base):
+    check: None = None  # no diagnostic
+
+# an undeclared one may have a function stored in it later
+class Unset(Base):
+    check = None  # error: [unestablished-assertion-guard]
+
+def flag() -> bool:
+    return True
+
+# one that only sometimes can be has to establish it where it can
+class Sometimes(Base):
+    if flag():
+        # error: [unestablished-assertion-guard]
+        check = lambda self: None
+    else:
+        check = None
+
+class NotAsserting:
+    def check(self) -> None:
+        pass
+
+class LambdaMixin:
+    check = lambda self: None
+
+# a member hides every later base's method, not only the nearest one's
+# error: [unestablished-assertion-guard] "`LambdaMixin.check`, which `Hidden` inherits, is not a `def`, so nothing checks that it establishes what `Base.check`, which it hides, asserts"
+class Hidden(LambdaMixin, NotAsserting, Base):
+    pass
+
+# a static method has no receiver to establish anything about
+class Static(Base):
+    @staticmethod
+    # error: [unestablished-assertion-guard] "`Static.check` is not bound the way a method it overrides is, so nothing checks that it establishes what `Base.check`, which it overrides, asserts"
+    def check():
+        pass
+
+class Typed(Base):
+    # an `object` may well be a function
+    # error: [unestablished-assertion-guard]
+    check: object = lambda self: None
+
+class Sub(Base):
+    def check(self):
+        super().check()
+
+# `Sub.check`'s `super().check()` runs `LambdaMixin.check` here, which establishes nothing
+# error: [unestablished-assertion-guard] "`LambdaMixin.check`, which `Cooperative` inherits, is not a `def`, so nothing checks that it establishes what `Base.check`, which it hides, asserts"
+class Cooperative(Sub, LambdaMixin, Base):
+    pass
+```
+
+A method bound differently from the one it overrides still has its body checked where the parameters
+line up, past the receiver.
+
+```by
+class Validator:
+    @staticmethod
+    def check(value: int | None):
+        assert value is not None
+
+class Checked(Validator):
+    def check(self, value: int | None):  # no diagnostic
+        assert value is not None
 ```

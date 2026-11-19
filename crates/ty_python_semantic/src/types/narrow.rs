@@ -15,7 +15,8 @@ use crate::types::inferred_narrowing::variable_scope_of;
 use crate::types::iteration::extract_literal_container_element_types;
 use crate::types::match_pattern::PatternCacheKey;
 use crate::types::narrowing_guards::{
-    GuardRoot, guard_root, narrowed_place, narrowed_scope_place, receiver_is_first_parameter,
+    GuardRoot, guard_root, narrowed_place, narrowed_receiver_place, narrowed_scope_place,
+    receiver_is_first_parameter,
 };
 use crate::types::signatures::NarrowingGuardKind;
 use crate::types::special_form::TypeQualifier;
@@ -251,7 +252,7 @@ fn asserts_guard_targets<'db>(
                     narrowed_place(db, scope, guard, argument)?
                 }
                 GuardRoot::Receiver(receiver) if receiver_is_first_parameter(db, callee_ty) => {
-                    narrowed_place(db, scope, guard, receiver)?
+                    narrowed_receiver_place(db, scope, guard, receiver)?
                 }
                 GuardRoot::Receiver(_) => return None,
                 GuardRoot::Scope => {
@@ -5242,7 +5243,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 )
                 .and_then(|argument| narrowed_place(db, scope, guard, argument)),
                 GuardRoot::Receiver(receiver) if receiver_is_first_parameter(db, callee_ty) => {
-                    narrowed_place(db, scope, guard, receiver)
+                    narrowed_receiver_place(db, scope, guard, receiver)
                 }
                 GuardRoot::Receiver(_) => None,
                 GuardRoot::Scope => narrowed_scope_place(db, scope, guard),

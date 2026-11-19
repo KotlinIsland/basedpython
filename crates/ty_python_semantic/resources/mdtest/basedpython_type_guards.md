@@ -1094,7 +1094,7 @@ def check_second(self: object, first: int | None, second: int | None) -> asserts
         raise ValueError()
 
 class Sub(Base):
-    check = check_second  # error: [invalid-method-override]
+    check = check_second  # error: [unestablished-assertion-guard]
 ```
 
 ## a callable type's predicate is parenthesized

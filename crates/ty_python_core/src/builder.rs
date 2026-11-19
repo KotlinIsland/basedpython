@@ -104,6 +104,10 @@ struct Loop {
     /// started. A `break` or a `continue` leaves every block opened since, so the
     /// names those blocks declared go out of scope on that edge.
     blocks_at_entry: usize,
+    /// basedpython: how many `finally` suites of the current scope were being visited when the
+    /// loop started: a `break` or a `continue` inside more of them than that leaves a `finally`
+    /// suite, which discards whatever exception was on its way out
+    finally_suites_at_entry: usize,
 }
 
 /// A narrowing alias: a variable whose RHS is a narrowing expression
@@ -133,6 +137,9 @@ struct ScopeInfo<'ast> {
     /// restored on `pop_scope`. A `return` in a function defined there returns from that
     /// function, which no `finally` of the enclosing scope runs after
     in_finally_statement: bool,
+    /// basedpython: how many `finally` suites of the enclosing scope were being visited,
+    /// restored on `pop_scope`
+    finally_suite_depth: usize,
     /// `global` and `nonlocal` declarations from scopes nested under this one. This is used for:
     ///
     /// 1. Visibility of nested writes. A nested function that binds a variable might affect the
@@ -307,6 +314,9 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// basedpython: whether the current statement is inside a `try` statement that has a
     /// `finally` suite, including the suite itself. See [`Self::record_return_exit`].
     in_finally_statement: bool,
+    /// basedpython: how many `finally` suites of the current scope are being visited, see
+    /// [`Loop::finally_suites_at_entry`]
+    finally_suite_depth: usize,
     /// basedpython: where the function scopes currently being built return, innermost last.
     function_exits: Vec<FunctionExits>,
 
@@ -484,6 +494,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             semantic_checker: SemanticSyntaxChecker::default(),
             in_try_statement: false,
             in_finally_statement: false,
+            finally_suite_depth: 0,
             function_exits: Vec::new(),
             semantic_syntax_errors: RefCell::default(),
             narrowing_aliases: FxHashMap::default(),
@@ -626,8 +637,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     /// Push a new loop, returning the outer loop, if any.
     fn push_loop(&mut self) -> Option<Loop> {
         let blocks_at_entry = self.open_blocks.len();
+        let finally_suites_at_entry = self.finally_suite_depth;
         self.current_scope_info_mut().current_loop.replace(Loop {
             blocks_at_entry,
+            finally_suites_at_entry,
             ..Loop::default()
         })
     }
@@ -692,12 +705,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         let saved_aliases = std::mem::take(&mut self.narrowing_aliases);
         let saved_open_blocks = std::mem::take(&mut self.open_blocks);
         let saved_in_finally_statement = std::mem::take(&mut self.in_finally_statement);
+        let saved_finally_suite_depth = std::mem::take(&mut self.finally_suite_depth);
         self.scope_stack.push(ScopeInfo {
             file_scope_id,
             current_loop: None,
             narrowing_aliases: saved_aliases,
             open_blocks: saved_open_blocks,
             in_finally_statement: saved_in_finally_statement,
+            finally_suite_depth: saved_finally_suite_depth,
             nested_global_or_nonlocal_declarations: FxHashMap::default(),
             this_scope_global_or_nonlocal_declarations: FxHashMap::default(),
             pending_captures: FxHashMap::default(),
@@ -1080,6 +1095,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             narrowing_aliases,
             open_blocks,
             in_finally_statement,
+            finally_suite_depth,
             mut nested_global_or_nonlocal_declarations,
             this_scope_global_or_nonlocal_declarations,
             pending_captures,
@@ -1091,6 +1107,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.narrowing_aliases = narrowing_aliases;
         self.open_blocks = open_blocks;
         self.in_finally_statement = in_finally_statement;
+        self.finally_suite_depth = finally_suite_depth;
 
         let children_end = self.scopes.next_index();
 
@@ -1723,6 +1740,38 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
         if records_each_return {
             self.record_each_return(stmt, scope, function);
+        }
+    }
+
+    /// basedpython: note a `break` or `continue` that leaves a `finally` suite
+    ///
+    /// leaving a `finally` suite that way discards the exception that may have been on its way
+    /// out, so the body can carry on past an assertion that failed:
+    ///
+    /// ```python
+    /// def check(x):
+    ///     while True:
+    ///         try:
+    ///             assert x is not None
+    ///         finally:
+    ///             break
+    /// ```
+    ///
+    /// the flow model only visits a `finally` suite as if what came before it ran to completion,
+    /// so the states where this body hands back control say more than it has established, and
+    /// nothing is recovered from it, as for a `return` a `finally` suite can follow
+    fn record_jump_out_of_finally_suite(&mut self) {
+        let scope = self.current_scope();
+        let finally_suite_depth = self.finally_suite_depth;
+        let leaves_finally_suite = self
+            .current_loop_mut()
+            .is_some_and(|current_loop| finally_suite_depth > current_loop.finally_suites_at_entry);
+        if leaves_finally_suite
+            && let Some(exits) = self.function_exits.last_mut()
+            && exits.scope == scope
+        {
+            exits.through_finally = true;
+            exits.snapshots = Vec::new();
         }
     }
 
@@ -3316,6 +3365,29 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     .filter_map(move |chain| PlaceExpr::try_from_expr_with_members(root, chain))
             })
             .collect();
+        // a call through `super()` is made on the method's first argument, and one through
+        // `super(C, obj)` on `obj`, neither of which the call writes as its receiver
+        let first_parameter = self.method_first_parameter();
+        let super_places: Vec<PlaceExpr> = collector
+            .calls
+            .iter()
+            .filter_map(|call| {
+                let receiver = call.func.as_attribute_expr()?.value.as_call_expr()?;
+                (receiver.func.as_name_expr()?.id == "super"
+                    && receiver.arguments.keywords.is_empty())
+                .then_some(&*receiver.arguments.args)
+            })
+            .flat_map(|arguments| {
+                let first_parameter = first_parameter.as_ref();
+                member_chains
+                    .iter()
+                    .filter_map(move |chain| match arguments {
+                        [] => PlaceExpr::from_symbol_with_members(first_parameter?, chain),
+                        [_, object] => PlaceExpr::try_from_expr_with_members(object, chain),
+                        _ => None,
+                    })
+            })
+            .collect();
         let scope_places: Vec<PlaceExpr> = scope_targets
             .iter()
             .filter_map(|(name, members)| PlaceExpr::from_symbol_with_members(name, members))
@@ -3324,8 +3396,27 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         scope_places
             .into_iter()
             .chain(member_places)
+            .chain(super_places)
             .map(|place| self.add_place(place))
             .collect()
+    }
+
+    /// basedpython: the name of the first parameter of the method whose body is the current
+    /// scope, which a zero-argument `super()` there binds
+    fn method_first_parameter(&self) -> Option<Name> {
+        let scope = self.current_scope();
+        let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
+            return None;
+        };
+        let mut parent = self.scopes[scope].parent()?;
+        if matches!(self.scopes[parent].kind(), ScopeKind::TypeParams) {
+            parent = self.scopes[parent].parent()?;
+        }
+        if !self.scopes[parent].kind().is_class() {
+            return None;
+        }
+        let first = function.node(self.module).parameters.iter().next()?;
+        Some(first.name().id.clone())
     }
 
     /// Adds and records a narrowing constraint for only the places that could possibly be narrowed.
@@ -3428,7 +3519,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     ) {
         self.current_use_def_map_mut()
             .enter_finally_suite(try_entry);
+        self.finally_suite_depth += 1;
         self.visit_block_body(finalbody);
+        self.finally_suite_depth -= 1;
         self.current_use_def_map_mut().exit_finally_suite();
     }
 
@@ -7189,6 +7282,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.record_ambiguous_reachability();
                 }
                 self.unbind_blocks_left_by_jump();
+                self.record_jump_out_of_finally_suite();
                 let snapshot = self.flow_snapshot();
                 if let Some(current_loop) = self.current_loop_mut() {
                     if stmt.is_continue_stmt() {
@@ -8683,7 +8777,8 @@ struct FunctionExits {
     /// Whether any `return` hands back a value, which is not read as an assertion.
     returns_value: bool,
     /// Whether any `return` can be followed by a `finally` suite, whose effect on what the caller
-    /// sees this model does not have.
+    /// sees this model does not have, or a `break` or `continue` leaves one, discarding the
+    /// exception it may have been running for
     through_finally: bool,
 }
 

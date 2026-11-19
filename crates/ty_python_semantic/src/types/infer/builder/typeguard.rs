@@ -6,7 +6,9 @@ use ty_python_core::scope::ScopeId;
 use crate::Db;
 use crate::types::Type;
 use crate::types::call::{Binding, Bindings};
-use crate::types::narrowing_guards::{GuardRoot, guard_root, narrowed_place, narrowed_scope_place};
+use crate::types::narrowing_guards::{
+    GuardRoot, guard_root, narrowed_place, narrowed_receiver_place, narrowed_scope_place,
+};
 
 pub(super) fn bind_type_guard_return_type<'db>(
     db: &'db dyn Db,
@@ -38,11 +40,11 @@ pub(super) fn bind_type_guard_return_type<'db>(
                 // a bound call's signature keeps the receiver parameter, but the call has
                 // no argument for it
                 GuardRoot::Parameter(index) if index < bound_argument_offset => {
-                    return narrowed_place(db, scope, &guard, receiver()?);
+                    return narrowed_receiver_place(db, scope, &guard, receiver()?);
                 }
                 GuardRoot::Parameter(_) => {}
                 GuardRoot::Receiver(receiver) => {
-                    return narrowed_place(db, scope, &guard, receiver);
+                    return narrowed_receiver_place(db, scope, &guard, receiver);
                 }
                 GuardRoot::Scope => return narrowed_scope_place(db, scope, &guard),
             }

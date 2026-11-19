@@ -59,6 +59,7 @@ use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{last_bound_parameter, parameter_modifiers};
+use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, ParameterWithDefault, PythonVersion};
 use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
@@ -1598,7 +1599,12 @@ impl<'db> OverloadLiteral<'db> {
                 // nothing about the return type answers nothing about the narrowing either
                 let guards = inferred_predicate_guards(db, self);
                 if !guards.is_empty() {
-                    if let Some(narrowed) = Self::symmetric_guard_type(db, env, guards) {
+                    let type_is_parameter = raw_signature
+                        .implicitly_narrowed_parameter(self.has_implicit_receiver(db))
+                        .cloned();
+                    if let Some(narrowed) =
+                        Self::symmetric_guard_type(db, env, guards, type_is_parameter.as_ref())
+                    {
                         raw_signature.return_ty = TypeIsType::from_type_expression(db, narrowed);
                     }
                     raw_signature.narrowing_guards.clone_from(guards);
@@ -1634,25 +1640,23 @@ impl<'db> OverloadLiteral<'db> {
     /// carries it to wherever that variable is tested.
     ///
     /// A guard set that says anything else — two places narrowed, or one side narrowed and not
-    /// the other — has no such spelling, and stays on the signature alone.
+    /// the other — has no such spelling, and stays on the signature alone. so does one about any
+    /// place but `type_is_parameter`, the one a `TypeIs` narrows: the type is read without the
+    /// signature wherever it goes — through a decorator typed `Callable[P, R]`, say — and there it
+    /// would be about the first argument
     fn symmetric_guard_type(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         guards: &[NarrowingGuard<'db>],
+        type_is_parameter: Option<&Name>,
     ) -> Option<Type<'db>> {
         let [guard] = guards else {
             return None;
         };
-        let NarrowingGuardKind::InferredPredicate {
-            positive: Some(positive),
-            negative: Some(negative),
-        } = guard.kind
-        else {
+        if !guard.members.is_empty() || type_is_parameter != Some(&guard.name) {
             return None;
-        };
-        negative
-            .is_equivalent_to(db, env, positive.negate(db, env))
-            .then_some(positive)
+        }
+        guard.kind.symmetric_narrowing(db, env)
     }
 
     /// basedpython: the callable that the innermost applied decorator declares this function to
@@ -1894,7 +1898,17 @@ impl<'db> OverloadLiteral<'db> {
             // type to copy
             return OverriddenReturnType::Inexpressible;
         }
-        OverriddenReturnType::of(db, env, base_raw_signature(db, base).return_ty)
+        let signature = base_raw_signature(db, base);
+        // a `bool` the base's body was recovered to test a place with is a claim about that body,
+        // as a `TypeIs` is, so an override answers it with what its own body tests
+        if signature
+            .narrowing_guards
+            .iter()
+            .any(|guard| matches!(guard.kind, NarrowingGuardKind::InferredPredicate { .. }))
+        {
+            return OverriddenReturnType::NotOverridden;
+        }
+        OverriddenReturnType::of(db, env, signature.return_ty)
     }
 
     /// basedpython: how to name the method this one overrides, for a diagnostic about it.
@@ -1941,39 +1955,79 @@ impl<'db> OverloadLiteral<'db> {
         env: &ProgramEnvironment<'db>,
         parameters: &Parameters<'db>,
     ) -> Box<[NarrowingGuard<'db>]> {
-        let Some(base) = self.overridden_method(db, env) else {
-            return Box::default();
-        };
-        let base_signature = base_raw_signature(db, base);
-        base_signature
-            .all_narrowing_guards(db)
-            .iter()
-            .filter(|guard| guard.kind.is_assertion())
-            .filter_map(|guard| {
+        self.inherited_assertions(db, env, parameters).0
+    }
+
+    /// basedpython: [`Self::inherited_assertion_guards`], and whether every assertion the methods
+    /// this one overrides make lines up with one of its parameters.
+    ///
+    /// each method up the chain is read on its own, since one between may assert less than one
+    /// above it — a `staticmethod` override of an instance method cannot carry an assertion about
+    /// the receiver, and the method below it still has to make it. a parameter lines up with the
+    /// one at the same place among those a call passes, past whatever receiver each is bound to,
+    /// and a receiver only with a receiver bound alike: an instance with an instance, a class with
+    /// a class. an assertion with nothing to line up with is one the body cannot establish
+    pub(crate) fn inherited_assertions(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        parameters: &Parameters<'db>,
+    ) -> (Box<[NarrowingGuard<'db>]>, bool) {
+        let binding = MethodBinding::of_overload(db, self);
+        let mut guards: Vec<NarrowingGuard<'db>> = Vec::new();
+        let mut complete = true;
+        let bases = std::iter::successors(self.overridden_method(db, env), |base| {
+            let literal = base.literal(db).last_definition;
+            let env = ProgramEnvironment::from_scope(literal.body_scope(db));
+            literal.overridden_method(db, &env)
+        });
+        for base in bases {
+            let base_binding = MethodBinding::of_function(db, base);
+            let base_signature = base_raw_signature(db, base);
+            for guard in base_signature
+                .all_narrowing_guards(db)
+                .iter()
+                .filter(|guard| guard.kind.is_assertion())
+            {
                 // a variable of an enclosing scope is the same variable whatever the override's
                 // parameters are called
-                if matches!(
+                let mapped = if matches!(
                     guard.kind,
                     NarrowingGuardKind::InferredAssertion {
                         variable_scope: Some(_),
                         ..
                     }
                 ) {
-                    return Some(guard.clone());
-                }
-                let index = base_signature
-                    .parameters()
+                    Some(guard.clone())
+                } else {
+                    base_signature
+                        .parameters()
+                        .iter()
+                        .position(|parameter| parameter.name() == Some(&guard.name))
+                        .and_then(|index| binding.line_up(base_binding, index))
+                        .and_then(|index| {
+                            let name = parameters.iter().nth(index)?.name()?;
+                            Some(NarrowingGuard {
+                                name: name.clone(),
+                                members: guard.members.clone(),
+                                root_is_first_parameter: index == 0,
+                                kind: guard.kind,
+                            })
+                        })
+                };
+                let Some(mapped) = mapped else {
+                    complete = false;
+                    continue;
+                };
+                if !guards
                     .iter()
-                    .position(|parameter| parameter.name() == Some(&guard.name))?;
-                let name = parameters.iter().nth(index)?.name()?;
-                Some(NarrowingGuard {
-                    name: name.clone(),
-                    members: guard.members.clone(),
-                    root_is_first_parameter: index == 0,
-                    kind: guard.kind,
-                })
-            })
-            .collect()
+                    .any(|made| made.name == mapped.name && made.members == mapped.members)
+                {
+                    guards.push(mapped);
+                }
+            }
+        }
+        (guards.into_boxed_slice(), complete)
     }
 
     /// basedpython: whether an assertion can reach this method from one it overrides: written by
@@ -2523,6 +2577,53 @@ pub(crate) fn infers_return_types(db: &dyn Db, file: File) -> bool {
     }
     let settings = db.analysis_settings(file);
     settings.return_type_inference.is_active() || settings.sound_types
+}
+
+/// basedpython: what a method is bound to when it is looked up on an instance
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MethodBinding {
+    /// a `staticmethod`: nothing
+    Unbound,
+    /// an ordinary function stored on a class: the instance
+    Instance,
+    /// a `classmethod`: the class
+    Class,
+}
+
+impl MethodBinding {
+    fn of_overload(db: &dyn Db, overload: OverloadLiteral<'_>) -> Self {
+        if overload.is_staticmethod(db) {
+            Self::Unbound
+        } else if overload.is_classmethod(db) {
+            Self::Class
+        } else {
+            Self::Instance
+        }
+    }
+
+    fn of_function<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> Self {
+        if function.is_staticmethod(db) {
+            Self::Unbound
+        } else if function.is_classmethod(db) {
+            Self::Class
+        } else {
+            Self::Instance
+        }
+    }
+
+    /// how many leading parameters the binding fills
+    fn receivers(self) -> usize {
+        usize::from(self != Self::Unbound)
+    }
+
+    /// the index among this method's parameters of the one at `index` among those of a method
+    /// bound as `base`, if there is one
+    fn line_up(self, base: Self, index: usize) -> Option<usize> {
+        if index < base.receivers() {
+            return (self == base).then_some(index);
+        }
+        Some(index - base.receivers() + self.receivers())
+    }
 }
 
 /// basedpython: what the method an unannotated method overrides says about its return type.

@@ -181,12 +181,16 @@ def rebound(x):
     return x is int   # `True` whatever it was given, so it says nothing about it
 ```
 
-a single place narrowed both ways is exactly what `TypeIs[T]` says, so that is
-the recovered return type — shown as the guard it stands for, `x is str`, which
-names the place it narrows — and a result held in a variable carries a
-parameter's narrowing, the same as a written one. a guard set with no such spelling — several places, or
-one side only — rides on the signature instead, and narrows where the call
-itself is tested
+a single place narrowed both ways is shown as the guard it stands for,
+`x is str`. when that place is the one a `TypeIs` narrows — the first
+argument, after the receiver of a method — the return type is `TypeIs[str]`,
+and a result held in a variable carries it, the same as a written one. any
+other place gets a `bool`, since a `TypeIs` is about the first argument
+wherever the type goes without its function, and so does a guard set with no
+such spelling — several places, or one side only. those ride on the signature,
+and narrow where the call is tested. a function that narrows another place, or
+less, cannot stand in for one of them, and a method that does so cannot
+override it
 
 ```by
 def is_str(x):
@@ -343,8 +347,22 @@ neither does an `async def`, whose call does not run the body. a body that
 hands back a value is not an assertion, since the narrowing only reaches a call
 written as a statement
 
+a `break` or `continue` that leaves a `finally` suite discards the exception
+the suite was running for, so a body with one asserts nothing either
+
 an override is handed what the method it overrides asserts, recovered or
-written, and is checked against it
+written, and is checked against it. delegating to `super()` establishes what
+it delegates to, since that call is made on the method's own receiver. an
+override that is not a `def` — a `lambda`, or a callable from elsewhere,
+written in the class or inherited from an earlier base — has no body to check,
+so its type has to carry the same assertion, and it is reported otherwise. with
+several bases, each one a `super()` call can reach before the asserting one has
+to establish it too
+
+a decorator typed `Callable[P, R]` hands back something with the function's
+parameters and return type, which is all its type says: the wrapper need not
+run the body. so an assertion does not survive it, and neither does a
+predicate other than a `TypeIs`, which comes back through `R`
 
 a recovered predicate or assertion is read from the body alone, so a plain
 python file narrows by it the same way:

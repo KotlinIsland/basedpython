@@ -45,8 +45,8 @@ use crate::types::repeated_underscore::{
     RepeatedUnderscoreRead, UnderscoreLowering, UnderscoreRefusal, repeated_underscore_read,
 };
 use crate::types::signatures::{
-    NarrowingGuardKind, Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope,
-    Signature, is_placeholder_default,
+    Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
+    is_placeholder_default,
 };
 use crate::types::tuple::TupleType;
 use crate::types::{
@@ -4754,25 +4754,24 @@ pub fn inferred_return_type<'db>(
     is_settled(db, &model.program_environment(), return_ty).then_some(return_ty)
 }
 
-/// The place a predicate recovered from a body narrows, and what it narrows it to: `a.a` and
-/// `int` for `def f(a): return a.a is int`.
+/// the place a predicate recovered from a body narrows, and what it narrows it to: `a.a` and
+/// `int` for `def f(a): return a.a is int`
 ///
-/// Such a function's return type is the `TypeIs[int]` the guard is symmetric in, which does not
-/// say which place it narrows.
+/// such a function returns a `bool`, or a `TypeIs[int]` when the place is the parameter a
+/// `TypeIs` narrows, and neither says which place it is
 pub struct InferredReturnPredicate<'db> {
     /// the narrowed place as it is written, `a` or `a.a`
     pub place: String,
     pub narrowed: Type<'db>,
     /// whether `narrowed` is written `not T`, which needs parentheses after the `is`
     pub narrowed_reads_as_negation: bool,
-    /// whether a written `TypeIs[narrowed]` narrows this same place: it narrows the first
-    /// argument a call passes, after the receiver of a method, so the place has to be that
-    /// parameter itself
+    /// whether the place is the parameter a written `TypeIs[narrowed]` narrows: the first
+    /// argument a call passes, after the receiver of a method
     pub is_type_is_parameter: bool,
 }
 
-/// The predicate `function`'s recovered `TypeIs` return type stands for, or `None`
-/// when its return type is anything else
+/// the one place `function`'s body is recovered to test both ways, or `None` when there is no
+/// such place
 pub fn inferred_return_predicate<'db>(
     model: &SemanticModel<'db>,
     function: &ast::StmtFunctionDef,
@@ -4782,25 +4781,21 @@ pub fn inferred_return_predicate<'db>(
     let definition = index.try_definition(function)?;
     let function = infer_definition_types(db, definition).function_type(definition)?;
     let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
-    let Type::TypeIs(type_is) = signature.return_ty else {
+    let env = model.program_environment();
+    let [guard] = &*signature.narrowing_guards else {
         return None;
     };
-    let guard = signature
-        .narrowing_guards
-        .iter()
-        .find(|guard| matches!(guard.kind, NarrowingGuardKind::InferredPredicate { .. }))?;
-    let narrowed = type_is.type_argument(db);
-    if !is_settled(db, &model.program_environment(), narrowed) {
+    let narrowed = guard.kind.symmetric_narrowing(db, &env)?;
+    if !is_settled(db, &env, narrowed) {
         return None;
     }
-
-    let type_is_parameter =
-        signature.implicitly_narrowed_parameter(function.has_implicit_receiver(db));
     Some(InferredReturnPredicate {
         place: guard.place(),
         narrowed,
         narrowed_reads_as_negation: reads_as_negation(db, narrowed),
-        is_type_is_parameter: guard.members.is_empty() && type_is_parameter == Some(&guard.name),
+        // a recovered predicate is only typed as a `TypeIs` when it is about the parameter one
+        // narrows
+        is_type_is_parameter: matches!(signature.return_ty, Type::TypeIs(_)),
     })
 }
 

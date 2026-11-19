@@ -35,9 +35,10 @@ use crate::{
             INVALID_EXPLICIT_OVERRIDE, INVALID_METHOD_OVERRIDE, INVALID_MUTABLE_OVERRIDE,
             INVALID_NAMED_TUPLE, INVALID_NAMED_TUPLE_OVERRIDE, INVALID_PROPERTY_TYPE_OVERRIDE,
             MISSING_OVERRIDE_DECORATOR, OVERRIDE_OF_FINAL_METHOD, OVERRIDE_OF_FINAL_VARIABLE,
-            report_incompatible_base_method, report_invalid_method_override,
-            report_invalid_override_visibility, report_invalid_reified_override,
-            report_overridden_final_method, report_overridden_final_variable,
+            UNESTABLISHED_ASSERTION_GUARD, report_incompatible_base_method,
+            report_invalid_method_override, report_invalid_override_visibility,
+            report_invalid_reified_override, report_overridden_final_method,
+            report_overridden_final_variable,
         },
         enums::{EnumMetadata, enum_metadata, is_enum_class_by_inheritance},
         function::{
@@ -47,6 +48,7 @@ use crate::{
             Member, MemberWithDefinition, all_end_of_scope_members, extract_underlying_functions,
         },
         operator_domain::tests_its_operand,
+        signatures::ReturnCallableTypeVarScope,
         tuple::Tuple,
     },
 };
@@ -94,7 +96,9 @@ pub(super) fn check_class<'db>(
     let scope = class.body_scope(db);
     let own_class_members: FxHashSet<_> = all_end_of_scope_members(db, scope).collect();
     let class_specialized = class.identity_specialization(db);
-    if configuration.check_liskov_violations() && !inconsistent_generic_bases {
+    if (configuration.check_liskov_violations() || configuration.check_override_assertions())
+        && !inconsistent_generic_bases
+    {
         check_inherited_conflicts(
             context,
             class,
@@ -243,6 +247,19 @@ fn check_inherited_conflicts<'db>(
                 })
                 .unwrap_or(candidate_owner);
 
+            // basedpython: like an override written in the class itself, one inherited from an
+            // earlier base has to establish what a later base's method asserts
+            if configuration.check_override_assertions() && owner == candidate_owner {
+                check_inherited_assertion_conflict(
+                    context,
+                    class,
+                    class_type,
+                    owner,
+                    &mro[index + 1..],
+                    &name,
+                );
+            }
+
             // Only a source definition on the selected owner goes to the method checker.
             // A generated member on an earlier base must not expose an older method.
             if configuration.check_method_liskov_violations()
@@ -266,6 +283,167 @@ fn check_inherited_conflicts<'db>(
             }
         }
     }
+}
+
+/// basedpython: report a member that is not a `def`, inherited from one base, over a method a
+/// later base declares that asserts something, unless the member carries the same assertions
+///
+/// ```python
+/// class Mixin:
+///     check = lambda self: None
+///
+/// class Combined(Mixin, Base): ...  # `Base.check` asserts, `Mixin.check` establishes nothing
+/// ```
+///
+/// a `def` there is compared with the later base's method as any inherited method is, and a
+/// member of a base that already inherits the asserting method was checked on that base. see
+/// [`check_assertions_of_callable_override`]
+fn check_inherited_assertion_conflict<'db>(
+    context: &InferContext<'db, '_>,
+    class: StaticClassLiteral<'db>,
+    class_type: ClassType<'db>,
+    owner: ClassType<'db>,
+    contracts: &[ClassType<'db>],
+    name: &Name,
+) {
+    let db = context.db();
+    let env = &context.program_environment();
+    let receiver = Type::instance(db, env, class_type);
+    // the first base with the member is what a call reaches, and each later one with it is what a
+    // `super()` call in the one before it reaches: in `class X(Sub, Mixin, Base)`, `Sub.check`'s
+    // `super().check()` runs `Mixin.check`. so each has to establish what every base after it
+    // asserts
+    // nothing below has anything to establish unless some later base's method asserts, which is
+    // the rare case, so that is asked first
+    let asserting = |contract: &ClassType<'db>| match contract
+        .own_class_member(db, env, None, name)
+        .inner
+        .place
+        .raw_type()
+    {
+        Some(Type::FunctionLiteral(function)) => asserts_anything(db, function),
+        _ => false,
+    };
+    if !contracts.iter().any(asserting) {
+        return;
+    }
+    let bases: Vec<ClassType<'db>> = std::iter::once(owner)
+        .chain(contracts.iter().copied())
+        .collect();
+    for (index, base) in bases.iter().copied().enumerate() {
+        let Some((member_type, value)) = member_on_instance(db, env, base, receiver, name) else {
+            continue;
+        };
+        if !may_be_called(db, env, value) {
+            continue;
+        }
+        for contract_owner in bases[index + 1..].iter().copied() {
+            let Some(Type::FunctionLiteral(function)) = contract_owner
+                .own_class_member(db, env, None, name)
+                .inner
+                .place
+                .raw_type()
+            else {
+                continue;
+            };
+            // one the base's own class inherits was checked on that class
+            if base.is_subclass_of(db, env, contract_owner) || !asserts_anything(db, function) {
+                continue;
+            }
+            let Some(asserting) = Type::FunctionLiteral(function)
+                .try_call_dunder_get(db, env, Some(receiver), receiver.to_meta_type(db, env))
+                .unwrap_or_else(|error| Some(error.fallback()))
+                .map(|binding| binding.return_type)
+            else {
+                continue;
+            };
+            let Some(OverrideTypes {
+                subclass: inherited,
+                superclass: asserting,
+                ..
+            }) = method_override_types(db, env, name, value, asserting)
+            else {
+                continue;
+            };
+            if inherited.is_assignable_to(db, env, asserting) {
+                continue;
+            }
+            let Some(builder) =
+                context.report_lint(&UNESTABLISHED_ASSERTION_GUARD, class.header_range(db))
+            else {
+                return;
+            };
+            let what = if matches!(member_type, Type::FunctionLiteral(_)) {
+                "is not a method of a subclass of it"
+            } else {
+                "is not a `def`"
+            };
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`{base}.{name}`, which `{class}` inherits, {what}, so nothing checks that it \
+                 establishes what `{contract}.{name}`, which it hides, asserts",
+                base = base.name(db),
+                class = class.name(db),
+                contract = contract_owner.name(db),
+            ));
+            inherited
+                .assignability_error_context(db, env, asserting)
+                .attach_to(db, env, &mut diagnostic);
+            return;
+        }
+    }
+}
+
+/// basedpython: the member `base` itself defines for `name`, and its value on `receiver`: a class
+/// member read through its descriptor, or an attribute instances are given in a method —
+/// `self.check = lambda: None` in a base's `__init__`
+fn member_on_instance<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    base: ClassType<'db>,
+    receiver: Type<'db>,
+    name: &Name,
+) -> Option<(Type<'db>, Type<'db>)> {
+    if let Some(member_type) = base
+        .own_class_member(db, env, None, name)
+        .inner
+        .place
+        .raw_type()
+    {
+        let value = member_type
+            .try_call_dunder_get(db, env, Some(receiver), receiver.to_meta_type(db, env))
+            .unwrap_or_else(|error| Some(error.fallback()))
+            .map_or(member_type, |binding| binding.return_type);
+        return Some((member_type, value));
+    }
+    let member_type = base
+        .own_instance_member(db, env, name)
+        .inner
+        .place
+        .raw_type()?;
+    Some((member_type, member_type))
+}
+
+/// basedpython: whether any call to `function` narrows by an assertion
+fn asserts_anything<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> bool {
+    function.signature(db).overloads.iter().any(|signature| {
+        signature
+            .all_narrowing_guards(db)
+            .iter()
+            .any(|guard| guard.kind.is_assertion())
+    })
+}
+
+/// basedpython: whether a value of type `ty` may be callable at all
+///
+/// one that cannot be — `check = None` — never returns from a call, so it leaves nothing a call
+/// asserts unestablished. one that only sometimes can be, `None` on one branch and a `lambda` on
+/// the other, has to establish it where it can
+fn may_be_called<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
+    // a type is only known not to be callable when it shares no value with any callable: an
+    // `object` or a `Hashable` may well be a function, a declared `None` never is. an undeclared
+    // `check = None` is widened with `Unknown`, since anything may be stored there later — a
+    // `lambda` included
+    !ty.is_disjoint_from(db, env, Type::Callable(CallableType::unknown(db)))
 }
 
 /// Check for a receiver annotation without inferring the method that contains it.
@@ -1166,6 +1344,25 @@ fn check_class_declaration<'db>(
             continue;
         }
 
+        // basedpython: whether the override establishes what the base asserts is a question of
+        // soundness rather than of substitutability, so it is asked whichever override rules are
+        // on, and before them: they would otherwise report the same override for the same reason
+        if configuration.check_override_assertions()
+            && check_assertions_of_callable_override(
+                context,
+                class,
+                &member.name,
+                member.ty,
+                *first_reachable_definition,
+                superclass,
+                superclass_type,
+                type_on_subclass_instance,
+            )
+        {
+            liskov_check_complete = true;
+            continue;
+        }
+
         if !configuration.check_liskov_violations() || member.name == "__hash__" {
             continue;
         }
@@ -1610,6 +1807,149 @@ struct OverrideTypes<'db> {
     /// hands some back, read as the comparison sees it
     /// ([`CallableType::as_compared_by_equality`])
     compared_by_equality: bool,
+}
+
+/// basedpython: whether an override of a method that asserts something has nothing but its type to
+/// say it establishes the assertion
+///
+/// the function a `def` of this name in the class body defines has its body checked against what
+/// it inherits, as long as every assertion it inherits lines up with one of its parameters — a
+/// `staticmethod` overriding an instance method has no receiver for an assertion about one. any
+/// other function — one defined elsewhere and assigned, or one a decorator hands back in place of
+/// the `def` — has only its type. whether the method override rule would compare that type too is
+/// beside the point: that rule passes over some names and can be switched off, and an assertion
+/// left unestablished narrows wrongly either way. a member whose value on an instance cannot be
+/// called at all — `check = None` — never returns from a call, so it leaves nothing unestablished
+fn is_checked_by_type_alone<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &Name,
+    member_type: Type<'db>,
+    type_on_instance: Type<'db>,
+    definition: Definition<'db>,
+) -> bool {
+    match member_type {
+        Type::FunctionLiteral(function) => !is_body_checked(db, env, name, function, definition),
+        _ => may_be_called(db, env, type_on_instance),
+    }
+}
+
+/// basedpython: whether `function` is what a `def` of `name` in the class body that `definition`
+/// is in defines, with every assertion it inherits lined up with one of its parameters
+fn is_body_checked<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &Name,
+    function: FunctionType<'db>,
+    definition: Definition<'db>,
+) -> bool {
+    if function.name(db) != name || function.definition(db).scope(db) != definition.scope(db) {
+        return false;
+    }
+    let literal = function.literal(db).last_definition;
+    let signature = literal.raw_signature(db, ReturnCallableTypeVarScope::Public);
+    let (_, complete) = literal.inherited_assertions(db, env, signature.parameters());
+    complete
+}
+
+/// basedpython: report an override that is not a `def` — a `lambda`, a decorated wrapper, a
+/// `partial` — of a method that asserts something, unless it carries the same assertions
+///
+/// a call through the base narrows by what the base asserts, and what it is called on may be an
+/// instance of the subclass, so the override has to establish it too. a `def` has its body
+/// checked against what it inherits; anything else only has its type, so that type has to be one
+/// the base's method is assignable from, assertions and all:
+///
+/// ```python
+/// class B:
+///     x: int | None = None
+///     def check(self):
+///         assert self.x is not None
+///
+/// class D(B):
+///     check = lambda self: None  # establishes nothing `B.check` asserts
+/// ```
+#[expect(clippy::too_many_arguments)]
+fn check_assertions_of_callable_override<'db>(
+    context: &InferContext<'db, '_>,
+    class: ClassType<'db>,
+    name: &Name,
+    member_type: Type<'db>,
+    definition: Definition<'db>,
+    superclass: ClassType<'db>,
+    superclass_type: Type<'db>,
+    type_on_subclass_instance: Type<'db>,
+) -> bool {
+    let db = context.db();
+    let env = &context.program_environment();
+    let superclass_function = match superclass_type {
+        Type::FunctionLiteral(function) => function,
+        Type::BoundMethod(bound_method) => match bound_method.function(db) {
+            Some(function) => function,
+            None => return false,
+        },
+        _ => return false,
+    };
+    if !asserts_anything(db, superclass_function)
+        || !is_checked_by_type_alone(
+            db,
+            env,
+            name,
+            member_type,
+            type_on_subclass_instance,
+            definition,
+        )
+    {
+        return false;
+    }
+    let Some(OverrideTypes {
+        subclass: subclass_override_type,
+        superclass: superclass_override_type,
+        ..
+    }) = method_override_types(
+        db,
+        env,
+        name,
+        bind_new_for_override(db, env, class, name, type_on_subclass_instance),
+        bind_new_for_override(db, env, class, name, superclass_type),
+    )
+    else {
+        return false;
+    };
+    if subclass_override_type.is_assignable_to(db, env, superclass_override_type) {
+        return false;
+    }
+    let Some(builder) = context.report_lint(
+        &UNESTABLISHED_ASSERTION_GUARD,
+        definition.focus_range(db, context.module()),
+    ) else {
+        return false;
+    };
+    // a decorated `def` is whatever its decorators returned, which need not run the body it was
+    // given: `functools.cache` hands back an earlier result without running it again
+    let what = match member_type {
+        Type::FunctionLiteral(function)
+            if function.name(db) == name
+                && function.definition(db).scope(db) == definition.scope(db) =>
+        {
+            "is not bound the way a method it overrides is"
+        }
+        _ if matches!(definition.kind(db), DefinitionKind::Function(_)) => {
+            "is what its decorators return rather than the `def` they were given"
+        }
+        Type::FunctionLiteral(_) => "is a function defined elsewhere",
+        _ => "is not a `def`",
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "`{class}.{name}` {what}, so nothing checks that it establishes what \
+         `{superclass}.{name}`, which it overrides, asserts",
+        class = class.name(db),
+        superclass = superclass.name(db),
+    ));
+    subclass_override_type
+        .assignability_error_context(db, env, superclass_override_type)
+        .attach_to(db, env, &mut diagnostic);
+    true
 }
 
 /// basedpython: an `__eq__` or `__ne__` override that hands back an operand it doesn't take is
@@ -2390,6 +2730,7 @@ bitflags! {
         const MISSING_OVERRIDE_DECORATOR = 1 << 9;
         const LISKOV_PROPERTIES = 1 << 10;
         const LISKOV_MUTABLE = 1 << 11;
+        const OVERRIDE_ASSERTIONS = 1 << 12;
     }
 }
 
@@ -2436,6 +2777,9 @@ impl From<&InferContext<'_, '_>> for OverrideRulesConfig {
         if rule_selection.is_enabled(LintId::of(&INVALID_ASSIGNMENT)) {
             config |= OverrideRulesConfig::INVALID_ENUM_VALUE;
         }
+        if rule_selection.is_enabled(LintId::of(&UNESTABLISHED_ASSERTION_GUARD)) {
+            config |= OverrideRulesConfig::OVERRIDE_ASSERTIONS;
+        }
 
         config
     }
@@ -2464,6 +2808,12 @@ impl OverrideRulesConfig {
 
     const fn check_liskov_violations(self) -> bool {
         self.check_method_liskov_violations() || self.check_attribute_type_violations()
+    }
+
+    /// basedpython: whether an override that is not a `def` is checked against what the method
+    /// it overrides asserts
+    const fn check_override_assertions(self) -> bool {
+        self.contains(OverrideRulesConfig::OVERRIDE_ASSERTIONS)
     }
 
     const fn check_final_method_overridden(self) -> bool {
