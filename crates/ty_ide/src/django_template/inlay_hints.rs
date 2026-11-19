@@ -32,7 +32,7 @@ pub struct TemplateInlayHint {
 }
 
 /// what a template hint says
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
 pub enum TemplateInlayHintKind {
     /// the type of a name the template binds
     Type,

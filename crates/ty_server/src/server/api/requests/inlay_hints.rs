@@ -5,8 +5,8 @@ use lsp_types::InlayHintRequest;
 use lsp_types::{InlayHintParams, Uri};
 use ruff_db::files::File;
 use ty_ide::{
-    InlayHintKind, InlayHintLabel, InlayHintTextEdit, TemplateInlayHint, TemplateInlayHintKind,
-    django_template_inlay_hints, inlay_hints,
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintTextEdit, TemplateInlayHint,
+    TemplateInlayHintKind, django_template_inlay_hints, inlay_hints,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
 use ty_python_semantic::ProgramEnvironment;
@@ -80,28 +80,7 @@ impl BackgroundDocumentRequestHandler for InlayHintRequestHandler {
 
         let inlay_hints: Vec<lsp_types::InlayHint> = inlay_hints
             .into_iter()
-            .filter_map(|hint| {
-                Some(lsp_types::InlayHint {
-                    position: hint
-                        .position
-                        .to_lsp_position(db, file, snapshot.encoding())?
-                        .local_position(),
-                    label: inlay_hint_label(&hint.label, db, snapshot.encoding()),
-                    kind: Some(inlay_hint_kind(hint.kind)),
-                    tooltip: None,
-                    padding_left: hint.padding_left.then_some(true),
-                    padding_right: hint.padding_right.then_some(true),
-                    data: Some(kind_tag(hint.kind.setting())),
-                    text_edits: Some(
-                        hint.text_edits
-                            .into_iter()
-                            .filter_map(|text_edit| {
-                                inlay_hint_text_edit(text_edit, db, file, snapshot.encoding())
-                            })
-                            .collect(),
-                    ),
-                })
-            })
+            .filter_map(|hint| lsp_inlay_hint(hint, db, file, snapshot.encoding()))
             .collect();
 
         tracing::debug!(
@@ -115,6 +94,37 @@ impl BackgroundDocumentRequestHandler for InlayHintRequestHandler {
 }
 
 impl RetriableRequestHandler for InlayHintRequestHandler {}
+
+/// one hint of a python or basedpython file, as the client shows it. `None` for a hint at an
+/// offset the file does not have
+///
+/// also what `by/inlayHintCatalog` draws its examples with, so an example's hints are in the
+/// shape a file's are
+pub(super) fn lsp_inlay_hint(
+    hint: InlayHint,
+    db: &ProjectDatabase,
+    file: File,
+    encoding: PositionEncoding,
+) -> Option<lsp_types::InlayHint> {
+    Some(lsp_types::InlayHint {
+        position: hint
+            .position
+            .to_lsp_position(db, file, encoding)?
+            .local_position(),
+        label: inlay_hint_label(&hint.label, db, encoding),
+        kind: Some(inlay_hint_kind(hint.kind)),
+        tooltip: None,
+        padding_left: hint.padding_left.then_some(true),
+        padding_right: hint.padding_right.then_some(true),
+        data: Some(kind_tag(hint.kind.setting())),
+        text_edits: Some(
+            hint.text_edits
+                .into_iter()
+                .filter_map(|text_edit| inlay_hint_text_edit(text_edit, db, file, encoding))
+                .collect(),
+        ),
+    })
+}
 
 /// one django template hint, as the client shows it
 ///

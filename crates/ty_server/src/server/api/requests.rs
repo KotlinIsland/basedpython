@@ -52,6 +52,7 @@ mod goto_implementation;
 mod goto_type_definition;
 mod hover;
 mod injections;
+mod inlay_hint_catalog;
 mod inlay_hints;
 mod input_status;
 mod merge_conflicts;
@@ -133,6 +134,7 @@ pub(super) use goto_implementation::GotoImplementationRequestHandler;
 pub(super) use goto_type_definition::GotoTypeDefinitionRequestHandler;
 pub(super) use hover::HoverRequestHandler;
 pub(super) use injections::InjectionsRequestHandler;
+pub(super) use inlay_hint_catalog::InlayHintCatalogHandler;
 pub(super) use inlay_hints::InlayHintRequestHandler;
 pub(super) use input_status::InputStatusHandler;
 pub(super) use merge_conflicts::{

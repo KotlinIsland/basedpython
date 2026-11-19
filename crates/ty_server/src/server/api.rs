@@ -149,6 +149,11 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::RulesHandler::METHOD => {
             background_request_task::<requests::RulesHandler>(req, BackgroundSchedule::Worker)
         }
+        // the kinds of inlay hint, each with an example drawn in a database of its own, with no
+        // document behind it
+        requests::InlayHintCatalogHandler::METHOD => background_request_task::<
+            requests::InlayHintCatalogHandler,
+        >(req, BackgroundSchedule::Worker),
         // what `by` takes on its command line, which no project changes
         requests::CommandLineHandler::METHOD => {
             sync_request_task::<requests::CommandLineHandler>(req)

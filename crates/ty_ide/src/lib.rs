@@ -38,6 +38,7 @@ mod import_order;
 mod importer;
 mod inherited_members;
 mod injection;
+mod inlay_hint_catalog;
 mod inlay_hints;
 mod markup;
 mod merge;
@@ -106,8 +107,12 @@ pub use hints::{Hint, HintKind, UnreachableCode, hints, unreachable_code};
 pub use hover::hover;
 pub use inherited_members::{ClassInheritedMembers, InheritedMember, document_inherited_members};
 pub use injection::{Injection, InjectionOrigin, Injections, injections};
+pub use inlay_hint_catalog::{
+    AnyInlayHintKind, INLAY_HINT_CATALOG, InlayHintAbout, InlayHintAttachment,
+    InlayHintExampleLanguage, InlayHintExamples, InlayHintFamily, InlayHintFileKind,
+};
 pub use inlay_hints::{
-    InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
 pub use merge::{

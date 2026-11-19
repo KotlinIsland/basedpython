@@ -59,6 +59,7 @@ mod implementation;
 mod inherited_members;
 mod initialize;
 mod injections;
+mod inlay_hint_catalog;
 mod inlay_hints;
 mod input_status;
 mod merge_conflicts;

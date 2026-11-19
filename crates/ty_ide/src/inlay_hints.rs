@@ -620,6 +620,10 @@ impl InlayHint {
 /// client can tell every kind apart by [`InlayHintKind::setting`] rather than
 /// by reading its label. the django template hints have kinds of their own, in
 /// `TemplateInlayHintKind`
+///
+/// what each kind is, as a client lists it — a title, a family, a description and an
+/// example — is [`InlayHintKind::about`], in `inlay_hint_catalog`, which a kind added
+/// here does not compile without
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
 pub enum InlayHintKind {
     /// The type of an unannotated binding
