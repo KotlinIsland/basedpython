@@ -6295,6 +6295,197 @@ main()
     );
 }
 
+/// the traceback `by run` prints for an exception the program did not catch is python's,
+/// whose own `traceback.format_exc()` the program prints first: so it has every exception
+/// chained to it, the cause of a `raise … from`, the one it was raised while handling, and
+/// not the one a `raise … from None` hid
+#[test]
+fn run_prints_the_exceptions_chained_to_an_uncaught_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import traceback
+
+
+def hidden() -> int:
+    try:
+        return {'a': 1}['b']
+    except KeyError:
+        raise TypeError('the key was never there') from None
+
+
+def handled() -> int:
+    try:
+        return hidden()
+    except TypeError:
+        return int('not a number')
+
+
+def explained() -> int:
+    try:
+        return handled()
+    except ValueError as error:
+        raise RuntimeError('could not explain') from error
+
+
+try:
+    _ = explained()
+except RuntimeError:
+    print(traceback.format_exc(), end='')
+    raise  # ty: ignore[unhandled-exception]
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let printed = &stderr[stderr.find("Traceback").expect(&stderr)..];
+    assert_eq!(printed, stdout, "not the traceback python formats");
+    let order = [
+        "main.by\", line 8, in hidden",
+        "TypeError: the key was never there",
+        "During handling of the above exception, another exception occurred:",
+        "main.by\", line 15, in handled",
+        "ValueError: invalid literal",
+        "The above exception was the direct cause of the following exception:",
+        "main.by\", line 22, in explained",
+        "RuntimeError: could not explain",
+    ];
+    let mut rest = printed;
+    for expected in order {
+        let at = rest
+            .find(expected)
+            .unwrap_or_else(|| panic!("no `{expected}` in order:\n{printed}"));
+        rest = &rest[at + expected.len()..];
+    }
+    assert!(!printed.contains("KeyError"), "{printed}");
+}
+
+/// an exception group is printed as python prints one: each of its exceptions, with its own
+/// chain, and the notes added to it
+#[test]
+fn run_prints_an_uncaught_exception_group_as_python_does() {
+    let Some(python) = python_at_least(11, "an exception group needs") else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import traceback
+
+
+def check(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as error:
+        raise LookupError(f'no number in {value!r}') from error
+
+
+def check_all(values: list[str]) -> None:
+    errors: list[Exception] = []
+    for value in values:
+        try:
+            _ = check(value)
+        except LookupError as error:
+            errors.append(error)
+    group = ExceptionGroup('some values are not numbers', errors)
+    group.add_note('checked every value')
+    raise group
+
+
+try:
+    check_all(['1', 'a', 'b'])
+except ExceptionGroup:
+    print(traceback.format_exc(), end='')
+    raise  # ty: ignore[unhandled-exception]
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", &python, "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let printed = &stderr[stderr.find("  + Exception Group Traceback").expect(&stderr)..];
+    assert_eq!(printed, stdout, "not the traceback python formats");
+    for expected in [
+        "ExceptionGroup: some values are not numbers (2 sub-exceptions)",
+        "checked every value",
+        "LookupError: no number in 'a'",
+        "LookupError: no number in 'b'",
+        "main.by\", line 8, in check",
+        "The above exception was the direct cause of the following exception:",
+    ] {
+        assert!(printed.contains(expected), "no `{expected}`:\n{printed}");
+    }
+}
+
+/// `multiprocessing` raises a worker's exception in the parent with the worker's traceback,
+/// as text, as its cause: printing the cause is the only way the error's origin is shown
+#[test]
+fn run_shows_the_traceback_of_a_failed_pool_worker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import multiprocessing as mp
+
+
+def fail(x: int) -> int:
+    raise ValueError(f'worker {x} failed')
+
+
+def main():
+    with mp.get_context('spawn').Pool(1) as pool:
+        _ = pool.map(fail, [7])  # ty: ignore[unhandled-exception]
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let remote = stderr
+        .find("multiprocessing.pool.RemoteTraceback")
+        .unwrap_or_else(|| panic!("the worker's traceback is missing:\n{stderr}"));
+    let cause = stderr[remote..]
+        .find("The above exception was the direct cause of the following exception:")
+        .unwrap_or_else(|| panic!("the worker's traceback is not the cause:\n{stderr}"));
+    let worker = &stderr[remote..remote + cause];
+    assert!(
+        worker.contains("in fail") && worker.contains("ValueError: worker 7 failed"),
+        "{worker}"
+    );
+    assert!(
+        stderr.trim_end().ends_with("ValueError: worker 7 failed"),
+        "{stderr}"
+    );
+}
+
 /// a debugger stops for an exception the program did not catch as it leaves the outermost
 /// frame, and shows the frames it came through. that has to be the program's own exception,
 /// raised where the program raised it, as it is under `python main.py` — not a `SystemExit`

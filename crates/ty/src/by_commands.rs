@@ -3366,11 +3366,28 @@ def _rewrite(frames):
     return out
 
 
-def format_exception(etype, evalue, tb):
-    """The traceback python prints for an exception, with every frame of a staged
-    module at the line of the project file it stands for, and none of the frames
-    that ran before the program's first."""
-    frames = _rewrite(traceback.extract_tb(tb))
+class _ProgramStack(traceback.StackSummary):
+    """The frames of one exception of a traceback, as `_rewrite` leaves them, which
+    `traceback.TracebackException` formats in place of the frames it extracted."""
+
+    def format(self, **kwargs):
+        # a frame `_rewrite` could only name is already text. the others are formatted a
+        # run at a time, so python still folds a repeated one
+        out = []
+        run = []
+        for frame in [*self, None]:
+            if isinstance(frame, traceback.FrameSummary):
+                run.append(frame)
+                continue
+            out.extend(traceback.StackSummary.from_list(run).format(**kwargs))
+            run = []
+            if frame is not None:
+                out.append(frame)
+        return out
+
+
+def _program_stack(stack, evalue):
+    frames = _rewrite(stack)
     if (
         isinstance(evalue, SyntaxError)
         and evalue.filename is not None
@@ -3384,20 +3401,39 @@ def format_exception(etype, evalue, tb):
         # the program's own module, which the runner could not compile: every frame
         # is the runner's, so it is reported as python reports a script it cannot
         # compile, by where the error is and nothing above it
-        return "".join(traceback.format_exception_only(etype, evalue))
-    out = ["Traceback (most recent call last):\n"]
-    # a frame `_rewrite` could only name is already text. the others are formatted a
-    # run at a time, so python still folds a repeated one
-    run = []
-    for frame in frames + [None]:
-        if isinstance(frame, traceback.FrameSummary):
-            run.append(frame)
-            continue
-        out.extend(traceback.StackSummary.from_list(run).format())
-        run = []
-        if frame is not None:
-            out.append(frame)
-    out.extend(traceback.format_exception_only(etype, evalue))
+        return _ProgramStack()
+    return _ProgramStack(frames)
+
+
+def format_exception(etype, evalue, tb):
+    """The traceback python prints for an exception, with every frame of a staged
+    module at the line of the project file it stands for, and none of the frames
+    that ran before the program's first.
+
+    It is python's own `traceback.TracebackException`, so what python prints around
+    the frames is printed here too: the exceptions chained to this one, its cause or
+    the one it was raised while handling, an exception group's exceptions, and notes.
+    Only the frames of each are replaced."""
+    report = traceback.TracebackException(etype, evalue, tb)
+    # each exception python will report, beside the one it was extracted from. python
+    # leaves out of the chain one it has already reported, so this ends
+    pending = [(report, evalue)]
+    while pending:
+        node, value = pending.pop()
+        node.stack = _program_stack(node.stack, value)
+        if node.__cause__ is not None:
+            pending.append((node.__cause__, value.__cause__))
+        if node.__context__ is not None:
+            pending.append((node.__context__, value.__context__))
+        # an exception group's exceptions, from python 3.11
+        grouped = getattr(node, "exceptions", None) or ()
+        pending.extend(zip(grouped, getattr(value, "exceptions", ())))
+    # resumed from here rather than by `str.join`: a profile counts a generator's calls
+    # against what resumes it, and a builtin the program calls too would keep the
+    # formatting of this traceback in the program's profile
+    out = []
+    for text in report.format():
+        out.append(text)
     return "".join(out)
 
 
