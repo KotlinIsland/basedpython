@@ -38,6 +38,7 @@ use by_stage::runtime::RuntimeLayout;
 use by_stage::sourcemap::{OwnCode, TracebackEntry, stage_module, write_sourcemap_module};
 use by_stage::staging::{Staging, transpiled_destination};
 use by_stage::verbatim::stage_verbatim;
+use by_stage::write_back::{Inventory, Mirror};
 
 /// The transpile config for a command whose `--min-version` is optional.
 ///
@@ -164,6 +165,9 @@ pub(crate) struct StagedRun {
     pub(crate) tree: tempfile::TempDir,
     /// the project file behind each copy in the tree
     carried: BTreeMap<PathBuf, PathBuf>,
+    /// where the tree's files and directories came from in the project, for what the program
+    /// writes there to be carried back
+    pub(crate) mirror: Mirror,
     traceback_entries: Vec<TracebackEntry>,
     /// the means to build the project's db again, unfrozen
     pub(crate) rebuilder: Rebuilder,
@@ -338,6 +342,7 @@ pub(crate) fn stage_run(
         })
         .collect();
     write_project_module(&mut staging, &root, &carried)?;
+    let mirror = Mirror::of(&staging);
     staging.finish()?;
     Ok(Ok(StagedRun {
         cwd,
@@ -346,6 +351,7 @@ pub(crate) fn stage_run(
         config,
         tree: tmp,
         carried,
+        mirror,
         traceback_entries,
         rebuilder,
         module,
@@ -388,6 +394,7 @@ pub(crate) fn cmd_run(
         config,
         tree: tmp,
         carried,
+        mirror,
         traceback_entries,
         rebuilder: _,
         module,
@@ -516,6 +523,10 @@ pub(crate) fn cmd_run(
         }
         None => None,
     };
+    // last, once everything `by` puts into the tree is there: the extensions above included
+    let inventory = mirror
+        .inventory(tmp.path())
+        .context("could not read the staged tree before running the program")?;
     let status = signals
         .run(command.arg(&module).args(args).current_dir(workdir))
         .with_context(|| match launcher {
@@ -531,6 +542,9 @@ pub(crate) fn cmd_run(
         })?;
 
     let mut code = exit_code(status);
+    if !write_back(&inventory, &cwd) && code == 0 {
+        code = 1;
+    }
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
         if file.is_file() {
             let report = cwd.join(report);
@@ -567,6 +581,18 @@ pub(crate) fn cmd_run(
     drop(tmp);
     drop(signals);
     std::process::exit(code);
+}
+
+/// carry what the program changed in the staged tree back to the project, saying on stderr
+/// what was written and what was not. `false` when a file could not be read or written
+#[expect(clippy::print_stderr)]
+pub(crate) fn write_back(inventory: &Inventory, cwd: &Path) -> bool {
+    let mut written = true;
+    for outcome in inventory.write_back() {
+        eprintln!("{}", outcome.describe(cwd));
+        written &= !outcome.is_error();
+    }
+    written
 }
 
 /// the status `by` exits with for a program that ended with `status`: the program's own, or

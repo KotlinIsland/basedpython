@@ -246,7 +246,7 @@ pub(crate) fn is_hidden_within(path: &Path, root: &Path) -> bool {
         .into_iter()
         .flat_map(Path::components)
         .filter_map(|component| component.as_os_str().to_str())
-        .any(|name| name.starts_with('.') || NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
+        .any(|name| !may_hold_build_content_named(name))
 }
 
 /// Whether the build walk may descend into this entry.
@@ -264,7 +264,13 @@ pub(crate) fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
     entry
         .file_name()
         .to_str()
-        .is_some_and(|name| !name.starts_with('.') && !NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
+        .is_some_and(may_hold_build_content_named)
+}
+
+/// Whether the build walk may descend into a directory called `name`, the part of
+/// [`may_hold_build_content`] that reads the name alone.
+pub(crate) fn may_hold_build_content_named(name: &str) -> bool {
+    !name.starts_with('.') && !NON_SOURCE_DIRS_TY_ALLOWS.contains(&name)
 }
 
 /// Whether a project walk may descend into this entry: hidden directories

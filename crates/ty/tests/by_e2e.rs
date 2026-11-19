@@ -1509,6 +1509,208 @@ fn run_in_build_runs_in_the_tree_it_staged() {
     );
 }
 
+/// a project whose package `app` holds a `.by` module, a `.py` module and a data file, with
+/// `program` as its `main.by`
+///
+/// a program reaches the package's staged directory through `app.__path__`, as django does to
+/// find an app's migrations: a module's `__file__` names its file in the project, but the
+/// package's search path is the tree the run staged
+fn project_writing_into_its_package(dir: &Path, program: &str) {
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let package = dir.join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("store.by"), "VALUE = 'staged'\n").unwrap();
+    fs::write(package.join("helper.py"), "VALUE = 'staged'\n").unwrap();
+    fs::write(package.join("notes.txt"), "staged\n").unwrap();
+    fs::write(
+        dir.join("main.by"),
+        format!(
+            "import os\nimport app\n\n\ndef place(name: str) -> str:\n    \
+             return os.path.join(app.__path__[0], name)\n\n\n{program}"
+        ),
+    )
+    .unwrap();
+}
+
+/// `by run main` in `dir`, and what it wrote on stderr
+fn run_writing_into_the_tree(dir: &Path) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        // so that python caches the bytecode of what it imports beside it, in the tree
+        .env_remove("PYTHONDONTWRITEBYTECODE")
+        .args(["run", "main"])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    stderr
+}
+
+/// a file the program makes in its package's staged directory lands in the project, a directory
+/// it makes there included, as `makemigrations` makes `migrations/0001_initial.py`. the bytecode
+/// python caches beside the modules it imports is not carried back with it
+#[test]
+fn run_writes_back_a_file_the_program_made_in_its_package() {
+    let dir = Scratch::new("run_writes_back_a_new_file");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "os.makedirs(place('migrations'), exist_ok=True)\n\
+         with open(place('migrations/0001_initial.py'), 'w') as file:\n    \
+         _ = file.write('made = True\\n')\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    let made = dir.join("app").join("migrations").join("0001_initial.py");
+    assert_eq!(
+        fs::read_to_string(&made).ok().as_deref(),
+        Some("made = True\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("wrote back"), "{stderr}");
+    let cached: Vec<_> = walkdir::WalkDir::new(&*dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name() == "__pycache__")
+        .map(|entry| entry.path().to_path_buf())
+        .collect();
+    assert!(cached.is_empty(), "{cached:?}\n{stderr}");
+}
+
+/// a program that changes its copy of a `.py` of the project changes the project's
+#[test]
+fn run_writes_back_a_change_to_a_carried_file() {
+    let dir = Scratch::new("run_writes_back_a_changed_copy");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "with open(place('helper.py'), 'w') as file:\n    \
+         _ = file.write(\"VALUE = 'changed'\\n\")\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("helper.py"))
+            .ok()
+            .as_deref(),
+        Some("VALUE = 'changed'\n"),
+        "{stderr}"
+    );
+}
+
+/// a program that deletes its copy of a project file deletes the project's
+#[test]
+fn run_deletes_a_carried_file_the_program_deleted() {
+    let dir = Scratch::new("run_deletes_a_deleted_copy");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(&dir, "os.remove(place('notes.txt'))\n");
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert!(!dir.join("app").join("notes.txt").exists(), "{stderr}");
+    assert!(stderr.contains("deleted"), "{stderr}");
+}
+
+/// a transpiled module has no project file of its own: what the program writes over it is not
+/// carried to the `.by` it came from, nor beside it, and is said to be lost
+#[test]
+fn run_does_not_write_back_a_change_to_a_transpiled_module() {
+    let dir = Scratch::new("run_does_not_write_back_a_transpiled_module");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "with open(place('store.py'), 'w') as file:\n    \
+         _ = file.write(\"VALUE = 'changed'\\n\")\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("store.by"))
+            .ok()
+            .as_deref(),
+        Some("VALUE = 'staged'\n"),
+        "{stderr}"
+    );
+    assert!(!dir.join("app").join("store.py").exists(), "{stderr}");
+    assert!(
+        stderr.contains("not written back: the program changed app/store.py")
+            && stderr.contains("transpiled from"),
+        "{stderr}"
+    );
+}
+
+/// a project file that changed while the program ran is left as it is, rather than overwritten
+/// with what the program made of the copy it was staged as
+#[test]
+fn run_leaves_a_project_file_that_changed_while_the_program_ran() {
+    let dir = Scratch::new("run_leaves_a_file_changed_meanwhile");
+    fs::create_dir_all(&*dir).unwrap();
+    // the program runs in the project, so a relative path is the project's own file
+    project_writing_into_its_package(
+        &dir,
+        "with open('app/helper.py', 'w') as file:\n    \
+         _ = file.write(\"VALUE = 'project'\\n\")\n\
+         with open(place('helper.py'), 'w') as file:\n    \
+         _ = file.write(\"VALUE = 'tree'\\n\")\n",
+    );
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("helper.py"))
+            .ok()
+            .as_deref(),
+        Some("VALUE = 'project'\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("changed in the project while the program ran"),
+        "{stderr}"
+    );
+}
+
+/// the root of a src-layout project's tree holds what is staged from both `src/` and the
+/// project root, so a file the program makes there has no one place in the project, and is
+/// reported rather than written to either
+#[test]
+fn run_does_not_write_back_a_file_whose_directory_came_from_two_places() {
+    let dir = Scratch::new("run_does_not_write_back_an_ambiguous_file");
+    let package = dir.join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        dir.join("main.by"),
+        "import os\nimport app\n\n\
+         with open(os.path.join(os.path.dirname(app.__path__[0]), 'made.txt'), 'w') as file:\n    \
+         _ = file.write('made\\n')\n",
+    )
+    .unwrap();
+
+    let stderr = run_writing_into_the_tree(&dir);
+
+    assert!(!dir.join("made.txt").exists(), "{stderr}");
+    assert!(!dir.join("src").join("made.txt").exists(), "{stderr}");
+    assert!(
+        stderr.contains("not written back: made.txt")
+            && stderr.contains("staged from more than one in the project"),
+        "{stderr}"
+    );
+}
+
 /// the modules, separated by whitespace, that whoever installed them says the interpreter
 /// `$PYTHON` names can import. a test that needs one fails when it cannot import it, rather
 /// than skipping as it does on an interpreter that was not given it
@@ -2741,6 +2943,30 @@ fn repl_starts_in_a_module() {
         session.starts_with("from .helpers import double\n")
             && session.ends_with("main()\n(__name__, __package__, __file__.endswith('main.by'))\n"),
         "{session}"
+    );
+}
+
+/// what a session writes into the tree it was staged into is carried back to the project when
+/// it ends, as it is for `by run`
+#[test]
+fn repl_writes_back_what_the_session_wrote_into_its_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_module(dir.path());
+    let (status, _, stderr) = repl_session(
+        dir.path(),
+        "import os\n\
+         import pkg\n\
+         with open(os.path.join(pkg.__path__[0], 'made.txt'), 'w') as file:\n    \
+         _ = file.write('made\\n')\n\n",
+        &[],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("pkg").join("made.txt"))
+            .ok()
+            .as_deref(),
+        Some("made\n"),
+        "{stderr}"
     );
 }
 

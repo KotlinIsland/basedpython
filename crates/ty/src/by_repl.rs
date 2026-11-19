@@ -103,6 +103,7 @@ pub(crate) fn cmd_repl(
         config,
         tree,
         rebuilder,
+        mirror,
         ..
     } = staged;
     let session_file = flags.session_file.map(|path| cwd.join(path));
@@ -133,6 +134,9 @@ pub(crate) fn cmd_repl(
         // the editor's, not the program's
         .env_remove(EnvVars::BY_REPL_EVENTS_TOKEN)
         .current_dir(&cwd);
+    let inventory = mirror
+        .inventory(tree.path())
+        .context("could not read the staged tree before starting the session")?;
     let mut child = signals.start(&mut command).with_context(|| {
         format!(
             "could not run `{}`, the interpreter from {}",
@@ -156,10 +160,14 @@ pub(crate) fn cmd_repl(
         .wait(&mut child)
         .context("the session's interpreter could not be waited for")?;
     drop(repl);
+    let mut code = crate::by_commands::exit_code(status);
+    if !crate::by_commands::write_back(&inventory, &cwd) && code == 0 {
+        code = 1;
+    }
     // `process::exit` skips destructors, and the tree is a temporary directory
     drop(tree);
     drop(signals);
-    std::process::exit(crate::by_commands::exit_code(status));
+    std::process::exit(code);
 }
 
 /// the editor's connection for the session's events, to `port` on the loopback interface, with

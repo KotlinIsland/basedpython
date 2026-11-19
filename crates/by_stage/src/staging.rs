@@ -37,6 +37,9 @@ pub struct Staging {
     /// destinations another writer produced -> the source each was produced from, held apart
     /// from `written` so a source that would land on one is reported rather than overwriting it
     recorded: BTreeMap<PathBuf, PathBuf>,
+    /// the destinations in `written` that are copies of their source rather than something
+    /// made from it
+    copied: BTreeSet<PathBuf>,
     /// whether the tree is known to carry a manifest already — see [`Self::mark_as_output`]
     marked: bool,
     /// relative destination of each initializer written for a directory package -> the
@@ -50,6 +53,7 @@ impl Staging {
             out: out.to_path_buf(),
             written: BTreeMap::new(),
             recorded: BTreeMap::new(),
+            copied: BTreeSet::new(),
             marked: false,
             initializers: BTreeMap::new(),
         }
@@ -113,6 +117,12 @@ impl Staging {
             .map(|(destination, source)| (destination.as_path(), source.as_deref()))
     }
 
+    /// Whether the file at `relative` is a copy of its source, made by [`Self::copy`], rather
+    /// than something written from it.
+    pub(crate) fn is_copy(&self, relative: &Path) -> bool {
+        self.copied.contains(relative)
+    }
+
     /// Every path in the tree produced from a project file, paired with that file: what was
     /// written from a source, and what another writer recorded.
     pub(crate) fn laid_out(&self) -> impl Iterator<Item = (&Path, &Path)> {
@@ -139,6 +149,7 @@ impl Staging {
         contents: &str,
     ) -> anyhow::Result<()> {
         self.claim(relative, source)?;
+        self.copied.remove(relative);
         self.mark_as_output()?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;
@@ -200,6 +211,7 @@ impl Staging {
     /// Copy `source` to `relative` verbatim.
     pub(crate) fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         self.claim(relative, Some(source))?;
+        self.copied.insert(relative.to_path_buf());
         self.mark_as_output()?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;

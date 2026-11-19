@@ -53,6 +53,8 @@
 //!   file runs as.
 //! - [`session`] — a `by repl` session, and whether what has been typed into it
 //!   is a whole input yet
+//! - [`write_back`] — what a program run out of a staged tree wrote there, carried back to the
+//!   project
 
 pub mod emit;
 pub mod layout;
@@ -66,3 +68,4 @@ pub mod session;
 pub mod sourcemap;
 pub mod staging;
 pub mod verbatim;
+pub mod write_back;
