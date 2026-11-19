@@ -3069,6 +3069,8 @@ _RUNTIME_FILE = "<by runtime>"
 # while the program is profiled, each code object `_relined` gave no `.by` line, by its id,
 # with the staged module and the line of it it was compiled from
 _TRANSPILER_WRITTEN = None
+# the profiler measuring the program, once the program's first line has run
+_PROFILER = None
 
 # this file, whose frames are never the program's
 _RUNNER = os.path.realpath(__file__)
@@ -3291,13 +3293,7 @@ def format_exception(etype, evalue, tb):
         # an exception group's exceptions, from python 3.11
         grouped = getattr(node, "exceptions", None) or ()
         pending.extend(zip(grouped, getattr(value, "exceptions", ())))
-    # resumed from here rather than by `str.join`: a profile counts a generator's calls
-    # against what resumes it, and a builtin the program calls too would keep the
-    # formatting of this traceback in the program's profile
-    out = []
-    for text in report.format():
-        out.append(text)
-    return "".join(out)
+    return "".join(report.format())
 
 
 def runs_transpiled_code(tb):
@@ -3313,7 +3309,19 @@ def runs_transpiled_code(tb):
 
 
 def _excepthook(etype, evalue, tb):
-    sys.stderr.write(format_exception(etype, evalue, tb))
+    # python prints the traceback once the program has ended, so printing it is not measured.
+    # a profile cannot leave it out afterwards: `pstats` keeps one total for each caller of a
+    # function, so the program's calls to a function the traceback calls too, and to what that
+    # calls, would not be told apart from the traceback's. the program's other threads and its
+    # own `atexit` handlers, which run after it, are measured again
+    profiler = _PROFILER
+    if profiler is not None:
+        profiler.disable()
+    try:
+        sys.stderr.write(format_exception(etype, evalue, tb))
+    finally:
+        if profiler is not None:
+            profiler.enable()
 
 
 def _project_file_of(origin):
@@ -4026,7 +4034,7 @@ def _run_as_main(module, profiler=None):
     if profiler is not None:
         # here rather than before the module was found, so the profile is the
         # program's and not the runner's search for it
-        profiler.enable()
+        _measure(profiler)
     exec(code, main_module.__dict__)
 
 
@@ -4051,7 +4059,7 @@ def _run_script(staged, file, argv0, profiler=None):
     else:
         code = loader.get_code("__main__")
     if profiler is not None:
-        profiler.enable()
+        _measure(profiler)
     exec(code, main_module.__dict__)
 
 
@@ -4211,6 +4219,14 @@ def _start_profile(snapshot):
     # writes it
     atexit.register(profiler.disable)
     return profiler
+
+
+def _measure(profiler):
+    """Measure the program with `profiler` from here on, which the excepthook pauses while it
+    prints a traceback."""
+    global _PROFILER
+    _PROFILER = profiler
+    profiler.enable()
 
 
 def _summed(left, right):
