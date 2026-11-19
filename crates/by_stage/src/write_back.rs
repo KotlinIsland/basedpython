@@ -21,7 +21,7 @@
 //! about where a new file in it belongs, so the file is reported rather than written.
 //!
 //! Directories the build never descends into — hidden ones, `__pycache__`, `build` and the rest
-//! `may_hold_build_content` turns away — are not part of the mirror in either
+//! `may_hold_build_content_named` turns away — are not part of the mirror in either
 //! direction: nothing in them is staged, and nothing a program writes into them is carried back.
 //! That is also what keeps the bytecode python caches in `__pycache__` out of the project.
 
@@ -34,7 +34,7 @@ use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
 use crate::project::may_hold_build_content_named;
-use crate::staging::Staging;
+use crate::staging::{Staging, placement_base};
 
 type ContentDigest = [u8; 32];
 
@@ -52,8 +52,9 @@ pub struct Mirror {
 }
 
 impl Mirror {
-    /// Where everything `staging` placed came from.
-    pub fn of(staging: &Staging) -> Self {
+    /// Where everything `staging` placed came from, for a project rooted at `root` with the
+    /// module roots `roots`, which staging placed it by.
+    pub fn of(staging: &Staging, roots: &[PathBuf], root: &Path) -> Self {
         let mut mirror = Self::default();
         for (relative, source) in staging.entries() {
             let Some(source) = source else {
@@ -68,32 +69,21 @@ impl Mirror {
                     .transpiled
                     .insert(relative.to_path_buf(), source.to_path_buf());
             }
-            mirror.record_directories(relative, source);
+            // a source below no root keeps its whole path in the tree, so its directories there
+            // were staged from no directory of the project
+            if let Some(base) = placement_base(roots, root, source)
+                && let Some(staged) = relative.parent()
+            {
+                for directory in staged.ancestors() {
+                    mirror
+                        .directories
+                        .entry(directory.to_path_buf())
+                        .or_default()
+                        .insert(base.join(directory));
+                }
+            }
         }
         mirror
-    }
-
-    /// Record the directories a file staged at `relative` from `source` lands in.
-    ///
-    /// Staging keeps a source's path below the module root it is in (see
-    /// [`crate::staging::relative_destination`]), so the staged directory `n` levels above
-    /// `relative` is the project directory `n` levels above `source`, up to the tree's root.
-    fn record_directories(&mut self, relative: &Path, source: &Path) {
-        let (Some(staged), Some(project)) = (relative.parent(), source.parent()) else {
-            return;
-        };
-        if !project.ends_with(staged) {
-            return;
-        }
-        let Some(base) = project.ancestors().nth(staged.components().count()) else {
-            return;
-        };
-        for directory in staged.ancestors() {
-            self.directories
-                .entry(directory.to_path_buf())
-                .or_default()
-                .insert(base.join(directory));
-        }
     }
 
     /// Every file in `tree` by its content, as it is before the program starts.
@@ -144,18 +134,24 @@ impl Inventory {
     /// file already is what the program left.
     pub fn write_back(&self) -> Vec<Outcome> {
         let mut outcomes = Vec::new();
+        // everything at a path the walk saw, a file or not: a copy whose path holds something
+        // else now was replaced rather than deleted
         let mut present = BTreeSet::new();
+        // what the walk could not read, whose files are neither present nor gone
+        let mut unreadable = Vec::new();
+        let mut differing = Vec::new();
         for entry in walk(&self.tree) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    let path = error
+                    let staged = error
                         .path()
                         .map_or_else(PathBuf::new, |path| relative_to(&self.tree, path));
-                    outcomes.push(Outcome::Unreadable {
-                        staged: path,
-                        error: io::Error::other(error),
+                    unreadable.push(staged.clone());
+                    let error = error.into_io_error().unwrap_or_else(|| {
+                        io::Error::other("a directory of the tree loops back on itself")
                     });
+                    outcomes.push(Outcome::Unreadable { staged, error });
                     continue;
                 }
             };
@@ -163,34 +159,42 @@ impl Inventory {
             if entry.file_type().is_dir() {
                 continue;
             }
+            present.insert(relative.clone());
             if !entry.file_type().is_file() {
                 if !self.others.contains(&relative) {
                     outcomes.push(Outcome::NotAFile(relative));
                 }
                 continue;
             }
-            present.insert(relative.clone());
-            let now = match digest(entry.path()) {
-                Ok(now) => now,
-                Err(error) => {
-                    outcomes.push(Outcome::Unreadable {
-                        staged: relative,
-                        error,
-                    });
-                    continue;
-                }
-            };
+            match digest(entry.path()) {
+                Ok(now) if self.files.get(&relative) == Some(&now) => {}
+                Ok(now) => differing.push((relative, now)),
+                Err(error) => outcomes.push(Outcome::Unreadable {
+                    staged: relative,
+                    error,
+                }),
+            }
+        }
+        // deletions first: a file the program renamed to a name its project's file system cannot
+        // tell from the old one, as a case-only rename is on a case-insensitive one, is then
+        // deleted under its old name before it is written under its new one, rather than the
+        // other way round, which deletes what was just written. so is a file the program
+        // replaced with a directory of the same name, which can then be made
+        for (relative, before) in &self.files {
+            if !present.contains(relative)
+                && !unreadable
+                    .iter()
+                    .any(|directory| relative.starts_with(directory))
+            {
+                outcomes.extend(self.deleted(relative, *before));
+            }
+        }
+        for (relative, now) in differing {
             let outcome = match self.files.get(&relative) {
-                Some(before) if *before == now => None,
                 Some(before) => self.changed(&relative, *before, now),
                 None => self.created(&relative, now),
             };
             outcomes.extend(outcome);
-        }
-        for (relative, before) in &self.files {
-            if !present.contains(relative) {
-                outcomes.extend(self.deleted(relative, *before));
-            }
         }
         outcomes
     }
@@ -202,21 +206,52 @@ impl Inventory {
         now: ContentDigest,
     ) -> Option<Outcome> {
         match self.mirror.copies.get(relative) {
-            Some(project) => self.settle(project, Some(before), Some((relative, now))),
+            Some(project) => self.settle(
+                project,
+                project.parent().unwrap_or(project),
+                Some(before),
+                Some((relative, now)),
+            ),
             None => Some(self.lost(relative, false)),
         }
     }
 
     fn deleted(&self, relative: &Path, before: ContentDigest) -> Option<Outcome> {
-        match self.mirror.copies.get(relative) {
-            Some(project) => self.settle(project, Some(before), None),
-            None => Some(self.lost(relative, true)),
+        let Some(project) = self.mirror.copies.get(relative) else {
+            return Some(self.lost(relative, true));
+        };
+        let outcome = self.settle(
+            project,
+            project.parent().unwrap_or(project),
+            Some(before),
+            None,
+        );
+        if matches!(outcome, Some(Outcome::Deleted(_))) {
+            self.remove_emptied_directories(relative, project);
+        }
+        outcome
+    }
+
+    /// Remove the project directories above `project` that the program removed from the tree,
+    /// once deleting `project` has left them empty, so that a package the program deleted is
+    /// deleted rather than left as empty directories, and a file the program put in place of
+    /// one can be written.
+    fn remove_emptied_directories(&self, relative: &Path, project: &Path) {
+        for (staged, directory) in relative.ancestors().zip(project.ancestors()).skip(1) {
+            if staged.as_os_str().is_empty()
+                || self.tree.join(staged).is_dir()
+                || fs::remove_dir(directory).is_err()
+            {
+                break;
+            }
         }
     }
 
     fn created(&self, relative: &Path, now: ContentDigest) -> Option<Outcome> {
         match self.destination(relative) {
-            Ok(project) => self.settle(&project, None, Some((relative, now))),
+            Ok((directory, project)) => {
+                self.settle(&project, &directory, None, Some((relative, now)))
+            }
             Err(outcome) => Some(outcome),
         }
     }
@@ -231,8 +266,8 @@ impl Inventory {
 
     /// Where in the project a file the program made at `relative` goes: below the project
     /// directory its nearest directory that was there before the program started was staged
-    /// from.
-    fn destination(&self, relative: &Path) -> Result<PathBuf, Outcome> {
+    /// from, which is returned with it.
+    fn destination(&self, relative: &Path) -> Result<(PathBuf, PathBuf), Outcome> {
         let parent = relative.parent().unwrap_or(Path::new(""));
         let unmapped = || Outcome::Unmapped(relative.to_path_buf());
         let existing = parent
@@ -241,8 +276,9 @@ impl Inventory {
             .ok_or_else(unmapped)?;
         let below = relative.strip_prefix(existing).map_err(|_| unmapped())?;
         let sources = self.mirror.directories.get(existing).ok_or_else(unmapped)?;
-        match sources.iter().collect::<Vec<_>>().as_slice() {
-            [source] => Ok(source.join(below)),
+        let mut sources_iter = sources.iter();
+        match (sources_iter.next(), sources_iter.next()) {
+            (Some(source), None) => Ok((source.clone(), source.join(below))),
             _ => Err(Outcome::Ambiguous {
                 staged: relative.to_path_buf(),
                 directories: sources.iter().cloned().collect(),
@@ -253,12 +289,20 @@ impl Inventory {
     /// Make `project` hold what the program left at `wanted` (its path in the tree and its
     /// digest), or make it absent when `wanted` is `None` — provided it still holds `staged`,
     /// what it held when the tree was staged, `None` for a file that was not there.
+    ///
+    /// `known` is the directory of the project the path is known to be below, a real one the
+    /// build read files from: nothing between it and `project` may be a symbolic link, which
+    /// would take the write somewhere the build never staged from, outside the project even
     fn settle(
         &self,
         project: &Path,
+        known: &Path,
         staged: Option<ContentDigest>,
         wanted: Option<(&Path, ContentDigest)>,
     ) -> Option<Outcome> {
+        if through_link(project, known) {
+            return Some(Outcome::Linked(project.to_path_buf()));
+        }
         let current = match project_digest(project) {
             Ok(current) => current,
             Err(error) => {
@@ -321,6 +365,9 @@ pub enum Outcome {
     Unmapped(PathBuf),
     /// the program left something that is neither a file nor a directory
     NotAFile(PathBuf),
+    /// the project file is reached through a symbolic link below the directory it was staged
+    /// from or would be written to
+    Linked(PathBuf),
     /// a file in the tree could not be read
     Unreadable { staged: PathBuf, error: io::Error },
     /// the project file could not be read, written or deleted
@@ -394,6 +441,10 @@ impl Outcome {
                 "warning: not written back: {}, which is not a regular file",
                 portable(staged)
             ),
+            Self::Linked(project) => format!(
+                "warning: not written back: {} is reached through a symbolic link in the project",
+                shown(project)
+            ),
             Self::Unreadable { staged, error } => format!(
                 "error: could not read {} in the staged tree to write it back: {error}",
                 portable(staged)
@@ -440,12 +491,33 @@ fn project_digest(path: &Path) -> io::Result<Option<ContentDigest>> {
     }
 }
 
+/// whether anything from below `known` down to `project` itself is a symbolic link
+fn through_link(project: &Path, known: &Path) -> bool {
+    project
+        .ancestors()
+        .take_while(|path| *path != known && path.starts_with(known))
+        .any(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()))
+}
+
 /// copy `from` over `to`, making the directories `to` needs
+///
+/// through a file beside `to` that is then renamed over it, so that `to` is never left half
+/// written: the old content stays until the new is whole
 fn write(from: &Path, to: &Path) -> io::Result<()> {
-    if let Some(parent) = to.parent() {
-        fs::create_dir_all(parent)?;
+    let (Some(parent), Some(name)) = (to.parent(), to.file_name()) else {
+        return Err(io::Error::other("not a path a file can be written to"));
+    };
+    fs::create_dir_all(parent)?;
+    let partial = parent.join(format!(
+        ".{}.{}.by-write-back",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let written = fs::copy(from, &partial).and_then(|_| fs::rename(&partial, to));
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
     }
-    fs::copy(from, to).map(drop)
+    written
 }
 
 /// a path of the tree with `/` separators, whatever the platform
@@ -460,29 +532,45 @@ fn portable(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// a project with `pkg/a.py`, staged into a tree beside a file of `by`'s own in a directory
-    /// of its own, and the tree inventoried
-    fn staged() -> (tempfile::TempDir, tempfile::TempDir, Inventory) {
+    /// a project holding `files` (relative path and content), each staged as a copy into a tree
+    /// beside a file of `by`'s own in a directory of its own, and the tree inventoried
+    fn staged(files: &[(&str, &str)]) -> (tempfile::TempDir, tempfile::TempDir, Inventory) {
         let project = tempfile::tempdir().expect("tempdir");
         let tree = tempfile::tempdir().expect("tempdir");
-        fs::create_dir_all(project.path().join("pkg")).expect("mkdir");
-        fs::write(project.path().join("pkg/a.py"), "staged\n").expect("write");
         let mut staging = Staging::new(tree.path());
-        staging
-            .copy(Path::new("pkg/a.py"), &project.path().join("pkg/a.py"))
-            .expect("copy");
+        for (relative, content) in files {
+            let path = project.path().join(relative);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+            fs::write(&path, content).expect("write");
+            staging.copy(Path::new(relative), &path).expect("copy");
+        }
         staging
             .write(Path::new("_by_own/marker"), None, "by's\n")
             .expect("write");
-        let mirror = Mirror::of(&staging);
+        let mirror = Mirror::of(&staging, &[project.path().to_path_buf()], project.path());
         staging.finish().expect("finish");
         let inventory = mirror.inventory(tree.path()).expect("inventory");
         (project, tree, inventory)
     }
 
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(directory)
+            .expect("read_dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
     #[test]
     fn a_project_file_already_holding_what_the_program_left_is_not_mentioned() {
-        let (project, tree, inventory) = staged();
+        let (project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
         fs::write(tree.path().join("pkg/a.py"), "changed\n").expect("write");
         fs::write(project.path().join("pkg/a.py"), "changed\n").expect("write");
         let outcomes = inventory.write_back();
@@ -492,7 +580,7 @@ mod tests {
     /// a file the project has and the build did not stage is not the program's to replace
     #[test]
     fn a_new_file_where_the_project_has_another_is_left() {
-        let (project, tree, inventory) = staged();
+        let (project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
         fs::write(project.path().join("pkg/b.txt"), "theirs\n").expect("write");
         fs::write(tree.path().join("pkg/b.txt"), "mine\n").expect("write");
         let outcomes = inventory.write_back();
@@ -508,12 +596,132 @@ mod tests {
 
     #[test]
     fn a_new_file_in_a_directory_nothing_was_staged_from_is_reported() {
-        let (_project, tree, inventory) = staged();
+        let (_project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
         fs::write(tree.path().join("_by_own/new"), "new\n").expect("write");
         let outcomes = inventory.write_back();
         assert!(
             matches!(outcomes.as_slice(), [Outcome::Unmapped(path)] if path == Path::new("_by_own/new")),
             "{outcomes:?}"
         );
+    }
+
+    /// on a case-insensitive file system the new name is the old file, so writing it before
+    /// deleting the old name deleted what was written
+    #[test]
+    fn a_case_only_rename_renames_the_project_file() {
+        let (project, tree, inventory) = staged(&[("pkg/Data.txt", "staged\n")]);
+        fs::rename(
+            tree.path().join("pkg/Data.txt"),
+            tree.path().join("pkg/data.txt"),
+        )
+        .expect("rename");
+        let outcomes = inventory.write_back();
+        assert_eq!(
+            names(&project.path().join("pkg")),
+            ["data.txt"],
+            "{outcomes:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/data.txt")).expect("read"),
+            "staged\n"
+        );
+    }
+
+    #[test]
+    fn a_file_the_program_replaced_with_a_directory_is_replaced_in_the_project() {
+        let (project, tree, inventory) = staged(&[("pkg/data.json", "{}\n")]);
+        fs::remove_file(tree.path().join("pkg/data.json")).expect("remove");
+        fs::create_dir(tree.path().join("pkg/data.json")).expect("mkdir");
+        fs::write(tree.path().join("pkg/data.json/x.txt"), "x\n").expect("write");
+        let outcomes = inventory.write_back();
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/data.json/x.txt"))
+                .ok()
+                .as_deref(),
+            Some("x\n"),
+            "{outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn a_directory_the_program_replaced_with_a_file_is_replaced_in_the_project() {
+        let (project, tree, inventory) = staged(&[("pkg/sub/x.txt", "x\n")]);
+        fs::remove_dir_all(tree.path().join("pkg/sub")).expect("remove");
+        fs::write(tree.path().join("pkg/sub"), "now a file\n").expect("write");
+        let outcomes = inventory.write_back();
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/sub"))
+                .ok()
+                .as_deref(),
+            Some("now a file\n"),
+            "{outcomes:?}"
+        );
+    }
+
+    /// a package the program deleted goes from the project whole, not as empty directories
+    #[test]
+    fn a_directory_the_program_deleted_is_deleted_from_the_project() {
+        let (project, tree, inventory) =
+            staged(&[("pkg/sub/deep/x.txt", "x\n"), ("pkg/kept.txt", "kept\n")]);
+        fs::remove_dir_all(tree.path().join("pkg/sub")).expect("remove");
+        let outcomes = inventory.write_back();
+        assert_eq!(
+            names(&project.path().join("pkg")),
+            ["kept.txt"],
+            "{outcomes:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_the_program_replaced_with_a_symlink_is_kept() {
+        let (project, tree, inventory) =
+            staged(&[("pkg/notes.txt", "notes\n"), ("pkg/other.txt", "other\n")]);
+        fs::remove_file(tree.path().join("pkg/notes.txt")).expect("remove");
+        std::os::unix::fs::symlink("other.txt", tree.path().join("pkg/notes.txt"))
+            .expect("symlink");
+        let outcomes = inventory.write_back();
+        assert!(
+            matches!(outcomes.as_slice(), [Outcome::NotAFile(_)]),
+            "{outcomes:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/notes.txt")).expect("read"),
+            "notes\n"
+        );
+    }
+
+    /// a directory the program made unreadable says nothing about whether its files are there
+    #[cfg(unix)]
+    #[test]
+    fn the_files_of_a_directory_that_cannot_be_read_are_not_deleted() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (project, tree, inventory) = staged(&[("pkg/sub/x.txt", "x\n")]);
+        let sub = tree.path().join("pkg/sub");
+        fs::set_permissions(&sub, fs::Permissions::from_mode(0o300)).expect("chmod");
+        let outcomes = inventory.write_back();
+        fs::set_permissions(&sub, fs::Permissions::from_mode(0o700)).expect("chmod");
+        assert!(
+            project.path().join("pkg/sub/x.txt").exists(),
+            "{outcomes:?}"
+        );
+    }
+
+    /// the build never stages through a symbolic link, so a write through one would land
+    /// wherever it points, outside the project even
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_is_not_written_through_a_symlink_in_the_project() {
+        let (project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
+        let outside = tempfile::tempdir().expect("tempdir");
+        let target = outside.path().join("target.txt");
+        std::os::unix::fs::symlink(&target, project.path().join("pkg/link.txt")).expect("symlink");
+        fs::write(tree.path().join("pkg/link.txt"), "through the link\n").expect("write");
+        let outcomes = inventory.write_back();
+        assert!(
+            matches!(outcomes.as_slice(), [Outcome::Linked(_)]),
+            "{outcomes:?}"
+        );
+        assert!(!target.exists());
     }
 }

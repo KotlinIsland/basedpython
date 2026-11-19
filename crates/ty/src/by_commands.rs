@@ -342,7 +342,7 @@ pub(crate) fn stage_run(
         })
         .collect();
     write_project_module(&mut staging, &root, &carried)?;
-    let mirror = Mirror::of(&staging);
+    let mirror = Mirror::of(&staging, &roots, &root);
     staging.finish()?;
     Ok(Ok(StagedRun {
         cwd,
@@ -542,7 +542,7 @@ pub(crate) fn cmd_run(
         })?;
 
     let mut code = exit_code(status);
-    if !write_back(&inventory, &cwd) && code == 0 {
+    if !carry_back(&inventory, &cwd) && code == 0 {
         code = 1;
     }
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
@@ -586,7 +586,7 @@ pub(crate) fn cmd_run(
 /// carry what the program changed in the staged tree back to the project, saying on stderr
 /// what was written and what was not. `false` when a file could not be read or written
 #[expect(clippy::print_stderr)]
-pub(crate) fn write_back(inventory: &Inventory, cwd: &Path) -> bool {
+pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path) -> bool {
     let mut written = true;
     for outcome in inventory.write_back() {
         eprintln!("{}", outcome.describe(cwd));

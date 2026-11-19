@@ -1584,6 +1584,37 @@ fn run_writes_back_a_file_the_program_made_in_its_package() {
     assert!(cached.is_empty(), "{cached:?}\n{stderr}");
 }
 
+/// a program that fails has still written what it wrote, and `by run` still exits as it did
+#[test]
+fn run_writes_back_what_a_failing_program_wrote() {
+    let dir = Scratch::new("run_writes_back_after_a_failure");
+    fs::create_dir_all(&*dir).unwrap();
+    project_writing_into_its_package(
+        &dir,
+        "import sys\n\n\
+         with open(place('made.txt'), 'w') as file:\n    \
+         _ = file.write('made\\n')\n\
+         sys.exit(3)\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.join("app").join("made.txt"))
+            .ok()
+            .as_deref(),
+        Some("made\n"),
+        "{stderr}"
+    );
+}
+
 /// a program that changes its copy of a `.py` of the project changes the project's
 #[test]
 fn run_writes_back_a_change_to_a_carried_file() {

@@ -350,10 +350,8 @@ fn portable(path: &Path) -> String {
 /// sensibly be set to. A file outside every module root keeps its place relative
 /// to the project.
 pub(crate) fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
-    let relative = roots
-        .iter()
-        .find_map(|candidate| source.strip_prefix(candidate).ok())
-        .or_else(|| source.strip_prefix(root).ok())
+    let relative = placement_base(roots, root, source)
+        .and_then(|base| source.strip_prefix(base).ok())
         .unwrap_or(source);
     // whatever happened above, the result has to be *relative*: joined onto the
     // output directory an absolute path replaces it outright, so every emitted
@@ -366,6 +364,22 @@ pub(crate) fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path
             _ => None,
         })
         .collect()
+}
+
+/// The directory [`relative_destination`] places `source` relative to: the deepest module root
+/// holding it, else the project root. `None` for a source below neither, whose whole path is kept
+pub(crate) fn placement_base<'a>(
+    roots: &'a [PathBuf],
+    root: &'a Path,
+    source: &Path,
+) -> Option<&'a Path> {
+    // a nested root shadows the one containing it, whatever order the roots come in
+    roots
+        .iter()
+        .map(PathBuf::as_path)
+        .filter(|candidate| source.starts_with(candidate))
+        .max_by_key(|candidate| candidate.components().count())
+        .or_else(|| source.starts_with(root).then_some(root))
 }
 
 /// What a transpiled source is called in the output.
@@ -403,6 +417,17 @@ mod tests {
     fn the_deepest_root_wins() {
         let destination = transpiled_destination(
             &roots(&["/p/src/inner", "/p/src"]),
+            Path::new("/p"),
+            Path::new("/p/src/inner/pkg/main.by"),
+        );
+        assert_eq!(destination, PathBuf::from("pkg/main.py"));
+    }
+
+    /// the roots `module_roots` gives come deepest first, and a list from anywhere else need not
+    #[test]
+    fn the_deepest_root_wins_whatever_the_order() {
+        let destination = transpiled_destination(
+            &roots(&["/p/src", "/p/src/inner"]),
             Path::new("/p"),
             Path::new("/p/src/inner/pkg/main.by"),
         );
