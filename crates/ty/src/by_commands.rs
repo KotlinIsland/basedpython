@@ -174,7 +174,8 @@ pub(crate) struct StagedRun {
 /// what a staged tree is for
 #[derive(Clone, Copy)]
 pub(crate) enum RunTarget<'a> {
-    /// `by run`'s program: the module named, or the project's entry point
+    /// `by run`'s program: the module named or whose file's path was given, or the project's
+    /// entry point
     Module(Option<&'a str>),
     /// a `by repl` session, which runs no module of the project's
     Session,
@@ -265,7 +266,9 @@ pub(crate) fn stage_run(
     // point stands in for it. resolving before the (much slower) check means a
     // project with neither fails immediately rather than after transpiling
     let module = match run_target {
-        RunTarget::Module(Some(module)) => Some(module.to_owned()),
+        RunTarget::Module(Some(argument)) => {
+            Some(by_stage::run_module::run_argument(&db, &cwd, argument)?.into_owned())
+        }
         RunTarget::Module(None) => match by_stage::run_module::configured_main(&db) {
             Some(main) => Some(main),
             None => anyhow::bail!(

@@ -14,9 +14,13 @@
 //! one is renamed; until then the name is reported for the file the resolver
 //! finds first, and the other runs under none.
 
-use std::path::Path;
+use std::borrow::Cow;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
-use ruff_db::files::File;
+use ruff_db::files::{File, system_path_to_file};
+use ruff_db::system::SystemPath;
+use ruff_python_ast::PySourceType;
 use ty_module_resolver::{ModuleName, file_to_module, resolve_module_confident};
 use ty_project::{Db as _, ProjectDatabase};
 use ty_python_semantic::Db as _;
@@ -54,15 +58,94 @@ pub fn module_file(db: &ProjectDatabase, module: &str) -> Option<File> {
 /// whose name the resolver finds another file for first, and for a package's
 /// `__init__`, since running a package runs its `__main__` instead.
 pub fn module_name(db: &ProjectDatabase, file: File) -> Option<String> {
+    file_module_name(db, file).ok()
+}
+
+/// The name `by run` is given to execute `file`, or why no name runs it.
+fn file_module_name(db: &ProjectDatabase, file: File) -> Result<String, Unnamed> {
     if !is_staged(db, file) {
-        return None;
+        return Err(Unnamed::Unstaged);
     }
     let program_file = db.program_file(file);
-    let module = file_to_module(db, program_file.resolver_file(db))?;
+    let module = file_to_module(db, program_file.resolver_file(db)).ok_or(Unnamed::Unresolved)?;
     if module.kind(db).is_package() {
-        return None;
+        return Err(Unnamed::PackageInit(module.name(db).to_string()));
     }
-    Some(module.name(db).to_string())
+    Ok(module.name(db).to_string())
+}
+
+/// The module `by run` runs for `argument`, as it was typed in `cwd`.
+///
+/// A path to a `.by` or `.py` file that exists runs that file, as `python path/to/file.py`
+/// does, under the name the project runs it as: `manage.py` runs `manage`, and `app/cli.by`
+/// runs `app.cli`, inside its package. Anything else is a module name, as `python -m` takes one,
+/// and is passed on as it was given.
+pub fn run_argument<'a>(
+    db: &ProjectDatabase,
+    cwd: &Path,
+    argument: &'a str,
+) -> Result<Cow<'a, str>, UnrunnableFile> {
+    let path = cwd.join(argument);
+    if !path.is_file() || !PySourceType::try_from_path(&path).is_some_and(PySourceType::is_py_file)
+    {
+        return Ok(Cow::Borrowed(argument));
+    }
+    let unrunnable = |reason| UnrunnableFile {
+        path: PathBuf::from(argument),
+        reason,
+    };
+    // canonical, as the project root is, so a file of the project is under its module roots
+    // however the path to it was written
+    let canonical = dunce::canonicalize(&path).unwrap_or(path);
+    let file = SystemPath::from_std_path(&canonical)
+        .and_then(|system_path| system_path_to_file(db, system_path).ok())
+        .ok_or_else(|| unrunnable(Unnamed::Unstaged))?;
+    file_module_name(db, file)
+        .map(Cow::Owned)
+        .map_err(unrunnable)
+}
+
+/// A file `by run` was given by its path that runs under no module name.
+#[derive(Debug)]
+pub struct UnrunnableFile {
+    /// The path as it was given.
+    path: PathBuf,
+    reason: Unnamed,
+}
+
+impl fmt::Display for UnrunnableFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let path = self.path.display();
+        match &self.reason {
+            Unnamed::Unstaged => write!(
+                f,
+                "`{path}` is outside every module root of the project, so no module name runs it"
+            ),
+            Unnamed::PackageInit(package) => write!(
+                f,
+                "`{path}` is the `__init__` of the package `{package}`, and running a package \
+                 runs its `__main__`, as `by run {package}` does"
+            ),
+            Unnamed::Unresolved => write!(
+                f,
+                "no module name of the project resolves to `{path}`: its name is not one a module \
+                 can have, or another file builds to the same module"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UnrunnableFile {}
+
+/// Why no module name runs a file.
+#[derive(Debug)]
+enum Unnamed {
+    /// It lies outside every module root the build stages.
+    Unstaged,
+    /// It is the `__init__` of this package, and running a package runs its `__main__`.
+    PackageInit(String),
+    /// The resolver finds another file for its name first, or it has no name a module can have.
+    Unresolved,
 }
 
 /// Whether `file` lies under a module root `by run` stages.

@@ -26,12 +26,22 @@ in addition to the cli provided by `ty`, `by` includes:
 
 ```sh
 by run MODULE [ARGS...]             # transpile + run with `python -m MODULE`
+by run path/to/file.by [ARGS...]    # run a file of the project as its module
 by run                              # run the configured entry point
 by run MODULE --min-version 3.12    # target a specific runtime python version
 ```
 
 equivalent to `by build && python -m MODULE`, but only transpiles the
 modules required to import `MODULE`
+
+a path to a `.by` or `.py` file of the project, relative to where `by run` is
+run, runs that file as the module it is: `by run manage.py check` runs `manage`,
+as `python manage.py check` would, and `by run app/cli.by` runs `app.cli`, inside
+its package, so its relative imports resolve. a file no module name runs is
+refused before anything runs: a package's `__init__` (run the package, which runs
+its `__main__`), a file outside the project's module roots, or one whose name no
+module can have, like `my-script.py`. an argument that is not an existing `.by` or
+`.py` file is a module name
 
 the module can be left out when the project configures an entry point:
 

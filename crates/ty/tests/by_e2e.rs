@@ -3406,6 +3406,88 @@ fn run_enters_a_package_through_its_main_module() {
     );
 }
 
+/// what `by run ARGS` in `cwd` printed, and whether it succeeded
+fn run_in(cwd: &Path, args: &[&str]) -> (bool, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("run")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("failed to spawn by");
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n"),
+    )
+}
+
+/// a path to a `.by` or `.py` file of the project runs that file, as `python manage.py` runs
+/// one, under the name the project runs it as: inside its package, with the path read from the
+/// directory `by` was started in, and with the arguments after it
+#[test]
+fn run_runs_a_file_given_by_its_path_as_its_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_program(dir.path());
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("manage.py"),
+        "import sys\n\nfrom app.helpers import double\n\nprint(__name__, double(int(sys.argv[1])))\n",
+    )
+    .unwrap();
+    let tools = dir.path().join("tools");
+    fs::create_dir_all(&tools).unwrap();
+
+    let (success, stdout, stderr) = run_in(dir.path(), &["manage.py", "4"]);
+    assert!(success, "by run manage.py failed:\n{stderr}");
+    assert_eq!(stdout, "__main__ 8\n", "{stderr}");
+
+    let (success, stdout, stderr) = run_in(&tools, &["../app/main.by"]);
+    assert!(success, "by run ../app/main.by failed:\n{stderr}");
+    assert_eq!(stdout, "answer is 42\nmain ran\n", "{stderr}");
+}
+
+/// a package's `__init__` runs under no name of its own, since running a package runs its
+/// `__main__`, so given by its path it is refused before anything runs, with the command that
+/// runs the package
+#[test]
+fn run_refuses_a_package_s_init_given_by_its_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_program(dir.path());
+    fs::write(dir.path().join("app/__init__.by"), "print('init ran')\n").unwrap();
+
+    let (success, stdout, stderr) = run_in(dir.path(), &["app/__init__.by"]);
+    assert!(!success, "{stdout}");
+    assert_eq!(stdout, "", "{stderr}");
+    assert!(
+        stderr.contains("is the `__init__` of the package `app`")
+            && stderr.contains("`by run app`"),
+        "{stderr}"
+    );
+}
+
+/// only a source file is read as a path: a file of another kind with the same name as a module
+/// leaves the name meaning the module
+#[test]
+fn run_reads_a_name_that_is_no_source_file_as_a_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print('main.by ran')\n").unwrap();
+    fs::write(
+        dir.path().join("main"),
+        "#!/bin/sh\necho 'the script ran'\n",
+    )
+    .unwrap();
+
+    let (success, stdout, stderr) = run_in(dir.path(), &["main"]);
+    assert!(success, "by run main failed:\n{stderr}");
+    assert_eq!(stdout, "main.by ran\n", "{stderr}");
+}
+
 /// a frame is still keyed by the staged `.py` the code object came from, so
 /// moving `__file__` must not stop the sourcemap finding it
 #[test]

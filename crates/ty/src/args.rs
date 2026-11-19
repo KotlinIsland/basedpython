@@ -68,8 +68,9 @@ pub(crate) enum Command {
     // ── basedpython commands ─────────────────────────────────────────────────
     /// Transpile and run a module with `python -m <module>`.
     Run {
-        /// module to run (e.g. `by run main` looks for main.by)
-        /// [default: the `run.main` entry point configured for the project]
+        /// module to run (e.g. `by run main` looks for main.by), or the path of a `.by` or
+        /// `.py` file of the project, which runs as its module (`by run app/cli.by` runs
+        /// `app.cli`) [default: the `run.main` entry point configured for the project]
         module: Option<ModuleName>,
         /// arguments forwarded to the program, as `sys.argv[1:]`
         #[arg(
