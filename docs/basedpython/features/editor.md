@@ -2132,14 +2132,20 @@ which only whatever started the program knows. the answer is one of two shapes:
 ```json
 { "files": [ { "source": "/p/app/main.by", "generated": "/tmp/.tmpX/app/main.py",
                "content": "…", "byDigest": "…", "pyDigest": "…", "changed": true } ],
-  "sourcemap": "…" }
+  "sourcemap": "…", "remap": true }
 ```
 
 each of `files` is one document's slot: where its bytes go, the whole text to
 write there, the sha-256 of the source and of that text, and whether writing it
 changes the tree. a file the build copied rather than transpiled is answered the
 same way, with its bytes. `sourcemap` is the whole new `_by_sourcemap.py`, every
-transpiled file's entry moved in it, or `null` when the map is unchanged. or:
+transpiled file's entry moved in it and every file of the edit listed as one a
+re-stage wrote, or `null` when the map is unchanged. a client writes it with the
+files, a set of copied files included: `by run` carries what the program wrote
+into the tree back to the project, and the list is how it tells the client's
+writes from the program's (see [sourcemaps](../development/sourcemaps.md)).
+`remap` says whether the map's line tables moved, which a debugger holding them
+reads again; a map rewritten only for the list leaves them as they were. or:
 
 ```json
 { "refusals": [ { "file": "/p/app/main.by", "refused": "…", "diagnostics": ["…"] } ] }

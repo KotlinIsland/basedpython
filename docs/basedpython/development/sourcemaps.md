@@ -281,11 +281,11 @@ a re-stage moves entries only in a map that names the build the tree's
 `_by_build.json` names, and only when that build is the one running: a tree
 whose map and record name different builds is refused, naming both
 
-and the map lists what a re-stage wrote into the tree after it was built, as one
-json object, which python reads as a dict:
+and the map lists what a re-stage wrote into the tree after it was built, on one
+line, its strings written as the tables write theirs:
 
 ```python
-RESTAGED = {"_by_sourcemap.py":"sha256:…","app/helper.py":"sha256:…"}
+RESTAGED = {"_by_sourcemap.py": "sha256:…", "app/helper.py": "sha256:…"}
 ```
 
 each key is a file relative to the tree, with `/` separators, and each value the
@@ -294,9 +294,10 @@ re-stage that changes the tree adds the files of its set, and the map itself at
 the digest of its text with this table empty, which the map can carry without
 changing what the digest is over. `by run` reads it when the program ends: a file
 still holding what a re-stage wrote is by's, a debugger's replacement rather
-than something the program wrote, so it is not carried back to the project. a
-set of nothing but copied files has no entry to move, and still rewrites the map
-for this table
+than something the program wrote, so it is not carried back to the project, and
+what the program then writes over a re-staged copy is measured against what the
+re-stage wrote. a set of nothing but copied files has no entry to move, and
+still rewrites the map for this table
 
 ## goals
 
