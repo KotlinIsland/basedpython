@@ -296,18 +296,32 @@ directory `manage.py` is in. a lens's command is `ty.runManageCommand`, its one
 argument `{ "arguments": ["test", "blog.tests.BookTest"] }`, and it answers at
 once, `null`, with the command running in the background
 
+python never imports a `.by` module, so in a project with a `.by` source the
+command runs through `by run` instead: `by run manage.py test blog.tests.BookTest`,
+on the same interpreter, as `by run --python` names one. the command then sees
+the project's `.by` models, and what it writes into the staged tree — the
+migration `makemigrations` makes — is written back to the project (see
+[`by run`](../cli-reference.md#by-run)). a project with no `.by` source runs on
+the interpreter directly, as `by run` refuses a project with nothing to stage
+
 everything the command writes goes to the editor's log, as
 `window/logMessage`. when it has finished, what came of it is shown, as
 `window/showMessage`: `manage.py test blog.tests.BookTest succeeded: OK`, with
 `Info`, or `manage.py test blog failed (exit status: 1): FAILED (failures=1)`,
 with `Error` — the outcome, and the last line the command wrote, which is where
-django sums up what it did
+django sums up what it did. through `by run`, the run is named
+`by run manage.py …`, and what `by run` wrote back is logged after the
+command's output. a file it did not write back is shown after the command's
+last line, with `Warning` when the command succeeded:
+`by run manage.py makemigrations app succeeded: + Create model Widget; warning: not written back: app/migrations/0001_initial.py is already in the project, holding something else`
 
 a command the server will not run — one that needs a terminal, such as
 `runserver` or `shell`, one no lens offers, or any of them in a project with no
 `manage.py` or no interpreter to run it — is refused with the reason as the
 command's error, and the reason is shown too, since an editor need not show an
-error answer to a click
+error answer to a click. a refused command is handed back as the command line to
+run it with: `by run manage.py runserver` in a project with a `.by` source,
+`manage.py runserver` otherwise
 
 ## see also
 
