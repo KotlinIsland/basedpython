@@ -162,12 +162,16 @@ pub(crate) fn cmd_repl(
     drop(repl);
     let mut code = crate::by_commands::exit_code(status);
     let mut notes = Vec::new();
-    if !crate::by_commands::carry_back(&inventory, &cwd, &mut notes) && code == 0 {
-        code = 1;
+    if crate::by_commands::carry_back(&inventory, &cwd, &mut notes) {
+        // `process::exit` skips destructors, and the tree is a temporary directory
+        drop(tree);
+    } else {
+        crate::by_commands::keep_tree(tree, &mut notes);
+        if code == 0 {
+            code = 1;
+        }
     }
     let _ = crate::by_commands::tell(&notes, None);
-    // `process::exit` skips destructors, and the tree is a temporary directory
-    drop(tree);
     drop(signals);
     std::process::exit(code);
 }

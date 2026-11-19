@@ -550,6 +550,13 @@ pub(crate) fn cmd_run(
         }
         None => None,
     };
+    // the program that runs in the tree takes its root for the project root, as a relative path
+    // it writes does
+    let mirror = if in_build {
+        mirror.with_the_tree_root_as_the_project_root()
+    } else {
+        mirror
+    };
     // last, once everything `by` puts into the tree is there: the extensions above included
     let inventory = mirror
         .inventory(tmp.path())
@@ -570,7 +577,8 @@ pub(crate) fn cmd_run(
 
     let mut code = exit_code(status);
     let mut notes = Vec::new();
-    if !carry_back(&inventory, &cwd, &mut notes) && code == 0 {
+    let written_back = carry_back(&inventory, &cwd, &mut notes);
+    if !written_back && code == 0 {
         code = 1;
     }
     if let (Some(report), Some((_, file))) = (coverage, &measured) {
@@ -608,26 +616,44 @@ pub(crate) fn cmd_run(
              signal does",
         ));
     }
+    // drop the temp dir explicitly: `process::exit` skips destructors, so
+    // exiting while it's still in scope would leak the directory
+    if written_back {
+        drop(tmp);
+    } else {
+        keep_tree(tmp, &mut notes);
+    }
     if !tell(&notes, notes_file.as_deref()) && code == 0 {
         code = 1;
     }
     drop(measured);
-    // drop the temp dir explicitly: `process::exit` skips destructors, so
-    // exiting while it's still in scope would leak the directory
-    drop(tmp);
     drop(signals);
     std::process::exit(code);
 }
 
 /// carry what the program changed in the staged tree back to the project, adding to `notes`
-/// what was written and what was not. `false` when a file could not be read or written
+/// what was written and what was not. `false` when anything was not carried back, which the
+/// tree is then the only place holding: see [`keep_tree`]
 pub(crate) fn carry_back(inventory: &Inventory, cwd: &Path, notes: &mut Vec<Note>) -> bool {
-    let mut written = true;
+    let mut carried = true;
     for outcome in inventory.write_back() {
         notes.push(outcome.note(cwd));
-        written &= !outcome.is_error();
+        carried &= outcome.is_carried();
     }
-    written
+    carried
+}
+
+/// keep `tree` rather than delete it, as it holds what was not carried back, and add to `notes`
+/// where it is
+pub(crate) fn keep_tree(tree: tempfile::TempDir, notes: &mut Vec<Note>) {
+    let kept = tree.keep();
+    notes.push(Note::new(
+        Level::Warning,
+        format!(
+            "kept the staged tree at {}, which holds what was not written back",
+            kept.display()
+        ),
+    ));
 }
 
 /// say `notes` on stderr, or write them to `file`, one json object a line, when there is one.

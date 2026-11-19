@@ -256,9 +256,11 @@ note: wrote back app/migrations/__init__.py
 ```
 
 - a new file goes to the project directory its directory in the tree was staged
-    from, and a new directory goes where its parent's would
+    from, and a new directory goes where its parent's would, an empty one included
 - a changed copy of a project file — a `.py`, a template, a data file — is
-    written over that file, and a deleted one deletes it
+    written over that file, and a deleted one deletes it. a file is written back
+    with the permissions the program left it with, and a copy whose permissions
+    alone the program changed has them carried to its project file
 - a file `by` wrote — a transpiled module, the runtime, the runner — has no
     project file to go back to. what the program does to one is lost, and `by run`
     says so
@@ -268,24 +270,48 @@ note: wrote back app/migrations/__init__.py
 - a file the program made in a directory of the tree that files from more than
     one project directory were staged into has no one place to go, and is reported
     rather than written. the root of a src-layout project's tree is one: `src/` and
-    the project root both land there
-- the bytecode python caches beside the modules it imports, a `.pyc` in a
-    `__pycache__` directory, is never carried back: the interpreter wrote it, not
-    the program. everything else the program writes is, wherever in the tree,
-    or is reported
+    the project root both land there. with `--in-build` it is not: see below
+- nothing in a `__pycache__` directory is carried back: the import system
+    keeps its caches there — the bytecode python writes beside the modules it
+    imports, and what a library such as numba caches beside them — and they
+    describe the modules in the tree, not the project's. everything else the
+    program writes is, wherever in the tree, or is reported
 - a project path reached through a symbolic link, which the build never stages
     from, is reported rather than written through
 - what a debugger wrote into the tree to replace code while the program ran is
     not the program's, and is neither written back nor reported: the tree's
     sourcemap lists each file a re-stage wrote, at what it wrote (see
-    [sourcemaps](development/sourcemaps.md))
+    [sourcemaps](development/sourcemaps.md)). a file a re-stage added to the
+    tree is `by`'s, as a transpiled module is: what the program does to one is
+    lost, and `by run` says so
 
-the tree is compared by content, as it was just before the program started, and
-this happens however the program ends: a non-zero exit, or a signal `by run`
-passed on to it. `by run` still exits as the program did, unless a file could
-not be read or written, which makes a program that exited 0 exit 1. with
-`--in-build` the program's working directory is the tree, so a relative path it
-writes is carried back the same way
+the tree is compared by content and permissions, as it was just before the
+program started, and this happens however the program ends: a non-zero exit, or
+a signal `by run` passed on to it. with `--in-build` the program's working
+directory is the tree, so a relative path it writes is carried back the same way,
+and the root of the tree stands for the project root: a new file or directory the
+program makes there, as a test runner makes its report and `.pytest_cache`, goes
+to the project root, a src-layout project's included. one in a directory that was
+staged goes where that directory was staged from, as always
+
+nothing the project or the program held is lost on the way. what happens to
+every file is decided before anything is written, and a project file whose copy
+the program deleted is deleted only once everything else has been written back,
+since a file the program renamed has its only other copy in the tree. so when
+anything is not written back, for any of the reasons above or because a file
+could not be read or written, no project file is deleted, and the tree is kept
+rather than deleted, holding what the program left:
+
+```console
+$ by run main
+moved
+warning: not written back: moved.txt, whose directory in the staged tree was staged from more than one in the project: src, .
+warning: not deleted: src/app/data.txt, whose copy the program deleted, since not everything else it changed was written back
+warning: kept the staged tree at /tmp/.tmpYhI9rV, which holds what was not written back
+```
+
+`by run` exits as the program did, unless anything was not written back, which
+makes a program that exited 0 exit 1
 
 `--notes PATH` writes those lines, and the note that a coverage report or a
 profile was not written, to `PATH` instead of stderr, one JSON object a line,
@@ -297,8 +323,8 @@ command wrote — `OK`, `No changes detected` — which on stderr would be `by r
 ```
 
 the level is `note` for what was written or deleted, `warning` for what was not
-written back, or a report that was not written, and why, and `error` for a file
-that could not be read or written. the file is replaced when `by run` starts, so a
+written back, the tree kept for it, or a report that was not written, and why,
+and `error` for a file that could not be read or written. the file is replaced when `by run` starts, so a
 run that ends before the program does leaves none, and a file that cannot be
 written makes a program that exited 0 exit 1
 
