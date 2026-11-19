@@ -9,7 +9,7 @@
 //!
 //! the picture is a short program with the hints drawn on it. the hints are not written here:
 //! [`InlayHintExamples`] computes them, with every kind enabled, by this crate's own
-//! [`inlay_hints`], on a database that holds nothing but the examples, so what a client shows in
+//! [`inlay_hints()`], on a database that holds nothing but the examples, so what a client shows in
 //! its preview is what this server draws in a file.
 
 use ruff_db::files::{File, system_path_to_file};
@@ -116,7 +116,7 @@ impl InlayHintExampleLanguage {
 
 impl InlayHintKind {
     /// what this kind of hint is, as a client lists it
-    pub const fn about(self) -> InlayHintAbout {
+    const fn about(self) -> InlayHintAbout {
         use InlayHintAttachment::{Following, Preceding};
         use InlayHintFamily::{Arguments, Effects, Generics, Types, Ui};
 
@@ -387,7 +387,7 @@ impl TemplateInlayHintKind {
     ///
     /// neither has an example: a template's hints come from the django project around it, its
     /// views, models and template directories, which no short program is
-    pub const fn about(self) -> InlayHintAbout {
+    const fn about(self) -> InlayHintAbout {
         match self {
             Self::Type => InlayHintAbout {
                 title: "Loop binding types",

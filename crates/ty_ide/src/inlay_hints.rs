@@ -1,4 +1,4 @@
-use std::{fmt, vec};
+use std::vec;
 use ty_python_semantic::ProgramEnvironment;
 
 use itertools::{Either, Itertools};
@@ -815,7 +815,8 @@ impl InlayHint {
         }
     }
 
-    pub fn display(&self) -> InlayHintDisplay<'_> {
+    #[cfg(test)]
+    pub(crate) fn display(&self) -> InlayHintDisplay<'_> {
         InlayHintDisplay { inlay_hint: self }
     }
 }
@@ -828,7 +829,7 @@ impl InlayHint {
 /// `TemplateInlayHintKind`
 ///
 /// what each kind is, as a client lists it — a title, a family, a description and an
-/// example — is [`InlayHintKind::about`], in `inlay_hint_catalog`, which a kind added
+/// example — is `InlayHintKind::about`, in `inlay_hint_catalog`, which a kind added
 /// here does not compile without
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
 pub enum InlayHintKind {
@@ -1020,14 +1021,16 @@ impl InlayHintLabel {
     }
 }
 
-pub struct InlayHintDisplay<'a> {
+#[cfg(test)]
+pub(crate) struct InlayHintDisplay<'a> {
     inlay_hint: &'a InlayHint,
 }
 
 /// A hint as the client draws it, padding included, so that what a test reads is
 /// what a reader of the file sees.
-impl fmt::Display for InlayHintDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+#[cfg(test)]
+impl std::fmt::Display for InlayHintDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.inlay_hint.padding_left {
             f.write_str(" ")?;
         }

@@ -978,7 +978,7 @@ impl SearchPaths {
     /// they were discovered from, which is what lets a caller that has to *run*
     /// something — rather than only resolve it — find the interpreter whose
     /// packages ty is reading.
-    pub fn site_packages_paths(&self) -> impl Iterator<Item = &SystemPath> {
+    pub(crate) fn site_packages_paths(&self) -> impl Iterator<Item = &SystemPath> {
         self.site_packages
             .iter()
             .filter_map(|path| path.as_system_path())

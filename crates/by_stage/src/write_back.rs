@@ -2093,7 +2093,7 @@ mod tests {
     #[test]
     fn a_setuid_file_the_program_changed_is_written_back() {
         let (project, tree, inventory) = staged_with(&[("pkg/run.sh", "echo hi\n")], |path| {
-            set_mode(path, 0o4755)
+            set_mode(path, 0o4755);
         });
         let copy = tree.path().join("pkg/run.sh");
         let staged_mode = mode(&copy);

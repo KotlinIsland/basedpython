@@ -8290,7 +8290,7 @@ impl<'db> Parameter<'db> {
         }
     }
 
-    pub(crate) fn callable_by_name(&self, name: &str) -> bool {
+    fn callable_by_name(&self, name: &str) -> bool {
         match &self.kind {
             ParameterKind::PositionalOrKeyword {
                 name: param_name, ..

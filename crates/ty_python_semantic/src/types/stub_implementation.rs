@@ -153,7 +153,7 @@ pub(crate) struct RuntimeReader<'db> {
 
 impl<'db> RuntimeReader<'db> {
     /// for the parameters and return type of the runtime function `definition`
-    pub(crate) fn for_function(db: &'db dyn Db, definition: Definition<'db>) -> Option<Self> {
+    fn for_function(db: &'db dyn Db, definition: Definition<'db>) -> Option<Self> {
         Some(Self {
             stub: runtime_module_stub(db, definition.program_file(db))?,
             scope: definition.scope(db),
@@ -162,7 +162,7 @@ impl<'db> RuntimeReader<'db> {
     }
 
     /// for a variable declared in the runtime scope `scope`
-    pub(crate) fn for_scope(db: &'db dyn Db, scope: ScopeId<'db>) -> Option<Self> {
+    fn for_scope(db: &'db dyn Db, scope: ScopeId<'db>) -> Option<Self> {
         Some(Self {
             stub: runtime_module_stub(db, scope.program_file(db))?,
             scope,
@@ -221,7 +221,7 @@ fn class_of<'db>(
 
 /// `ty`, a type the stub writes, as the runtime module reads it where `reader` says, or `None`
 /// where it names something only the stub has: see the module documentation
-pub(crate) fn stub_type_in_runtime<'db>(
+fn stub_type_in_runtime<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,

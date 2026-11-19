@@ -48,7 +48,7 @@ fn stub_span(db: &dyn Db, definition: Definition<'_>) -> Span {
 ///
 /// `range` is where a member of the scope is reported: a class's name, or the start of the
 /// module's first statement for the module's own members, which have nowhere better to point
-pub(crate) fn check_scope_members<'db>(
+fn check_scope_members<'db>(
     context: &InferContext<'db, '_>,
     scope: ScopeId<'db>,
     class: Option<ClassLiteral<'db>>,

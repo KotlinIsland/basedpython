@@ -6,7 +6,7 @@
 //! is the whole document, so an editor that marks every such declaration (a gutter icon going to
 //! the other side) asks once per pass over the document rather than once per declaration.
 //!
-//! which declarations pair is [`stub_pairing`]'s: by where they sit among the module's members,
+//! which declarations pair is [`stub_pairing()`]'s: by where they sit among the module's members,
 //! every overload and every `sys.version_info` branch included, a stub's class-body `x: int` with
 //! the `self.x = ...` a runtime method assigns.
 //!

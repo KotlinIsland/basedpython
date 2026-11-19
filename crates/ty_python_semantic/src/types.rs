@@ -263,7 +263,7 @@ pub(crate) mod state_invalidations;
 pub(crate) mod state_reads;
 pub mod static_resource;
 mod string_annotation;
-pub(crate) mod stub_consistency;
+mod stub_consistency;
 pub(crate) mod stub_implementation;
 mod subclass_of;
 pub(crate) mod template;

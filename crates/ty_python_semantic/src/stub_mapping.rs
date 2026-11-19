@@ -490,7 +490,7 @@ pub fn stub_definitions<'db>(
 ///
 /// `None` where the stub describes no runtime module with python source, the definition is no
 /// member, or the runtime module does not declare it
-pub fn runtime_definitions<'db>(
+pub(crate) fn runtime_definitions<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
     cached_vendored_typeshed: Option<&SystemPath>,
@@ -590,13 +590,13 @@ pub fn is_definition_reachable(db: &dyn Db, definition: Definition<'_>) -> bool 
 /// configured python version and platform sees it on both sides
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct StubMember<'db> {
-    pub name: Name,
+    pub(crate) name: Name,
     /// the stub's reachable declarations of the name, in source order: every overload, the
     /// declaration in the `sys.version_info` branch that runs
-    pub stub: Box<[Definition<'db>]>,
+    pub(crate) stub: Box<[Definition<'db>]>,
     /// the runtime module's declarations of the name, reachable or not; empty for a member the
     /// stub declares and the runtime scope does not
-    pub runtime: Box<[Definition<'db>]>,
+    pub(crate) runtime: Box<[Definition<'db>]>,
 }
 
 /// one scope of a runtime module, the module itself or the body of a class its stub declares too,
@@ -604,14 +604,14 @@ pub struct StubMember<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Default, get_size2::GetSize, salsa::SalsaValue)]
 pub struct StubScope<'db> {
     /// every member the stub declares in the scope, in the stub's order
-    pub members: Box<[StubMember<'db>]>,
+    pub(crate) members: Box<[StubMember<'db>]>,
     /// the members the runtime scope declares and the stub does not, with the runtime's first
     /// declaration of each, in the runtime's order
-    pub runtime_only: Box<[(Name, Definition<'db>)]>,
+    pub(crate) runtime_only: Box<[(Name, Definition<'db>)]>,
 }
 
 impl<'db> StubScope<'db> {
-    pub fn member(&self, name: &str) -> Option<&StubMember<'db>> {
+    pub(crate) fn member(&self, name: &str) -> Option<&StubMember<'db>> {
         self.members.iter().find(|member| member.name == name)
     }
 }

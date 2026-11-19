@@ -48,7 +48,7 @@ pub(crate) fn lexical_name_path_for_definition(
 /// Computes a lexical name path component for an enclosing scope.
 ///
 /// See [`lexical_name_path_for_definition`][] for details.
-pub(crate) fn lexical_name_path_component_for_node(
+fn lexical_name_path_component_for_node(
     parsed: &ParsedModuleRef,
     node: &NodeWithScopeKind,
 ) -> Result<Option<Name>, ()> {
