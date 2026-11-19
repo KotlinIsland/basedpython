@@ -299,9 +299,13 @@ neither has to fit the annotation nor solves anything: a call to such a declarat
 variable unsolved. that covers a stub, an overload, an abstract method, a protocol member, and a
 declaration under `if TYPE_CHECKING:`.
 
+`stub.pyi`:
+
 ```pyi
 def stub[T](t: T = ...) -> T: ...
 ```
+
+`main.py`:
 
 ```py
 from abc import ABC, abstractmethod
@@ -338,6 +342,8 @@ reveal_type(declared())  # revealed: Unknown
 ```
 
 outside of those, `...` is an ordinary value of type `EllipsisType`.
+
+`node.py`:
 
 ```py
 from typing import Self

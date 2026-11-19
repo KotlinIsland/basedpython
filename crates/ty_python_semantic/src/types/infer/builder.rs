@@ -161,6 +161,7 @@ use crate::types::soundness::{
     runtime_check_target,
 };
 use crate::types::special_form::TypeQualifier;
+use crate::types::stub_implementation::stub_declared_type;
 use crate::types::subclass_of::SubclassOfInner;
 use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
 use crate::types::trailing_lambda::{
@@ -1505,6 +1506,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             ty,
                             function.node(self.module()),
                         );
+                        crate::types::stub_consistency::check_function(
+                            &self.context,
+                            definition,
+                            function.node(self.module()),
+                        );
                     }
                     DefinitionKind::Class(class_node) => {
                         post_inference::decorator::check_decorator_calls(
@@ -1526,6 +1532,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             self.index,
                             &|expr| self.file_expression_type(expr),
                         );
+                        crate::types::stub_consistency::check_class(
+                            &self.context,
+                            definition,
+                            class_node.node(self.module()),
+                        );
                     }
                     DefinitionKind::TypeAlias(type_alias) => {
                         // an alias's variance comes from what it expands to, which is not
@@ -1542,13 +1553,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             );
                         }
                     }
-                    DefinitionKind::AnnotatedAssignment(assignment)
+                    DefinitionKind::AnnotatedAssignment(assignment) => {
                         if assignment.value(self.module()).is_some()
                             && self
                                 .file_expression_type(assignment.annotation(self.module()))
-                                .is_typealias_special_form() =>
-                    {
-                        self.implicit_aliases.insert(definition);
+                                .is_typealias_special_form()
+                        {
+                            self.implicit_aliases.insert(definition);
+                        }
+                        crate::types::stub_consistency::check_variable(
+                            &self.context,
+                            definition,
+                            assignment.annotation(self.module()),
+                            ty,
+                        );
                     }
                     _ => {}
                 }
@@ -1573,6 +1591,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             post_inference::final_variable::check_final_without_value(&self.context, self.index);
+
+            if self.scope.file_scope_id(self.db()).is_global() {
+                crate::types::stub_consistency::check_module(
+                    &self.context,
+                    self.scope.program_file(self.db()),
+                );
+            }
         }
     }
 
@@ -2054,6 +2079,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     format_enumeration(conflicting.iter().map(|ty| ty.display(db, env)))
                 ));
             }
+        }
+
+        // basedpython: a module variable or class attribute the module's stub declares and this
+        // module leaves undeclared is declared by the stub
+        if place_and_quals.is_undefined()
+            && is_local
+            && matches!(
+                self.index.scope(file_scope_id).kind(),
+                ScopeKind::Class | ScopeKind::Module
+            )
+            && let PlaceExprRef::Symbol(symbol) = place
+            && let Some(declared) = stub_declared_type(db, binding.scope(db), symbol.name())
+        {
+            place_and_quals = declared;
         }
 
         if place_and_quals.is_undefined()

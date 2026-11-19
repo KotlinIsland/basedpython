@@ -40,8 +40,8 @@ pub use self::dedicated::pytest::{
 pub(crate) use self::diagnostic::TypeCheckDiagnostics;
 pub(crate) use self::diagnostic::register_lints;
 pub use self::diagnostic::{
-    MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNDEFINED_REVEAL, UNRESOLVED_IMPORT,
-    UNRESOLVED_REFERENCE,
+    MISPLACED_DEPENDENCY, MISSING_RUNTIME_MEMBER, UNDECLARED_DEPENDENCY, UNDEFINED_REVEAL,
+    UNRESOLVED_IMPORT, UNRESOLVED_REFERENCE,
 };
 pub(crate) use self::infer::{
     ArgumentContextOrigin, InferredDeclaration, TruthinessAnalyzer, TypeContext,
@@ -263,6 +263,8 @@ pub(crate) mod state_invalidations;
 pub(crate) mod state_reads;
 pub mod static_resource;
 mod string_annotation;
+pub(crate) mod stub_consistency;
+pub(crate) mod stub_implementation;
 mod subclass_of;
 pub(crate) mod template;
 #[cfg(test)]

@@ -14,7 +14,8 @@ use ty_project::Db;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::lint::LintId;
 use ty_python_semantic::types::{
-    MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT, UNRESOLVED_REFERENCE,
+    MISPLACED_DEPENDENCY, MISSING_RUNTIME_MEMBER, UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT,
+    UNRESOLVED_REFERENCE,
 };
 use ty_python_semantic::{suppress_in_file, suppress_single};
 
@@ -106,6 +107,16 @@ pub fn code_actions(
         ));
     }
 
+    // a member the stub declares and the module lacks is written in from the stub, where the
+    // `stubOnlyMembers` hint draws it
+    if lint_id == LintId::of(&MISSING_RUNTIME_MEMBER) {
+        actions.extend(
+            crate::inlay_hints::stub_member_fixes(db, file, diagnostic_range)
+                .into_iter()
+                .map(|(title, edits)| QuickFix::new(title, file.file(db), edits, true)),
+        );
+    }
+
     // Suggest just suppressing the lint (always a valid option, but never ideal)
     actions.push(QuickFix::new(
         format!("Ignore '{}' for this line", lint_id.name()),
@@ -193,7 +204,7 @@ mod tests {
     use ty_python_semantic::{
         default_lint_registry,
         lint::LintMetadata,
-        types::{UNDEFINED_REVEAL, UNRESOLVED_REFERENCE},
+        types::{MISSING_RUNTIME_MEMBER, UNDEFINED_REVEAL, UNRESOLVED_REFERENCE},
     };
 
     /// a file that already starts with a suppression of its own has the code added to it
@@ -1439,6 +1450,27 @@ mod tests {
         2 | NamespaceReport()
           |
         ");
+    }
+
+    /// a member the stub declares and a class lacks is written into the class as the stub
+    /// declares it, where the stub orders it among the class's members
+    #[test]
+    fn missing_runtime_member_is_added_from_the_stub() {
+        let mut test = CodeActionTest::with_source(
+            "
+            class <START>A<END>:
+                def m(self):
+                    pass
+            ",
+        );
+        test.db
+            .write_file(
+                "main.pyi",
+                "class A:\n    def m(self) -> None: ...\n    def n(self, a: int) -> int: ...\n",
+            )
+            .unwrap();
+
+        assert_snapshot!(test.code_actions(&MISSING_RUNTIME_MEMBER));
     }
 
     struct CodeActionTest {

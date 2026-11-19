@@ -194,7 +194,7 @@ class MyClass: ...
 ```py
 class MyClass: ...
 
-def get_MyClass() -> MyClass:
+def get_MyClass() -> MyClass:  # error: [missing-stub-member]
     from . import make_MyClass
 
     # error: [invalid-return-type] "Return type does not match returned value: expected `package.foo.MyClass @ src/package/foo.py:1:7`, found `package.foo.MyClass @ src/package/foo.pyi:1:7`"

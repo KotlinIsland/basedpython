@@ -53,7 +53,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/overloads.md
 38 |         return x
 ```
 
-## mdtest_snippet.pyi
+## stub.pyi
 
 ```
  1 | from typing_extensions import overload, override
@@ -118,7 +118,7 @@ error[invalid-overload]: `@override` decorator should be applied only to the ove
 
 ```
 error[invalid-overload]: `@override` decorator should be applied only to the first overload
-  --> src/mdtest_snippet.pyi:22:9
+  --> src/stub.pyi:22:9
    |
 17 | /     @overload
 18 | |     def method(self, x: int) -> int: ...

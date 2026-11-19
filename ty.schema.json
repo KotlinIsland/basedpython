@@ -1145,6 +1145,36 @@
             }
           ]
         },
+        "incompatible-stub-attribute": {
+          "title": "detects a variable annotated with a type incompatible with its stub's",
+          "description": "## What it does\nChecks that a module variable or class attribute annotated in a module described by a stub\nhas the type the stub declares for it.\n\n## Why is this bad?\nImporters are typed by the stub: they read the stub's type from the variable and may\nassign it values of that type. A variable declared with another type holds values the\nimporters were not told about, or is handed values the module does not expect.\n\nA variable the module leaves unannotated is declared by the stub, so its assignments are\nchecked as any declared variable's are.\n\n## Example\n\n```pyi\n# m.pyi\nx: int\n```\n\n```python\n# m.py\nx: str = \"\"  # error: `str` is not the stub's `int`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "incompatible-stub-bases": {
+          "title": "detects a class that does not inherit from the bases its stub declares",
+          "description": "## What it does\nChecks that a class a stub declares inherits from every class the stub lists as a base.\n\n## Why is this bad?\nImporters are typed by the stub, so an instance of the class is accepted wherever one of\nthe stub's bases is, and `isinstance` against a base is taken to be true. A class that does\nnot inherit from it fails both at runtime.\n\nProtocol bases are structural and are not checked, and nor is a base the stub defines for\nitself with no runtime class to compare against.\n\n## Example\n\n```pyi\n# m.pyi\nclass E(ValueError): ...\n```\n\n```python\n# m.py\nclass E(Exception): ...  # error: `E` does not inherit from `ValueError`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "incompatible-stub-signature": {
+          "title": "detects a function whose signature is incompatible with its stub's",
+          "description": "## What it does\nChecks that a function a stub declares accepts every call the stub accepts and returns what\nthe stub says it returns: each parameter the stub declares can be passed as the stub\ndeclares it (by position, by keyword, or left out where the stub gives it a default), every\nparameter the stub does not declare can be left out, a parameter annotation accepts what\nthe stub's does, and a return annotation promises no more than the stub's.\n\nA function the stub overloads is held to every overload in the code that runs, as the\nimplementation of overloads is.\n\n## Why is this bad?\nImporters are typed by the stub, so a call the stub accepts is one they may make. A\nfunction that cannot take it fails at runtime, and a return value of another type reaches\ncode that was checked against the stub's.\n\nA parameter or return type the function leaves unannotated takes the stub's, so only the\nannotations the function writes can disagree with it.\n\n## Example\n\n```pyi\n# m.pyi\ndef f(a: int, b: str = ...) -> int: ...\n```\n\n```python\n# m.py\ndef f(a: str, b) -> object:  # error: three times\n    ...\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "inconsistent-mro": {
           "title": "detects class definitions with an inconsistent MRO",
           "description": "## What it does\n\nChecks for classes with an inconsistent [method resolution order] (MRO).\n\n## Why is this bad?\n\nClasses with an inconsistent MRO will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass A: ...\n\n\nclass B(A): ...\n\n\n# TypeError: Cannot create a consistent method resolution order\nclass C(A, B): ...  # error\n```\n\n[method resolution order]: https://docs.python.org/3/glossary.html#term-method-resolution-order",
@@ -2045,10 +2075,30 @@
             }
           ]
         },
+        "missing-runtime-member": {
+          "title": "detects a member a stub declares that the module it describes does not define",
+          "description": "## What it does\nChecks that a module described by a stub defines every public member the stub declares,\nand that each class the stub declares has every member the stub gives it.\n\n## Why is this bad?\nImporters of a module that has a stub are typed by the stub, so they are told the member\nexists. If the module never defines it, the import or the attribute access type-checks and\nthen fails at runtime.\n\nWhat a stub declares only for a type checker is not expected of the module: private names,\nanything `@type_check_only`, type variables, type aliases, `__all__`, and a `__getattr__`\nsaying there are attributes the stub does not list. Nor is anything a module- or\nclass-level `__getattr__` could supply, or a class member the runtime class inherits.\n\nThe runtime module's own definitions are read from its source, so a member it creates in\na way its source does not show (through `globals()`, `setattr` or `exec`) is reported as\nmissing.\n\n## Example\n\n```pyi\n# m.pyi\ndef f() -> None: ...\ndef g() -> None: ...\n```\n\n```python\n# m.py: error: `g` is declared by the stub but not defined here\ndef f():\n    pass\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "missing-slot": {
           "title": "detects assignments to declared attributes without instance storage",
           "description": "## What it does\n\nChecks for assignments to declared attributes that have no matching `__slots__` entry on the class\nor its bases, and no instance dictionary to store their values.\n\n## Why is this bad?\n\nMost Python objects store their attributes in an \"instance dictionary\". Assigning to a new attribute\nadds an entry to this dictionary; deleting that attribute removes it again. Accordingly, most Python\nobjects allow for **arbitrary attributes to be set and read**. The advantage of this is that it\nallows for many dynamic features; the disadvantage is that it can be costly in terms of memory, and\ncan easily allow for typos to slip in accidentally, e.g.:\n\n```py\nclass Foo:\n    def __init__(self, x):\n        self.x = x\n\n    def update_x(self, x):\n        self.xx = x  # oops, this was meant to be the same attribute set in `__init__`,\n        # but ended up being an entirely separate one!\n```\n\nDefining `__slots__` lets a class reserve space for a fixed set of instance attributes instead.\nUnless an instance dictionary is inherited from a base class or requested by including `\"__dict__\"`\nin `__slots__`, instances of the class have no dictionary in which to store additional attributes.\nAttempting to assign to an attribute not declared in `__slots__` will often raise `AttributeError`\nat runtime if the instance has no instance dictionary.\n\n## Examples\n\n### Class definitions\n\n```python\nclass Item:\n    __slots__ = ()\n    value: int\n\n\nItem().value = 1  # error: [missing-slot]\n```\n\nIf you control the class, include the attribute in `__slots__` to make the assignment valid:\n\n```python\nclass Item:\n    __slots__ = (\"value\",)\n    value: int\n\n\nItem().value = 1\n```\n\n### Stub files\n\nStub files can use properties to indicate that instances have attributes that are readable and\nwritable but do not appear in `__slots__`, for example:\n\n```pyi\nclass Item:\n    __slots__ = ()\n    @property\n    def value(self) -> int: ...\n    @value.setter\n    def value(self, value: int) -> None: ...\n```\n\n## References\n\n- [Python data model: `__slots__`](https://docs.python.org/3/reference/datamodel.html#slots)",
           "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "missing-stub-member": {
+          "title": "detects a public member of a module that its stub does not declare",
+          "description": "## What it does\nChecks that every public member of a module described by a stub, and of each class the\nstub declares, is declared by the stub.\n\n## Why is this bad?\nImporters are typed by the stub, so a member the stub leaves out is one they are told does\nnot exist, though the module defines it. That is often deliberate: a stub describes the\nsupported interface, and a module's other public names are implementation details. So this\nrule is disabled by default; enable it for a module whose stub is meant to be complete.\n\nA member is public when its name has no leading underscore and it is not a dunder, and\nwhere the module defines `__all__`, when `__all__` lists it. An import counts only when\n`__all__` lists it.\n\n## Example\n\n```pyi\n# m.pyi\ndef f() -> None: ...\n```\n\n```python\n# m.py\ndef f(): ...\ndef g(): ...  # error: `g` is not declared by the stub\n```",
+          "default": "ignore",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

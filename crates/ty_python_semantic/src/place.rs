@@ -20,6 +20,7 @@ use crate::reachability::{
     evaluate_reachability_with_cache,
 };
 use crate::types::check_order::InferredInCheckOrder;
+use crate::types::stub_implementation::stub_declared_type;
 use crate::types::{
     DynamicType, KnownClass, MemberLookupPolicy, Type, TypeAndQualifiers, TypeQualifiers,
     UnionBuilder, UnionType, binding_type, inferred_declaration, is_discarded_dict_key_assignment,
@@ -35,7 +36,7 @@ use ty_python_core::predicate::{Predicate, ScopedPredicateId};
 use ty_python_core::reachability_constraints::{
     ReachabilityConstraints, ScopedReachabilityConstraintId,
 };
-use ty_python_core::scope::{FileScopeId, ScopeId};
+use ty_python_core::scope::{FileScopeId, ScopeId, ScopeKind};
 use ty_python_core::{
     BindingWithConstraints, BindingWithConstraintsIterator, BoundnessAnalysis,
     DeclarationWithConstraint, DeclarationsIterator, ImportedFinalCandidatesIterator, ProgramFile,
@@ -2273,6 +2274,33 @@ pub(crate) fn place_by_id<'db>(
             let mut inferred =
                 place_from_bindings_impl(db, &env, bindings, requires_explicit_reexport, None)
                     .place;
+
+            // basedpython: a module variable or class attribute the module's stub declares is
+            // declared by the stub, wherever the module binds it
+            if let Some(symbol_id) = place_id.as_symbol()
+                && matches!(
+                    scope.node(db).scope_kind(),
+                    ScopeKind::Module | ScopeKind::Class
+                )
+                && let Some(declared) =
+                    stub_declared_type(db, scope, place_table(db, scope).symbol(symbol_id).name())
+                && let Place::Defined(binding) = inferred
+                && let Place::Defined(declared_place) = declared.place
+            {
+                let definedness = if boundness_analysis == BoundnessAnalysis::AssumeBound {
+                    Definedness::AlwaysDefined
+                } else {
+                    binding.definedness
+                };
+                return Place::Defined(DefinedPlace {
+                    ty: declared_place.ty,
+                    origin: TypeOrigin::Declared,
+                    definedness,
+                    public_type_policy: PublicTypePolicy::Raw,
+                    provenance: binding.provenance,
+                })
+                .with_qualifiers(qualifiers | declared.qualifiers);
+            }
 
             if boundness_analysis == BoundnessAnalysis::AssumeBound {
                 if let Place::Defined(defined) = inferred {

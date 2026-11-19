@@ -22,7 +22,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/overloads.md
 7 |     return x
 ```
 
-## mdtest_snippet.pyi
+## stub.pyi
 
 ```
 1 | from typing import overload
@@ -48,7 +48,7 @@ error[invalid-overload]: Overloaded function `func` requires at least two overlo
 
 ```
 error[invalid-overload]: Overloaded function `func` requires at least two overloads
- --> src/mdtest_snippet.pyi:5:5
+ --> src/stub.pyi:5:5
   |
 3 | @overload
   | ---------

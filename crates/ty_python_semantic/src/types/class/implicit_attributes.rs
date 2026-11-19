@@ -11,6 +11,7 @@ use crate::{
         infer::infer_unpack_types,
         infer_expression_type, inferred_declaration,
         member::Member,
+        stub_implementation::stub_declared_type,
     },
 };
 use ruff_db::parsed::parsed_module;
@@ -302,7 +303,21 @@ impl<'db> StaticClassLiteral<'db> {
             }
         }
 
-        let member = if is_attribute_bound {
+        // basedpython: an attribute the methods assign without declaring it, which the stub of
+        // the module declares in the class body as an instance variable, is declared by the stub
+        let stub_declared = (is_attribute_bound
+            && target_method_decorator == MethodDecorator::None)
+            .then(|| stub_declared_type(db, class_body_scope, name))
+            .flatten()
+            .filter(|declared| !declared.qualifiers.contains(TypeQualifiers::CLASS_VAR));
+
+        let member = if let Some(declared) = stub_declared {
+            Member {
+                inner: declared.place.with_provenance(provenance).with_qualifiers(
+                    declared.qualifiers | TypeQualifiers::IMPLICIT_INSTANCE_ATTRIBUTE,
+                ),
+            }
+        } else if is_attribute_bound {
             Member {
                 inner: Place::bound(
                     union_of_inferred_types

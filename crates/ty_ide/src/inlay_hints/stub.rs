@@ -12,6 +12,12 @@
 //!   version check that runs) gets a hint in a slot only where every declaration says the same
 //!   there: an overloaded `def f(x: int) -> int` / `def f(x: str) -> str` hints neither `x` nor the
 //!   return, since the one runtime `def` implements both and no single annotation is the stub's.
+//!   the checker reads such a slot as the union of what the overloads say, which the inherited
+//!   parameter type and return type hints show there instead.
+//!
+//!   the hint says what the checker reads the slot as, which is the stub's type only where the
+//!   stub's type means the same in the runtime module: a type naming one of the stub's own
+//!   classes or type variables is not carried into the runtime body, and is not hinted.
 //! - `stubOnlyMembers`: a member the stub declares and the runtime module (or class) does not,
 //!   drawn as its own lines, the stub's source as the stub writes it, where the stub's order puts
 //!   it among the runtime's members.
@@ -20,7 +26,6 @@ use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::{SourceText, source_text};
 use ruff_python_ast::comparable::ComparableExpr;
-use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{self as ast, AnyParameterRef, Expr, Stmt};
 use ruff_source_file::LineRanges;
@@ -30,7 +35,11 @@ use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::{ProgramFile, global_scope, place_table};
 use ty_python_semantic::stub_mapping::{
-    PairedMember, is_definition_reachable, runtime_module_stub, stub_pairing,
+    PairedMember, is_definition_reachable, is_stub_only_by_design, runtime_module_stub,
+    stub_counterpart_declarations, stub_pairing,
+};
+use ty_python_semantic::types::ide_support::{
+    inferred_return_type, inherited_parameter_annotation,
 };
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -49,17 +58,12 @@ pub(super) struct StubContext<'db> {
     /// whether the stub and the runtime module are written in the same language, so that an
     /// annotation the stub spells can be written into the runtime module as it is
     same_language: bool,
-    /// each runtime `def` and `class` the stub declares too, with the stub's declarations of it
-    /// in the code that runs for the configured version and platform
-    counterparts: FxHashMap<Definition<'db>, Vec<Definition<'db>>>,
 }
 
 impl<'db> StubContext<'db> {
     /// `None` for a module no stub describes
     pub(super) fn new(db: &'db dyn Db, runtime: ProgramFile<'db>) -> Option<Self> {
         let stub = runtime_module_stub(db, runtime)?;
-        let mut counterparts = FxHashMap::default();
-        collect_counterparts(db, stub_pairing(db, stub, runtime), &mut counterparts);
         Some(Self {
             stub,
             stub_model: SemanticModel::new(db, stub),
@@ -67,7 +71,6 @@ impl<'db> StubContext<'db> {
             stub_source: source_text(db, stub.file(db)),
             same_language: stub.file(db).source_type(db).is_basedpython()
                 == runtime.file(db).source_type(db).is_basedpython(),
-            counterparts,
         })
     }
 
@@ -100,41 +103,6 @@ impl<'db> StubContext<'db> {
             focus,
             full,
         )))
-    }
-}
-
-fn collect_counterparts<'db>(
-    db: &'db dyn Db,
-    members: &[PairedMember<'db>],
-    counterparts: &mut FxHashMap<Definition<'db>, Vec<Definition<'db>>>,
-) {
-    for member in members {
-        if member.is_paired() {
-            let stub: Vec<_> = member
-                .stub
-                .iter()
-                .copied()
-                .filter(|definition| is_definition_reachable(db, *definition))
-                .collect();
-            for runtime in member.runtime.iter().copied() {
-                let wanted: fn(&DefinitionKind<'_>) -> bool = match runtime.kind(db) {
-                    DefinitionKind::Function(_) => {
-                        |kind| matches!(kind, DefinitionKind::Function(_))
-                    }
-                    DefinitionKind::Class(_) => |kind| matches!(kind, DefinitionKind::Class(_)),
-                    _ => continue,
-                };
-                let matching: Vec<_> = stub
-                    .iter()
-                    .copied()
-                    .filter(|definition| wanted(definition.kind(db)))
-                    .collect();
-                if !matching.is_empty() {
-                    counterparts.insert(runtime, matching);
-                }
-            }
-        }
-        collect_counterparts(db, &member.members, counterparts);
     }
 }
 
@@ -180,9 +148,12 @@ fn same_arguments(left: &ast::Arguments, right: &ast::Arguments) -> bool {
 
 impl<'db> InlayHintVisitor<'_, 'db> {
     /// the stub's declarations of the runtime `def` or `class` declared by `node`
-    fn stub_declarations(&self, definition: Option<Definition<'db>>) -> Option<&[Definition<'db>]> {
-        let stub = self.stub.as_ref()?;
-        stub.counterparts.get(&definition?).map(Vec::as_slice)
+    fn stub_declarations(
+        &self,
+        definition: Option<Definition<'db>>,
+    ) -> Option<&'db [Definition<'db>]> {
+        self.stub.as_ref()?;
+        stub_counterpart_declarations(self.db, definition?).as_deref()
     }
 
     /// `stubTypes`: the parameter and return annotations the stub declares for a `def` that
@@ -239,6 +210,14 @@ impl<'db> InlayHintVisitor<'_, 'db> {
                 continue;
             };
             let declared = stub_parameter.inferred_type(&stub.stub_model);
+            // the hint says what the checker reads the parameter as: a type the stub writes in
+            // terms only the stub has (its own classes, its type variables) is not carried into
+            // the runtime body, and is not hinted as though it were
+            if declared.is_none()
+                || inherited_parameter_annotation(&self.model, runtime_parameter) != declared
+            {
+                continue;
+            }
             hints.push(self.stub_annotation_hint(
                 runtime_parameter.name.range().end(),
                 parameter,
@@ -258,7 +237,9 @@ impl<'db> InlayHintVisitor<'_, 'db> {
             )
         {
             let declared = returns.inferred_type(&stub.stub_model);
-            hints.push(self.stub_return_hint(function, returns, declared));
+            if declared.is_some() && inferred_return_type(&self.model, function) == declared {
+                hints.push(self.stub_return_hint(function, returns, declared));
+            }
         }
 
         for hint in hints.into_iter().flatten() {
@@ -605,7 +586,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
                 }
                 continue;
             }
-            if !shows_as_stub_only(self.db, member, &stub.stub_module) {
+            if is_stub_only_by_design(self.db, &member.name, &member.stub) {
                 continue;
             }
             let (position, placement) =
@@ -686,59 +667,6 @@ struct Container<'a> {
     indentation: String,
 }
 
-/// whether a member the runtime module lacks is worth drawing: not one only a type checker reads
-///
-/// a stub declares a few things for itself that its module has no reason to: a private helper
-/// (`_T = TypeVar("_T")`, `class _SupportsRead(Protocol)`), anything `@type_check_only`, a type
-/// variable or a type alias. their absence from the runtime module is what a stub is for
-fn shows_as_stub_only(
-    db: &dyn Db,
-    member: &PairedMember<'_>,
-    stub_module: &ParsedModuleRef,
-) -> bool {
-    let name = member.name.as_str();
-    if name.starts_with('_') && !is_dunder(name) {
-        return false;
-    }
-    member
-        .stub
-        .iter()
-        .any(|definition| match definition.kind(db) {
-            DefinitionKind::Function(function) => {
-                !is_type_check_only(&function.node(stub_module).decorator_list)
-            }
-            DefinitionKind::Class(class) => {
-                !is_type_check_only(&class.node(stub_module).decorator_list)
-            }
-            DefinitionKind::TypeAlias(_) => false,
-            DefinitionKind::AnnotatedAssignment(assignment) => {
-                !is_named(assignment.annotation(stub_module), "TypeAlias")
-            }
-            DefinitionKind::Assignment(assignment) => !matches!(
-                assignment.value(stub_module),
-                Expr::Call(call) if ["TypeVar", "ParamSpec", "TypeVarTuple"]
-                    .iter()
-                    .any(|name| is_named(&call.func, name))
-            ),
-            _ => true,
-        })
-}
-
-fn is_type_check_only(decorators: &[ast::Decorator]) -> bool {
-    decorators
-        .iter()
-        .any(|decorator| is_named(&decorator.expression, "type_check_only"))
-}
-
-/// whether `expression` is `name` or an attribute `name` of something, as `typing.TypeAlias`
-fn is_named(expression: &Expr, name: &str) -> bool {
-    match expression {
-        Expr::Name(expression) => expression.id.as_str() == name,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == name,
-        _ => false,
-    }
-}
-
 /// the stub source a stub-only declaration is drawn from: a `def` or a `class` with its
 /// decorators, a variable's whole declaration, an import's one name
 fn declaration_range(
@@ -810,4 +738,71 @@ fn reindented(source: &str, range: TextRange, indentation: &str, head: Option<&s
         }
     }
     text
+}
+
+/// the fixes of a `missing-runtime-member` diagnostic at `diagnostic_range`, each a title and the
+/// edits that write one member the stub declares into the module or class the diagnostic is on,
+/// as the `stubOnlyMembers` hint draws it
+///
+/// the diagnostic is on the name of a class for the class's members, and at the start of the
+/// module for the module's, so each member of that container the stub has and the module lacks is
+/// offered
+pub(crate) fn stub_member_fixes(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    diagnostic_range: TextRange,
+) -> Vec<(String, Vec<ruff_diagnostics::Edit>)> {
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let mut classes = Vec::new();
+    collect_classes(module.suite(), &mut classes);
+    // the class whose members the diagnostic is about, `None` for the module's own
+    let container = classes
+        .iter()
+        .find(|class| class.name.range() == diagnostic_range)
+        .map(Ranged::range);
+    // the innermost class `position` is a member of
+    let innermost = |position: TextSize| {
+        classes
+            .iter()
+            .filter(|class| class.range().contains_inclusive(position))
+            .min_by_key(|class| class.range().len())
+            .map(Ranged::range)
+    };
+    let settings = super::InlayHintSettings {
+        stub_only_members: true,
+        ..super::InlayHintSettings::none()
+    };
+    super::inlay_hints(db, file, TextRange::up_to(module.syntax().end()), &settings)
+        .into_iter()
+        .filter(|hint| {
+            hint.kind == InlayHintKind::StubOnlyMembers
+                && !hint.text_edits.is_empty()
+                && innermost(hint.position) == container
+        })
+        .filter_map(|hint| {
+            let target = hint
+                .label
+                .parts()
+                .iter()
+                .find_map(InlayHintLabelPart::target)?;
+            let name = source_text(db, target.file())[target.focus_range()].to_string();
+            let edits = hint
+                .text_edits
+                .iter()
+                .map(|edit| {
+                    ruff_diagnostics::Edit::range_replacement(edit.new_text.clone(), edit.range)
+                })
+                .collect();
+            Some((format!("Add `{name}` from the stub"), edits))
+        })
+        .collect()
+}
+
+fn collect_classes<'a>(body: &'a [Stmt], classes: &mut Vec<&'a ast::StmtClassDef>) {
+    for statement in body {
+        if let Stmt::ClassDef(class) = statement {
+            classes.push(class);
+            collect_classes(&class.body, classes);
+        }
+    }
 }

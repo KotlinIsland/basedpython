@@ -363,6 +363,8 @@ reveal_type(Pet10.DOG)  # revealed: Literal[Pet10.DOG]
 If a `_value_` annotation is defined on an `Enum` class, all enum member values must be compatible
 with the declared type:
 
+`stub.pyi`:
+
 ```pyi
 from enum import Enum
 

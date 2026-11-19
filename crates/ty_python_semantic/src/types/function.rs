@@ -97,6 +97,10 @@ use crate::types::signatures::{
     CallableSignature, DeferredAssertions, NarrowingGuard, NarrowingGuardKind, Parameters,
     ReturnCallableTypeVarScope, Signature,
 };
+use crate::types::stub_implementation::{
+    definition_stub, is_statable_in_runtime, stub_return_type, stub_signatures,
+    visible_binding_contexts,
+};
 use crate::types::variance::{VarianceInferable, VarianceOrigin, VarianceTerm};
 use crate::types::visitor::any_over_type;
 use crate::types::{
@@ -958,7 +962,7 @@ impl<'db> OverloadLiteral<'db> {
     /// [`Signature::add_implicit_self_annotation`] leaves its `cls` alone — but construction
     /// still binds the class there, and nothing a call site writes lands in it. A parameter no
     /// caller fills is not a hole for one to fill.
-    fn binds_first_parameter(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn binds_first_parameter(self, db: &'db dyn Db) -> bool {
         self.body_scope(db).is_method_scope(db)
             && (!self.is_staticmethod(db) || is_implicit_staticmethod(self.name(db)))
     }
@@ -1451,6 +1455,39 @@ impl<'db> OverloadLiteral<'db> {
             }
         }
 
+        // basedpython: a function its module's stub declares takes the parameter types the stub
+        // gives it, as the implementation of overloads takes its overloads': a parameter the
+        // stub overloads is the union of what each overload says. an `@overload` of the runtime
+        // module's own declares its signature itself, and only its implementation is the
+        // stub's. the stub speaks for this very function, so it comes before the method it
+        // overrides. what the stub says in terms only the stub has (its own classes and type
+        // variables) is not carried; see `stub_implementation`
+        if !self.is_overload(db)
+            && raw_signature.has_inherited_annotations_to_fill()
+            && let Some(stub_signatures) = stub_signatures(db, definition).as_deref()
+            && let Some(stub) = definition_stub(db, definition)
+        {
+            let sources: Vec<(Signature<'db>, bool)> = stub_signatures
+                .iter()
+                .map(|stub_signature| {
+                    (
+                        stub_signature.signature.clone(),
+                        stub_signature.binds_receiver,
+                    )
+                })
+                .collect();
+            let visible = visible_binding_contexts(db, definition);
+            raw_signature.inherit_unannotated_parameters_where(
+                db,
+                env,
+                &sources,
+                self.binds_first_parameter(db),
+                |ty| {
+                    is_statable_in_runtime(db, env, ty, stub, |context| visible.contains(&context))
+                },
+            );
+        }
+
         // basedpython: an unannotated method inherits its parameter types from the methods it
         // overrides, so `def m(self, a)` over `def m(self, a: int)` sees `a: int`. a constructor
         // is not held to the signature of the one it overrides, since a subclass's constructor
@@ -1546,7 +1583,9 @@ impl<'db> OverloadLiteral<'db> {
         match self.return_type_source(db, env, false, |base| {
             Self::overridden_return_type(db, env, base)
         }) {
-            ReturnTypeSource::Overridden(ty) | ReturnTypeSource::Overloads(ty) => {
+            ReturnTypeSource::Overridden(ty)
+            | ReturnTypeSource::Overloads(ty)
+            | ReturnTypeSource::Stub(ty) => {
                 raw_signature.return_ty = ty;
             }
             ReturnTypeSource::Body => {
@@ -1729,7 +1768,8 @@ impl<'db> OverloadLiteral<'db> {
         }) {
             ReturnTypeSource::PropertyInitialiser(ty)
             | ReturnTypeSource::Overridden(ty)
-            | ReturnTypeSource::Overloads(ty) => ty,
+            | ReturnTypeSource::Overloads(ty)
+            | ReturnTypeSource::Stub(ty) => ty,
             ReturnTypeSource::Body => from_body(),
             ReturnTypeSource::Written | ReturnTypeSource::Gradual => Type::unknown(),
         }
@@ -1740,6 +1780,10 @@ impl<'db> OverloadLiteral<'db> {
     /// [`OverloadLiteral::return_type_without_annotation`], which the
     /// `redundant-return-annotation` lint compares an annotation against; and the reading of
     /// whether a call to the function can return (`normal_completion`)
+    ///
+    /// the stub of the function's module, where it declares the function, answers ahead of the
+    /// method it overrides and the function's body, unless the module overloads the function
+    /// itself: see `stub_implementation`
     ///
     /// `without_annotation` answers for the function as though its return annotation were
     /// deleted. `overridden` says what the method this one overrides supplies. the signature and
@@ -1775,6 +1819,17 @@ impl<'db> OverloadLiteral<'db> {
             && let Some(property_type) = self.property_initialiser_type(db)
         {
             return ReturnTypeSource::PropertyInitialiser(property_type);
+        }
+
+        // basedpython: the stub of the module speaks for this very function, ahead of anything
+        // it overrides or infers. overloads the module writes itself speak for their
+        // implementation, as they do for its parameters
+        if !self.is_overload(db)
+            && self.previous_overload(db).is_none()
+            && let Some(stub_return) =
+                stub_return_type(db, env, self.definition(db), header.is_async)
+        {
+            return ReturnTypeSource::Stub(stub_return);
         }
 
         let infers = infers_return_types(db, self.file(db));
@@ -2514,6 +2569,9 @@ pub(crate) enum ReturnTypeSource<'db> {
     Overridden(Type<'db>),
     /// the union of what the sibling `@overload`s return
     Overloads(Type<'db>),
+    /// the stub of the function's module declares it, as the union of its overloads' where it
+    /// overloads the function
+    Stub(Type<'db>),
     /// the function's own body
     Body,
     /// nothing supplies one, so it stays gradual

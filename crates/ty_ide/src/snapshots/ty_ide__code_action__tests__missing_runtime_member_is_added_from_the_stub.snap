@@ -1,0 +1,36 @@
+---
+source: crates/ty_ide/src/code_action.rs
+expression: test.code_actions(&MISSING_RUNTIME_MEMBER)
+---
+info[code-action]: Add `n` from the stub
+ --> main.py:2:7
+  |
+2 | class A:
+  |       ^
+help: This is a preferred code action
+  |
+4 |         pass
+5 +     def n(self, a: int) -> int: ...
+  |
+
+info[code-action]: Ignore 'missing-runtime-member' for this line
+ --> main.py:2:7
+  |
+2 | class A:
+  |       ^
+  |
+1 |
+  - class A:
+2 + class A:  # ty: ignore[missing-runtime-member]
+3 |     def m(self):
+  |
+
+info[code-action]: Ignore 'missing-runtime-member' in this file
+ --> main.py:2:7
+  |
+2 | class A:
+  |       ^
+  |
+1 + # ty: ignore[missing-runtime-member]
+2 |
+  |

@@ -246,7 +246,77 @@ fn a_stub_only_member_is_a_whole_line_hint() -> Result<()> {
                 .collect()
         })
         .collect();
-    // `load`'s overloads agree on what it returns and nothing else
-    assert_eq!(stub_types, [": str", "-> list[str]", "-> Parser"]);
+    // `load`'s overloads agree on what it returns and nothing else, and what they agree on is
+    // the stub's own `Parser`, not the runtime module's: the checker does not read the runtime
+    // `load` as returning it, so neither does a hint
+    assert_eq!(stub_types, [": str", "-> list[str]"]);
+    Ok(())
+}
+
+/// where a runtime module disagrees with its stub is reported in the runtime module as ordinary
+/// diagnostics, and a member it lacks is offered as a quick fix that writes it in as the stub
+/// declares it
+#[test]
+fn a_member_the_runtime_module_lacks_is_reported_and_offered() -> Result<()> {
+    let mut server = server()?;
+    let runtime = SystemPath::new("src/parsing.py");
+    let report = server.document_diagnostic_request(runtime, None);
+    let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) = report
+    else {
+        panic!("expected a full diagnostic report");
+    };
+    let diagnostics = report.full_document_diagnostic_report.items;
+    let missing: Vec<lsp_types::Diagnostic> = diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            serde_json::to_value(diagnostic).expect("diagnostic")["code"]
+                == "missing-runtime-member"
+        })
+        .collect();
+    let reported = serde_json::to_value(&missing)?;
+    assert_eq!(
+        reported
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .map(|diagnostic| (diagnostic["message"].clone(), diagnostic["range"].clone()))
+            .collect::<Vec<_>>(),
+        // on the class's name
+        [(
+            json!("`reset` is declared by the stub but not defined by class `Parser`"),
+            json!({ "start": { "line": 0, "character": 6 }, "end": { "line": 0, "character": 12 } }),
+        )]
+    );
+
+    let range = missing[0].range;
+    let actions =
+        server.send_request_await::<lsp_types::CodeActionRequest>(lsp_types::CodeActionParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: server.file_uri(runtime),
+            },
+            range,
+            context: lsp_types::CodeActionContext {
+                diagnostics: missing,
+                only: Some(vec![lsp_types::CodeActionKind::QuickFix]),
+                trigger_kind: None,
+            },
+            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            partial_result_params: lsp_types::PartialResultParams::default(),
+        });
+    let actions = serde_json::to_value(&actions)?;
+    let added = actions
+        .as_array()
+        .expect("code actions")
+        .iter()
+        .find(|action| action["title"] == "Add `reset` from the stub")
+        .expect("a quick fix adding `reset`");
+    let new_texts: Vec<&str> = added["edit"]["changes"]
+        .as_object()
+        .expect("changes")
+        .values()
+        .flat_map(|edits| edits.as_array().expect("edits"))
+        .map(|edit| edit["newText"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(new_texts, ["\n    def reset(self) -> None: ..."]);
     Ok(())
 }

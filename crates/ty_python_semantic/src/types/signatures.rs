@@ -1925,7 +1925,7 @@ impl<'db> Signature<'db> {
         binds_receiver: bool,
         is_visible: impl Fn(BindingContext<'db>) -> bool,
     ) {
-        let statable = |ty: Type<'db>| {
+        self.inherit_unannotated_parameters_where(db, env, sources, binds_receiver, |ty| {
             !any_over_type(
                 db,
                 env,
@@ -1933,7 +1933,19 @@ impl<'db> Signature<'db> {
                 false,
                 |ty| matches!(ty, Type::TypeVar(typevar) if !is_visible(typevar.binding_context(db))),
             )
-        };
+        });
+    }
+
+    /// basedpython: [`Signature::inherit_unannotated_parameters`], inheriting only the types
+    /// `statable` accepts as meaning here what they mean in the source
+    pub(crate) fn inherit_unannotated_parameters_where(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        sources: &[(Signature<'db>, bool)],
+        binds_receiver: bool,
+        statable: impl Fn(Type<'db>) -> bool,
+    ) {
         let inherited: Vec<(usize, Type<'db>)> = self
             .parameters
             .iter()
@@ -7992,7 +8004,7 @@ impl<'db> Parameter<'db> {
         }
     }
 
-    fn callable_by_name(&self, name: &str) -> bool {
+    pub(crate) fn callable_by_name(&self, name: &str) -> bool {
         match &self.kind {
             ParameterKind::PositionalOrKeyword {
                 name: param_name, ..

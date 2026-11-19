@@ -143,9 +143,9 @@ fn unannotated_call_returns<'db>(
     }
     match source {
         ReturnTypeSource::Body => Some(body_call_returns(db, overload.body_scope(db))),
-        ReturnTypeSource::Overridden(return_ty) => Some(Truthiness::from(
-            !return_ty.is_equivalent_to(db, &env, Type::Never),
-        )),
+        ReturnTypeSource::Overridden(return_ty) | ReturnTypeSource::Stub(return_ty) => Some(
+            Truthiness::from(!return_ty.is_equivalent_to(db, &env, Type::Never)),
+        ),
         ReturnTypeSource::Written
         | ReturnTypeSource::PropertyInitialiser(_)
         | ReturnTypeSource::Overloads(_)
@@ -205,7 +205,8 @@ fn return_type_seen_by_overrides<'db>(
         },
         ReturnTypeSource::PropertyInitialiser(return_ty)
         | ReturnTypeSource::Overridden(return_ty)
-        | ReturnTypeSource::Overloads(return_ty) => OverriddenReturnType::of(db, &env, return_ty),
+        | ReturnTypeSource::Overloads(return_ty)
+        | ReturnTypeSource::Stub(return_ty) => OverriddenReturnType::of(db, &env, return_ty),
         ReturnTypeSource::Body => match body_call_returns(db, base.body_scope(db)) {
             Truthiness::AlwaysTrue => OverriddenReturnType::Declared(Type::unknown()),
             // a body with no outcome at all never completes either

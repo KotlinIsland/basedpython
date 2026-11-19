@@ -35,8 +35,11 @@ use ruff_db::files::vendored_path_to_file;
 use ruff_db::parsed::parsed_module;
 use ruff_db::system::SystemPath;
 use ruff_db::vendored::VendoredPathBuf;
+use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, Expr};
 use ruff_text_size::Ranged as _;
+use rustc_hash::FxHashMap;
 use tracing::trace;
 use ty_module_resolver::{
     ImportingFile, resolve_module, resolve_real_module, runtime_file_to_module,
@@ -44,7 +47,7 @@ use ty_module_resolver::{
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place::ScopedPlaceId;
-use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, NodeWithScopeRef, ScopeKind};
+use ty_python_core::scope::{FileScopeId, NodeWithScopeKind, NodeWithScopeRef, ScopeId, ScopeKind};
 use ty_python_core::{ProgramFile, attribute_scopes, semantic_index};
 
 use crate::dunder_all::dunder_all_names;
@@ -581,4 +584,227 @@ pub fn is_definition_reachable(db: &dyn Db, definition: Definition<'_>) -> bool 
         definition.file_scope(db),
         definition.full_range(db, &module).range(),
     )
+}
+
+/// what a stub declares for one member of a runtime module's scope, as the code that runs for the
+/// configured python version and platform sees it on both sides
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub struct StubMember<'db> {
+    pub name: Name,
+    /// the stub's reachable declarations of the name, in source order: every overload, the
+    /// declaration in the `sys.version_info` branch that runs
+    pub stub: Box<[Definition<'db>]>,
+    /// the runtime module's declarations of the name, reachable or not; empty for a member the
+    /// stub declares and the runtime scope does not
+    pub runtime: Box<[Definition<'db>]>,
+}
+
+/// one scope of a runtime module, the module itself or the body of a class its stub declares too,
+/// held against what the stub declares for it
+#[derive(Debug, Clone, PartialEq, Eq, Default, get_size2::GetSize, salsa::SalsaValue)]
+pub struct StubScope<'db> {
+    /// every member the stub declares in the scope, in the stub's order
+    pub members: Box<[StubMember<'db>]>,
+    /// the members the runtime scope declares and the stub does not, with the runtime's first
+    /// declaration of each, in the runtime's order
+    pub runtime_only: Box<[(Name, Definition<'db>)]>,
+}
+
+impl<'db> StubScope<'db> {
+    pub fn member(&self, name: &str) -> Option<&StubMember<'db>> {
+        self.members.iter().find(|member| member.name == name)
+    }
+}
+
+/// a runtime module described by a stub, read scope by scope: see [`stub_scope`]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+struct RuntimeStubIndex<'db> {
+    scopes: FxHashMap<ScopeId<'db>, StubScope<'db>>,
+    /// each runtime `def` and `class` the stub declares, with the stub's reachable declarations of
+    /// it of the same kind: the stub's `def`s for a `def`, its `class`es for a `class`
+    counterparts: FxHashMap<Definition<'db>, Box<[Definition<'db>]>>,
+}
+
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+fn runtime_stub_index<'db>(
+    db: &'db dyn Db,
+    runtime: ProgramFile<'db>,
+) -> Option<RuntimeStubIndex<'db>> {
+    let stub = runtime_module_stub(db, runtime)?;
+    let runtime_side = Side::new(db, runtime, false);
+    let mut index = RuntimeStubIndex {
+        scopes: FxHashMap::default(),
+        counterparts: FxHashMap::default(),
+    };
+    index_scope(
+        db,
+        &runtime_side,
+        &[FileScopeId::global()],
+        false,
+        stub_pairing(db, stub, runtime),
+        &mut index,
+    );
+    index.scopes.shrink_to_fit();
+    index.counterparts.shrink_to_fit();
+    Some(index)
+}
+
+fn index_scope<'db>(
+    db: &'db dyn Db,
+    runtime: &Side<'db>,
+    runtime_scopes: &[FileScopeId],
+    is_class: bool,
+    members: &[PairedMember<'db>],
+    index: &mut RuntimeStubIndex<'db>,
+) {
+    let reachable = |definitions: &[Definition<'db>]| -> Box<[Definition<'db>]> {
+        definitions
+            .iter()
+            .copied()
+            .filter(|definition| is_definition_reachable(db, *definition))
+            .collect()
+    };
+
+    let mut scope = StubScope::default();
+    let mut stub_members = Vec::with_capacity(members.len());
+    for member in members {
+        let stub = reachable(&member.stub);
+        if stub.is_empty() {
+            continue;
+        }
+        // the runtime module's own reachability is not asked: its conditions are inferred with the
+        // types of the module, which are read off this index in turn
+        let runtime_definitions = member.runtime.clone();
+        for &runtime_definition in &runtime_definitions {
+            let wanted: fn(&DefinitionKind<'_>) -> bool = match runtime_definition.kind(db) {
+                DefinitionKind::Function(_) => |kind| matches!(kind, DefinitionKind::Function(_)),
+                DefinitionKind::Class(_) => |kind| matches!(kind, DefinitionKind::Class(_)),
+                _ => continue,
+            };
+            let matching: Box<[Definition<'db>]> = stub
+                .iter()
+                .copied()
+                .filter(|definition| wanted(definition.kind(db)))
+                .collect();
+            if !matching.is_empty() {
+                index.counterparts.insert(runtime_definition, matching);
+            }
+        }
+        if !member.members.is_empty() {
+            let classes = runtime.class_bodies(db, &runtime_definitions);
+            if !classes.is_empty() {
+                index_scope(db, runtime, &classes, true, &member.members, index);
+            }
+        }
+        stub_members.push(StubMember {
+            name: member.name.clone(),
+            stub,
+            runtime: runtime_definitions,
+        });
+    }
+
+    scope.runtime_only = runtime
+        .members(db, runtime_scopes, is_class)
+        .into_iter()
+        .filter(|(name, _)| !members.iter().any(|member| member.name == *name))
+        .filter_map(|(name, definitions)| Some((name, definitions.into_iter().next()?)))
+        .collect();
+    scope.members = stub_members.into_boxed_slice();
+    for &runtime_scope in runtime_scopes {
+        index
+            .scopes
+            .insert(runtime_scope.to_scope_id(db, runtime.file), scope.clone());
+    }
+}
+
+/// what the stub of a runtime module declares for `scope`, the module's global scope or the body
+/// of a class the stub declares too
+///
+/// `None` for a scope of a module no stub describes, and for any other scope: a function's body
+/// declares nothing a stub describes. read scope by scope so that a body checked against its stub
+/// depends on what the stub says for that scope alone, not on the rest of the stub
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+pub fn stub_scope<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> Option<StubScope<'db>> {
+    runtime_stub_index(db, scope.program_file(db))
+        .as_ref()?
+        .scopes
+        .get(&scope)
+        .cloned()
+}
+
+/// the stub's declarations of the runtime `def` or `class` `definition`, the ones of the same
+/// kind in the code that runs: every overload of a function, the class in the branch taken
+///
+/// `None` where the module has no stub or the stub declares no such `def` or `class`
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+pub fn stub_counterpart_declarations<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Option<Box<[Definition<'db>]>> {
+    runtime_stub_index(db, definition.program_file(db))
+        .as_ref()?
+        .counterparts
+        .get(&definition)
+        .cloned()
+}
+
+/// whether `member`, which a stub declares, is something only a type checker reads, so that a
+/// runtime module has no reason to define it
+///
+/// a stub declares a few things for itself: a private helper (`_T = TypeVar("_T")`,
+/// `class _SupportsRead(Protocol)`), anything `@type_check_only`, a type variable, a type alias,
+/// the `__all__` that says what it re-exports, or a `__getattr__` that says it lists only some of
+/// the attributes.
+/// their absence from the runtime module is what a stub is for
+pub fn is_stub_only_by_design(
+    db: &dyn Db,
+    name: &str,
+    stub_definitions: &[Definition<'_>],
+) -> bool {
+    // a stub's `__all__` says what the stub re-exports, which a runtime module that never
+    // star-imports anything has no need to spell, and a stub's `__getattr__` says a module or class
+    // has attributes the stub does not list, which the runtime may well set some other way
+    if (name.starts_with('_') && !is_dunder(name)) || matches!(name, "__all__" | "__getattr__") {
+        return true;
+    }
+    let Some(first) = stub_definitions.first() else {
+        return true;
+    };
+    let module = parsed_module(db, first.program_file(db).python_file(db)).load(db);
+    !stub_definitions
+        .iter()
+        .any(|definition| match definition.kind(db) {
+            DefinitionKind::Function(function) => {
+                !is_type_check_only(&function.node(&module).decorator_list)
+            }
+            DefinitionKind::Class(class) => {
+                !is_type_check_only(&class.node(&module).decorator_list)
+            }
+            DefinitionKind::TypeAlias(_) => false,
+            DefinitionKind::AnnotatedAssignment(assignment) => {
+                !is_named(assignment.annotation(&module), "TypeAlias")
+            }
+            DefinitionKind::Assignment(assignment) => !matches!(
+                assignment.value(&module),
+                Expr::Call(call) if ["TypeVar", "ParamSpec", "TypeVarTuple"]
+                    .iter()
+                    .any(|name| is_named(&call.func, name))
+            ),
+            _ => true,
+        })
+}
+
+fn is_type_check_only(decorators: &[ast::Decorator]) -> bool {
+    decorators
+        .iter()
+        .any(|decorator| is_named(&decorator.expression, "type_check_only"))
+}
+
+/// whether `expression` is `name` or an attribute `name` of something, as `typing.TypeAlias`
+fn is_named(expression: &Expr, name: &str) -> bool {
+    match expression {
+        Expr::Name(expression) => expression.id.as_str() == name,
+        Expr::Attribute(attribute) => attribute.attr.as_str() == name,
+        _ => false,
+    }
 }

@@ -1,0 +1,86 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{\n    inherited_parameter_types: true, inferred_return_types: true,\n    ..stub_settings()\n})"
+---
+
+class Node: ...
+
+def get(key[: str], default[: int | str]=0)[ -> int | str]:
+    reveal_type(key)
+    reveal_type(default)
+    return default
+
+def link(node, weight[: float])[ -> node]:
+    return node
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.pyi:4:14
+  |
+4 | def get(key: str, default: int) -> int: ...
+  |              ^^^
+info: Source
+ --> main2.py:4:15
+  |
+4 | def get(key[: str], default[: int | str]=0)[ -> int | str]:
+  |               ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:49
+   |
+LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
+   |                                                 ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:55
+   |
+LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
+   |                                                       ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.pyi:7:30
+  |
+7 | def link(node: Node, weight: float) -> Node: ...
+  |                              ^^^^^
+info: Source
+ --> main2.py:9:25
+  |
+9 | def link(node, weight[: float])[ -> node]:
+  |                         ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.py:9:10
+  |
+9 | def link(node, weight):
+  |          ^^^^
+info: Source
+ --> main2.py:9:37
+  |
+9 | def link(node, weight[: float])[ -> node]:
+  |                                     ^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.py:1:1
+   |
+3  |
+   - def get(key, default=0):
+4  + def get(key: str, default=0) -> int | str:
+5  |     reveal_type(key)
+6  |     reveal_type(default)
+7  |     return default
+8  |
+   - def link(node, weight):
+9  + def link(node, weight: float):
+10 |     return node
+   |

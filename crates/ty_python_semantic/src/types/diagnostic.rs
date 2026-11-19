@@ -210,6 +210,11 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&UNESTABLISHED_ASSERTION_GUARD);
     registry.register_lint(&UNGUARDED_OPERAND);
+    registry.register_lint(&MISSING_RUNTIME_MEMBER);
+    registry.register_lint(&MISSING_STUB_MEMBER);
+    registry.register_lint(&INCOMPATIBLE_STUB_SIGNATURE);
+    registry.register_lint(&INCOMPATIBLE_STUB_ATTRIBUTE);
+    registry.register_lint(&INCOMPATIBLE_STUB_BASES);
     registry.register_lint(&INVALID_OPERATOR_OVERRIDE);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&MUTABLE_STATE_VALUE);
@@ -2248,6 +2253,183 @@ declare_lint! {
     pub(crate) static UNESTABLISHED_ASSERTION_GUARD = {
         summary: "detects an assertion guard its function can return without establishing",
         status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a module described by a stub defines every public member the stub declares,
+    /// and that each class the stub declares has every member the stub gives it.
+    ///
+    /// ## Why is this bad?
+    /// Importers of a module that has a stub are typed by the stub, so they are told the member
+    /// exists. If the module never defines it, the import or the attribute access type-checks and
+    /// then fails at runtime.
+    ///
+    /// What a stub declares only for a type checker is not expected of the module: private names,
+    /// anything `@type_check_only`, type variables, type aliases, `__all__`, and a `__getattr__`
+    /// saying there are attributes the stub does not list. Nor is anything a module- or
+    /// class-level `__getattr__` could supply, or a class member the runtime class inherits.
+    ///
+    /// The runtime module's own definitions are read from its source, so a member it creates in
+    /// a way its source does not show (through `globals()`, `setattr` or `exec`) is reported as
+    /// missing.
+    ///
+    /// ## Example
+    ///
+    /// ```pyi
+    /// # m.pyi
+    /// def f() -> None: ...
+    /// def g() -> None: ...
+    /// ```
+    ///
+    /// ```python
+    /// # m.py: error: `g` is declared by the stub but not defined here
+    /// def f():
+    ///     pass
+    /// ```
+    pub static MISSING_RUNTIME_MEMBER = {
+        summary: "detects a member a stub declares that the module it describes does not define",
+        status: LintStatus::stable("0.0.3"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that every public member of a module described by a stub, and of each class the
+    /// stub declares, is declared by the stub.
+    ///
+    /// ## Why is this bad?
+    /// Importers are typed by the stub, so a member the stub leaves out is one they are told does
+    /// not exist, though the module defines it. That is often deliberate: a stub describes the
+    /// supported interface, and a module's other public names are implementation details. So this
+    /// rule is disabled by default; enable it for a module whose stub is meant to be complete.
+    ///
+    /// A member is public when its name has no leading underscore and it is not a dunder, and
+    /// where the module defines `__all__`, when `__all__` lists it. An import counts only when
+    /// `__all__` lists it.
+    ///
+    /// ## Example
+    ///
+    /// ```pyi
+    /// # m.pyi
+    /// def f() -> None: ...
+    /// ```
+    ///
+    /// ```python
+    /// # m.py
+    /// def f(): ...
+    /// def g(): ...  # error: `g` is not declared by the stub
+    /// ```
+    pub(crate) static MISSING_STUB_MEMBER = {
+        summary: "detects a public member of a module that its stub does not declare",
+        status: LintStatus::stable("0.0.3"),
+        default_level: Level::Ignore,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a function a stub declares accepts every call the stub accepts and returns what
+    /// the stub says it returns: each parameter the stub declares can be passed as the stub
+    /// declares it (by position, by keyword, or left out where the stub gives it a default), every
+    /// parameter the stub does not declare can be left out, a parameter annotation accepts what
+    /// the stub's does, and a return annotation promises no more than the stub's.
+    ///
+    /// A function the stub overloads is held to every overload in the code that runs, as the
+    /// implementation of overloads is.
+    ///
+    /// ## Why is this bad?
+    /// Importers are typed by the stub, so a call the stub accepts is one they may make. A
+    /// function that cannot take it fails at runtime, and a return value of another type reaches
+    /// code that was checked against the stub's.
+    ///
+    /// A parameter or return type the function leaves unannotated takes the stub's, so only the
+    /// annotations the function writes can disagree with it.
+    ///
+    /// ## Example
+    ///
+    /// ```pyi
+    /// # m.pyi
+    /// def f(a: int, b: str = ...) -> int: ...
+    /// ```
+    ///
+    /// ```python
+    /// # m.py
+    /// def f(a: str, b) -> object:  # error: three times
+    ///     ...
+    /// ```
+    pub(crate) static INCOMPATIBLE_STUB_SIGNATURE = {
+        summary: "detects a function whose signature is incompatible with its stub's",
+        status: LintStatus::stable("0.0.3"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a module variable or class attribute annotated in a module described by a stub
+    /// has the type the stub declares for it.
+    ///
+    /// ## Why is this bad?
+    /// Importers are typed by the stub: they read the stub's type from the variable and may
+    /// assign it values of that type. A variable declared with another type holds values the
+    /// importers were not told about, or is handed values the module does not expect.
+    ///
+    /// A variable the module leaves unannotated is declared by the stub, so its assignments are
+    /// checked as any declared variable's are.
+    ///
+    /// ## Example
+    ///
+    /// ```pyi
+    /// # m.pyi
+    /// x: int
+    /// ```
+    ///
+    /// ```python
+    /// # m.py
+    /// x: str = ""  # error: `str` is not the stub's `int`
+    /// ```
+    pub(crate) static INCOMPATIBLE_STUB_ATTRIBUTE = {
+        summary: "detects a variable annotated with a type incompatible with its stub's",
+        status: LintStatus::stable("0.0.3"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a class a stub declares inherits from every class the stub lists as a base.
+    ///
+    /// ## Why is this bad?
+    /// Importers are typed by the stub, so an instance of the class is accepted wherever one of
+    /// the stub's bases is, and `isinstance` against a base is taken to be true. A class that does
+    /// not inherit from it fails both at runtime.
+    ///
+    /// Protocol bases are structural and are not checked, and nor is a base the stub defines for
+    /// itself with no runtime class to compare against.
+    ///
+    /// ## Example
+    ///
+    /// ```pyi
+    /// # m.pyi
+    /// class E(ValueError): ...
+    /// ```
+    ///
+    /// ```python
+    /// # m.py
+    /// class E(Exception): ...  # error: `E` does not inherit from `ValueError`
+    /// ```
+    pub(crate) static INCOMPATIBLE_STUB_BASES = {
+        summary: "detects a class that does not inherit from the bases its stub declares",
+        status: LintStatus::stable("0.0.3"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }

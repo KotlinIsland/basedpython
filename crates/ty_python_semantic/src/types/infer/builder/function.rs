@@ -10,7 +10,7 @@ use crate::{
         UnionBuilder, UnionType,
         callable::CallableTypeKind,
         constraints::ConstraintSetBuilder,
-        context::InferContext,
+        context::{InferContext, LintDiagnosticGuard},
         cyclic::ActiveRecursionDetector,
         dedicated::{pytest, role::FunctionFrameworkRole},
         diagnostic::{
@@ -59,6 +59,7 @@ use crate::{
             DefaultFit, ReturnCallableTypeVarScope, default_fit,
             function_signature_expression_type, relate_default,
         },
+        stub_implementation::{stub_return_type, stub_signatures},
         trailing_lambda::{
             BlockCallee, UnbindableParameters, block_callee, trailing_lambda_it_borrow,
             trailing_lambda_it_type,
@@ -419,6 +420,39 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // impl body is just `...` or a docstring: that shape signals a
         // placeholder rather than a real implementation, so we don't want to
         // surface implicit-return-None against the inherited union
+        // basedpython: where the stub of the module declares the return type this function
+        // leaves out, which a mismatch points to
+        let stub_return_span = if function.returns.is_none() {
+            enclosing_function_for_return_check.and_then(|enclosing| {
+                let overload = enclosing.literal(db).last_definition;
+                // overloads the module writes itself declare their implementation's return type
+                if overload.is_overload(db)
+                    || !enclosing.overloads_and_implementation(db).0.is_empty()
+                {
+                    return None;
+                }
+                let definition = overload.definition(db);
+                stub_return_type(db, env, definition, function.is_async)?;
+                stub_signatures(db, definition)
+                    .as_deref()?
+                    .first()?
+                    .overload
+                    .spans(db)
+                    .return_type
+            })
+        } else {
+            None
+        };
+        let annotate_stub_return = |diagnostic: Option<LintDiagnosticGuard<'_, '_>>| {
+            if let Some(mut diagnostic) = diagnostic
+                && let Some(span) = stub_return_span.clone()
+            {
+                diagnostic.annotate(
+                    Annotation::secondary(span).message("Return type declared by the stub here"),
+                );
+            }
+        };
+
         let inherited_return_range = function.returns.as_ref().map_or_else(
             || {
                 let enclosing = enclosing_function_for_return_check?;
@@ -432,6 +466,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         .property_initialiser_type(db)
                         .is_some()
                 {
+                    return Some(function.name.range());
+                }
+                // basedpython: a function its module's stub declares a return type for is held to
+                // it. its name stands for the return type it does not write
+                if !function.is_asserts_return && stub_return_span.is_some() {
                     return Some(function.name.range());
                 }
                 let (overloads, implementation) = enclosing.overloads_and_implementation(db);
@@ -539,13 +578,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             .ty
                             .is_assignable_to(db, env, expected_return_ty)
                         {
-                            report_invalid_return_type(
+                            annotate_stub_return(report_invalid_return_type(
                                 &self.context,
                                 return_statement.range,
                                 returns_range,
                                 expected_return_ty,
                                 return_statement.ty,
-                            );
+                            ));
                         } else if self.context.is_lint_enabled(&UNSOUND_RETURN_STATEMENT)
                             && expected_return_ty.is_fully_static(db, env)
                             && !return_statement.ty.is_pure_redundant_with(
@@ -660,13 +699,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     return_statement.ty,
                     TypeRelation::Assignability,
                 ) {
-                    report_invalid_return_type(
+                    annotate_stub_return(report_invalid_return_type(
                         &self.context,
                         return_statement.range,
                         returns_range,
                         declared_ty,
                         return_statement.ty,
-                    );
+                    ));
                 } else if self.context.is_lint_enabled(&UNSOUND_RETURN_STATEMENT)
                     && expected_return.public.is_fully_static(db, env)
                     && !expected_return.accepts(

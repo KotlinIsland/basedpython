@@ -19,6 +19,7 @@ use ruff_python_ast::{
 };
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
+pub(crate) use stub::stub_member_fixes;
 use ty_module_resolver::file_to_module;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::importer::{ImportAction, ImportRequest, Importer, MembersInScope};
@@ -1271,7 +1272,6 @@ pub struct InlayHintSettings {
 
 impl InlayHintSettings {
     /// Every hint disabled — a base for enabling one kind at a time.
-    #[cfg(test)]
     pub(crate) fn none() -> Self {
         Self {
             variable_types: false,
@@ -14535,6 +14535,57 @@ def each(fn: (int) -> None) -> None:
         3 |     return default
           |
         ");
+    }
+
+    /// the hints in a runtime module's signature say what the checker reads it as, and the
+    /// checker reads it as the stub declares it: a slot the stub's overloads agree on takes the
+    /// stub's own words, one they disagree on the union the checker reads (the hint of a
+    /// parameter type taken from elsewhere), and one the stub types with its own class nothing,
+    /// since the stub's class is not the runtime module's
+    #[test]
+    fn stub_types_say_what_the_checker_reads() {
+        let mut test = inlay_hint_test(
+            "
+            class Node: ...
+
+            def get(key, default=0):
+                reveal_type(key)
+                reveal_type(default)
+                return default
+
+            def link(node, weight):
+                return node
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "from typing import overload\n\
+             class Node: ...\n\
+             @overload\ndef get(key: str, default: int) -> int: ...\n\
+             @overload\ndef get(key: str, default: str) -> str: ...\n\
+             def link(node: Node, weight: float) -> Node: ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_types: true,
+            inferred_return_types: true,
+            ..stub_settings()
+        }));
+        // and the checker reads the body as the hints say
+        let file = ProgramFile::new(
+            &test.db,
+            test.file,
+            test.db.program_environment().program(&test.db),
+        );
+        let revealed: Vec<String> = ty_python_semantic::types::check_types(&test.db, file)
+            .iter()
+            .filter(|diagnostic| diagnostic.id().as_str() == "revealed-type")
+            .map(|diagnostic| diagnostic.concise_message().to_string())
+            .collect();
+        assert_eq!(
+            revealed,
+            ["Revealed type: `str`", "Revealed type: `int | str`"]
+        );
     }
 
     #[test]

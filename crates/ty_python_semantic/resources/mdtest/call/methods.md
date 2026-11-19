@@ -712,6 +712,8 @@ assert_type(a.non_existing_method(), Any)
 
 The `__get__` method on `types.FunctionType` has the following overloaded signature in typeshed:
 
+`stub.pyi`:
+
 ```pyi
 from types import FunctionType, MethodType
 from typing import overload

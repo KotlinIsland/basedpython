@@ -111,6 +111,7 @@ features = [
   { "enhancements that also apply to python" = [
     { "fluid specializations" = "features/fluid-specializations.md" },
     { "sound types" = "features/sound-types.md" },
+    { "modules checked against their stubs" = "features/stub-checking.md" },
     { "precise unsolved type variables" = "features/precise-unsolved-typevars.md" },
     { "regex group types" = "features/regex-groups.md" },
     { "boolean conditions" = "features/conditions.md" },

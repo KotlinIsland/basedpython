@@ -43,7 +43,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/overloads.md
 28 |         return x
 ```
 
-## mdtest_snippet.pyi
+## stub.pyi
 
 ```
  1 | from typing_extensions import final, overload
@@ -110,7 +110,7 @@ error[invalid-overload]: `@final` decorator should be applied only to the overlo
 
 ```
 error[invalid-overload]: `@final` decorator should be applied only to the first overload
-  --> src/mdtest_snippet.pyi:14:9
+  --> src/stub.pyi:14:9
    |
  9 | /     @overload
 10 | |     def method2(self, x: int) -> int: ...
@@ -126,7 +126,7 @@ error[invalid-overload]: `@final` decorator should be applied only to the first 
 
 ```
 error[invalid-overload]: `@final` decorator should be applied only to the first overload
-  --> src/mdtest_snippet.pyi:19:9
+  --> src/stub.pyi:19:9
    |
 15 | /     @overload
 16 | |     def method3(self, x: int) -> int: ...
@@ -141,7 +141,7 @@ error[invalid-overload]: `@final` decorator should be applied only to the first 
 
 ```
 error[invalid-overload]: `@final` decorator should be applied only to the first overload
-  --> src/mdtest_snippet.pyi:22:9
+  --> src/stub.pyi:22:9
    |
 15 | /     @overload
 16 | |     def method3(self, x: int) -> int: ...

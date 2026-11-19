@@ -214,7 +214,7 @@ ROOT = "runtime"
 `/src/pkg_a/vendor/get_rate.py`:
 
 ```py
-RATE = 1
+RATE = 1  # error: [invalid-assignment] "Object of type `Literal[1]` is not assignable to `str`"
 ```
 
 `main.py`:
@@ -430,7 +430,7 @@ a = "runtime"
 `/src/lib/b.py`:
 
 ```py
-c = "runtime"
+c = "runtime"  # error: [invalid-assignment] "Object of type `Literal["runtime"]` is not assignable to `int`"
 ```
 
 `/src/lib/runtime_only.py`:

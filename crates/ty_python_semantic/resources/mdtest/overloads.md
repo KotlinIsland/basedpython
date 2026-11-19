@@ -806,6 +806,8 @@ def func(x: int | str) -> int | str:
     return x
 ```
 
+`stub.pyi`:
+
 ```pyi
 from typing import overload
 
@@ -1798,6 +1800,8 @@ class Foo:
 If an overload implementation isn't present (for example, in a stub file), the `@final` decorator
 should be applied only to the first overload.
 
+`stub.pyi`:
+
 ```pyi
 from typing_extensions import final, overload
 
@@ -1873,6 +1877,8 @@ class Sub3(Base):
 ```
 
 And, similarly, in stub files:
+
+`stub.pyi`:
 
 ```pyi
 from typing_extensions import overload, override
