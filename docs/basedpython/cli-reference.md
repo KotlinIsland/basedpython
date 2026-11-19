@@ -238,6 +238,46 @@ the head of `sys.path` — so a relative path on the command line, and anything
 the program reads or writes beside the project, resolve where they were written
 to
 
+the tree is deleted when the program ends, but what the program wrote into it
+is not deleted with it. a module's `__file__` names its file in the project, so
+a program writing beside `__file__` writes the project directly, but a package's
+`__path__` is its directory in the tree — and that is where django's
+`makemigrations` writes `migrations/0001_initial.py`. so once the program has
+ended, `by run` carries what changed in the tree back to the project, and says
+on stderr what it wrote, deleted or left:
+
+```console
+$ by run manage.py makemigrations app
+Migrations for 'app':
+  /tmp/.tmpYhI9rV/app/migrations/0001_initial.py
+    + Create model Widget
+note: wrote back app/migrations/0001_initial.py
+note: wrote back app/migrations/__init__.py
+```
+
+- a new file goes to the project directory its directory in the tree was staged
+    from, and a new directory goes where its parent's would
+- a changed copy of a project file — a `.py`, a template, a data file — is
+    written over that file, and a deleted one deletes it
+- a file `by` wrote — a transpiled module, the runtime, the runner — has no
+    project file to go back to. what the program does to one is lost, and `by run`
+    says so
+- a project file that changed while the program ran is left as it is, and so is
+    one already where the program made a new file. a project file that already is
+    what the program left is not mentioned
+- a file the program made in a directory of the tree that files from more than
+    one project directory were staged into has no one place to go, and is reported
+    rather than written. the root of a src-layout project's tree is one: `src/` and
+    the project root both land there
+- nothing is carried back from a directory the build never stages — hidden ones,
+    `__pycache__`, `build` and the rest — so the bytecode python caches in the tree
+    stays there
+
+the tree is compared by content, as it was just before the program started, and
+this happens however the program ends: a non-zero exit, or a signal `by run`
+passed on to it. with `--in-build` the program's working directory is the tree,
+so a relative path it writes is carried back the same way
+
 hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
 treated as project source: they are neither checked nor transpiled, by `run`
 and `build` alike
@@ -256,8 +296,9 @@ would, with the project staged as `by run` stages it, so the project's modules i
 do in a program. `--session-file PATH` keeps `PATH` holding the inputs that ran, for an editor's
 console to complete against, and `--events PORT` tells the console, on a connection to `PORT`,
 whether standard input is read for an input or by the program. `--module MODULE` starts the
-session in a module of the project: it runs first, and each input is its continuation. see
-[the repl](features/repl.md)
+session in a module of the project: it runs first, and each input is its continuation. what the
+session wrote into the staged tree is carried back to the project when it ends, as `by run`
+carries a program's. see [the repl](features/repl.md)
 
 ## `by build`
 

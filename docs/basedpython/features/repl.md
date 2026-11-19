@@ -28,7 +28,9 @@ error[invalid-assignment]: read-only symbol `rate` cannot be reassigned
 it starts where `by run` would: in the project around the working directory, on the
 project's interpreter (`--python` names another), with the project's modules staged as `by run` stages them. so `import app.pricing` imports the project's `.by` module, transpiled, and an
 error raised inside it is reported at its `.by` line. like `by run`, it does not start while
-the project has check errors
+the project has check errors, and what it writes into the staged tree — a file in a package's
+`__path__`, say — is carried back to the project when the session ends, as
+[`by run`](../cli-reference.md#by-run) carries a program's
 
 ## a session is a module
 
