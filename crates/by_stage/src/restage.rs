@@ -47,10 +47,10 @@ use crate::project::{BY_SOURCES, Rebuilder, project_sources};
 use crate::record::{BY_BUILD_FILENAME, BuildRecord, build_identity};
 use crate::sourcemap::{
     BY_SOURCEMAP_FILENAME, RewriteRefusal, content_digest, describe_module, map_digest,
-    restaged_files, rewrite_sourcemap_entry, sourcemap_build, sourcemap_key_for,
+    restaged_files, rewrite_sourcemap_entry, sourcemap_build, sourcemap_key_for, tree_key,
     with_restaged_files,
 };
-use crate::staging::{portable, transpiled_destination};
+use crate::staging::transpiled_destination;
 use crate::verbatim::verbatim_destination;
 
 /// What one file's slot in the tree should now contain.
@@ -85,8 +85,12 @@ pub struct RestagedSet {
     files: Vec<Restaged>,
     /// the full new text of `_by_sourcemap.py` with the entry of every
     /// transpiled file of the set moved in it, and every file of the set listed
-    /// as one a re-stage wrote, or `None` when the set changes nothing in the tree
+    /// as one a re-stage wrote, or `None` when the map would come out as it is
     sourcemap: Option<String>,
+    /// whether the map's line tables moved, which a debugger holding them has to read again.
+    /// `false` for a map rewritten only to list what the set writes, as one is for a set of
+    /// nothing but copied files
+    remap: bool,
 }
 
 /// Why nothing was produced for one file, or for the tree as a whole.
@@ -244,8 +248,7 @@ pub fn restage(
         Ok(existing) => existing,
         Err(error) => {
             return Ok(Restage::refuse(format!(
-                "`{}` has no {BY_SOURCEMAP_FILENAME}, so a reloaded module would have no line \
-                 table: {error}",
+                "`{}` has no {BY_SOURCEMAP_FILENAME}, which every tree `by` builds has: {error}",
                 build_directory.display(),
             )));
         }
@@ -254,21 +257,19 @@ pub fn restage(
     // whose entries this `by` knows how to move. a tree holding the map of one build and the
     // record of another was written into twice, and its map describes modules the record's
     // build did not write
-    {
-        let map_build = sourcemap_build(&existing_map);
-        if map_build.as_deref() != Some(record.by_build.as_str()) {
-            return Ok(Restage::refuse(format!(
-                "`{}` has a {BY_SOURCEMAP_FILENAME} written by {} and a {BY_BUILD_FILENAME} \
-                 written by by {}, so it is not one build's tree — rebuild it before reloading \
-                 into it",
-                build_directory.display(),
-                map_build.map_or_else(
-                    || "a by that names no build".to_owned(),
-                    |build| format!("by {build}")
-                ),
-                record.by_build,
-            )));
-        }
+    let map_build = sourcemap_build(&existing_map);
+    if map_build.as_deref() != Some(record.by_build.as_str()) {
+        return Ok(Restage::refuse(format!(
+            "`{}` has a {BY_SOURCEMAP_FILENAME} written by {} and a {BY_BUILD_FILENAME} \
+             written by by {}, so it is not one build's tree — rebuild it before reloading \
+             into it",
+            build_directory.display(),
+            map_build.map_or_else(
+                || "a by that names no build".to_owned(),
+                |build| format!("by {build}")
+            ),
+            record.by_build,
+        )));
     }
 
     let tree = Tree {
@@ -312,11 +313,12 @@ pub fn restage(
     // a set that changes the tree says so in the map, which is written with it: a program
     // running from the tree did not write these, and `by run` must not carry them back to the
     // project as though it had
-    if restaged.iter().any(|one| one.changed) || merged != existing_map {
+    let remap = merged != existing_map;
+    if remap || restaged.iter().any(|one| one.changed) {
         let Some(recorded) = record_restaged(&merged, build_directory, &restaged) else {
             return Ok(Restage::refuse(format!(
-                "`{}` has a {BY_SOURCEMAP_FILENAME} with no table of what a re-stage wrote — \
-                 rebuild it before reloading into it",
+                "the files of the set could not be listed in the table of what a re-stage wrote \
+                 in `{}`'s {BY_SOURCEMAP_FILENAME} — rebuild it before reloading into it",
                 build_directory.display(),
             )));
         };
@@ -325,6 +327,7 @@ pub fn restage(
     Ok(Restage::Ready(RestagedSet {
         files: restaged,
         sourcemap: Some(merged).filter(|merged| *merged != existing_map),
+        remap,
     }))
 }
 
@@ -335,7 +338,7 @@ fn record_restaged(map: &str, build_directory: &Path, restaged: &[Restaged]) -> 
     let mut table = restaged_files(map)?;
     for one in restaged {
         let relative = one.generated.strip_prefix(build_directory).ok()?;
-        table.insert(portable(relative), one.py_digest.clone());
+        table.insert(tree_key(relative)?, one.py_digest.clone());
     }
     table.insert(BY_SOURCEMAP_FILENAME.to_owned(), map_digest(map)?);
     with_restaged_files(map, &table)

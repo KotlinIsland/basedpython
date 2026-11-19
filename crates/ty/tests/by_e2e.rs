@@ -1692,8 +1692,12 @@ fn run_does_not_write_back_what_a_restage_wrote_into_its_tree() {
     }
     let answer: serde_json::Value = serde_json::from_slice(&restage.stdout).expect("json");
     let files = answer["files"].as_array().expect("files");
-    // written before the program is let go, as the editor writes them while it runs
-    for file in files {
+    // written before the program is let go, as the editor writes them while it runs: each file
+    // whose bytes changed, then the map
+    for file in files
+        .iter()
+        .filter(|file| file["changed"].as_bool() == Some(true))
+    {
         fs::write(
             file["generated"].as_str().expect("generated"),
             file["content"].as_str().expect("content"),

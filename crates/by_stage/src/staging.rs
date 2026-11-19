@@ -334,7 +334,7 @@ fn read_manifest(path: &Path) -> BTreeSet<PathBuf> {
 }
 
 /// A relative path with `/` separators, whatever the platform.
-pub(crate) fn portable(path: &Path) -> String {
+fn portable(path: &Path) -> String {
     path.components()
         .filter_map(|component| component.as_os_str().to_str())
         .collect::<Vec<_>>()

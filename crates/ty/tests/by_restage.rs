@@ -295,7 +295,9 @@ fn a_hand_written_python_is_its_own_bytes_and_has_no_map_entry() {
         .split_once("RESTAGED = ")
         .expect("a table of re-staged files");
     assert!(!tables.contains("helper.py"), "{map}");
-    assert!(restaged.contains("\"helper.py\":\"sha256:"), "{map}");
+    assert!(restaged.contains("\"helper.py\": \"sha256:"), "{map}");
+    // no line table moved, so a debugger holding them has nothing to read again
+    assert_eq!(answer.0["remap"].as_bool(), Some(false), "{map}");
 }
 
 /// A file that does not check must not reach a running program: the transpiler would emit for a
@@ -543,6 +545,7 @@ fn an_edit_to_two_modules_comes_back_with_one_map_describing_both() {
     let files = answer["files"].as_array().unwrap();
     assert_eq!(files.len(), 2, "{answer}");
     let map = answer["sourcemap"].as_str().expect("both entries moved");
+    assert_eq!(answer["remap"].as_bool(), Some(true), "{answer}");
 
     for file in files {
         assert_eq!(file["changed"].as_bool(), Some(true), "{file}");

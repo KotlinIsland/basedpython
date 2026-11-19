@@ -14,7 +14,8 @@
 //! ever reused, and python compiling a literal list for every generated line of a
 //! large project took longer than the program it was about to run
 //!
-//! It is written whole by a build and edited one entry at a time by a re-stage.
+//! It is written whole by a build and edited one entry at a time by a re-stage, which also
+//! lists the files it wrote in the map's `RESTAGED` table.
 //! The re-stage is a line substitution rather than a re-render, and deliberately:
 //! the contract with the debugger is that every *other* entry comes out
 //! byte-identical, and the only way to promise that without qualification is never
@@ -245,18 +246,31 @@ pub(crate) fn render_sourcemap_module(
     map_src
 }
 
-/// the start of the map's line listing what a re-stage wrote, a json object on one line, which
-/// is a python dict literal too
+/// the start of the map's line listing what a re-stage wrote, a dict on one line whose keys and
+/// values are string literals as [`py_str_literal`] writes them, like every other in the map
 const RESTAGED_PREFIX: &str = "RESTAGED = ";
 
-/// what an existing map says a re-stage wrote into its tree: each file relative to the tree with
-/// `/` separators, and the digest of the bytes it was written with. `None` for a map without
-/// the table
+/// what an existing map says a re-stage wrote into its tree: each file by its [`tree_key`], and
+/// the digest of the bytes it was written with. `None` for a map without the table, or with one
+/// this did not write
 pub(crate) fn restaged_files(existing: &str) -> Option<BTreeMap<String, String>> {
-    let table = existing
+    let mut rest = existing
         .lines()
-        .find_map(|line| line.strip_prefix(RESTAGED_PREFIX))?;
-    serde_json::from_str(table).ok()
+        .find_map(|line| line.strip_prefix(RESTAGED_PREFIX))?
+        .strip_prefix('{')?;
+    let mut files = BTreeMap::new();
+    loop {
+        if let Some(after) = rest.strip_prefix('}') {
+            return after.is_empty().then_some(files);
+        }
+        if !files.is_empty() {
+            rest = rest.strip_prefix(", ")?;
+        }
+        let (key, after) = read_str_literal_from(rest.strip_prefix('"')?)?;
+        let (digest, after) = read_str_literal_from(after.strip_prefix(": \"")?)?;
+        files.insert(key, digest);
+        rest = after;
+    }
 }
 
 /// `existing` with its table of what a re-stage wrote holding `files`, and every other byte as
@@ -265,15 +279,17 @@ pub(crate) fn with_restaged_files(
     existing: &str,
     files: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let table = serde_json::to_string(files).ok()?;
+    let table = files
+        .iter()
+        .map(|(key, digest)| format!("{}: {}", py_str_literal(key), py_str_literal(digest)))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut found = false;
     let mut out = String::with_capacity(existing.len() + table.len());
     for line in existing.split_inclusive('\n') {
         if !found && line.starts_with(RESTAGED_PREFIX) {
             found = true;
-            out.push_str(RESTAGED_PREFIX);
-            out.push_str(&table);
-            out.push('\n');
+            let _ = writeln!(out, "{RESTAGED_PREFIX}{{{table}}}");
         } else {
             out.push_str(line);
         }
@@ -285,6 +301,33 @@ pub(crate) fn with_restaged_files(
 /// that table empty, which a digest of the map can be listed in without changing what it is over
 pub(crate) fn map_digest(existing: &str) -> Option<String> {
     with_restaged_files(existing, &BTreeMap::new()).map(|blank| content_digest(blank.as_bytes()))
+}
+
+/// how the table of what a re-stage wrote names a file of the tree: its path relative to the
+/// tree with `/` separators. `None` for a path with a part that is not text, which the table has
+/// no way to name
+pub(crate) fn tree_key(relative: &Path) -> Option<String> {
+    relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join("/"))
+}
+
+/// the sha-256 a digest spelled by [`content_digest`] names, or `None` for one it did not spell
+pub(crate) fn parse_digest(spelled: &str) -> Option<[u8; 32]> {
+    let hex = spelled.strip_prefix("sha256:")?;
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut digest = [0; 32];
+    for (byte, pair) in digest.iter_mut().zip(hex.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(digest)
 }
 
 /// One entry's line in the `SOURCEMAP` table, newline included.
@@ -456,15 +499,21 @@ fn entry_key(line: &str) -> Option<PathBuf> {
 
 /// a string literal as [`py_str_literal`] writes it, from just after its opening quote
 fn read_str_literal(rest: &str) -> Option<String> {
+    read_str_literal_from(rest).map(|(literal, _)| literal)
+}
+
+/// a string literal as [`py_str_literal`] writes it, from just after its opening quote, and
+/// what follows its closing one
+fn read_str_literal_from(rest: &str) -> Option<(String, &str)> {
     let mut key = String::new();
-    let mut chars = rest.chars();
-    while let Some(ch) = chars.next() {
+    let mut chars = rest.char_indices();
+    while let Some((at, ch)) = chars.next() {
         match ch {
-            '"' => return Some(key),
+            '"' => return Some((key, &rest[at + 1..])),
             // the escapes [`py_str_literal`] writes, and only those: a literal
             // holding anything else was not written here, and guessing at it
             // would invent a path
-            '\\' => match chars.next()? {
+            '\\' => match chars.next()?.1 {
                 '\\' => key.push('\\'),
                 '"' => key.push('"'),
                 'n' => key.push('\n'),
@@ -565,11 +614,13 @@ fn py_str_literal(s: &str) -> String {
 mod tests {
     use super::{
         BY_SOURCEMAP_FILENAME, OwnCode, RewriteRefusal, TracebackEntry, UNPACK_SRC, content_digest,
-        describe_module, pack_columns, pack_line_map, py_str_literal, render_sourcemap_module,
-        rewrite_sourcemap_entry, write_sourcemap_module,
+        describe_module, map_digest, pack_columns, pack_line_map, parse_digest, py_str_literal,
+        render_sourcemap_module, restaged_files, rewrite_sourcemap_entry, with_restaged_files,
+        write_sourcemap_module,
     };
     use crate::emit::Transpiled;
     use by_transforms::columns::{ColumnOrigin, Columns, Segment};
+    use sha2::Digest as _;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -594,6 +645,33 @@ mod tests {
     /// the digest carries the algorithm that produced it, so a reader that does
     /// not know one can refuse the entry rather than compare hex it could never
     /// have produced
+    /// the table is written with the map's own string literals, which a reader of the map
+    /// already reads, whatever a path holds
+    #[test]
+    fn the_table_of_restaged_files_round_trips() {
+        let map = "SOURCEMAP = {\n}\n\nRESTAGED = {}\n";
+        let files: std::collections::BTreeMap<String, String> = [
+            ("app/we\tird \"one\".py", "sha256:00"),
+            ("app/back\\slash\nline.py", "sha256:01"),
+        ]
+        .into_iter()
+        .map(|(key, digest)| (key.to_owned(), digest.to_owned()))
+        .collect();
+        let written = with_restaged_files(map, &files).expect("a table");
+        assert_eq!(restaged_files(&written).as_ref(), Some(&files), "{written}");
+        assert!(written.starts_with("SOURCEMAP = {\n}\n\n"), "{written}");
+        assert_eq!(map_digest(&written), map_digest(map));
+    }
+
+    #[test]
+    fn a_digest_round_trips_through_its_spelling() {
+        let spelled = content_digest(b"bytes");
+        let parsed = parse_digest(&spelled).expect("a digest");
+        assert_eq!(content_digest(b"bytes"), spelled);
+        assert_eq!(&parsed[..], &sha2::Sha256::digest(b"bytes")[..]);
+        assert_eq!(parse_digest("md5:00"), None);
+    }
+
     #[test]
     fn a_digest_names_the_algorithm_before_the_hex() {
         assert_eq!(

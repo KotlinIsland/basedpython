@@ -25,13 +25,12 @@
 //! sourcemap with the digest of what it wrote. A file still holding what the re-stage listed is
 //! `by`'s, not the program's, and is neither carried back nor reported.
 //!
-//! The one thing in the tree that is never carried back is the bytecode python caches beside
-//! the modules it imports: a `.pyc` in a `__pycache__` directory, the place
+//! The only other thing in the tree that is never carried back is the bytecode python caches
+//! beside the modules it imports: a `.pyc` in a `__pycache__` directory, the place
 //! `importlib.util.cache_from_source` names (PEP 3147). The interpreter writes it, not the program,
 //! and it describes the tree's modules rather than the project's.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -39,8 +38,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
-use crate::sourcemap::{BY_SOURCEMAP_FILENAME, map_digest, restaged_files};
-use crate::staging::{Staging, placement_base, portable};
+use crate::sourcemap::{BY_SOURCEMAP_FILENAME, map_digest, parse_digest, restaged_files, tree_key};
+use crate::staging::{Staging, placement_base};
 
 type ContentDigest = [u8; 32];
 
@@ -181,6 +180,13 @@ impl Inventory {
                 }),
             }
         }
+        let record = RestageRecord::read(&self.tree).unwrap_or_else(|error| {
+            outcomes.push(Outcome::Unreadable {
+                staged: PathBuf::from(BY_SOURCEMAP_FILENAME),
+                error,
+            });
+            RestageRecord::default()
+        });
         // deletions first: a file the program renamed to a name its project's file system cannot
         // tell from the old one, as a case-only rename is on a case-insensitive one, is then
         // deleted under its old name before it is written under its new one, rather than the
@@ -192,16 +198,19 @@ impl Inventory {
                     .iter()
                     .any(|directory| relative.starts_with(directory))
             {
-                outcomes.extend(self.deleted(relative, *before));
+                outcomes.extend(self.deleted(relative, record.listed(relative).unwrap_or(*before)));
             }
         }
-        let restaged = Restaged::read(&self.tree);
         for (relative, now) in differing {
-            if restaged.wrote(&relative, now) {
+            if record.wrote(&relative, now) {
                 continue;
             }
             let outcome = match self.files.get(&relative) {
-                Some(before) => self.changed(&relative, *before, now),
+                // a copy a re-stage wrote held what the project file did then, so what the
+                // program made of it is measured against that rather than against what was staged
+                Some(before) => {
+                    self.changed(&relative, record.listed(&relative).unwrap_or(*before), now)
+                }
                 None => self.created(&relative, now),
             };
             outcomes.extend(outcome);
@@ -349,44 +358,58 @@ impl Inventory {
 /// What a re-stage wrote into the tree while the program ran from it, as the tree's sourcemap
 /// lists it (see [`crate::restage`]): what the debugger put there, not the program.
 #[derive(Debug, Default)]
-struct Restaged {
-    /// each file, relative to the tree with `/` separators, and the digest of what was written
-    files: BTreeMap<String, String>,
-    /// the digest the map is listed at when it is what a re-stage wrote
-    map: Option<String>,
+struct RestageRecord {
+    /// each file by its [`tree_key`], and the digest of what a re-stage last wrote there
+    files: BTreeMap<String, ContentDigest>,
+    /// the digest the map is listed at while it is as a re-stage wrote it
+    map: Option<ContentDigest>,
 }
 
-impl Restaged {
-    fn read(tree: &Path) -> Self {
-        let Ok(map) = fs::read_to_string(tree.join(BY_SOURCEMAP_FILENAME)) else {
-            return Self::default();
+impl RestageRecord {
+    /// the record the tree's map holds. an error for a map whose table cannot be read, after
+    /// which nothing tells what a re-stage wrote from what the program wrote
+    fn read(tree: &Path) -> io::Result<Self> {
+        let map = match fs::read_to_string(tree.join(BY_SOURCEMAP_FILENAME)) {
+            Ok(map) => map,
+            // a map the program deleted is reported as such, and no re-stage can have written
+            // into a tree without one
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) => return Err(error),
         };
-        Self {
-            files: restaged_files(&map).unwrap_or_default(),
-            map: map_digest(&map),
-        }
+        let unreadable = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "its table of what a re-stage wrote",
+            )
+        };
+        let files = restaged_files(&map)
+            .ok_or_else(unreadable)?
+            .into_iter()
+            .map(|(key, digest)| Some((key, parse_digest(&digest)?)))
+            .collect::<Option<_>>()
+            .ok_or_else(unreadable)?;
+        Ok(Self {
+            files,
+            map: map_digest(&map).as_deref().and_then(parse_digest),
+        })
+    }
+
+    /// the digest of what a re-stage last wrote at `relative`, if one wrote there
+    fn listed(&self, relative: &Path) -> Option<ContentDigest> {
+        self.files.get(&tree_key(relative)?).copied()
     }
 
     /// whether the file at `relative`, holding what digests to `now`, is what a re-stage wrote
     fn wrote(&self, relative: &Path, now: ContentDigest) -> bool {
-        let Some(listed) = self.files.get(&portable(relative)) else {
+        let Some(listed) = self.listed(relative) else {
             return false;
         };
         if relative == Path::new(BY_SOURCEMAP_FILENAME) {
-            self.map.as_ref() == Some(listed)
+            self.map == Some(listed)
         } else {
-            *listed == spelled(&now)
+            listed == now
         }
     }
-}
-
-/// a digest as the sourcemap spells one
-fn spelled(digest: &ContentDigest) -> String {
-    let mut spelled = String::from("sha256:");
-    for byte in digest {
-        let _ = write!(spelled, "{byte:02x}");
-    }
-    spelled
 }
 
 /// What carrying one file of the tree back to the project came to.
@@ -608,6 +631,9 @@ mod tests {
         staging
             .write(Path::new("_by_own/marker"), None, "by's\n")
             .expect("write");
+        staging
+            .write(Path::new(BY_SOURCEMAP_FILENAME), None, "RESTAGED = {}\n")
+            .expect("write");
         let mirror = Mirror::of(&staging, &[project.path().to_path_buf()], project.path());
         staging.finish().expect("finish");
         let inventory = mirror.inventory(tree.path()).expect("inventory");
@@ -627,6 +653,69 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// write `content` to `relative` in the tree as a re-stage does, listing it in the map
+    fn restage(tree: &Path, relative: &str, content: &str) {
+        fs::write(tree.join(relative), content).expect("write");
+        let map_path = tree.join(BY_SOURCEMAP_FILENAME);
+        let map = fs::read_to_string(&map_path).expect("the map");
+        let mut files = restaged_files(&map).expect("a table");
+        files.insert(
+            relative.to_owned(),
+            crate::sourcemap::content_digest(content.as_bytes()),
+        );
+        files.insert(
+            BY_SOURCEMAP_FILENAME.to_owned(),
+            map_digest(&map).expect("a digest"),
+        );
+        let map = crate::sourcemap::with_restaged_files(&map, &files).expect("a table");
+        fs::write(map_path, map).expect("write");
+    }
+
+    /// the debugger put the user's edit into the tree, and the user then took it back: the
+    /// edit is not the program's, and must not undo theirs
+    #[test]
+    fn a_file_still_holding_what_a_restage_wrote_is_left() {
+        let (project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
+        restage(tree.path(), "pkg/a.py", "edited\n");
+        let outcomes = inventory.write_back();
+        assert!(outcomes.is_empty(), "{outcomes:?}");
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/a.py")).expect("read"),
+            "staged\n"
+        );
+    }
+
+    /// a re-staged copy held what the project file did, so the program's change to it is
+    /// carried back over that, not refused as a change made in the project
+    #[test]
+    fn what_the_program_writes_over_a_restaged_file_is_carried_back() {
+        let (project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
+        fs::write(project.path().join("pkg/a.py"), "edited\n").expect("write");
+        restage(tree.path(), "pkg/a.py", "edited\n");
+        fs::write(tree.path().join("pkg/a.py"), "the program's\n").expect("write");
+        let outcomes = inventory.write_back();
+        assert_eq!(
+            fs::read_to_string(project.path().join("pkg/a.py")).expect("read"),
+            "the program's\n",
+            "{outcomes:?}"
+        );
+    }
+
+    /// without the table nothing tells a re-stage's writes from the program's, which is said
+    #[test]
+    fn a_table_of_restaged_files_that_cannot_be_read_is_reported() {
+        let (_project, tree, inventory) = staged(&[("pkg/a.py", "staged\n")]);
+        fs::write(tree.path().join(BY_SOURCEMAP_FILENAME), "RESTAGED = {\"a\n").expect("write");
+        let outcomes = inventory.write_back();
+        assert!(
+            outcomes.iter().any(|outcome| matches!(
+                outcome,
+                Outcome::Unreadable { staged, .. } if staged == Path::new(BY_SOURCEMAP_FILENAME)
+            )),
+            "{outcomes:?}"
+        );
     }
 
     #[test]
