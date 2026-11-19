@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use by_stage::project::Rebuilder;
+use by_stage::run_module::Entry;
 use by_stage::session::{Refusal, Session, input_status};
 use by_transforms::config::Config;
 use ruff_db::diagnostic::render::{FullRenderer, Renderer};
@@ -71,7 +72,8 @@ pub(crate) struct ReplFlags<'a> {
     /// `--events`: the port on the loopback interface an editor listens for the session's
     /// events on
     pub(crate) events: Option<u16>,
-    /// `--module`: the module of the project the session starts in
+    /// `--module`: the module of the project the session starts in, or the file it starts in as
+    /// a script
     pub(crate) module: Option<&'a str>,
 }
 
@@ -92,7 +94,7 @@ pub(crate) fn cmd_repl(
         lowering,
         flags.python,
         false,
-        RunTarget::Session,
+        RunTarget::Session(flags.module),
     )? {
         Ok(staged) => staged,
         Err(status) => return Ok(status),
@@ -104,6 +106,7 @@ pub(crate) fn cmd_repl(
         tree,
         rebuilder,
         mirror,
+        entry,
         ..
     } = staged;
     let session_file = flags.session_file.map(|path| cwd.join(path));
@@ -111,7 +114,7 @@ pub(crate) fn cmd_repl(
         fs::write(path, "").with_context(|| format!("could not write {}", path.display()))?;
     }
     let events = flags.events.map(connect_events).transpose()?;
-    let mut repl = Repl::new(rebuilder, config, &cwd, flags.module, session_file, events)?;
+    let mut repl = Repl::new(rebuilder, config, entry, session_file, events)?;
     // a session that cannot start in the module it was asked to has said why, and does not start
     if !repl.prepare_start()? {
         return Ok(ExitStatus::Failure);
@@ -307,8 +310,8 @@ struct Repl {
 
 /// the module of the project a session starts in
 struct StartModule {
-    /// its dotted name, which `--module` may have given as the path of its file
-    name: String,
+    /// how it runs: as the module it is, or as a script
+    entry: Entry,
     /// its file
     path: PathBuf,
     /// its source, as the session starts with it
@@ -331,8 +334,7 @@ impl Repl {
     fn new(
         rebuilder: Rebuilder,
         config: Config,
-        cwd: &Path,
-        start_in: Option<&str>,
+        start_in: Option<Entry>,
         session_file: Option<PathBuf>,
         events: Option<TcpStream>,
     ) -> anyhow::Result<Self> {
@@ -354,21 +356,26 @@ impl Repl {
                     .with_context(|| format!("could not read {}", module_path.display()))?;
                 (rebuilder, db, module, Some(module_dir), None)
             }
-            Some(argument) => {
+            Some(entry) => {
                 let db = rebuilder.project_database();
-                // the module `by run` would run: the session is its continuation, checked as
-                // the module itself, so a relative import resolves in it and in an input alike
-                let name = by_stage::run_module::run_argument(&db, cwd, argument)?.into_owned();
-                let module = by_stage::run_module::module_file(&db, &name)
-                    .with_context(|| format!("no module named `{name}` in the project"))?;
+                // the module or file `by run` would run: the session is its continuation,
+                // checked as the module itself, so a relative import resolves in it and in an
+                // input alike
+                let module = match &entry {
+                    Entry::Module(name) => by_stage::run_module::module_file(&db, name)
+                        .with_context(|| format!("no module named `{name}` in the project"))?,
+                    Entry::Script(script) => SystemPath::from_std_path(&script.file)
+                        .and_then(|path| system_path_to_file(&db, path).ok())
+                        .with_context(|| format!("could not read {}", script.file.display()))?,
+                };
                 let path = module
                     .path(&db)
                     .as_system_path()
-                    .with_context(|| format!("module `{name}` is no file"))?
+                    .context("the module the session starts in is no file")?
                     .as_std_path()
                     .to_path_buf();
                 let text = source_text(&db, module).as_str().to_owned();
-                let started_in = StartModule { name, path, text };
+                let started_in = StartModule { entry, path, text };
                 (rebuilder, db, module, None, Some(started_in))
             }
         };
@@ -436,10 +443,10 @@ impl Repl {
     /// starts in, if it starts in one. `false`, having said why on standard error, when the
     /// module cannot run as the session's start
     fn prepare_start(&mut self) -> anyhow::Result<bool> {
-        let Some(StartModule { name, path, text }) = &self.started_in else {
+        let Some(StartModule { entry, path, text }) = &self.started_in else {
             return Ok(true);
         };
-        let (name, path, text) = (name.clone(), path.clone(), text.clone());
+        let (entry, path, text) = (entry.clone(), path.clone(), text.clone());
         self.prelude = TextSize::try_from(text.len())?;
         let file = SourceFileBuilder::new(path.display().to_string(), &*text).finish();
         let Some(mut reply) = self.prepare(0, &text, &file)? else {
@@ -447,7 +454,13 @@ impl Repl {
         };
         // a module prints no values, as a program does not
         reply["display"] = json!(false);
-        reply["module"] = json!(name);
+        match entry {
+            Entry::Module(name) => reply["module"] = json!(name),
+            Entry::Script(script) => {
+                reply["script"] = json!(script.staged);
+                reply["argument"] = json!(script.argument);
+            }
+        }
         reply["file"] = json!(path);
         reply["text"] = json!(text);
         self.start = Some(reply);

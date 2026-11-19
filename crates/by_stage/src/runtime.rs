@@ -19,11 +19,15 @@
 //! # a tree nothing ships
 //!
 //! a tree `by run` stages is run and thrown away, and nothing installs it, so neither
-//! reason holds there. a module in no package imports the copy at the tree's root
-//! instead, which the runner's directory on `sys.path` makes importable from every
-//! module of the tree. the helpers then run from a file of their own, at its lines,
-//! rather than as lines of the module the transpiler wrote with no line of the `.by`
-//! behind them, which a traceback and a debugger can only call line 0
+//! reason holds there. every module imports the one copy at the tree's root instead,
+//! which the runner finds by its name whatever `sys.path` holds. the helpers then run
+//! from a file of their own, at its lines, rather than as lines of the module the
+//! transpiler wrote with no line of the `.by` behind them, which a traceback and a
+//! debugger can only call line 0
+//!
+//! a package's copy would not do there: a file `by run` is given the path of runs as a
+//! script, with its own directory at the head of `sys.path`, so the modules beside it
+//! are imported under names its package is no part of, and it is in no package itself
 //!
 //! # the import is absolute
 //!
@@ -47,8 +51,8 @@ use crate::packages::is_package;
 pub struct RuntimeLayout {
     /// each package holding a copy, the tree's root as the empty name
     packages: BTreeSet<String>,
-    /// whether a module in no package imports the copy at the tree's root, as in a tree
-    /// nothing ships, rather than having the definitions pasted in
+    /// whether every module imports the copy at the tree's root, as in a tree nothing ships,
+    /// rather than its package's, or having the definitions pasted in
     root_copy: bool,
 }
 
@@ -59,8 +63,7 @@ impl RuntimeLayout {
         Self::default()
     }
 
-    /// the layout of a tree nothing ships, which `by run` stages: a copy in each package, and
-    /// one at the tree's root for every module in none
+    /// the layout of a tree nothing ships, which `by run` stages: one copy, at the tree's root
     pub fn unshipped() -> Self {
         Self {
             packages: BTreeSet::new(),
@@ -81,8 +84,10 @@ impl RuntimeLayout {
         source: &Path,
         db: &ProjectDatabase,
     ) -> Option<RuntimePackage> {
+        if self.root_copy {
+            return Some(RuntimePackage(String::new()));
+        }
         RuntimePackage::of(relative, source, db)
-            .or_else(|| self.root_copy.then(|| RuntimePackage(String::new())))
     }
 
     /// record that a module importing `package`'s copy was transpiled, whether or
@@ -302,8 +307,7 @@ mod tests {
         );
     }
 
-    /// and so does a module in a directory that is not a package, which the runner's
-    /// directory on `sys.path` reaches the root copy from all the same
+    /// and so does a module in a directory that is not a package
     #[test]
     fn an_unshipped_module_in_no_package_imports_the_root_copy() {
         let project = Project::configured(
@@ -317,19 +321,20 @@ mod tests {
         );
     }
 
-    /// a package keeps its own copy in a tree nothing ships
+    /// and so does a module of a package: a file run by its path is in no package, and the
+    /// modules it imports are imported under names relative to its own directory
     #[test]
-    fn an_unshipped_package_imports_its_own_copy() {
+    fn an_unshipped_package_imports_the_root_copy() {
         let project = Project::with(&["src/pkg/__init__.py", "src/pkg/a.by", "src/main.by"]);
         let mut layout = RuntimeLayout::unshipped();
-        project.record(&mut layout, "pkg/a.py");
+        assert_eq!(
+            project.record(&mut layout, "pkg/a.py").as_deref(),
+            Some("_by_runtime")
+        );
         project.record(&mut layout, "main.py");
         assert_eq!(
             layout.files().collect::<Vec<_>>(),
-            vec![
-                PathBuf::from("_by_runtime.py"),
-                PathBuf::from("pkg/_by_runtime.py")
-            ]
+            vec![PathBuf::from("_by_runtime.py")]
         );
     }
 

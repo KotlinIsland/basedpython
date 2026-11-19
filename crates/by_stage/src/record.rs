@@ -32,6 +32,7 @@ use by_transforms::SoundnessPositions;
 use by_transforms::config::FloatLiteralLowering;
 use by_transforms::config::{Config, PythonVersion};
 
+use crate::run_module::Entry;
 use crate::runtime::RuntimeLayout;
 use crate::staging::Staging;
 
@@ -167,23 +168,27 @@ pub struct BuildRecord {
     pub(crate) module_roots: Vec<PathBuf>,
     /// the module that runs as `__main__`, when the build has one
     ///
-    /// `by run` always does. `by build` has one only when the project configures
-    /// `run.main`, and `null` there is the honest answer: an output tree nobody
-    /// has named an entry point for does not have one, and inventing a name would
-    /// tell a debugger that a module it must not replace is safe to replace.
+    /// `by run` has one unless it was given a file's path. `by build` has one only
+    /// when the project configures `run.main`, and `null` there is the honest
+    /// answer: an output tree nobody has named an entry point for does not have
+    /// one, and inventing a name would tell a debugger that a module it must not
+    /// replace is safe to replace.
     pub(crate) entry_module: Option<String>,
+    /// the file that runs as `__main__`, relative to the tree, when `by run` was
+    /// given its path: it runs as a script, under no module name
+    #[serde(default)]
+    pub(crate) entry_script: Option<PathBuf>,
     /// whether the tree's modules were compiled to native extensions
     ///
     /// A compiled module has no `__code__` to assign, so a tree with this set can
     /// never be re-staged a file at a time. The record says so rather than
     /// leaving a caller to discover it from a failed replacement.
     pub(crate) compiled: bool,
-    /// whether a module in no package imports the copy of the runtime at the tree's root, as
-    /// in a tree nothing ships, rather than having its definitions pasted in
+    /// whether every module imports the copy of the runtime at the tree's root, as in a tree
+    /// nothing ships, rather than its package's copy, or having its definitions pasted in
     ///
-    /// it decides the bytes of every such module, so a re-stage has to lay the runtime out
-    /// as the build did. defaulted, because a tree written before root copies existed pasted
-    /// them in
+    /// it decides the bytes of every module, so a re-stage has to lay the runtime out as the
+    /// build did. defaulted, because a tree written before root copies existed pasted them in
     #[serde(default)]
     pub(crate) runtime_at_root: bool,
     pub(crate) config: ConfigRecord,
@@ -196,7 +201,7 @@ impl BuildRecord {
     pub fn new(
         project_root: &Path,
         module_roots: &[PathBuf],
-        entry_module: Option<String>,
+        entry: Option<&Entry>,
         compiled: bool,
         runtime: &RuntimeLayout,
         config: &Config,
@@ -208,7 +213,14 @@ impl BuildRecord {
             by_build: by_build.to_owned(),
             project_root: project_root.to_path_buf(),
             module_roots: module_roots.to_vec(),
-            entry_module,
+            entry_module: match entry {
+                Some(Entry::Module(module)) => Some(module.clone()),
+                _ => None,
+            },
+            entry_script: match entry {
+                Some(Entry::Script(script)) => Some(script.staged.clone()),
+                _ => None,
+            },
             compiled,
             runtime_at_root: runtime.is_unshipped(),
             config: ConfigRecord {
@@ -398,6 +410,7 @@ mod tests {
         BuildRecord, ConfigRecord, build_identity, identify_executable, parse_soundness,
         spell_soundness,
     };
+    use crate::run_module::{Entry, Script};
     use crate::runtime::RuntimeLayout;
     use by_transforms::SoundnessPositions;
     use by_transforms::config::{Config, FloatLiteralLowering};
@@ -479,7 +492,7 @@ mod tests {
         let record = BuildRecord::new(
             Path::new("/p"),
             &[PathBuf::from("/p/src")],
-            Some("main".to_owned()),
+            Some(&Entry::Module("main".to_owned())),
             false,
             &RuntimeLayout::unshipped(),
             &Config::default(),
@@ -545,6 +558,28 @@ mod tests {
         assert!(json["entryModule"].is_null());
     }
 
+    /// a file run by its path runs under no module name, so the record names the file instead
+    #[test]
+    fn a_script_entry_is_named_by_its_file() {
+        let record = BuildRecord::new(
+            Path::new("/p"),
+            &[],
+            Some(&Entry::Script(Script {
+                file: PathBuf::from("/p/backend/manage.py"),
+                staged: PathBuf::from("backend/manage.py"),
+                argument: PathBuf::from("backend/manage.py"),
+            })),
+            false,
+            &RuntimeLayout::unshipped(),
+            &Config::default(),
+        )
+        .expect("the running `by` names its build");
+        let json: serde_json::Value =
+            serde_json::from_str(&record.render()).expect("the record is plain data");
+        assert!(json["entryModule"].is_null(), "{json}");
+        assert_eq!(json["entryScript"], "backend/manage.py");
+    }
+
     /// the config a re-stage transpiles under has to be the one the build used,
     /// down to the individual soundness positions
     #[test]
@@ -608,8 +643,8 @@ mod tests {
         assert!(serde_json::from_str::<BuildRecord>(json).is_err());
     }
 
-    /// a re-stage lays the runtime out as the build that wrote the tree did: a module in no
-    /// package of a `by run` tree imports the root copy, and one of a `by build` tree has the
+    /// a re-stage lays the runtime out as the build that wrote the tree did: every module of a
+    /// `by run` tree imports the root copy, and one in no package of a `by build` tree has the
     /// definitions pasted in
     #[test]
     fn the_record_keeps_how_the_build_laid_the_runtime_out() {
@@ -664,6 +699,7 @@ mod tests {
             project_root: PathBuf::from("/p"),
             module_roots: Vec::new(),
             entry_module: None,
+            entry_script: None,
             compiled: false,
             runtime_at_root: false,
             config: ConfigRecord {

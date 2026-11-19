@@ -3057,11 +3057,15 @@ def _lazy_from_value(mod, attr):
 # a `from` import: registers each name it binds, as `{bound: imported}`, with the
 # module's `_LazyFrom`. a relative import names its module against the package
 # doing the importing, which only that module knows, so it hands `__package__` in
+# one in no package, a script or a top-level module, fails at the statement, as
+# python fails it
 #
 # a value the name already holds is from before the statement ran — a reload runs
 # the module again over the namespace it had — and the statement replaces it
 def _lazy_from(lazy, mod, names, package=None):
-    if package is not None:
+    if mod.startswith("."):
+        if not package:
+            raise ImportError("attempted relative import with no known parent package")
         mod = _by_iu.resolve_name(mod, package)
     for bound, attr in names.items():
         lazy.__dict__.pop(bound, None)

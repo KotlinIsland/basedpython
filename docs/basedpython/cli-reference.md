@@ -26,7 +26,7 @@ in addition to the cli provided by `ty`, `by` includes:
 
 ```sh
 by run MODULE [ARGS...]             # transpile + run with `python -m MODULE`
-by run path/to/file.by [ARGS...]    # run a file of the project as its module
+by run path/to/file.by [ARGS...]    # run a file of the project as a script
 by run                              # run the configured entry point
 by run MODULE --min-version 3.12    # target a specific runtime python version
 ```
@@ -35,13 +35,34 @@ equivalent to `by build && python -m MODULE`, but only transpiles the
 modules required to import `MODULE`
 
 a path to a `.by` or `.py` file of the project, relative to where `by run` is
-run, runs that file as the module it is: `by run manage.py check` runs `manage`,
-as `python manage.py check` would, and `by run app/cli.by` runs `app.cli`, inside
-its package, so its relative imports resolve. a file no module name runs is
-refused before anything runs: a package's `__init__` (run the package, which runs
-its `__main__`), a file outside the project's module roots, or one whose name no
-module can have, like `my-script.py`. an argument that is not an existing `.by` or
-`.py` file is a module name
+run, runs that file as `python path/to/file.py` runs one: as `__main__`, in no
+package, with its own directory at the head of `sys.path`.
+`by run backend/manage.py check` runs as `python backend/manage.py check` does,
+so `backend/proj/settings.by` is imported as `proj.settings`, and a relative
+import in the file fails, as it does in python. the directory is the staged copy
+of the file's own, which holds the transpiled modules, so a `.by` beside the file
+imports as a `.py` there would. `__file__` is the path as it was typed, joined to
+the directory `by run` was run in, and `sys.argv[0]` is the path as it was typed,
+as python gives a script them, so a file run through a symbolic link is named by
+the link. with `--in-build` the program runs in the tree, where a path typed
+relative to somewhere else names nothing, so `sys.argv[0]` is the file's path in
+the tree instead. a file the build does not stage — one outside the project, or
+one it excludes — is not in that directory, and is refused before anything runs
+
+an argument with a path separator in it is a path, since no module name has one,
+and runs whatever file it names, as python runs any file it is given. one that
+names no file fails at once, as python fails, before the project is checked, and
+exits 2:
+
+```console
+$ by run tools/nothere.py
+by: can't open file '/home/me/site/tools/nothere.py': [Errno 2] No such file or directory
+```
+
+a directory is refused the same way. an argument without a separator is a path
+only when it names an existing `.by` or `.py` file, and a module name otherwise,
+as `python -m` takes one: `by run foo.py` with no `foo.py` there runs the module
+`py` of the package `foo`, as `python -m foo.py` does
 
 the module can be left out when the project configures an entry point:
 
@@ -338,6 +359,7 @@ and `build` alike
 by repl                             # an interactive session, on the project's interpreter
 by repl --python python3.14         # on another interpreter
 by repl --module app.main           # starting in a module of the project, after running it
+by repl --module scripts/seed.by    # starting in a file of the project, run as a script
 ```
 
 an interactive session in which you type basedpython, each input checked and transpiled as the
@@ -346,7 +368,7 @@ would, with the project staged as `by run` stages it, so the project's modules i
 do in a program. `--session-file PATH` keeps `PATH` holding the inputs that ran, for an editor's
 console to complete against, and `--events PORT` tells the console, on a connection to `PORT`,
 whether standard input is read for an input or by the program. `--module MODULE` starts the
-session in a module of the project: it runs first, and each input is its continuation. what the
+session in a module of the project, or in a file of it given by its path, which runs as `by run` runs one: it runs first, and each input is its continuation. what the
 session wrote into the staged tree is carried back to the project when it ends, as `by run`
 carries a program's. see [the repl](features/repl.md)
 

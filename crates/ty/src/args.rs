@@ -69,8 +69,9 @@ pub(crate) enum Command {
     /// Transpile and run a module with `python -m <module>`.
     Run {
         /// module to run (e.g. `by run main` looks for main.by), or the path of a `.by` or
-        /// `.py` file of the project, which runs as its module (`by run app/cli.by` runs
-        /// `app.cli`) [default: the `run.main` entry point configured for the project]
+        /// `.py` file of the project, which runs as `python path/to/file.py` runs one: as
+        /// `__main__` in no package, with its own directory at the head of `sys.path`
+        /// [default: the `run.main` entry point configured for the project]
         module: Option<ModuleName>,
         /// arguments forwarded to the program, as `sys.argv[1:]`
         #[arg(
@@ -192,13 +193,15 @@ pub(crate) enum Command {
         /// `BY_REPL_EVENTS_TOKEN` holds, for the editor to know the connection is the session's
         #[arg(long, value_name = "PORT")]
         events: Option<u16>,
-        /// start in MODULE, a module of the project named, or its file's path given, as `by run`
-        /// takes one: it runs first, as `__main__`, and the session goes on from it with its names
+        /// start in MODULE, a module of the project named, or the path of a file of it, as `by
+        /// run` takes one: it runs first, as `__main__`, and the session goes on from it with
+        /// its names, as `python -i -m MODULE` and `python -i path/to/file.py` do
         ///
         /// the module's source is the session's first, and each input is checked and
         /// transpiled as its continuation, as the module itself, so a relative import resolves
-        /// in an input as it does in the module. its `def main` is a function like any other in
-        /// a session: nothing calls it
+        /// in an input as it does in the module. a file given by its path runs as a script, in
+        /// no package, so a relative import fails in it at runtime as in python. its `def main`
+        /// is a function like any other in a session: nothing calls it
         #[arg(long, value_name = "MODULE")]
         module: Option<ModuleName>,
     },

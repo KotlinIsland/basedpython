@@ -2207,6 +2207,155 @@ fn run_keeps_the_tree_when_a_write_after_a_deletion_is_refused() {
     );
 }
 
+/// an argument with a path separator in it is a path, as no module name has one, and a path
+/// that names no file fails as python fails, before the project is checked: the error in it is
+/// never reached
+#[test]
+fn run_refuses_a_path_naming_no_file_before_checking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "count: int = 'one'\n").unwrap();
+    let cwd = dunce::canonicalize(dir.path()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "tools/nothere.py"])
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!(
+            "by: can't open file '{}': [Errno 2] No such file or directory\n",
+            cwd.join("tools/nothere.py").display()
+        )
+    );
+}
+
+/// a file it cannot read fails as python fails to open it, before the project is checked, rather
+/// than when the build copies it
+#[cfg(unix)]
+#[test]
+fn run_refuses_a_script_it_cannot_read_as_python_does() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cwd = dunce::canonicalize(dir.path()).unwrap();
+    fs::write(cwd.join("main.by"), "count: int = 'one'\n").unwrap();
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    let script = cwd.join("tools").join("locked.py");
+    fs::write(&script, "print('ran')\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&script).is_ok() {
+        // a user who reads every file, as root does, is never refused one
+        return;
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "tools/locked.py"])
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to spawn by");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!(
+            "by: can't open file '{}': [Errno 13] Permission denied\n",
+            script.display()
+        )
+    );
+}
+
+/// a `.py` named without a path separator runs as a script when the file is there, so a file
+/// there that cannot be read fails as python fails to open it, as one named by a path does
+#[cfg(unix)]
+#[test]
+fn run_refuses_a_script_named_without_a_separator_it_cannot_read_as_python_does() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cwd = dunce::canonicalize(dir.path()).unwrap();
+    fs::write(cwd.join("main.by"), "count: int = 'one'\n").unwrap();
+    let script = cwd.join("locked.py");
+    fs::write(&script, "print('ran')\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&script).is_ok() {
+        // a user who reads every file, as root does, is never refused one
+        return;
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "locked.py"])
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to spawn by");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!(
+            "by: can't open file '{}': [Errno 13] Permission denied\n",
+            script.display()
+        )
+    );
+}
+
+/// `command` run in `dir`: its exit status, and what it wrote on stdout and stderr
+fn ran(command: &mut Command, dir: &Path) -> (Option<i32>, String, String) {
+    let output = command
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// with `--in-build` the program runs in the tree, where a path typed relative to the directory
+/// `by run` was run in names nothing, so `sys.argv[0]` is the file's path in the tree, which is
+/// the file that runs
+#[test]
+fn run_in_build_gives_a_script_its_path_in_the_tree_as_argv0() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    fs::create_dir_all(dir.path().join("tools")).unwrap();
+    fs::write(
+        dir.path().join("tools").join("show.py"),
+        "import os\nimport sys\n\nprint(sys.argv[0])\nprint(os.path.isfile(sys.argv[0]))\n",
+    )
+    .unwrap();
+    let tools = dir.path().join("tools");
+
+    let (code, stdout, stderr) = ran(
+        Command::new(env!("CARGO_BIN_EXE_by")).args(["run", "show.py"]),
+        &tools,
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "show.py\nTrue\n", "{stderr}");
+
+    let (code, stdout, stderr) = ran(
+        Command::new(env!("CARGO_BIN_EXE_by")).args(["run", "--in-build", "show.py"]),
+        &tools,
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "tools/show.py\nTrue\n", "{stderr}");
+}
+
 /// the modules, separated by whitespace, that whoever installed them says the interpreter
 /// `$PYTHON` names can import. a test that needs one fails when it cannot import it, rather
 /// than skipping as it does on an interpreter that was not given it
@@ -2978,7 +3127,7 @@ fn run_profile_names_the_runtime_s_helpers_by_the_runtime() {
         found
     };
 
-    // written into `main.py`, and in `pkg/_by_runtime.py`: one function
+    // called from `main.py` and from `pkg/util.py`: one function
     let unwrap = helper("_force_unwrap");
     assert_eq!(unwrap.len(), 1, "{functions:#?}");
     let unwrap = unwrap[0];
@@ -3466,19 +3615,29 @@ fn repl_writes_back_what_the_session_wrote_into_its_tree() {
     );
 }
 
-/// `--module` takes the path of the module's file, as `by run` does
+/// `--module` takes the path of a file, as `by run` does, and starts in it as `python -i` starts
+/// in a script: as `__main__` in no package, with its own directory at the head of `sys.path`,
+/// `sys.argv[0]` the path as it was typed and `__file__` that path made absolute
 #[test]
-fn repl_starts_in_a_module_given_by_its_path() {
+fn repl_starts_in_a_file_given_by_its_path_as_a_script() {
     let dir = tempfile::tempdir().expect("tempdir");
     project_with_a_program(dir.path());
+    let scripts = dir.path().join("scripts");
+    fs::create_dir_all(&scripts).unwrap();
+    fs::write(
+        scripts.join("start.by"),
+        "import os\nimport sys\n\nhere = os.path.basename(sys.path[0])\nprint('started')\n",
+    )
+    .unwrap();
     let (status, stdout, stderr) = repl_session(
         dir.path(),
-        "(__name__, __package__, answer)\n",
-        &["--module", "app/main.by"],
+        "(__name__, __package__, __spec__, here, sys.argv[0])\n\
+         __file__ == os.path.join(os.getcwd(), 'scripts', 'start.by')\n",
+        &["--module", "scripts/start.by"],
     );
     assert_eq!(status, Some(0), "{stderr}");
     assert_eq!(
-        stdout, "answer is 42\n('__main__', 'app', 42)\n",
+        stdout, "started\n('__main__', None, None, 'scripts', 'scripts/start.by')\nTrue\n",
         "{stderr}"
     );
 }
@@ -4162,11 +4321,11 @@ fn run_in(cwd: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
-/// a path to a `.by` or `.py` file of the project runs that file, as `python manage.py` runs
-/// one, under the name the project runs it as: inside its package, with the path read from the
-/// directory `by` was started in, and with the arguments after it
+/// a path to a `.by` or `.py` file of the project runs that file as `python manage.py` runs
+/// one: as `__main__` in no package, with the path read from the directory `by` was started in,
+/// and with the arguments after it. a relative import in it then fails, as it does in python
 #[test]
-fn run_runs_a_file_given_by_its_path_as_its_module() {
+fn run_runs_a_file_given_by_its_path_as_a_script() {
     let dir = tempfile::tempdir().expect("tempdir");
     project_with_a_program(dir.path());
     fs::write(
@@ -4176,7 +4335,8 @@ fn run_runs_a_file_given_by_its_path_as_its_module() {
     .unwrap();
     fs::write(
         dir.path().join("manage.py"),
-        "import sys\n\nfrom app.helpers import double\n\nprint(__name__, double(int(sys.argv[1])))\n",
+        "import sys\n\nfrom app.helpers import double\n\n\
+         print(__name__, __package__, __spec__, double(int(sys.argv[1])))\n",
     )
     .unwrap();
     let tools = dir.path().join("tools");
@@ -4184,28 +4344,131 @@ fn run_runs_a_file_given_by_its_path_as_its_module() {
 
     let (success, stdout, stderr) = run_in(dir.path(), &["manage.py", "4"]);
     assert!(success, "by run manage.py failed:\n{stderr}");
-    assert_eq!(stdout, "__main__ 8\n", "{stderr}");
+    assert_eq!(stdout, "__main__ None None 8\n", "{stderr}");
 
     let (success, stdout, stderr) = run_in(&tools, &["../app/main.by"]);
-    assert!(success, "by run ../app/main.by failed:\n{stderr}");
-    assert_eq!(stdout, "answer is 42\nmain ran\n", "{stderr}");
+    assert!(!success, "{stdout}");
+    assert!(
+        stderr.contains("ImportError: attempted relative import with no known parent package"),
+        "{stderr}"
+    );
 }
 
-/// a package's `__init__` runs under no name of its own, since running a package runs its
-/// `__main__`, so given by its path it is refused before anything runs, with the command that
-/// runs the package
+/// `python backend/manage.py` puts `backend/` at the head of `sys.path`, not the directory it
+/// was started in, so the project's `backend/proj` is importable as `proj`; so does `by run`,
+/// with the staged copy of `backend/`. `__file__` names the project file, and `sys.argv[0]` is
+/// the path as it was typed, as python has them
 #[test]
-fn run_refuses_a_package_s_init_given_by_its_path() {
+fn run_puts_a_script_s_own_directory_at_the_head_of_sys_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let backend = dir.path().join("backend");
+    fs::create_dir_all(backend.join("proj")).unwrap();
+    fs::write(backend.join("proj/__init__.by"), "").unwrap();
+    fs::write(backend.join("proj/settings.by"), "NAME = \"settings\"\n").unwrap();
+    fs::write(
+        backend.join("manage.py"),
+        "import importlib\nimport os\nimport sys\n\n\
+         settings = importlib.import_module('proj.settings')\n\
+         print(settings.NAME, os.path.basename(sys.path[0]))\n\
+         print(__file__ == os.path.join(os.getcwd(), 'backend', 'manage.py'), sys.argv[0])\n",
+    )
+    .unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+
+    let (success, stdout, stderr) = run_in(&root, &["backend/manage.py"]);
+    assert!(success, "by run backend/manage.py failed:\n{stderr}");
+    assert_eq!(
+        stdout, "settings backend\nTrue backend/manage.py\n",
+        "{stderr}"
+    );
+}
+
+/// the distribution that names `_by_pytest` as a pytest plugin is found once, whether the tree is
+/// on `sys.path`, as for a module, or not, as for a script in a directory of its own
+#[test]
+fn run_finds_by_s_own_distribution_once_wherever_sys_path_points() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let count = "import importlib.metadata\n\n\
+                 names = [d.metadata['Name'] for d in importlib.metadata.distributions()]\n\
+                 print(names.count('by-pytest'))\n";
+    fs::write(dir.path().join("main.by"), count).unwrap();
+    fs::create_dir_all(dir.path().join("tools")).unwrap();
+    fs::write(dir.path().join("tools/count.py"), count).unwrap();
+
+    let (success, stdout, stderr) = run_in(dir.path(), &["main"]);
+    assert!(success, "by run main failed:\n{stderr}");
+    assert_eq!(stdout, "1\n", "{stderr}");
+    let (success, stdout, stderr) = run_in(dir.path(), &["tools/count.py"]);
+    assert!(success, "by run tools/count.py failed:\n{stderr}");
+    assert_eq!(stdout, "1\n", "{stderr}");
+}
+
+/// a script's name need not be one a module can have, as `my-site/manage.py`'s directory's is
+/// not
+#[test]
+fn run_runs_a_script_whose_path_is_no_module_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let site = dir.path().join("my-site");
+    fs::create_dir_all(site.join("app")).unwrap();
+    fs::write(site.join("app/__init__.by"), "").unwrap();
+    fs::write(site.join("app/models.by"), "MODEL = \"widget\"\n").unwrap();
+    fs::write(
+        site.join("manage.py"),
+        "import importlib\n\nprint(__name__, importlib.import_module('app.models').MODEL)\n",
+    )
+    .unwrap();
+
+    let (success, stdout, stderr) = run_in(&site, &["manage.py"]);
+    assert!(success, "by run manage.py in my-site failed:\n{stderr}");
+    assert_eq!(stdout, "__main__ widget\n", "{stderr}");
+}
+
+/// a package's `__init__` given by its path runs as a script, as `python app/__init__.py` runs
+/// it, rather than as the package
+#[test]
+fn run_runs_a_package_s_init_given_by_its_path_as_a_script() {
     let dir = tempfile::tempdir().expect("tempdir");
     project_with_a_program(dir.path());
-    fs::write(dir.path().join("app/__init__.by"), "print('init ran')\n").unwrap();
+    fs::write(
+        dir.path().join("app/__init__.by"),
+        "print('init ran', __name__, __package__)\n",
+    )
+    .unwrap();
 
     let (success, stdout, stderr) = run_in(dir.path(), &["app/__init__.by"]);
+    assert!(success, "by run app/__init__.by failed:\n{stderr}");
+    assert_eq!(stdout, "init ran __main__ None\n", "{stderr}");
+}
+
+/// a file the build does not stage is not in the tree the program runs out of, so given by its
+/// path it is refused before anything runs
+#[test]
+fn run_refuses_a_file_the_build_does_not_stage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project");
+    project_with_a_program(&project);
+    fs::write(
+        project.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("outside.py"), "print('outside ran')\n").unwrap();
+
+    let (success, stdout, stderr) = run_in(&project, &["../outside.py"]);
     assert!(!success, "{stdout}");
     assert_eq!(stdout, "", "{stderr}");
     assert!(
-        stderr.contains("is the `__init__` of the package `app`")
-            && stderr.contains("`by run app`"),
+        stderr.contains("`../outside.py` is not one of the files `by run` stages"),
         "{stderr}"
     );
 }
@@ -12111,7 +12374,6 @@ fn run_declares_by_s_own_python_in_the_tree() {
         "_by_runner.py",
         "_by_runtime.py",
         "_by_sourcemap.py",
-        "pkg/_by_runtime.py",
     ]
     .iter()
     .map(|file| root.join(file).display().to_string())

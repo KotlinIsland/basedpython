@@ -125,13 +125,16 @@ already run, so a module that reads a class the copy doesn't hold says so itself
     beside `src/` say, which has no import that works both when it is run and
     when it is imported
 - a tree `by run` stages is run and thrown away, and nothing installs it, so
-    neither reason holds there: `by run` writes a copy at the tree's root, and
-    every module in no package imports from it, which the runner's directory on
-    `sys.path` makes importable from all of them. a helper then runs from a file
-    of its own, at its real lines, where a definition pasted into a module would
-    be lines with no `.by` line behind them, which a traceback and a debugger can
-    only call line 0. the tree's `_by_build.json` says which layout it has, as
-    `runtimeAtRoot`, so a re-stage writes a module as the build did
+    neither reason holds there: `by run` writes one copy, at the tree's root, and
+    every module imports from it, which the runner finds by its name whatever
+    `sys.path` holds. a package's copy would not do: a file run by its path runs
+    as a script, with its own directory at the head of `sys.path`, so the modules
+    beside it are imported under names its package is no part of. a helper then
+    runs from a file of its own, at its real lines, where a definition pasted
+    into a module would be lines with no `.by` line behind them, which a
+    traceback and a debugger can only call line 0. the tree's `_by_build.json`
+    says which layout it has, as `runtimeAtRoot`, so a re-stage writes a module
+    as the build did
 - `by transpile <file>` and the language server's `by/transpile` answer with one
     module's text, and `by transpile <dir>` writes into the source tree itself,
     where a file with no `.by` beside it would read as a module the author wrote.

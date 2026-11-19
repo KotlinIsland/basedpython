@@ -100,7 +100,13 @@ error[invalid-assignment]: read-only symbol `base` cannot be reassigned
 
 it runs as the start of a session, not as a program: its `def main` is a function like any
 other, which nothing calls — `main()` is one input away — and a value its last line computes is
-not printed. a diagnostic or a traceback that points into it names its file and line. a module
+not printed.
+
+`--module` takes the path of a file of the project too, as `by run` does, and the file then runs
+as `by run` runs one, as `python -i path/to/file.py` starts in it: as a script, in no package,
+with its own directory at the head of `sys.path`, so a relative import in it fails when it runs.
+the check still reads each input as the file's continuation, and a diagnostic or a traceback
+that points into the file names its file and line. a module
 the project does not have, or one whose python cannot run as a session's start, keeps the
 session from starting
 

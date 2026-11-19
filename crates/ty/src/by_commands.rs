@@ -34,6 +34,7 @@ use by_stage::project::{
     may_contain_sources, module_roots, source_files,
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
+use by_stage::run_module::Entry;
 use by_stage::run_notes::{Level, Note};
 use by_stage::runtime::RuntimeLayout;
 use by_stage::sourcemap::{OwnCode, TracebackEntry, stage_module, write_sourcemap_module};
@@ -175,18 +176,19 @@ pub(crate) struct StagedRun {
     traceback_entries: Vec<TracebackEntry>,
     /// the means to build the project's db again, unfrozen
     pub(crate) rebuilder: Rebuilder,
-    /// the module `by run` runs, which a session has none of
-    module: Option<String>,
+    /// what runs as `__main__`: the module or file `by run` runs, or the one a session starts in
+    pub(crate) entry: Option<Entry>,
 }
 
 /// what a staged tree is for
 #[derive(Clone, Copy)]
 pub(crate) enum RunTarget<'a> {
-    /// `by run`'s program: the module named or whose file's path was given, or the project's
+    /// `by run`'s program: the module named or the file whose path was given, or the project's
     /// entry point
     Module(Option<&'a str>),
-    /// a `by repl` session, which runs no module of the project's
-    Session,
+    /// a `by repl` session, which starts in the module named or the file whose path was given,
+    /// as `by run` takes one, or in none of the project's
+    Session(Option<&'a str>),
 }
 
 /// check, transpile and stage the project around the working directory for `target`, on the
@@ -201,6 +203,14 @@ pub(crate) fn stage_run(
     run_target: RunTarget<'_>,
 ) -> anyhow::Result<Result<StagedRun, ExitStatus>> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
+    // a script can be opened or it cannot, which needs nothing of the project: python says so
+    // before it runs anything, and so does this, before the project is read
+    if let RunTarget::Module(Some(argument)) | RunTarget::Session(Some(argument)) = run_target
+        && let Some(refusal) = by_stage::run_module::unopenable(&cwd, argument)
+    {
+        eprintln!("by: {refusal}");
+        return Ok(Err(ExitStatus::Error));
+    }
     // one resolution of the project, for the environment and the target version
     // both: they are two readings of the same configuration and must not be able
     // to disagree
@@ -273,18 +283,18 @@ pub(crate) fn stage_run(
     // an explicit module always wins; otherwise the project's configured entry
     // point stands in for it. resolving before the (much slower) check means a
     // project with neither fails immediately rather than after transpiling
-    let module = match run_target {
-        RunTarget::Module(Some(argument)) => {
-            Some(by_stage::run_module::run_argument(&db, &cwd, argument)?.into_owned())
-        }
+    let entry = match run_target {
+        RunTarget::Module(Some(argument)) | RunTarget::Session(Some(argument)) => Some(
+            by_stage::run_module::run_argument(&db, &root, &roots, tmp.path(), &cwd, argument)?,
+        ),
         RunTarget::Module(None) => match by_stage::run_module::configured_main(&db) {
-            Some(main) => Some(main),
+            Some(main) => Some(Entry::Module(main)),
             None => anyhow::bail!(
                 "no module given and no entry point configured — \
                  name a module (`by run main`) or set `run.main` in the project configuration"
             ),
         },
-        RunTarget::Session => None,
+        RunTarget::Session(None) => None,
     };
 
     // each generated `.py` paired with its source `.by` and the line table that
@@ -333,7 +343,7 @@ pub(crate) fn stage_run(
     // configuration would emit different code in exactly the case that matters
     stage_build_record(
         &mut staging,
-        &BuildRecord::new(&root, &roots, module.clone(), compiled, &layout, &config)?,
+        &BuildRecord::new(&root, &roots, entry.as_ref(), compiled, &layout, &config)?,
     )?;
     // the project file behind each copy in the tree, for the runner to run it as
     // and a coverage report to name: the copy is deleted with the tree when the
@@ -358,7 +368,7 @@ pub(crate) fn stage_run(
         mirror,
         traceback_entries,
         rebuilder,
-        module,
+        entry,
     }))
 }
 
@@ -424,10 +434,10 @@ pub(crate) fn cmd_run(
         mirror,
         traceback_entries,
         rebuilder: _,
-        module,
+        entry,
     } = staged;
     let python = interpreter.path.clone();
-    let module = module.context("a program is staged for the module it runs")?;
+    let run_as_main = entry.context("a program is staged for what it runs")?;
 
     if compiled {
         // the extension lands beside the generated `.py`, and python's finder
@@ -436,8 +446,8 @@ pub(crate) fn cmd_run(
         // the source embedded in the extension, which is why this is a speed
         // switch and not a behaviour switch.
         //
-        // the entry module is the exception, and it has to be: `runpy` needs a
-        // code object to run something as `__main__`, and an extension has none.
+        // the entry module or script is the exception, and it has to be: running
+        // something as `__main__` takes a code object, and an extension has none.
         // so the entry stays interpreted and everything it imports is native
         let mut options = by_build::Options {
             fallback: Some(config),
@@ -468,7 +478,11 @@ pub(crate) fn cmd_run(
             let Some(name) = dotted_module_name(relative) else {
                 continue;
             };
-            if name.dotted() == module {
+            let is_entry = match &run_as_main {
+                Entry::Module(module) => name.dotted() == *module,
+                Entry::Script(script) => relative == script.staged,
+            };
+            if is_entry {
                 continue;
             }
             let mut lowered = by_irbuild::module_from_source(source, name, options.lowering());
@@ -484,9 +498,13 @@ pub(crate) fn cmd_run(
             built += 1;
         }
         if built == 0 {
+            let entry = match &run_as_main {
+                Entry::Module(module) => format!("`{module}` is the entry module"),
+                Entry::Script(script) => format!("`{}` is the entry script", script.file.display()),
+            };
             eprintln!(
-                "note: `{module}` is the entry module, which has to run as `__main__` \
-                 from source — nothing else to compile"
+                "note: {entry}, which has to run as `__main__` from source — nothing else to \
+                 compile"
             );
         }
     }
@@ -495,7 +513,9 @@ pub(crate) fn cmd_run(
     // relative path on its command line, and anything it reads or writes beside
     // the project, resolve against the directory they were written for. python
     // puts the runner's own directory — the generated tree — at the head of
-    // `sys.path`, so the module is still found there.
+    // `sys.path`, so the module is still found there. a file run by its path
+    // has the runner put the tree's copy of its own directory there instead, as
+    // python does for a script.
     //
     // a launcher goes in front of the interpreter rather than in place of it. a
     // debugger that has to *be* the process the program runs in used to get
@@ -561,8 +581,24 @@ pub(crate) fn cmd_run(
     let inventory = mirror
         .inventory(tmp.path())
         .context("could not read the staged tree before running the program")?;
+    match &run_as_main {
+        Entry::Module(module) => command.arg(module),
+        // `__file__` is the path as it was typed, made absolute, and `sys.argv[0]` the path as
+        // it was typed, as python gives a script them. but where the program runs in the tree, a
+        // path typed relative to somewhere else names nothing there, so `sys.argv[0]` is the
+        // file's path in the tree, which is the file that runs
+        Entry::Script(script) => command
+            .arg("--script")
+            .arg(&script.staged)
+            .arg(cwd.join(&script.argument))
+            .arg(if in_build {
+                &script.staged
+            } else {
+                &script.argument
+            }),
+    };
     let status = signals
-        .run(command.arg(&module).args(args).current_dir(workdir))
+        .run(command.args(args).current_dir(workdir))
         .with_context(|| match launcher {
             Some(launcher) => format!(
                 "could not run the launcher `{}` for `{python}`, the interpreter from {}",
@@ -2546,18 +2582,36 @@ def _run(session, namespace, text):
 def _start_in(session, main_module, start):
     """Run the module the session starts in, which `start` is what `by repl` wrote for, as
     `__main__`: in the session's namespace, with the module's file, package and spec, as `by
-    run` runs it, so its relative imports resolve and a spawned process finds it."""
+    run` runs it, so its relative imports resolve and a spawned process finds it. A file
+    `--module` gave the path of runs as `by run` runs one, as a script: in no package, with its
+    own directory at the head of `sys.path`."""
     by_path = start["file"]
     try:
-        _, spec = _by_runner._entry_spec(start["module"])
+        if "script" in start:
+            staged = os.path.join(_by_runner._TREE, start["script"])
+            loader = _by_runner._BySourceLoader("__main__", staged, by_path)
+            package = spec = None
+            directory = os.path.dirname(staged)
+        else:
+            _, spec = _by_runner._entry_spec(start["module"])
+            loader, package = spec.loader, spec.parent
+            directory = None
         codes = _codes(start, start["text"], by_path)
     except Exception:
         sys.stderr.write(_by_runner.format_exception(*sys.exc_info()))
         return
-    sys.argv = [by_path]
-    main_module.__file__ = by_path
-    main_module.__loader__ = spec.loader
-    main_module.__package__ = spec.parent
+    if directory is not None:
+        sys.path[0] = directory
+        main_module.__cached__ = None
+        # as python gives a script them: the path as it was typed, and that path made absolute,
+        # which through a symbolic link names the link
+        sys.argv = [start["argument"]]
+        main_module.__file__ = os.path.join(os.getcwd(), start["argument"])
+    else:
+        sys.argv = [by_path]
+        main_module.__file__ = by_path
+    main_module.__loader__ = loader
+    main_module.__package__ = package
     main_module.__spec__ = spec
     _execute(session, main_module.__dict__, start["input"], codes)
 
@@ -2574,7 +2628,7 @@ def main():
         sys.stdin = _ProgramStdin(_STDIN, session)
     try:
         start = session.ask({"start": True})
-        if "module" in start:
+        if "module" in start or "script" in start:
             _start_in(session, main_module, start)
     except KeyboardInterrupt:
         sys.stderr.write("\nKeyboardInterrupt\n")
@@ -3045,6 +3099,10 @@ const RUNTIME_LINES_PLACEHOLDER: &str = "_RUNTIME_LINES = {}\n";
 /// [`runner_source`] fills in
 const MACHINERY_FILES_PLACEHOLDER: &str = "_MACHINERY_FILES = []\n";
 
+/// the line [`BY_RUNNER_SRC`] holds for the distributions of by's own in the tree, which
+/// [`runner_source`] fills in
+const OWN_DISTRIBUTIONS_PLACEHOLDER: &str = "_OWN_DISTRIBUTIONS = []\n";
+
 /// the line [`BY_RUNNER_SRC`] holds for the python that unpacks a module's entry of the map,
 /// which [`runner_source`] fills in
 const UNPACK_PLACEHOLDER: &str = "# the unpacking of the map's entries\n";
@@ -3071,6 +3129,10 @@ fn runner_source() -> anyhow::Result<String> {
         "the runner has no place for the files of by's own python"
     );
     anyhow::ensure!(
+        BY_RUNNER_SRC.contains(OWN_DISTRIBUTIONS_PLACEHOLDER),
+        "the runner has no place for the distributions of by's own"
+    );
+    anyhow::ensure!(
         BY_RUNNER_SRC.contains(UNPACK_PLACEHOLDER),
         "the runner has no place for the unpacking of the map's entries"
     );
@@ -3078,6 +3140,7 @@ fn runner_source() -> anyhow::Result<String> {
     // strings a python list literal
     let lines = serde_json::to_string(&by_transforms::runtime::definition_lines())?;
     let machinery = serde_json::to_string(&MACHINERY_FILES)?;
+    let distributions = serde_json::to_string(&[BY_PYTEST_DISTRIBUTION_DIR])?;
     Ok(BY_RUNNER_SRC
         .replacen(
             RUNTIME_LINES_PLACEHOLDER,
@@ -3087,6 +3150,11 @@ fn runner_source() -> anyhow::Result<String> {
         .replacen(
             MACHINERY_FILES_PLACEHOLDER,
             &format!("_MACHINERY_FILES = {machinery}\n"),
+            1,
+        )
+        .replacen(
+            OWN_DISTRIBUTIONS_PLACEHOLDER,
+            &format!("_OWN_DISTRIBUTIONS = {distributions}\n"),
             1,
         )
         .replacen(
@@ -3112,7 +3180,7 @@ import types
 import warnings
 
 from _by_project import CARRIED, ROOT
-from _by_sourcemap import COLUMNS, DIGESTS, SOURCEMAP
+from _by_sourcemap import BY_CODE, COLUMNS, DIGESTS, SOURCEMAP
 
 # index the sourcemap by realpath so symlinked temp dirs (e.g. /tmp on macOS)
 # still match the filenames python reports in frames. the key the entry was
@@ -3159,6 +3227,17 @@ _MACHINERY_FILES = []
 # those files, whose frames run the program and are never its own: a traceback and a profile
 # leave them out
 _MACHINERY = {os.path.realpath(os.path.join(_TREE, name)) for name in _MACHINERY_FILES}
+# by's own modules at the top of the tree, by the names the runtime's users, a plugin and the
+# runner import them as. `_ByFinder` finds them whatever `sys.path` holds: a file run by its
+# path has its own directory at the head of it, as python gives a script, not the tree
+_OWN_MODULES = {
+    os.path.splitext(os.path.basename(path))[0]: path
+    for path in map(os.path.realpath, BY_CODE)
+    if os.path.dirname(path) == _TREE
+}
+# the directories of the distributions of by's own at the top of the tree, which `_ByFinder`
+# finds likewise. `by run` fills it in
+_OWN_DISTRIBUTIONS = []
 # the hand-written `.py` files carried over into the tree, each with the project
 # file it is a copy of
 _CARRIED = {
@@ -3893,9 +3972,13 @@ class _ByCompiledLike(importlib.machinery.SourceFileLoader):
 
 
 class _ByFinder:
-    """Puts a loader of its own on every staged module, whoever ends up finding it."""
+    """Puts a loader of its own on every staged module, whoever ends up finding it, and finds
+    by's own modules and distributions wherever `sys.path` points."""
 
     def find_spec(self, fullname, path=None, target=None):
+        own = _OWN_MODULES.get(fullname)
+        if own is not None:
+            return importlib.util.spec_from_file_location(fullname, own)
         for finder in sys.meta_path:
             if finder is self:
                 continue
@@ -3920,6 +4003,28 @@ class _ByFinder:
                 spec.loader = _ByLoader(spec.loader, by_path)
             return spec
         return None
+
+    def find_distributions(self, context=None):
+        """The distributions of by's own that `context` asks for, on a path that does not
+        hold the tree, where python's own finder does not see them: the one that names
+        `_by_pytest` as a pytest plugin, for a program run by its path that runs pytest."""
+        import importlib.metadata
+        import pathlib
+        import re
+
+        if context is None:
+            context = importlib.metadata.DistributionFinder.Context()
+        if _TREE in map(os.path.realpath, context.path):
+            return
+        wanted = context.name
+
+        def normalized(name):
+            return re.sub(r"[-_.]+", "-", name).lower()
+
+        for directory in _OWN_DISTRIBUTIONS:
+            distribution = importlib.metadata.PathDistribution(pathlib.Path(_TREE, directory))
+            if wanted is None or normalized(distribution.name) == normalized(wanted):
+                yield distribution
 
 
 # the types of loader that compile a module themselves, each with how it compiles one,
@@ -4003,6 +4108,31 @@ def _run_as_main(module, profiler=None):
     if profiler is not None:
         # here rather than before the module was found, so the profile is the
         # program's and not the runner's search for it
+        profiler.enable()
+    exec(code, main_module.__dict__)
+
+
+def _run_script(staged, file, argv0, profiler=None):
+    """Run the staged file at `staged` as python runs a script: as `__main__` in no package,
+    with its own directory at the head of `sys.path` where python put the runner's, `file`, the
+    path to it in the project as it was typed, made absolute, for `__file__`, and `argv0` for
+    `argv[0]`, measured by `profiler` from its first line when there is one."""
+    sys.path[0] = os.path.dirname(staged)
+    loader = _BySourceLoader("__main__", staged, file)
+    sys.argv[0] = argv0
+    main_module = types.ModuleType("__main__")
+    main_module.__file__ = file
+    main_module.__cached__ = None
+    main_module.__loader__ = loader
+    sys.modules["__main__"] = main_module
+    if os.path.realpath(staged) in _CARRIED:
+        # a copy of a hand-written file is compiled under the path python would compile it
+        # under, which is `__file__`, the path as it was typed rather than the file it reaches
+        with open(staged, "rb") as handle:
+            code = _compiled(handle.read(), file)
+    else:
+        code = loader.get_code("__main__")
+    if profiler is not None:
         profiler.enable()
     exec(code, main_module.__dict__)
 
@@ -4423,13 +4553,20 @@ def main():
     sys.excepthook = _excepthook
     sys.meta_path.insert(0, _ByFinder())
     # `by run --coverage` and `--profile` name where to write what was measured in
-    # front of the module, where no module name can be
+    # front of the module, where no module name can be. `--script` names the file run by
+    # its path in the module's place, with its `__file__` and `argv[0]` after it, and the
+    # program's arguments after those
     written = {}
     while sys.argv[1] in ("--coverage", "--profile"):
         written[sys.argv[1]] = sys.argv[2]
         del sys.argv[1:3]
-    module = sys.argv[1]
-    sys.argv = sys.argv[1:]
+    script = None
+    if sys.argv[1] == "--script":
+        script, script_file, script_argv0 = sys.argv[2:5]
+        del sys.argv[1:5]
+    else:
+        module = sys.argv[1]
+        sys.argv = sys.argv[1:]
     if "--coverage" in written:
         _start_coverage(written["--coverage"])
     profiler = None
@@ -4440,7 +4577,10 @@ def main():
     # excepthook above and exits 1. a debugger watching for an exception the program did not
     # catch then sees the program's own, with the program's frames on top, where catching
     # it here had it see a `SystemExit` the runner raised in a frame of its own
-    _run_as_main(module, profiler)
+    if script is None:
+        _run_as_main(module, profiler)
+    else:
+        _run_script(os.path.join(_TREE, script), script_file, script_argv0, profiler)
 
 
 if __name__ == "__main__":
