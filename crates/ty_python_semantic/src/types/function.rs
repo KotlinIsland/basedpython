@@ -1519,7 +1519,14 @@ impl<'db> OverloadLiteral<'db> {
         // `infer-unannotated-signatures` is set to — but only in a basedpython file, since python
         // itself does not carry a default across an override and the lowering is what makes it
         // true at runtime
+        //
+        // a vendored stub is the exception: it is typeshed's description of python's standard
+        // library written as basedpython, and describes modules no lowering ever touched. an
+        // override there that leaves a default out is python's override, which drops it, and
+        // basedpython has no way to spell that, so the rule does not apply there: tkinter's
+        // `OptionMenu.__init__(self, master, ...)` does not take `Menubutton`'s `master=None`
         if self.file(db).source_type(db).is_basedpython()
+            && !self.file(db).path(db).is_vendored_path()
             && raw_signature.has_inheritable_defaults_to_fill(self.binds_first_parameter(db))
             && let Some(base) = self.overridden_method(db, env)
             && base.signature(db).overloads.len() == 1

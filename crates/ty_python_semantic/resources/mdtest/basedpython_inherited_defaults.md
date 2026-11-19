@@ -206,6 +206,21 @@ class B(A):
 B().f()
 ```
 
+## the standard library's stubs carry nothing
+
+the vendored stubs are typeshed's description of python's standard library, written as basedpython.
+the modules they describe are python, where an override that drops a default drops it, so an
+override there takes no default from its base: tkinter's `Menubutton.__init__` defaults `master` to
+`None`, and `OptionMenu.__init__` requires it, as the module does.
+
+```py
+from tkinter import OptionMenu, StringVar
+
+def _(variable: StringVar):
+    # error: [missing-argument] "No argument provided for required parameter `master`"
+    OptionMenu(variable=variable, value="a")
+```
+
 ## the base's own defaults are untouched
 
 an override taking a default does not give one to a parameter of the base that never had one.
