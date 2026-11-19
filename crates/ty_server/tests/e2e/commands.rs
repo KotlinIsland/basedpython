@@ -297,6 +297,13 @@ fi
 /// `recorded` beside `by`
 #[cfg(unix)]
 fn manage_project(models: &str) -> Result<TestServerBuilder> {
+    manage_project_in(SystemPath::new("src"), models)
+}
+
+/// [`manage_project`], with `manage.py` and the django project in `site`, a directory of the
+/// workspace `src`
+#[cfg(unix)]
+fn manage_project_in(site: &SystemPath, models: &str) -> Result<TestServerBuilder> {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -316,19 +323,16 @@ fn manage_project(models: &str) -> Result<TestServerBuilder> {
     let builder = builder
         .with_workspace(SystemPath::new("src"), Some(options))?
         .with_file(
-            SystemPath::new("src/manage.py"),
+            site.join("manage.py"),
             "import os\n\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')\n",
         )?
-        .with_file(SystemPath::new("src/project/__init__.py"), "")?
+        .with_file(site.join("project/__init__.py"), "")?
         .with_file(
-            SystemPath::new("src/project/settings.py"),
+            site.join("project/settings.py"),
             "INSTALLED_APPS = ['app']\n",
         )?
-        .with_file(SystemPath::new("src/app/__init__.py"), "")?
-        .with_file(
-            SystemPath::new("src/app").join(models),
-            "class Widget:\n    pass\n",
-        )?
+        .with_file(site.join("app/__init__.py"), "")?
+        .with_file(site.join("app").join(models), "class Widget:\n    pass\n")?
         .with_file(SystemPath::new("env/bin/python3"), MANAGE_STUB)?
         .with_file(
             SystemPath::new("env/lib/python3.13/site-packages/installed.py"),
@@ -447,6 +451,43 @@ fn a_management_command_of_a_project_without_by_sources_runs_on_its_interpreter(
     assert_eq!(
         std::fs::read_to_string(recorded.as_std_path())?,
         format!("{root}\n{root}/manage.py\nmakemigrations\napp\n")
+    );
+
+    Ok(())
+}
+
+/// `by run` finds its project from the directory it is started in, `manage.py`'s, so a
+/// `pyproject.toml` there makes the django project one of its own, whatever the workspace
+/// around it holds: with no `.by` source of its own, `by run` would refuse it, and python runs it
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_nested_project_without_by_sources_runs_on_its_interpreter()
+-> Result<()> {
+    let builder = manage_project_in(SystemPath::new("src/site"), "models.py")?
+        .with_file(
+            SystemPath::new("src/pyproject.toml"),
+            "[project]\nname = \"outer\"\n",
+        )?
+        .with_file(SystemPath::new("src/outer.by"), "x = 1\n")?
+        .with_file(
+            SystemPath::new("src/site/pyproject.toml"),
+            "[project]\nname = \"site\"\n",
+        )?;
+    let site = builder.file_path(SystemPath::new("src/site"));
+    let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, _) = shown_outcome(&mut server);
+    assert_eq!(
+        shown.message,
+        "manage.py makemigrations app succeeded: app/migrations/0001_initial.py"
+    );
+    assert_eq!(
+        std::fs::read_to_string(recorded.as_std_path())?,
+        format!("{site}\n{site}/manage.py\nmakemigrations\napp\n")
     );
 
     Ok(())

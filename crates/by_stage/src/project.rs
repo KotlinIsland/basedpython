@@ -437,12 +437,25 @@ pub(crate) fn project_sources(
         .collect()
 }
 
-/// whether the project `db` holds has a source `by run` stages, out of a db that already
-/// exists: `by run` refuses a project without one (`no .by files found`), and so the language
-/// server runs a project's program through `by run` only when it has one
-pub fn has_by_sources(db: &ProjectDatabase) -> bool {
-    let root = db.project().root(db).as_std_path();
-    !project_sources(db, BY_SOURCES, root, None).is_empty()
+/// The project `by run` started in `cwd` runs: the one discovered from `cwd`, with the `.by`
+/// sources it stages, checked against the python environment `python` as
+/// [`build_project_db_for`] takes one.
+pub fn build_run_project_db(
+    cwd: &Path,
+    python: Option<&SystemPath>,
+) -> anyhow::Result<ProjectBuild> {
+    build_project_db_for(cwd, BY_SOURCES, None, python)
+}
+
+/// Whether `by run` started in `cwd` has a source to stage, which it refuses to run without
+/// (`no .by files found`).
+///
+/// The language server asks it of the directory it starts `by run` in, to run a program
+/// through `by run` exactly when `by run` would run it. The environment a project is checked
+/// against decides what its sources import, never which sources it has, so none is named.
+pub fn run_has_sources(cwd: &Path) -> anyhow::Result<bool> {
+    let (_, sources, _, _) = build_run_project_db(cwd, None)?;
+    Ok(!sources.is_empty())
 }
 
 /// The project's first-party module roots, longest first, as absolute paths.

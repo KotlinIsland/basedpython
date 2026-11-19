@@ -30,7 +30,7 @@ use by_stage::emit::{
 };
 use by_stage::packages::{directory_packages, stage_package_initializers};
 use by_stage::project::{
-    BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, build_project_db_for,
+    BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, build_run_project_db,
     may_contain_sources, module_roots, source_files,
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
@@ -270,10 +270,10 @@ pub(crate) fn stage_run(
     let checked_against = probe
         .filter(|_| interpreter.named_for_run)
         .map(|probe| probe.prefix);
-    let (db, handles, rebuilder, root) =
-        build_project_db_for(&cwd, BY_SOURCES, None, checked_against.as_deref())?;
+    let (db, handles, rebuilder, root) = build_run_project_db(&cwd, checked_against.as_deref())?;
     // a session can start in a project with nothing to stage, as python's repl starts
-    // anywhere; a program has to be somewhere
+    // anywhere; a program has to be somewhere. the language server asks this of the same
+    // directory, through `run_has_sources`, before it starts `by run` there
     if handles.is_empty() && matches!(run_target, RunTarget::Module(_)) {
         eprintln!("no .by files found");
         return Ok(Err(ExitStatus::Failure));

@@ -289,12 +289,21 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         })
         .ok_or_else(|| anyhow::anyhow!("this project has no `manage.py`"))?;
 
+    // django resolves its settings, its apps and its templates relative to the
+    // directory `manage.py` sits in, which is why it is run from there rather than
+    // from wherever the editor happens to have been started
+    let working_directory = manage
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("`{manage}` is not in a directory"))?
+        .to_path_buf();
+
     // python never imports a `.by` module, so a project with a `.by` model run by python alone
     // has no such model: `makemigrations` finds no changes and `test` runs without it. `by run`
     // stages the project, runs the command in it and writes back what the command wrote there,
     // a migration included. it refuses a project with no `.by` source, which python runs as it
-    // is
-    let staged = by_stage::project::has_by_sources(db);
+    // is. the project is the one `by run` finds from the directory it is started in, which need
+    // not be this workspace's: a `pyproject.toml` beside `manage.py` makes a project of its own
+    let staged = by_stage::project::run_has_sources(working_directory.as_std_path())?;
     let script = manage.file_name().unwrap_or("manage.py");
     let line = if staged {
         format!("by run {script} {}", arguments.join(" "))
@@ -322,14 +331,6 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
              so `{script}` cannot be run"
         )
     })?;
-
-    // django resolves its settings, its apps and its templates relative to the
-    // directory `manage.py` sits in, which is why it is run from there rather than
-    // from wherever the editor happens to have been started
-    let working_directory = manage
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("`{manage}` is not in a directory"))?
-        .to_path_buf();
 
     let (mut process, notes) = if staged {
         let by = session.by_executable().ok_or_else(|| {

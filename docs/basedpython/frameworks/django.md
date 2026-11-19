@@ -302,7 +302,10 @@ on the same interpreter, as `by run --python` names one. the command then sees
 the project's `.by` models, and what it writes into the staged tree — the
 migration `makemigrations` makes — is written back to the project (see
 [`by run`](../cli-reference.md#by-run)). a project with no `.by` source runs on
-the interpreter directly, as `by run` refuses a project with nothing to stage
+the interpreter directly, as `by run` refuses a project with nothing to stage.
+the project is the one `by run` finds from `manage.py`'s directory, where it is
+started, so a `pyproject.toml` beside `manage.py` makes the django project one of
+its own, whatever the workspace around it holds
 
 everything the command writes goes to the editor's log, as
 `window/logMessage`. when it has finished, what came of it is shown, as
