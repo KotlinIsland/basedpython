@@ -17,10 +17,12 @@ zip = { workspace = true }
 
 [build-dependencies]
 path-slash = { workspace = true }
+sha2 = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+sha2 = { workspace = true }
 walkdir = { workspace = true }
 
 [features]

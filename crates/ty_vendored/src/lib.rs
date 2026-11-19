@@ -11,6 +11,15 @@ pub const SOURCE_COMMIT: &str =
 
 static_assertions::const_assert_eq!(SOURCE_COMMIT.len(), 40);
 
+/// A SHA-256 of every vendored stub's path and contents, computed when the zip is built.
+///
+/// This, not [`SOURCE_COMMIT`], names the stubs: they are typeshed rewritten for basedpython,
+/// so builds on one typeshed commit can hold different stubs, and a copy on disk named after
+/// the commit is a copy of whichever build wrote it first.
+pub const CONTENT_HASH: &str = env!("TY_VENDORED_CONTENT_HASH");
+
+static_assertions::const_assert_eq!(CONTENT_HASH.len(), 64);
+
 // The file path here is hardcoded in this crate's `build.rs` script.
 // Luckily this crate will fail to build if this file isn't available at build time.
 static TYPESHED_ZIP_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zipped_typeshed.zip"));
@@ -49,6 +58,35 @@ mod tests {
         // basedpython typeshed converts it to a pep 695 generic function, so a
         // type-parameter list `[...]` follows the name
         assert!(functools_module_stub_source.contains("def update_wrapper"));
+    }
+
+    /// The hash the build names the stubs by is the hash of what the zip holds: every file,
+    /// in the zip's order, with its path. A file the zip gains or changes changes the name.
+    #[test]
+    fn content_hash_covers_every_file_in_the_zip() {
+        use sha2::{Digest, Sha256};
+
+        let mut archive = zip::ZipArchive::new(io::Cursor::new(TYPESHED_ZIP_BYTES)).unwrap();
+        let mut hasher = Sha256::new();
+        let mut files = 0;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            if !entry.is_file() {
+                continue;
+            }
+            let name = entry.name().to_owned();
+            let mut contents = Vec::new();
+            entry.read_to_end(&mut contents).unwrap();
+            hasher.update((name.len() as u64).to_le_bytes());
+            hasher.update(name.as_bytes());
+            hasher.update((contents.len() as u64).to_le_bytes());
+            hasher.update(&contents);
+            files += 1;
+        }
+        let hash = format!("{:x}", hasher.finalize());
+
+        assert!(files > 100, "only {files} files in the vendored zip");
+        assert_eq!(hash, CONTENT_HASH);
     }
 
     #[test]

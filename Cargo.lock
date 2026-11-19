@@ -5333,6 +5333,7 @@ version = "0.0.19"
 dependencies = [
  "path-slash",
  "ruff_db",
+ "sha2",
  "static_assertions",
  "walkdir",
  "zip",

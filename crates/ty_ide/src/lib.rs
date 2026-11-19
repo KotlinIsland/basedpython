@@ -478,8 +478,14 @@ impl HasNavigationTargets for TypeDefinition<'_> {
 
 /// Get the cache-relative path where vendored paths should be written to.
 fn relative_cached_vendored_root() -> SystemPathBuf {
-    // The vendored files are uniquely identified by the source commit.
-    SystemPathBuf::from(format!("vendored/typeshed/{}", ty_vendored::SOURCE_COMMIT))
+    // Named after the stubs' contents, not typeshed's source commit: basedpython rewrites
+    // typeshed, so builds on one commit hold different stubs, and a file here is written once
+    // and then reused. Named apart from upstream ty's `vendored/typeshed/<commit>`, since both
+    // share the `ty` cache directory.
+    SystemPathBuf::from(format!(
+        "vendored/basedpython-typeshed/{}",
+        ty_vendored::CONTENT_HASH
+    ))
 }
 
 /// Get the cached version of a vendored path in the cache, ensuring the file is written to disk.

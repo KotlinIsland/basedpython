@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path::Path;
 
 use path_slash::PathExt;
+use sha2::{Digest, Sha256};
 use zip::CompressionMethod;
 use zip::result::ZipResult;
 use zip::write::{SimpleFileOptions, ZipWriter};
@@ -35,13 +36,36 @@ const TY_EXTENSIONS_STUBS: &[(&str, &str)] = &[
 ];
 const TYPESHED_ZIP_LOCATION: &str = "/zipped_typeshed.zip";
 
+/// Writes one file into the zip and folds its path and contents into `hasher`, so the
+/// hash covers exactly what the zip holds.
+fn add_file(
+    zip: &mut ZipWriter<File>,
+    hasher: &mut Sha256,
+    options: SimpleFileOptions,
+    name: &str,
+    contents: &[u8],
+) -> ZipResult<()> {
+    hasher.update((name.len() as u64).to_le_bytes());
+    hasher.update(name.as_bytes());
+    hasher.update((contents.len() as u64).to_le_bytes());
+    hasher.update(contents);
+    zip.start_file(name, options)?;
+    zip.write_all(contents)?;
+    Ok(())
+}
+
 /// Recursively zip the contents of the entire typeshed directory and patch typeshed
 /// on the fly to include the `ty_extensions` module.
 ///
+/// Returns a hash of every file's path and contents as written, in a fixed order. The stubs
+/// here are typeshed rewritten for basedpython, so typeshed's source commit does not name
+/// them: two builds of `by` on the same commit can hold different stubs.
+///
 /// This routine is adapted from a recipe at
 /// <https://github.com/zip-rs/zip-old/blob/5d0f198124946b7be4e5969719a7f29f363118cd/examples/write_dir.rs>
-fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
+fn write_zipped_typeshed_to(writer: File) -> ZipResult<String> {
     let mut zip = ZipWriter::new(writer);
+    let mut hasher = Sha256::new();
 
     // Use deflated compression for WASM builds because compiling `zstd-sys` requires clang
     // [source](https://github.com/gyscos/zstd-rs/wiki/Compile-for-WASM) which complicates the build
@@ -58,7 +82,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
         .compression_method(method)
         .unix_permissions(0o644);
 
-    for entry in walkdir::WalkDir::new(TYPESHED_SOURCE_DIR) {
+    for entry in walkdir::WalkDir::new(TYPESHED_SOURCE_DIR).sort_by_file_name() {
         let dir_entry = entry.unwrap();
         let absolute_path = dir_entry.path();
         let normalized_relative_path = absolute_path
@@ -71,14 +95,20 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
         // Some unzip tools unzip files with directory paths correctly, some do not!
         if absolute_path.is_file() {
             println!("adding file {absolute_path:?} as {normalized_relative_path:?} ...");
-            zip.start_file(&*normalized_relative_path, options)?;
-            let mut f = File::open(absolute_path)?;
-            std::io::copy(&mut f, &mut zip).unwrap();
+            let mut contents = std::fs::read(absolute_path)?;
 
             // Patch the VERSIONS file to make `ty_extensions` available
             if normalized_relative_path == "stdlib/VERSIONS" {
-                writeln!(&mut zip, "ty_extensions: 3.0-")?;
+                writeln!(&mut contents, "ty_extensions: 3.0-")?;
             }
+
+            add_file(
+                &mut zip,
+                &mut hasher,
+                options,
+                &normalized_relative_path,
+                &contents,
+            )?;
         } else if !normalized_relative_path.is_empty() {
             // Only if not root! Avoids path spec / warning
             // and mapname conversion failed error on unzip
@@ -91,12 +121,17 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
     zip.add_directory("stdlib/ty_extensions/", options)?;
     for (source, destination) in TY_EXTENSIONS_STUBS {
         println!("adding file {source} as {destination} ...");
-        zip.start_file(destination, options)?;
-        let mut f = File::open(source)?;
-        std::io::copy(&mut f, &mut zip).unwrap();
+        add_file(
+            &mut zip,
+            &mut hasher,
+            options,
+            destination,
+            &std::fs::read(source)?,
+        )?;
     }
 
-    zip.finish()
+    zip.finish()?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn main() {
@@ -115,5 +150,6 @@ fn main() {
     let zipped_typeshed_location = format!("{out_dir}{TYPESHED_ZIP_LOCATION}");
 
     let zipped_typeshed_file = File::create(zipped_typeshed_location).unwrap();
-    write_zipped_typeshed_to(zipped_typeshed_file).unwrap();
+    let content_hash = write_zipped_typeshed_to(zipped_typeshed_file).unwrap();
+    println!("cargo::rustc-env=TY_VENDORED_CONTENT_HASH={content_hash}");
 }
