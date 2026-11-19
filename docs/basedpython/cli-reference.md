@@ -269,12 +269,16 @@ note: wrote back app/migrations/__init__.py
     one project directory were staged into has no one place to go, and is reported
     rather than written. the root of a src-layout project's tree is one: `src/` and
     the project root both land there
-- nothing is carried back from a directory the build never descends into, by
-    name: a hidden one, or one called `__pycache__`, `build`, `out`, `target`,
-    `env` or `site-packages`. so the bytecode python caches in
-    the tree stays there
+- the bytecode python caches beside the modules it imports, a `.pyc` in a
+    `__pycache__` directory, is never carried back: the interpreter wrote it, not
+    the program. everything else the program writes is, wherever in the tree,
+    or is reported
 - a project path reached through a symbolic link, which the build never stages
     from, is reported rather than written through
+- what a debugger wrote into the tree to replace code while the program ran is
+    not the program's, and is neither written back nor reported: the tree's
+    sourcemap lists each file a re-stage wrote, at what it wrote (see
+    [sourcemaps](development/sourcemaps.md))
 
 the tree is compared by content, as it was just before the program started, and
 this happens however the program ends: a non-zero exit, or a signal `by run`
