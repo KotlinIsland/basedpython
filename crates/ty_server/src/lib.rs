@@ -6,7 +6,7 @@ use ruff_db::system::{OsSystem, SystemPathBuf};
 
 pub use crate::capabilities::COMMAND_LINE_FLAGS;
 pub use crate::command_line::{
-    Choice, CommandLine, CommandOption, CommandValue, PathHint, Positional, ValueKind,
+    ByProgram, Choice, CommandLine, CommandOption, CommandValue, PathHint, Positional, ValueKind,
 };
 use crate::db::Db;
 pub use crate::logging::{LogLevel, init_logging};
@@ -34,8 +34,9 @@ pub(crate) const DIAGNOSTIC_NAME: &str = "ty";
 /// result type is needed.
 pub(crate) type Result<T> = anyhow::Result<T>;
 
-/// run the language server over stdio, answering `by/commandLine` with `command_line`
-pub fn run_server(command_line: CommandLine) -> anyhow::Result<()> {
+/// run the language server over stdio as part of `by`, answering `by/commandLine` with its
+/// command line
+pub fn run_server(by: ByProgram) -> anyhow::Result<()> {
     let _ = print_interactive_warning();
     let four = NonZeroUsize::new(4).unwrap();
 
@@ -76,7 +77,7 @@ pub fn run_server(command_line: CommandLine) -> anyhow::Result<()> {
         false,
         project_server_directory,
         true,
-        Arc::new(command_line),
+        Arc::new(by),
     )
     .context("Failed to start server")?
     .run();

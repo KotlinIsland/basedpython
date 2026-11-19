@@ -437,6 +437,14 @@ pub(crate) fn project_sources(
         .collect()
 }
 
+/// whether the project `db` holds has a source `by run` stages, out of a db that already
+/// exists: `by run` refuses a project without one (`no .by files found`), and so the language
+/// server runs a project's program through `by run` only when it has one
+pub fn has_by_sources(db: &ProjectDatabase) -> bool {
+    let root = db.project().root(db).as_std_path();
+    !project_sources(db, BY_SOURCES, root, None).is_empty()
+}
+
 /// The project's first-party module roots, longest first, as absolute paths.
 ///
 /// These are the directories a module name is resolved against — for a

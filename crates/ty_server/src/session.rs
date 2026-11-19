@@ -37,7 +37,7 @@ pub use self::options::{
 };
 pub(crate) use self::settings::{GlobalSettings, WorkspaceSettings};
 use crate::capabilities::{ResolvedClientCapabilities, server_diagnostic_options};
-use crate::command_line::CommandLine;
+use crate::command_line::{ByProgram, CommandLine};
 use crate::db::Db as _;
 use crate::document::{DocumentKey, DocumentVersion, LanguageId, NotebookDocument};
 use crate::server::{
@@ -158,8 +158,8 @@ pub(crate) struct Session {
     /// The name of the client (editor) that connected to this server.
     client_name: ClientName,
 
-    /// `by`'s command line, as the `by` that started this server describes it
-    command_line: Arc<CommandLine>,
+    /// the `by` that started this server
+    by: Arc<ByProgram>,
 
     /// The session's own file system watcher, over every project's paths.
     ///
@@ -223,7 +223,7 @@ impl Session {
         client_name: ClientName,
         in_test: bool,
         watch_file_system: bool,
-        command_line: Arc<CommandLine>,
+        by: Arc<ByProgram>,
     ) -> crate::Result<Self> {
         let index = Arc::new(Index::new());
 
@@ -259,7 +259,7 @@ impl Session {
             registrations: HashSet::new(),
             file_watcher: LspFileWatcher::new(resolved_client_capabilities),
             client_name,
-            command_line,
+            by,
             own_watcher: if watch_file_system {
                 OwnWatcher::Idle
             } else {
@@ -274,7 +274,12 @@ impl Session {
 
     /// `by`'s command line, as the `by` that started this server describes it
     pub(crate) fn command_line(&self) -> &CommandLine {
-        &self.command_line
+        &self.by.command_line
+    }
+
+    /// the `by` executable this server is part of, when it was started as one
+    pub(crate) fn by_executable(&self) -> Option<&SystemPath> {
+        self.by.executable()
     }
 
     pub(crate) fn request_queue(&self) -> &RequestQueue {

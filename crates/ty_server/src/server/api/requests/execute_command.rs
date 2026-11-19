@@ -5,6 +5,7 @@ use crate::server::api::RequestHandler;
 use crate::server::api::traits::SyncRequestHandler;
 use crate::session::Session;
 use crate::session::client::Client;
+use by_stage::run_notes::{Level, Note};
 use lsp_server::ErrorCode;
 use lsp_types::ExecuteCommandRequest;
 use lsp_types::{self as types, MessageType};
@@ -260,7 +261,7 @@ const TERMINAL_COMMANDS: &[&str] = &["runserver", "shell", "dbshell", "createsup
 /// the few we know are wrong" is a much larger promise than this needs to make.
 const OFFERED_COMMANDS: &[&str] = &["test", "makemigrations", "migrate", "sqlmigrate"];
 
-/// runs the project's `manage.py`
+/// runs the project's `manage.py`, through `by run` when the project has a `.by` source
 ///
 /// its output goes to `window/logMessage`, all of it, and its outcome to
 /// `window/showMessage` once it has finished — succeeded or failed, with the last line
@@ -277,40 +278,48 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         return Err(anyhow::anyhow!("no management command was named"));
     };
 
-    // this is a refusal about the command itself, so it does not wait on finding
-    // the project's `manage.py` or its interpreter first
-    if TERMINAL_COMMANDS.contains(&subcommand.as_str()) {
-        return Err(anyhow::anyhow!(
-            "`manage.py {subcommand}` needs a terminal, which the server cannot give it. \
-             Run it yourself: `manage.py {}`",
-            arguments.join(" "),
-        ));
-    }
-
-    if !OFFERED_COMMANDS.contains(&subcommand.as_str()) {
-        return Err(anyhow::anyhow!(
-            "the server only runs the management commands it offers a lens for, \
-             and `{subcommand}` is not one of them. Run it yourself: `manage.py {}`",
-            arguments.join(" "),
-        ));
-    }
-
-    let (manage, interpreter) = session
+    let (db, manage) = session
         .project_dbs()
         .find_map(|db| {
             let manage = ty_ide::django_manage_script(db)?
                 .path(db)
                 .as_system_path()?
                 .to_path_buf();
-
-            Some((manage, interpreter(db)))
+            Some((db, manage))
         })
         .ok_or_else(|| anyhow::anyhow!("this project has no `manage.py`"))?;
 
-    let interpreter = interpreter.ok_or_else(|| {
+    // python never imports a `.by` module, so a project with a `.by` model run by python alone
+    // has no such model: `makemigrations` finds no changes and `test` runs without it. `by run`
+    // stages the project, runs the command in it and writes back what the command wrote there,
+    // a migration included. it refuses a project with no `.by` source, which python runs as it
+    // is
+    let staged = by_stage::project::has_by_sources(db);
+    let script = manage.file_name().unwrap_or("manage.py");
+    let line = if staged {
+        format!("by run {script} {}", arguments.join(" "))
+    } else {
+        format!("{script} {}", arguments.join(" "))
+    };
+
+    if TERMINAL_COMMANDS.contains(&subcommand.as_str()) {
+        return Err(anyhow::anyhow!(
+            "`{script} {subcommand}` needs a terminal, which the server cannot give it. \
+             Run it yourself: `{line}`",
+        ));
+    }
+
+    if !OFFERED_COMMANDS.contains(&subcommand.as_str()) {
+        return Err(anyhow::anyhow!(
+            "the server only runs the management commands it offers a lens for, \
+             and `{subcommand}` is not one of them. Run it yourself: `{line}`",
+        ));
+    }
+
+    let interpreter = interpreter(db).ok_or_else(|| {
         anyhow::anyhow!(
             "no python interpreter could be found for this project, \
-             so `manage.py` cannot be run"
+             so `{script}` cannot be run"
         )
     })?;
 
@@ -322,15 +331,38 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         .ok_or_else(|| anyhow::anyhow!("`{manage}` is not in a directory"))?
         .to_path_buf();
 
-    let mut process = std::process::Command::new(interpreter.as_std_path());
+    let (mut process, notes) = if staged {
+        let by = session.by_executable().ok_or_else(|| {
+            anyhow::anyhow!(
+                "this project has `.by` sources, so `{script}` runs through `by run`, \
+                 and this server was not started as a `by` it can run"
+            )
+        })?;
+        // what `by run` says about writing back comes after the command's own last line, so
+        // it is written to a file of its own rather than to stderr. the interpreter is the one
+        // the project is checked against here, which may be one the editor chose and `by run`
+        // would not find for itself
+        let notes = tempfile::Builder::new().prefix("ty-manage").tempdir()?;
+        let mut process = std::process::Command::new(by.as_std_path());
+        process
+            .arg("run")
+            .arg("--python")
+            .arg(interpreter.as_std_path())
+            .arg("--notes")
+            .arg(notes.path().join(NOTES_FILE))
+            .arg(manage.as_std_path());
+        (process, Some(notes))
+    } else {
+        let mut process = std::process::Command::new(interpreter.as_std_path());
+        process.arg(manage.as_std_path());
+        (process, None)
+    };
     process
-        .arg(manage.as_std_path())
         .args(arguments)
         .current_dir(working_directory.as_std_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let line = format!("manage.py {}", arguments.join(" "));
     let client = client.clone();
 
     std::thread::Builder::new()
@@ -349,18 +381,33 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
                         }
                     }
 
-                    let (kind, outcome) = if output.status.success() {
-                        (MessageType::Info, "succeeded".to_string())
-                    } else {
+                    let notes = match &notes {
+                        Some(notes) => read_notes(&notes.path().join(NOTES_FILE)),
+                        None => Ok(Vec::new()),
+                    };
+                    let notes = notes.unwrap_or_else(|error| {
+                        vec![Note::new(
+                            Level::Warning,
+                            format!("what `by run` wrote back could not be read: {error}"),
+                        )]
+                    });
+                    for note in &notes {
+                        log(&client, message_type(note.level), note.to_string());
+                    }
+
+                    let failed = !output.status.success();
+                    let (kind, outcome) = if failed {
                         (MessageType::Error, format!("failed ({})", output.status))
+                    } else {
+                        (MessageType::Info, "succeeded".to_string())
                     };
                     log(&client, kind, format!("{line} {outcome}"));
                     client.show_message(
-                        match summary {
-                            Some(summary) => format!("{line} {outcome}: {summary}"),
-                            None => format!("{line} {outcome}"),
+                        outcome_message(&line, &outcome, summary.as_deref(), &notes),
+                        match notes.iter().map(|note| note.level).max() {
+                            Some(Level::Warning | Level::Error) if !failed => MessageType::Warning,
+                            _ => kind,
                         },
-                        kind,
                     );
                 }
                 Err(error) => {
@@ -372,6 +419,45 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         })?;
 
     Ok(())
+}
+
+/// the name of the file `by run --notes` is given, in a directory of its own
+const NOTES_FILE: &str = "notes.jsonl";
+
+/// what `by run --notes` wrote. a run that ended before the program did, as one whose project
+/// does not check does, wrote none
+fn read_notes(file: &std::path::Path) -> std::io::Result<Vec<Note>> {
+    match std::fs::read_to_string(file) {
+        Ok(written) => Note::read_all(&written).map_err(std::io::Error::other),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn message_type(level: Level) -> MessageType {
+    match level {
+        Level::Note => MessageType::Info,
+        Level::Warning => MessageType::Warning,
+        Level::Error => MessageType::Error,
+    }
+}
+
+/// what a finished command is shown as: its outcome, the last line it wrote, and the first
+/// thing `by run` could not write back, which that line does not say
+fn outcome_message(line: &str, outcome: &str, summary: Option<&str>, notes: &[Note]) -> String {
+    let mut message = match summary {
+        Some(summary) => format!("{line} {outcome}: {summary}"),
+        None => format!("{line} {outcome}"),
+    };
+    let mut unwritten = notes.iter().filter(|note| note.level > Level::Note);
+    if let Some(first) = unwritten.next() {
+        let _ = write!(message, "; {first}");
+        let more = unwritten.count();
+        if more > 0 {
+            let _ = write!(message, " (and {more} more in the log)");
+        }
+    }
+    message
 }
 
 /// what `process` wrote, once it has finished, and the last line it wrote that says something

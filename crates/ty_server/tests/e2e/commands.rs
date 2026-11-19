@@ -267,3 +267,216 @@ fn what_uv_installed_is_picked_up_when_it_finishes() -> Result<()> {
 
     Ok(())
 }
+
+/// A stand-in for `by`, and for python, that records how it was called and then says what
+/// `manage.py makemigrations` says.
+///
+/// As `by`, it writes the notes `by run --notes` writes: what it wrote back to the project, and
+/// one file it did not.
+#[cfg(unix)]
+const MANAGE_STUB: &str = r#"#!/bin/sh
+{ pwd -P; printf '%s\n' "$@"; } > "$(dirname "$0")/recorded"
+notes=
+while [ $# -gt 0 ]; do
+    if [ "$1" = --notes ]; then notes=$2; fi
+    shift
+done
+echo "Migrations for 'app':"
+echo "  app/migrations/0001_initial.py"
+if [ -n "$notes" ]; then
+    printf '%s\n' \
+        '{"level":"note","message":"wrote back app/migrations/0001_initial.py"}' \
+        '{"level":"warning","message":"not written back: app/admin.py was changed in the project while the program ran"}' \
+        > "$notes"
+fi
+"#;
+
+/// A django project whose models module is `models`, with an interpreter the editor chose, as
+/// the python extension chooses one: an environment the server finds only because it was told.
+/// `by` and the interpreter are both [`MANAGE_STUB`], recording into `env/bin/recorded` and
+/// `recorded` beside `by`
+#[cfg(unix)]
+fn manage_project(models: &str) -> Result<TestServerBuilder> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let builder = TestServerBuilder::new()?;
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
+    let options: ty_server::ClientOptions = serde_json::from_value(serde_json::json!({
+        "pythonExtension": {
+            "activeEnvironment": {
+                "executable": {
+                    "uri": builder.file_uri(SystemPath::new("env/bin/python3")),
+                    "sysPrefix": builder.file_path(SystemPath::new("env")),
+                }
+            }
+        }
+    }))?;
+
+    let builder = builder
+        .with_workspace(SystemPath::new("src"), Some(options))?
+        .with_file(
+            SystemPath::new("src/manage.py"),
+            "import os\n\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')\n",
+        )?
+        .with_file(SystemPath::new("src/project/__init__.py"), "")?
+        .with_file(
+            SystemPath::new("src/project/settings.py"),
+            "INSTALLED_APPS = ['app']\n",
+        )?
+        .with_file(SystemPath::new("src/app/__init__.py"), "")?
+        .with_file(
+            SystemPath::new("src/app").join(models),
+            "class Widget:\n    pass\n",
+        )?
+        .with_file(SystemPath::new("env/bin/python3"), MANAGE_STUB)?
+        .with_file(
+            SystemPath::new("env/lib/python3.13/site-packages/installed.py"),
+            "",
+        )?
+        .with_file(SystemPath::new("by/by"), MANAGE_STUB)?;
+
+    let by = builder.file_path(SystemPath::new("by/by"));
+    for executable in [&python, &by] {
+        fs::set_permissions(executable.as_std_path(), fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(builder.with_by_executable(by))
+}
+
+/// what the server showed once the command it ran had finished, with everything it logged
+#[cfg(unix)]
+fn shown_outcome(server: &mut TestServer) -> (lsp_types::ShowMessageParams, Vec<String>) {
+    let shown = server
+        .try_await_notification::<lsp_types::ShowMessageNotification>(Some(Duration::from_mins(1)))
+        .expect("the server to show what came of the command");
+    let mut logged = Vec::new();
+    while let Ok(log) =
+        server.try_await_notification::<LogMessageNotification>(Some(Duration::from_millis(10)))
+    {
+        logged.push(log.message);
+    }
+    (shown, logged)
+}
+
+#[cfg(unix)]
+fn run_manage_command(server: &mut TestServer, arguments: &[&str]) -> lsp_server::RequestId {
+    server.send_request::<ExecuteCommandRequest>(ExecuteCommandParams {
+        command: "ty.runManageCommand".to_string(),
+        arguments: Some(vec![serde_json::json!({ "arguments": arguments })]),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    })
+}
+
+/// python never imports a `.by` module, so in a project with a `.by` model a management
+/// command runs through `by run`, on the interpreter the project is checked against, from the
+/// directory `manage.py` is in. what `by run` wrote back is logged, and the outcome shown is
+/// the command's own last line, with what was not written back after it
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Result<()> {
+    let builder = manage_project("models.by")?;
+    let root = builder.file_path(SystemPath::new("src"));
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
+    let recorded = builder.file_path(SystemPath::new("by/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(
+        shown.message,
+        "by run manage.py makemigrations app succeeded: app/migrations/0001_initial.py; \
+         warning: not written back: app/admin.py was changed in the project while the program ran"
+    );
+    assert_eq!(shown.kind, lsp_types::MessageType::Warning);
+    assert_eq!(
+        logged,
+        [
+            "running by run manage.py makemigrations app",
+            "Migrations for 'app':\n  app/migrations/0001_initial.py",
+            "note: wrote back app/migrations/0001_initial.py",
+            "warning: not written back: app/admin.py was changed in the project while the program ran",
+            "by run manage.py makemigrations app succeeded",
+        ]
+    );
+
+    let recorded = std::fs::read_to_string(recorded.as_std_path())?;
+    let recorded: Vec<&str> = recorded.lines().collect();
+    let [
+        directory,
+        "run",
+        "--python",
+        interpreter,
+        "--notes",
+        notes,
+        manage,
+        arguments @ ..,
+    ] = recorded.as_slice()
+    else {
+        panic!("not a `by run` of the interpreter: {recorded:?}");
+    };
+    assert_eq!(*directory, root.as_str());
+    assert_eq!(*interpreter, python.as_str());
+    assert!(notes.ends_with("notes.jsonl"), "{notes}");
+    assert_eq!(*manage, root.join("manage.py").as_str());
+    assert_eq!(arguments, ["makemigrations", "app"]);
+
+    Ok(())
+}
+
+/// `by run` refuses a project with no `.by` source, which python runs as it is
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_project_without_by_sources_runs_on_its_interpreter() -> Result<()> {
+    let builder = manage_project("models.py")?;
+    let root = builder.file_path(SystemPath::new("src"));
+    let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, _) = shown_outcome(&mut server);
+    assert_eq!(
+        shown.message,
+        "manage.py makemigrations app succeeded: app/migrations/0001_initial.py"
+    );
+    assert_eq!(shown.kind, lsp_types::MessageType::Info);
+    assert_eq!(
+        std::fs::read_to_string(recorded.as_std_path())?,
+        format!("{root}\n{root}/manage.py\nmakemigrations\napp\n")
+    );
+
+    Ok(())
+}
+
+/// a refusal hands back the command that runs it, which in a project with a `.by` model is
+/// `by run`'s
+#[cfg(unix)]
+#[test]
+fn a_refused_management_command_of_a_project_with_by_sources_hands_back_by_run() -> Result<()> {
+    let mut server = manage_project("models.by")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["runserver", "8001"]);
+    let failure = server
+        .try_await_response::<ExecuteCommandRequest>(&id, None)
+        .expect_err("a refusal rather than a process nothing could stop");
+
+    assert!(
+        format!("{failure}").contains("Run it yourself: `by run manage.py runserver 8001`"),
+        "got {failure}"
+    );
+    let shown = server.await_notification::<lsp_types::ShowMessageNotification>();
+    assert!(
+        shown
+            .message
+            .contains("Run it yourself: `by run manage.py runserver 8001`"),
+        "got {shown:?}"
+    );
+
+    Ok(())
+}

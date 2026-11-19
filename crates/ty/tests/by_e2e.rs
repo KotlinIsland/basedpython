@@ -11990,6 +11990,166 @@ fn the_server_describes_by_s_own_command_line() {
     assert_eq!(python["value"]["kind"], "path", "{python}");
 }
 
+/// the editor's lens for `manage.py makemigrations app` in a project whose model is a `.by`
+/// module runs it through `by run`: python alone imports no `.by` module, so the command would
+/// run without the model. what the command wrote into the staged tree lands in the project, and
+/// the outcome the editor shows is the command's own last line rather than `by run`'s report of
+/// what it wrote back, which is logged
+///
+/// `manage.py` here stands in for django's: it imports the model, as django's app registry does,
+/// and writes a migration into the app package's directory, where `makemigrations` writes one
+#[cfg(unix)]
+#[test]
+fn the_server_runs_a_management_command_of_a_by_project_through_by_run() {
+    let dir = Scratch::new("server_runs_manage_through_by_run");
+    let app = dir.join("app");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(dir.join("proj")).unwrap();
+    // the environment the server checks the project against, which is the interpreter the
+    // command runs on: the one every python-executing test runs on
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let prefix = Command::new(&python)
+        .args(["-c", "import sys; print(sys.prefix)"])
+        .output()
+        .expect("failed to spawn python");
+    let prefix = String::from_utf8_lossy(&prefix.stdout).trim().to_owned();
+    fs::write(
+        dir.join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0\"\n\n\
+             [tool.ty.environment]\npython = {prefix:?}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("proj").join("__init__.py"), "").unwrap();
+    fs::write(
+        dir.join("proj").join("settings.py"),
+        "INSTALLED_APPS = ['app']\n",
+    )
+    .unwrap();
+    fs::write(app.join("__init__.py"), "").unwrap();
+    fs::write(app.join("models.by"), "class Widget:\n    pass\n").unwrap();
+    fs::write(
+        dir.join("manage.py"),
+        "\
+import os
+import sys
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'proj.settings')
+
+import app
+import app.models
+
+if sys.argv[1:] == ['makemigrations', 'app']:
+    migrations = os.path.join(app.__path__[0], 'migrations')
+    os.makedirs(migrations, exist_ok=True)
+    with open(os.path.join(migrations, '0001_initial.py'), 'w') as file:
+        _ = file.write(f'# {app.models.Widget.__name__}\\n')
+    print(\"Migrations for 'app':\")
+    print('  + Create model Widget')
+",
+    )
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("server")
+        .current_dir(&*dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn by server");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let (messages, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while stdout.fill_buf().is_ok_and(|buffer| !buffer.is_empty()) {
+            if messages.send(receive_lsp(&mut stdout)).is_err() {
+                break;
+            }
+        }
+    });
+
+    let root = format!("file://{}", dir.display());
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"processId": null, "rootUri": root, "capabilities": {},
+                "workspaceFolders": [{"uri": root, "name": "demo"}]}}),
+    );
+    let mut logged = Vec::new();
+    let shown = loop {
+        let message = received
+            .recv_timeout(Duration::from_mins(5))
+            .unwrap_or_else(|_| panic!("the server said nothing more after:\n{logged:#?}"));
+        match message["method"].as_str() {
+            None if message["id"] == 1 => {
+                send_lsp(
+                    &mut stdin,
+                    &serde_json::json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+                );
+                send_lsp(
+                    &mut stdin,
+                    &serde_json::json!({"jsonrpc": "2.0", "id": 2,
+                        "method": "workspace/executeCommand",
+                        "params": {"command": "ty.runManageCommand",
+                            "arguments": [{"arguments": ["makemigrations", "app"]}]}}),
+                );
+            }
+            None => assert!(message.get("error").is_none(), "{message}"),
+            Some("window/logMessage") => {
+                logged.push(message["params"]["message"].as_str().unwrap().to_owned());
+            }
+            Some("window/showMessage") => break message["params"].clone(),
+            Some(_) => {
+                // a request of the server's own, which it waits on before it answers ours
+                if let Some(id) = message.get("id") {
+                    let result = match message["params"]["items"].as_array() {
+                        Some(items) => {
+                            serde_json::Value::Array(vec![serde_json::Value::Null; items.len()])
+                        }
+                        None => serde_json::Value::Null,
+                    };
+                    send_lsp(
+                        &mut stdin,
+                        &serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                    );
+                }
+            }
+        }
+    };
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+    );
+    send_lsp(
+        &mut stdin,
+        &serde_json::json!({"jsonrpc": "2.0", "method": "exit"}),
+    );
+    drop(stdin);
+    let _ = child.wait();
+
+    assert_eq!(
+        shown["message"], "by run manage.py makemigrations app succeeded: + Create model Widget",
+        "{logged:#?}"
+    );
+    assert_eq!(shown["type"], 3, "{logged:#?}");
+    assert!(
+        logged
+            .iter()
+            .any(|line| line == "note: wrote back app/migrations/0001_initial.py"),
+        "{logged:#?}"
+    );
+    assert_eq!(
+        fs::read_to_string(app.join("migrations").join("0001_initial.py"))
+            .ok()
+            .as_deref(),
+        Some("# Widget\n"),
+        "{logged:#?}"
+    );
+}
+
 /// a call the author wrote is located at the author's text in the `.by`, columns and all, read
 /// through the lazy-import holder or not, and a call the transpiler wrote has its `.by` line and
 /// no columns: what a debugger names a step-into target by, and tells the two apart by

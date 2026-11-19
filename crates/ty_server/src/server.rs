@@ -3,7 +3,7 @@
 use self::schedule::spawn_main_loop;
 use crate::PositionEncoding;
 use crate::capabilities::{ResolvedClientCapabilities, server_capabilities};
-use crate::command_line::CommandLine;
+use crate::command_line::ByProgram;
 use crate::session::{ClientName, InitializationOptions, Session, warn_about_unknown_options};
 use anyhow::Context;
 use lsp_server::{Connection, ErrorCode, Message, Response};
@@ -60,7 +60,7 @@ impl Server {
         in_test: bool,
         project_server_directory: Option<SystemPathBuf>,
         watch_file_system: bool,
-        command_line: Arc<CommandLine>,
+        by: Arc<ByProgram>,
     ) -> crate::Result<Self> {
         let (id, init_value) = connection.initialize_start()?;
 
@@ -200,7 +200,7 @@ impl Server {
                 ClientName::from(client_info),
                 in_test,
                 watch_file_system,
-                command_line,
+                by,
             )?,
         })
     }
