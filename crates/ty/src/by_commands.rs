@@ -3244,12 +3244,13 @@ _CARRIED = {
     os.path.realpath(os.path.join(_TREE, staged)): source for staged, source in CARRIED.items()
 }
 
-# entries already checked against their digests, so each file is read at most
-# once no matter how many frames it contributes
-_CURRENT = set()
+# entries a check has found no longer the files they were transpiled from. a `.by` can be
+# saved over at any moment of a run, so one that matched is checked again before a module
+# is compiled, and before a traceback names a line of it
 _STALE = set()
-# what `_by_lines` answered for each current entry, by its key: the widths it read are those
-# of the two files the digests matched, which a location asks about again and again
+# what `_by_lines` answered for each entry the first time it matched, by its key: the
+# widths it read are those of the two files the digests matched, which describe that
+# transpile for as long as the run lasts
 _LINES = {}
 
 
@@ -3278,42 +3279,47 @@ def _stale(key, by_path):
     )
 
 
-def _is_current(key, by_path):
+def _is_current(key, by_path, checked=None):
     # the map describes a *pair* of files, and a .by line read out of it is only
     # true while both are still the ones it was built from. a source saved since
     # the transpile would otherwise be quoted at line numbers belonging to the
     # file it replaced — a wrong answer, where leaving the frame generated is
-    # merely a worse one
-    if key in _CURRENT:
-        return True
+    # merely a worse one. `checked` holds what one answer, a traceback of many
+    # frames, has found already
     if key in _STALE:
         return False
+    if checked is not None and key in checked:
+        return checked[key]
     digests = DIGESTS.get(key)
-    if (
+    current = (
         digests is not None
         and _digest_matches(by_path, digests["by"])
         and _digest_matches(key, digests["py"])
-    ):
-        _CURRENT.add(key)
-        return True
-    _stale(key, by_path)
-    return False
+    )
+    if not current:
+        _stale(key, by_path)
+    if checked is not None:
+        checked[key] = current
+    return current
 
 
-def _still_current(key, by_path):
+def _still_current(key, by_path, checked):
     # a module `_by_code` compiled has its `.by` lines in its frames already, checked
     # when it was loaded. a `.by` saved over since then no longer has those lines, so
     # it is checked again before a frame names one
     if key in _STALE:
         return False
+    if key in checked:
+        return checked[key]
     digests = DIGESTS.get(key)
-    if digests is not None and _digest_matches(by_path, digests["by"]):
-        return True
-    _stale(key, by_path)
-    return False
+    current = digests is not None and _digest_matches(by_path, digests["by"])
+    if not current:
+        _stale(key, by_path)
+    checked[key] = current
+    return current
 
 
-def _rewrite(frames):
+def _rewrite(frames, checked):
     # drop the runner/runpy bootstrap above the first user frame. an input to a `by repl`
     # session is the program's own as much as a module of the project is
     first = next(
@@ -3336,7 +3342,7 @@ def _rewrite(frames):
     out = []
     for f in frames:
         compiled_from = _BY_SOURCES.get(os.path.realpath(f.filename))
-        if compiled_from is not None and not _still_current(compiled_from, f.filename):
+        if compiled_from is not None and not _still_current(compiled_from, f.filename, checked):
             # its line is one of the file that was transpiled, which is gone. the
             # generated line it came from is named instead when it is the only one
             # that `.by` line was written as, and no line at all when it is not
@@ -3357,7 +3363,7 @@ def _rewrite(frames):
             lines = _line_table(key)
             idx = f.lineno - 1
             mapped = lines[idx] if 0 <= idx < len(lines) else None
-            if mapped is not None and _is_current(key, by_path):
+            if mapped is not None and _is_current(key, by_path, checked):
                 by_lineno = mapped + 1
                 text = linecache.getline(by_path, by_lineno).strip() or f.line
                 out.append(traceback.FrameSummary(by_path, by_lineno, f.name, line=text))
@@ -3386,8 +3392,8 @@ class _ProgramStack(traceback.StackSummary):
         return out
 
 
-def _program_stack(stack, evalue):
-    frames = _rewrite(stack)
+def _program_stack(stack, evalue, checked):
+    frames = _rewrite(stack, checked)
     if (
         isinstance(evalue, SyntaxError)
         and evalue.filename is not None
@@ -3415,12 +3421,14 @@ def format_exception(etype, evalue, tb):
     the one it was raised while handling, an exception group's exceptions, and notes.
     Only the frames of each are replaced."""
     report = traceback.TracebackException(etype, evalue, tb)
+    # whether each entry its frames name still matches, which is checked once for all of them
+    checked = {}
     # each exception python will report, beside the one it was extracted from. python
     # leaves out of the chain one it has already reported, so this ends
     pending = [(report, evalue)]
     while pending:
         node, value = pending.pop()
-        node.stack = _program_stack(node.stack, value)
+        node.stack = _program_stack(node.stack, value, checked)
         if node.__cause__ is not None:
             pending.append((node.__cause__, value.__cause__))
         if node.__context__ is not None:
@@ -3662,19 +3670,27 @@ def _relined_one(code, filename, by_line, width, by_span):
     )
 
 
-def _by_lines(origin):
+def _by_lines(origin, compiling=False):
     """The `.by` the staged `.py` at `origin` was transpiled from, as `_relined` takes
     it: its path, the `.by` line of each line of the `.py` (0 for one the transpiler
     wrote on its own), the width of each `.by` line, and the `.by` location of a span of
     the `.py` whose text is the author's (see `_by_span`).
 
     `None` when there is no `.by` to answer with, or it has changed since it was
-    transpiled."""
+    transpiled. The two files are read when a location of the module is first asked
+    for, and once more for each further compile of it, `compiling`: a module compiled
+    again — by `importlib.reload` — after its `.by` was saved over is compiled where it
+    is, at the lines of the python that runs, rather than named after a `.by` it no
+    longer stands for."""
     entry = _BY_MAP.get(os.path.realpath(origin)) if origin else None
     if entry is None:
         return None
     key, (by_path, _) = entry
+    if key in _STALE:
+        return None
     if key in _LINES:
+        if compiling and not _is_current(key, by_path):
+            return None
         return _LINES[key]
     if not _is_current(key, by_path):
         return None
@@ -3799,7 +3815,7 @@ def reline_module(module):
 
     def mapping(origin):
         if origin not in mappings:
-            mappings[origin] = _by_lines(origin)
+            mappings[origin] = _by_lines(origin, compiling=True)
         return mappings[origin]
 
     def visit(value):
@@ -3875,7 +3891,7 @@ def _by_code(origin, compile_source):
     `None` when there is no `.by` to answer with, or it has changed since it was
     transpiled, which leaves the module to be compiled where it is.
     """
-    lines = _by_lines(origin)
+    lines = _by_lines(origin, compiling=True)
     if lines is None:
         return None
     by_path, by_line, width, by_span = lines
@@ -4290,11 +4306,11 @@ def _write_coverage(measurement, report):
             if analysed is not None:
                 files[measured] = {"statements": analysed[0], "executed": analysed[1]}
     for key, lines in ran.items():
-        if key in _STALE:
+        by_path = SOURCEMAP[key][0]
+        if not _is_current(key, by_path):
             # its `.by` was saved over during the run, so no line of it is the line
             # this ran as
             continue
-        by_path = SOURCEMAP[key][0]
         generated = _line_table(key)
         analysed = _generated_analysis(measurement, key, lines)
         if analysed is None:

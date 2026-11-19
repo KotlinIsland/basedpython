@@ -118,8 +118,12 @@ the line of a warning python raises while compiling it, and of the `SyntaxError`
 instead when the warning filters make that warning an error (`-W error`). the `.py` is compiled from its
 text, as python's loader would, and its code objects are then moved to the `.by` lines:
 python 3.9 to 3.11 refuse a syntax tree nested deeper than their recursion limit, even
-one whose source they compile. the digests are checked then, and a mismatch leaves
-the module to python's loader. a `.by` saved over during the run is caught when a frame is reported: the frame
+one whose source they compile. the digests are checked then, every time a module is
+compiled, and a mismatch leaves the module to python's loader: `importlib.reload` runs
+the staged python again, which was transpiled from the `.by` as it was when the run
+started, so a reload after the `.by` is saved over compiles code that names the python
+it runs, at its own lines, rather than quoting the new `.by` at the old one's lines. a
+`.by` saved over during the run is caught again when a frame is reported: the frame
 names the one generated line that `.by` line was written as, or no line when
 there was more than one
 

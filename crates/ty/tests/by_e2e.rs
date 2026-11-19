@@ -6747,6 +6747,71 @@ boom()
     );
 }
 
+/// `importlib.reload` runs the module's staged python again, which was transpiled from the
+/// `.by` as it was when the run started. once that `.by` is saved over, the code the reload
+/// compiles is not named after it: a traceback the program formats itself would quote the new
+/// `.by` at the lines of the old one. it names the python that runs, at its own lines
+#[test]
+fn run_does_not_name_a_reloaded_module_after_a_by_saved_over_since() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("lib.by"),
+        "def boom() -> None:\n    raise ValueError('boom')\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import importlib
+import traceback
+
+import lib
+
+
+def last_frame() -> str:
+    try:
+        lib.boom()
+    except ValueError:
+        return '|'.join(line.strip() for line in traceback.format_exc().splitlines()[-3:-1])
+    return 'no error'
+
+
+print(last_frame())
+with open(lib.__file__, 'w') as handle:
+    _ = handle.write('# a line added above\\ndef boom() -> None:\\n    raise ValueError(\\'boom\\')\\n')
+_ = importlib.reload(lib)
+print(last_frame())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    // python writes its output in text mode, which ends a line with `\r\n` on windows
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    let frames: Vec<&str> = stdout.lines().collect();
+    assert_eq!(frames.len(), 2, "{stdout}");
+    assert!(
+        frames[0].contains("lib.by\", line 2, in boom|raise ValueError('boom')"),
+        "{stdout}"
+    );
+    assert!(
+        frames[1].contains("lib.py\", line") && frames[1].ends_with("|raise ValueError('boom')"),
+        "the reloaded code is not at a line of its own:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("lib.by no longer matches what it was transpiled from"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn build_skips_a_source_it_cannot_read() {
     // a source ty cannot decode reads as an empty module, so emitting for it
