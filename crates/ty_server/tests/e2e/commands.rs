@@ -341,7 +341,7 @@ fn manage_project(models: &str) -> Result<TestServerBuilder> {
         fs::set_permissions(executable.as_std_path(), fs::Permissions::from_mode(0o755))?;
     }
 
-    Ok(builder.with_by_executable(by))
+    Ok(builder.with_by_executable(&by))
 }
 
 /// what the server showed once the command it ran had finished, with everything it logged

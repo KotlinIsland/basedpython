@@ -309,7 +309,10 @@ everything the command writes goes to the editor's log, as
 `window/showMessage`: `manage.py test blog.tests.BookTest succeeded: OK`, with
 `Info`, or `manage.py test blog failed (exit status: 1): FAILED (failures=1)`,
 with `Error` — the outcome, and the last line the command wrote, which is where
-django sums up what it did. through `by run`, the run is named
+django sums up what it did. the command runs with `PYTHONUNBUFFERED` set, so
+that a line it writes on stdout is read when it writes it rather than when it
+exits, and with no standard input: a command that asks a question, as
+`makemigrations` asks whether a field was renamed, reads no answer. through `by run`, the run is named
 `by run manage.py …`, and what `by run` wrote back is logged after the
 command's output. a file it did not write back is shown after the command's
 last line, with `Warning` when the command succeeded:

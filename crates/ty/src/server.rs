@@ -4,7 +4,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::Result;
-use ruff_db::system::{OsSystem, SystemPathBuf};
+use ruff_db::system::OsSystem;
 use ty_project::ProjectMetadata;
 use ty_site_packages::PythonEnvironment;
 
@@ -23,24 +23,10 @@ pub(crate) fn run(args: &ServerCommand) -> Result<ExitStatus> {
     }
     ty_server::run_server(ty_server::ByProgram {
         command_line: crate::command_line::command_line(),
-        executable: own_executable(),
+        // the `by` this process is, which the server runs `by run` with
+        executable: std::env::current_exe().ok(),
     })?;
     Ok(ExitStatus::Success)
-}
-
-/// the `by` executable this process is, which the server runs `by run` with
-fn own_executable() -> Option<SystemPathBuf> {
-    let executable = std::env::current_exe()
-        .inspect_err(|error| tracing::debug!("Failed to find the `by` executable: {error}"))
-        .ok()?;
-    SystemPathBuf::from_path_buf(executable)
-        .inspect_err(|executable| {
-            tracing::debug!(
-                "The `by` executable `{}` is not a unicode path",
-                executable.display()
-            );
-        })
-        .ok()
 }
 
 fn find_executable() -> Result<ExitStatus> {

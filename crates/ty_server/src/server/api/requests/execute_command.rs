@@ -342,8 +342,8 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
         // it is written to a file of its own rather than to stderr. the interpreter is the one
         // the project is checked against here, which may be one the editor chose and `by run`
         // would not find for itself
-        let notes = tempfile::Builder::new().prefix("ty-manage").tempdir()?;
-        let mut process = std::process::Command::new(by.as_std_path());
+        let notes = tempfile::Builder::new().prefix("by-manage").tempdir()?;
+        let mut process = std::process::Command::new(by);
         process
             .arg("run")
             .arg("--python")
@@ -359,6 +359,13 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
     };
     process
         .args(arguments)
+        // python buffers what it writes to stdout when that is a pipe, so a line reaches the
+        // pipe when the buffer fills or the process exits, after the stderr lines written since.
+        // the summary is the last line read, so each line has to reach its pipe when written
+        .env("PYTHONUNBUFFERED", "1")
+        // the server's own stdin is the editor's connection, which a command that asks a
+        // question, as `makemigrations` does about a renamed field, would read as its answer
+        .stdin(std::process::Stdio::null())
         .current_dir(working_directory.as_std_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -388,7 +395,7 @@ fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate
                     let notes = notes.unwrap_or_else(|error| {
                         vec![Note::new(
                             Level::Warning,
-                            format!("what `by run` wrote back could not be read: {error}"),
+                            format!("what `by run` said once the command ended could not be read: {error}"),
                         )]
                     });
                     for note in &notes {

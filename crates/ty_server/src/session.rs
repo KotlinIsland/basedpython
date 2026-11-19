@@ -278,8 +278,8 @@ impl Session {
     }
 
     /// the `by` executable this server is part of, when it was started as one
-    pub(crate) fn by_executable(&self) -> Option<&SystemPath> {
-        self.by.executable()
+    pub(crate) fn by_executable(&self) -> Option<&std::path::Path> {
+        self.by.executable.as_deref()
     }
 
     pub(crate) fn request_queue(&self) -> &RequestQueue {

@@ -11994,7 +11994,8 @@ fn the_server_describes_by_s_own_command_line() {
 /// module runs it through `by run`: python alone imports no `.by` module, so the command would
 /// run without the model. what the command wrote into the staged tree lands in the project, and
 /// the outcome the editor shows is the command's own last line rather than `by run`'s report of
-/// what it wrote back, which is logged
+/// what it wrote back, which is logged. the last line is the last one written, of either stream:
+/// the test runner's `OK` on stderr, not the line it wrote on stdout before it
 ///
 /// `manage.py` here stands in for django's: it imports the model, as django's app registry does,
 /// and writes a migration into the app package's directory, where `makemigrations` writes one
@@ -12034,6 +12035,7 @@ fn the_server_runs_a_management_command_of_a_by_project_through_by_run() {
         "\
 import os
 import sys
+import time
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'proj.settings')
 
@@ -12047,6 +12049,10 @@ if sys.argv[1:] == ['makemigrations', 'app']:
         _ = file.write(f'# {app.models.Widget.__name__}\\n')
     print(\"Migrations for 'app':\")
     print('  + Create model Widget')
+elif sys.argv[1:] == ['test', 'app']:
+    print('Found 1 test(s).')
+    time.sleep(1)
+    _ = sys.stderr.write('Ran 1 test in 0.001s\\n\\nOK\\n')
 ",
     )
     .unwrap();
@@ -12078,8 +12084,23 @@ if sys.argv[1:] == ['makemigrations', 'app']:
             "params": {"processId": null, "rootUri": root, "capabilities": {},
                 "workspaceFolders": [{"uri": root, "name": "demo"}]}}),
     );
+    let mut commands = [["makemigrations", "app"], ["test", "app"]].into_iter();
+    let mut run_next = |stdin: &mut ChildStdin, id: usize| {
+        let Some(arguments) = commands.next() else {
+            return false;
+        };
+        send_lsp(
+            stdin,
+            &serde_json::json!({"jsonrpc": "2.0", "id": id,
+                "method": "workspace/executeCommand",
+                "params": {"command": "ty.runManageCommand",
+                    "arguments": [{"arguments": arguments}]}}),
+        );
+        true
+    };
     let mut logged = Vec::new();
-    let shown = loop {
+    let mut shown = Vec::new();
+    loop {
         let message = received
             .recv_timeout(Duration::from_mins(5))
             .unwrap_or_else(|_| panic!("the server said nothing more after:\n{logged:#?}"));
@@ -12089,19 +12110,18 @@ if sys.argv[1:] == ['makemigrations', 'app']:
                     &mut stdin,
                     &serde_json::json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
                 );
-                send_lsp(
-                    &mut stdin,
-                    &serde_json::json!({"jsonrpc": "2.0", "id": 2,
-                        "method": "workspace/executeCommand",
-                        "params": {"command": "ty.runManageCommand",
-                            "arguments": [{"arguments": ["makemigrations", "app"]}]}}),
-                );
+                run_next(&mut stdin, 2);
             }
             None => assert!(message.get("error").is_none(), "{message}"),
             Some("window/logMessage") => {
                 logged.push(message["params"]["message"].as_str().unwrap().to_owned());
             }
-            Some("window/showMessage") => break message["params"].clone(),
+            Some("window/showMessage") => {
+                shown.push(message["params"].clone());
+                if !run_next(&mut stdin, 2 + shown.len()) {
+                    break;
+                }
+            }
             Some(_) => {
                 // a request of the server's own, which it waits on before it answers ours
                 if let Some(id) = message.get("id") {
@@ -12118,10 +12138,10 @@ if sys.argv[1:] == ['makemigrations', 'app']:
                 }
             }
         }
-    };
+    }
     send_lsp(
         &mut stdin,
-        &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+        &serde_json::json!({"jsonrpc": "2.0", "id": 100, "method": "shutdown"}),
     );
     send_lsp(
         &mut stdin,
@@ -12130,11 +12150,26 @@ if sys.argv[1:] == ['makemigrations', 'app']:
     drop(stdin);
     let _ = child.wait();
 
+    let shown: Vec<_> = shown
+        .iter()
+        .map(|shown| (shown["type"].clone(), shown["message"].clone()))
+        .collect();
     assert_eq!(
-        shown["message"], "by run manage.py makemigrations app succeeded: + Create model Widget",
+        shown,
+        [
+            (
+                serde_json::json!(3),
+                serde_json::json!(
+                    "by run manage.py makemigrations app succeeded: + Create model Widget"
+                )
+            ),
+            (
+                serde_json::json!(3),
+                serde_json::json!("by run manage.py test app succeeded: OK")
+            ),
+        ],
         "{logged:#?}"
     );
-    assert_eq!(shown["type"], 3, "{logged:#?}");
     assert!(
         logged
             .iter()

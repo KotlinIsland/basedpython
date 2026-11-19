@@ -1931,8 +1931,8 @@ impl TestServerBuilder {
     }
 
     /// Start the server as the `by` at `executable`, which it runs a project's program through.
-    pub(crate) fn with_by_executable(mut self, executable: impl Into<SystemPathBuf>) -> Self {
-        self.by.executable = Some(executable.into());
+    pub(crate) fn with_by_executable(mut self, executable: &SystemPath) -> Self {
+        self.by.executable = Some(executable.as_std_path().to_path_buf());
         self
     }
 

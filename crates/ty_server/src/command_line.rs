@@ -6,7 +6,8 @@
 //! completes `by` in a terminal asks for it with `by/commandLine` rather than keeping a copy of
 //! its own
 
-use ruff_db::system::{SystemPath, SystemPathBuf};
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// the `by` that started the server: the command line it describes, and the executable it is
@@ -16,13 +17,7 @@ pub struct ByProgram {
     pub command_line: CommandLine,
     /// the `by` executable, which the server runs a project's program through as `by run`.
     /// `None` when what started the server is no `by` it could run, as a test's server is
-    pub executable: Option<SystemPathBuf>,
-}
-
-impl ByProgram {
-    pub(crate) fn executable(&self) -> Option<&SystemPath> {
-        self.executable.as_deref()
-    }
+    pub executable: Option<PathBuf>,
 }
 
 /// a command: `by` itself, or one of its subcommands at any depth
