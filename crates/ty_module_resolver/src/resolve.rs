@@ -1630,9 +1630,9 @@ type ResolvedNames<'db> = Vec<ModuleResolutionCandidate<'db>>;
 
 /// Resolve the module `name` in `directory` to a file.
 ///
-/// `by_typed` is whether an enclosing package already declared its `.by` sources
-/// authoritative; a marker on `directory` itself counts for just as much, and is
-/// only looked for when there is a `.py` for it to outrank.
+/// `by_typed` is whether an enclosing package already declared its basedpython files
+/// authoritative; a marker on `directory` itself counts for just as much, and is only looked for
+/// when there is a python file beside a basedpython one for it to outrank.
 fn resolve_file_module_with_filter(
     directory: &ModuleDirectory,
     resolver_state: &ResolverContext,
@@ -1640,19 +1640,37 @@ fn resolve_file_module_with_filter(
     filter: ComponentFileFilter,
     by_typed: bool,
 ) -> Option<File> {
-    let stub_file = if resolver_state.mode.is_typing() {
-        directory.resolve_file(resolver_state, &format_compact!("{name}.pyi"))
-    } else {
-        None
+    let declares_by_typed = std::cell::OnceCell::new();
+    let declares_by_typed = || {
+        *declares_by_typed
+            .get_or_init(|| by_typed || directory.path().declares_by_typed(resolver_state))
     };
-    let by_stub_file = if resolver_state.mode.is_typing() {
-        directory.resolve_file(resolver_state, &format_compact!("{name}.byi"))
+
+    // a `.byi` beside a `.pyi` is the stub the `.pyi` was generated from, as a `.by` beside a
+    // `.py` is the source the `.py` was: a build that ships its basedpython files ships both. the
+    // `.byi` is what still says what python has no spelling for, and which of the two speaks for
+    // the module is the package's to declare, as it is for the sources
+    let stub = if resolver_state.mode.is_typing() {
+        let pyi = directory.resolve_file(resolver_state, &format_compact!("{name}.pyi"));
+        let byi = || directory.resolve_file(resolver_state, &format_compact!("{name}.byi"));
+        match pyi {
+            Some(pyi) => {
+                if let Some(byi) = byi()
+                    && declares_by_typed()
+                {
+                    Some(byi)
+                } else {
+                    Some(pyi)
+                }
+            }
+            None => byi(),
+        }
     } else {
         None
     };
 
     if filter == ComponentFileFilter::StubOnly {
-        return stub_file.or(by_stub_file);
+        return stub;
     }
 
     let by_source = || directory.resolve_file(resolver_state, &format_compact!("{name}.by"));
@@ -1663,7 +1681,7 @@ fn resolve_file_module_with_filter(
     // is the module is the package's to declare
     let source = match py_source {
         Some(py_source) => {
-            if by_typed || directory.path().declares_by_typed(resolver_state) {
+            if declares_by_typed() {
                 by_source().or(Some(py_source))
             } else {
                 Some(py_source)
@@ -1672,7 +1690,7 @@ fn resolve_file_module_with_filter(
         None => by_source(),
     };
 
-    stub_file.or(by_stub_file).or(source)
+    stub.or(source)
 }
 
 /// Determines whether a package is a legacy namespace package.

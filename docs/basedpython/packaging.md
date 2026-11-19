@@ -103,6 +103,10 @@ python only ever imports the `.py`. the `.by` is there for the next basedpython
 project along — see [depending on a basedpython
 library](#depending-on-a-basedpython-library)
 
+a stub ships the same way: `app/api.byi` goes out beside the `app/api.pyi` built
+from it, and under the marker the `.byi` is the stub a basedpython project reads,
+as the `.by` is the source. a python type checker reads the `.pyi`
+
 to ship python only:
 
 ```toml

@@ -194,6 +194,92 @@ from shipped.value import NUMBER
 reveal_type(NUMBER)  # revealed: bytes
 ```
 
+## With a marker, the basedpython stub outranks the python stub
+
+A build that ships its basedpython files ships a `.byi` beside the `.pyi` generated from it, as it
+ships a `.by` beside the `.py`. The marker makes the `.byi` the stub that speaks for the module.
+
+```toml
+[environment]
+extra-paths = ["/packages"]
+```
+
+`/packages/shipped/by.typed`:
+
+```text
+```
+
+`/packages/shipped/__init__.py`:
+
+```py
+```
+
+`/packages/shipped/value.pyi`:
+
+```pyi
+NUMBER: bytes
+```
+
+`/packages/shipped/value.byi`:
+
+```byi
+NUMBER: str
+```
+
+`/packages/shipped/value.py`:
+
+```py
+NUMBER = "from the source"
+```
+
+`/packages/shipped/value.by`:
+
+```by
+NUMBER = "from the source"
+```
+
+```py
+from shipped.value import NUMBER
+
+reveal_type(NUMBER)  # revealed: str
+```
+
+## Without a marker, the python stub is the stub
+
+```toml
+[environment]
+extra-paths = ["/packages"]
+```
+
+`/packages/shipped/__init__.py`:
+
+```py
+```
+
+`/packages/shipped/value.pyi`:
+
+```pyi
+NUMBER: bytes
+```
+
+`/packages/shipped/value.byi`:
+
+```byi
+NUMBER: str
+```
+
+`/packages/shipped/value.py`:
+
+```py
+NUMBER = b"from the source"
+```
+
+```py
+from shipped.value import NUMBER
+
+reveal_type(NUMBER)  # revealed: bytes
+```
+
 ## A marker loose outside a package claims nothing
 
 A marker only speaks for the package it is in. Left directly in a search path it would otherwise
