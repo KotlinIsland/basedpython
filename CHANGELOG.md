@@ -2,6 +2,76 @@
 
 ruff's changelog, from before basedpython forked it, is in [`changelogs/`](https://github.com/KotlinIsland/basedpython/tree/main/changelogs)
 
+## 0.0.3
+
+```sh
+uv add --dev "basedpython>=0.0.3"
+```
+
+### stubs
+
+- a module with a stub is [checked against it](https://kotlinisland.github.io/basedpython/features/stub-checking/):
+    what the stub declares for a parameter, a return type, a module variable or a class attribute
+    the module leaves unannotated is its declared type in the module's own body, and
+    `missing-runtime-member`, `incompatible-stub-signature`, `incompatible-stub-attribute`,
+    `incompatible-stub-bases` and `missing-stub-member` report where the two disagree
+- a stub's types are read in terms of the runtime module it describes, so a class the stub defines
+    is the module's class of the same name
+- a package with a `by.typed` marker is typed by its `.byi`, as its `.by` is already the source,
+    rather than by the `.pyi` derived from it
+- an editor can show a stub and its module side by side, declaration by declaration, with
+    `by/documentCounterparts`
+- the on-disk copy of the vendored stubs is named after their contents, so a new `by` no longer
+    opens an older one's copy for go-to-definition
+
+### `by run` and `by repl`
+
+- [`by run`](https://kotlinisland.github.io/basedpython/cli-reference/#by-run) takes the path of
+    a file as well as a module name: `by run app/cli.by` runs `app.cli` inside its package, and
+    `by run manage.py check` runs a `.py` file as python runs a script. `by repl --module` takes a
+    path with the same meaning
+- what the program writes into the staged tree is written back to the project: a new file, or a
+    changed copy of a file still holding what was staged. a file the program deleted, renamed away
+    or replaced is kept and reported, and nothing in `__pycache__` is written back
+- `--notes PATH` writes what `by run` says after the program ends to `PATH` as json lines, so the
+    program's own last line ends the output
+- an uncaught exception prints every exception chained to it, as python does, and its traceback
+    leaves out every frame of `by`'s own runner
+- the program gets the `__main__` namespace python gives a script
+- a module `importlib.reload` compiles after its `.by` was saved over is compiled where it is
+
+### django
+
+- a [`manage.py` lens](https://kotlinisland.github.io/basedpython/frameworks/django/#running-management-commands)
+    in a project with a `.by` source runs through `by run`, so the command sees the `.by` models and
+    what it writes is written back
+- a lens runs the `manage.py` it was offered for, so two django workspaces each run their own,
+    and is refused in a workspace the editor does not trust
+
+### narrowing
+
+- a [predicate](https://kotlinisland.github.io/basedpython/features/type-is/#a-predicate-that-was-never-written-down)
+    or [assertion](https://kotlinisland.github.io/basedpython/features/type-is/#an-assertion-that-was-never-written-down)
+    recovered from a function's body narrows in `.py` files too, and its hint shows the place it narrows
+- recovery no longer narrows through a `break` out of a `finally`, a non-`def` override, a
+    decorator, or a `TypeIs` about another place
+
+### editor
+
+- every inlay hint whose label is source carries the edit that writes it, and a tooltip where it
+    has more to say. `by/inlayHintCatalog` lists every kind of hint with a live example
+- no completions are offered inside a number literal
+
+### other changes
+
+- a directory below a package root holding a basedpython module is a
+    [regular package](https://kotlinisland.github.io/basedpython/features/packages/) without an
+    `__init__.by`
+- a type test at the end of a comparison chain, `x < 1 is int`, is rejected rather than lowered to
+    `x < False`, and the linter no longer reports python's identity-comparison rules on a type test
+- a checked `.py` operator dunder declares the `NotImplemented` it returns, as a `.by` one does
+- an override in a vendored stub takes no default from the method it overrides
+
 ## 0.0.2
 
 ```sh

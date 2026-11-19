@@ -9,7 +9,7 @@ basedpython ships as the `basedpython` package, which installs two executables:
 `by`, the type checker and transpiler, and `buff`, the linter and formatter
 
 ```sh
-uv add --dev "basedpython>=0.0.2"
+uv add --dev "basedpython>=0.0.3"
 ```
 
 a directory that has no `pyproject.toml` yet needs `uv init --bare` first
