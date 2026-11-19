@@ -12757,7 +12757,10 @@ fn the_server_describes_by_s_own_command_line() {
 /// run without the model. what the command wrote into the staged tree lands in the project, and
 /// the outcome the editor shows is the command's own last line rather than `by run`'s report of
 /// what it wrote back, which is logged. the last line is the last one written, of either stream:
-/// the test runner's `OK` on stderr, not the line it wrote on stdout before it
+/// the stand-in's `test` writes a line on stdout and then its last on stderr, and the one on
+/// stderr is shown. (django's own test runner writes `Destroying test database for alias
+/// 'default'...` after its summary for a `TestCase`, so that is the line shown for one.) the
+/// command reads nothing from stdin: the server's own stdin is the editor's connection
 ///
 /// `manage.py` here stands in for django's: it imports the model, as django's app registry does,
 /// and writes a migration into the app package's directory, where `makemigrations` writes one
@@ -12803,6 +12806,11 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'proj.settings')
 
 import app
 import app.models
+
+if os.path.samestat(os.fstat(0), os.stat(os.devnull)):
+    print('stdin:', repr(sys.stdin.read()))
+else:
+    print('stdin: not the null device')
 
 if sys.argv[1:] == ['makemigrations', 'app']:
     migrations = os.path.join(app.__path__[0], 'migrations')
@@ -12936,6 +12944,13 @@ elif sys.argv[1:] == ['test', 'app']:
         logged
             .iter()
             .any(|line| line == "note: wrote back app/migrations/0001_initial.py"),
+        "{logged:#?}"
+    );
+    assert!(
+        logged
+            .iter()
+            .flat_map(|logged| logged.lines())
+            .any(|line| line == "stdin: ''"),
         "{logged:#?}"
     );
     assert_eq!(

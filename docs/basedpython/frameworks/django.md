@@ -290,29 +290,41 @@ django template files get their own language support in the editor — completio
 
 a test case and its test methods, a migration and an app's models module carry
 code lenses that run `manage.py` — `test`, `makemigrations`, `migrate`,
-`sqlmigrate` — with the
-interpreter of the environment the project is checked against, from the
-directory `manage.py` is in. a lens's command is `ty.runManageCommand`, its one
-argument `{ "arguments": ["test", "blog.tests.BookTest"] }`, and it answers at
-once, `null`, with the command running in the background
+`sqlmigrate` — from the directory `manage.py` is in. a lens's command is
+`ty.runManageCommand`, its one argument `{ "arguments": ["test", "blog.tests.BookTest"] }`,
+and it answers at once, `null`, with the command running in the background
 
 python never imports a `.by` module, so in a project with a `.by` source the
-command runs through `by run` instead: `by run manage.py test blog.tests.BookTest`,
-on the same interpreter, as `by run --python` names one. the command then sees
-the project's `.by` models, and what it writes into the staged tree — the
-migration `makemigrations` makes — is written back to the project (see
-[`by run`](../cli-reference.md#by-run)). a project with no `.by` source runs on
-the interpreter directly, as `by run` refuses a project with nothing to stage.
-the project is the one `by run` finds from `manage.py`'s directory, where it is
-started, so a `pyproject.toml` beside `manage.py` makes the django project one of
-its own, whatever the workspace around it holds
+command runs through `by run` instead: `by run manage.py test blog.tests.BookTest`.
+the command then sees the project's `.by` models, and what it writes into the
+staged tree — the migration `makemigrations` makes — is written back to the
+project (see [`by run`](../cli-reference.md#by-run)). a project with no `.by`
+source runs on python directly, as `by run` refuses a project with nothing to
+stage. either way it runs what `by run manage.py …` started in `manage.py`'s
+directory would: the project is the one `by run` finds from there, so a
+`pyproject.toml` beside `manage.py` makes the django project one of its own,
+whatever the workspace around it holds, and the interpreter is the one `by run`
+finds for that project — its `environment.python`, an activated environment, or
+its `.venv`. an environment chosen in the editor, such as the python extension's
+active environment, is one `by run` cannot find, so it is passed on, as
+`by run --python /path/to/env manage.py test`, and a project `by run` refuses
+runs on that environment's python
+
+a project `by run` cannot discover, such as one whose configuration it cannot
+read, cannot run through `by run` either. if the workspace's project has a `.by`
+source, the command is refused, since python alone would run it without its
+`.by` models; otherwise it runs on python, and why `by run` did not run it is
+logged
 
 everything the command writes goes to the editor's log, as
 `window/logMessage`. when it has finished, what came of it is shown, as
-`window/showMessage`: `manage.py test blog.tests.BookTest succeeded: OK`, with
-`Info`, or `manage.py test blog failed (exit status: 1): FAILED (failures=1)`,
-with `Error` — the outcome, and the last line the command wrote, which is where
-django sums up what it did. the command runs with `PYTHONUNBUFFERED` set, so
+`window/showMessage`: `manage.py makemigrations blog succeeded: No changes detected`,
+with `Info`, or `manage.py test blog failed (exit status: 1): …`, with `Error` —
+the outcome, and the last line the command wrote, on either stream. that line is
+the command's own, read as it is: django's test runner writes
+`Destroying test database for alias 'default'...` after its summary when a test
+used the database, so that is the line shown for it, and the summary is in the
+log. the command runs with `PYTHONUNBUFFERED` set, so
 that a line it writes on stdout is read when it writes it rather than when it
 exits, and with no standard input: a command that asks a question, as
 `makemigrations` asks whether a field was renamed, reads no answer. through `by run`, the run is named
@@ -323,10 +335,11 @@ last line, with `Warning` when the command succeeded:
 
 a command the server will not run — one that needs a terminal, such as
 `runserver` or `shell`, one no lens offers, or any of them in a project with no
-`manage.py` or no interpreter to run it — is refused with the reason as the
-command's error, and the reason is shown too, since an editor need not show an
-error answer to a click. a refused command is handed back as the command line to
-run it with: `by run manage.py runserver` in a project with a `.by` source,
+`manage.py`, no interpreter to run it, or one `by run` cannot discover — is
+refused: the click is answered as any other is, and the reason is shown with
+`Error` and logged, with every cause behind it. a command refused for what it is
+is handed back as the command line to run it with, the one the lens would have
+run: `by run manage.py runserver` in a project with a `.by` source,
 `manage.py runserver` otherwise
 
 ## see also

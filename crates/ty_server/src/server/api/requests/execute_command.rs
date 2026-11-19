@@ -5,19 +5,20 @@ use crate::server::api::RequestHandler;
 use crate::server::api::traits::SyncRequestHandler;
 use crate::session::Session;
 use crate::session::client::Client;
+use anyhow::Context as _;
 use by_stage::run_notes::{Level, Note};
 use lsp_server::ErrorCode;
 use lsp_types::ExecuteCommandRequest;
 use lsp_types::{self as types, MessageType};
-use ruff_db::Db as _;
-use ruff_db::system::{Command, SystemPathBuf};
+use ruff_db::system::{Command, SystemPath, SystemPathBuf};
 use std::fmt::{self, Write};
 use std::io::{BufRead as _, BufReader, Read};
 use std::str::FromStr;
 use std::sync::{Mutex, PoisonError};
 use ty_ide::{AddDependency, DependencyTarget};
 use ty_module_resolver::ModuleResolveMode;
-use ty_project::{Db as _, ProjectDatabase};
+use ty_project::{Db as _, ProjectDatabase, ProjectMetadata};
+use ty_python_semantic::SysPrefixPathOrigin;
 
 pub(crate) struct ExecuteCommand;
 
@@ -48,12 +49,8 @@ impl SyncRequestHandler for ExecuteCommand {
                     .and_then(|argument| Ok(serde_json::from_value(argument)?))
                     .with_failure_code(ErrorCode::InvalidParams)?;
 
-                // a lens is clicked, and what it does is shown, not only logged: an error
-                // answer to the click is one an editor need not show anyone
-                if let Err(refusal) = run_manage(session, client, &arguments.arguments) {
-                    client.show_error_message(&refusal);
-                    return Err(refusal).with_failure_code(ErrorCode::InvalidParams);
-                }
+                run_manage(session, client, arguments.arguments)
+                    .with_failure_code(ErrorCode::InternalError)?;
 
                 Ok(None)
             }
@@ -261,172 +258,330 @@ const TERMINAL_COMMANDS: &[&str] = &["runserver", "shell", "dbshell", "createsup
 /// the few we know are wrong" is a much larger promise than this needs to make.
 const OFFERED_COMMANDS: &[&str] = &["test", "makemigrations", "migrate", "sqlmigrate"];
 
-/// runs the project's `manage.py`, through `by run` when the project has a `.by` source
+/// runs the project's `manage.py`, through `by run` when `by run` would run it
 ///
 /// its output goes to `window/logMessage`, all of it, and its outcome to
 /// `window/showMessage` once it has finished — succeeded or failed, with the last line
-/// it wrote, which is where django's test runner and its other commands sum up what
-/// they did (`OK`, `FAILED (failures=1)`, `No changes detected`) — so that whoever
-/// clicked the lens sees what came of it. a refusal is shown the same way by the
-/// caller
+/// it wrote — so that whoever clicked the lens sees what came of it. the click is answered
+/// at once, and a command that is not run is refused the same way: the reason is shown and
+/// logged, since an error answer to a click is one an editor need not show anyone
 ///
-/// The process is spawned on a thread of its own so that a command that takes a
-/// while — a test suite is the whole point of this — doesn't stop the server
-/// answering anything else in the meantime.
-fn run_manage(session: &Session, client: &Client, arguments: &[String]) -> crate::Result<()> {
-    let Some(subcommand) = arguments.first() else {
-        return Err(anyhow::anyhow!("no management command was named"));
-    };
-
-    let (db, manage) = session
-        .project_dbs()
-        .find_map(|db| {
-            let manage = ty_ide::django_manage_script(db)?
-                .path(db)
-                .as_system_path()?
-                .to_path_buf();
-            Some((db, manage))
-        })
-        .ok_or_else(|| anyhow::anyhow!("this project has no `manage.py`"))?;
-
-    // django resolves its settings, its apps and its templates relative to the
-    // directory `manage.py` sits in, which is why it is run from there rather than
-    // from wherever the editor happens to have been started
-    let working_directory = manage
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("`{manage}` is not in a directory"))?
-        .to_path_buf();
-
-    // python never imports a `.by` module, so a project with a `.by` model run by python alone
-    // has no such model: `makemigrations` finds no changes and `test` runs without it. `by run`
-    // stages the project, runs the command in it and writes back what the command wrote there,
-    // a migration included. it refuses a project with no `.by` source, which python runs as it
-    // is. the project is the one `by run` finds from the directory it is started in, which need
-    // not be this workspace's: a `pyproject.toml` beside `manage.py` makes a project of its own
-    let staged = by_stage::project::run_has_sources(working_directory.as_std_path())?;
-    let script = manage.file_name().unwrap_or("manage.py");
-    let line = if staged {
-        format!("by run {script} {}", arguments.join(" "))
-    } else {
-        format!("{script} {}", arguments.join(" "))
-    };
-
-    if TERMINAL_COMMANDS.contains(&subcommand.as_str()) {
-        return Err(anyhow::anyhow!(
-            "`{script} {subcommand}` needs a terminal, which the server cannot give it. \
-             Run it yourself: `{line}`",
-        ));
-    }
-
-    if !OFFERED_COMMANDS.contains(&subcommand.as_str()) {
-        return Err(anyhow::anyhow!(
-            "the server only runs the management commands it offers a lens for, \
-             and `{subcommand}` is not one of them. Run it yourself: `{line}`",
-        ));
-    }
-
-    let interpreter = interpreter(db).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no python interpreter could be found for this project, \
-             so `{script}` cannot be run"
-        )
-    })?;
-
-    let (mut process, notes) = if staged {
-        let by = session.by_executable().ok_or_else(|| {
-            anyhow::anyhow!(
-                "this project has `.by` sources, so `{script}` runs through `by run`, \
-                 and this server was not started as a `by` it can run"
-            )
-        })?;
-        // what `by run` says about writing back comes after the command's own last line, so
-        // it is written to a file of its own rather than to stderr. the interpreter is the one
-        // the project is checked against here, which may be one the editor chose and `by run`
-        // would not find for itself
-        let notes = tempfile::Builder::new().prefix("by-manage").tempdir()?;
-        let mut process = std::process::Command::new(by);
-        process
-            .arg("run")
-            .arg("--python")
-            .arg(interpreter.as_std_path())
-            .arg("--notes")
-            .arg(notes.path().join(NOTES_FILE))
-            .arg(manage.as_std_path());
-        (process, Some(notes))
-    } else {
-        let mut process = std::process::Command::new(interpreter.as_std_path());
-        process.arg(manage.as_std_path());
-        (process, None)
-    };
-    process
-        .args(arguments)
-        // python buffers what it writes to stdout when that is a pipe, so a line reaches the
-        // pipe when the buffer fills or the process exits, after the stderr lines written since.
-        // the summary is the last line read, so each line has to reach its pipe when written
-        .env("PYTHONUNBUFFERED", "1")
-        // the server's own stdin is the editor's connection, which a command that asks a
-        // question, as `makemigrations` does about a renamed field, would read as its answer
-        .stdin(std::process::Stdio::null())
-        .current_dir(working_directory.as_std_path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
+/// the process is spawned on a thread of its own so that a command that takes a while — a test
+/// suite is the whole point of this — doesn't stop the server answering anything else in the
+/// meantime. everything else is decided there too, refusals included: whether it runs through
+/// `by run` finds `by run`'s project and every one of its sources
+fn run_manage(session: &Session, client: &Client, arguments: Vec<String>) -> crate::Result<()> {
     let client = client.clone();
+    let manage_run = match ManageRun::new(session, arguments) {
+        Ok(manage_run) => manage_run,
+        Err(refusal) => {
+            refuse(&client, &refusal);
+            return Ok(());
+        }
+    };
 
     std::thread::Builder::new()
         .name("ty:manage".to_string())
-        .spawn(move || {
-            log(&client, MessageType::Info, format!("running {line}"));
-
-            match run_to_end(&mut process) {
-                Ok((output, summary)) => {
-                    // django's test runner and most of its commands report on
-                    // stderr, so both streams are the answer rather than one
-                    for stream in [&output.stdout, &output.stderr] {
-                        let text = String::from_utf8_lossy(stream);
-                        if !text.trim().is_empty() {
-                            log(&client, MessageType::Info, text.trim_end().to_string());
-                        }
-                    }
-
-                    let notes = match &notes {
-                        Some(notes) => read_notes(&notes.path().join(NOTES_FILE)),
-                        None => Ok(Vec::new()),
-                    };
-                    let notes = notes.unwrap_or_else(|error| {
-                        vec![Note::new(
-                            Level::Warning,
-                            format!("what `by run` said once the command ended could not be read: {error}"),
-                        )]
-                    });
-                    for note in &notes {
-                        log(&client, message_type(note.level), note.to_string());
-                    }
-
-                    let failed = !output.status.success();
-                    let (kind, outcome) = if failed {
-                        (MessageType::Error, format!("failed ({})", output.status))
-                    } else {
-                        (MessageType::Info, "succeeded".to_string())
-                    };
-                    log(&client, kind, format!("{line} {outcome}"));
-                    client.show_message(
-                        outcome_message(&line, &outcome, summary.as_deref(), &notes),
-                        match notes.iter().map(|note| note.level).max() {
-                            Some(Level::Warning | Level::Error) if !failed => MessageType::Warning,
-                            _ => kind,
-                        },
-                    );
-                }
-                Err(error) => {
-                    let message = format!("{line} could not be started: {error}");
-                    log(&client, MessageType::Error, message.clone());
-                    client.show_error_message(message);
-                }
-            }
+        .spawn(move || match manage_run.plan(&client) {
+            Ok(plan) => plan.run(&client),
+            Err(refusal) => refuse(&client, &refusal),
         })?;
 
     Ok(())
+}
+
+/// shows and logs why a management command was not run, with every cause it has
+fn refuse(client: &Client, refusal: &anyhow::Error) {
+    let message = format!("{refusal:#}");
+    log(client, MessageType::Error, message.clone());
+    client.show_error_message(message);
+}
+
+/// what a management command is run with, taken from the session before the thread that
+/// decides how to run it starts
+struct ManageRun {
+    /// the arguments to `manage.py`, the subcommand first
+    arguments: Vec<String>,
+    /// the environment the editor chose for the project, which `by run` cannot find for itself
+    chosen_environment: Option<SystemPathBuf>,
+    /// the project of the workspace `manage.py` was found in, which is what decides how a command
+    /// runs when `by run` cannot discover a project of its own
+    workspace: ProjectMetadata,
+    /// whether the workspace's project has a source `by run` would stage
+    workspace_has_run_sources: bool,
+    /// the `by` this server is, if it was started as one
+    by: Option<std::path::PathBuf>,
+    manage: SystemPathBuf,
+    /// `manage.py`'s file name
+    script: String,
+    /// the directory `manage.py` is in, which the command runs in
+    working_directory: SystemPathBuf,
+}
+
+impl ManageRun {
+    /// what the session says about running a command through the project's `manage.py`, or the
+    /// refusal when no project has one
+    fn new(session: &Session, arguments: Vec<String>) -> crate::Result<Self> {
+        let (db, manage) = session
+            .project_dbs()
+            .find_map(|db| {
+                let manage = ty_ide::django_manage_script(db)?
+                    .path(db)
+                    .as_system_path()?
+                    .to_path_buf();
+                Some((db, manage))
+            })
+            .ok_or_else(|| anyhow::anyhow!("this project has no `manage.py`"))?;
+
+        // django resolves its settings, its apps and its templates relative to the
+        // directory `manage.py` sits in, which is why it is run from there rather than
+        // from wherever the editor happens to have been started
+        let working_directory = manage
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("`{manage}` is not in a directory"))?
+            .to_path_buf();
+        let script = manage.file_name().unwrap_or("manage.py").to_string();
+
+        Ok(Self {
+            arguments,
+            chosen_environment: chosen_environment(db),
+            workspace: db.project().metadata(db).clone(),
+            // the project's files are in memory already, read when `manage.py` was looked for
+            workspace_has_run_sources: by_stage::project::has_run_sources(db),
+            by: session.by_executable().map(std::path::Path::to_path_buf),
+            manage,
+            script,
+            working_directory,
+        })
+    }
+
+    /// how the command runs, or the refusal to run it
+    fn plan(&self, client: &Client) -> crate::Result<Plan> {
+        let script = &self.script;
+        let Some(subcommand) = self.arguments.first() else {
+            anyhow::bail!("no management command was named");
+        };
+
+        // python never imports a `.by` module, so a project with a `.by` model run by python
+        // alone has no such model: `makemigrations` finds no changes and `test` runs without
+        // it. `by run` stages the project, runs the command in it and writes back what the
+        // command wrote there, a migration included. it refuses a project with no `.by`
+        // source, which python runs as it is, on the interpreter `by run` would have run it
+        // on. the project is the one `by run` finds from the directory it is started in, which
+        // need not be this workspace's: a `pyproject.toml` beside `manage.py` makes a project
+        // of its own
+        let chosen = self.chosen_environment.as_deref();
+        let runner = match by_stage::project::build_run_project_db(
+            self.working_directory.as_std_path(),
+            chosen,
+        ) {
+            Ok((_, sources, _, _)) if !sources.is_empty() => Runner::ByRun,
+            Ok((db, _, _, _)) => Runner::Python(self.python(db.project().metadata(&*db))?),
+            // `by run` cannot run a project it cannot discover, and python alone would run
+            // this one without its `.by` models
+            Err(error) if self.workspace_has_run_sources => {
+                return Err(error.context(format!(
+                    "`{script}` runs through `by run` in a project with `.by` sources, \
+                     and `by run` cannot find the project it is in"
+                )));
+            }
+            Err(error) => {
+                log(
+                    client,
+                    MessageType::Warning,
+                    format!(
+                        "`by run` cannot find the project `{script}` is in, and it has no `.by` \
+                         source, so it runs on python: {error:#}"
+                    ),
+                );
+                Runner::Python(self.python(&self.workspace)?)
+            }
+        };
+        let line = runner.command_line(chosen, script, &self.arguments);
+
+        if TERMINAL_COMMANDS.contains(&subcommand.as_str()) {
+            anyhow::bail!(
+                "`{script} {subcommand}` needs a terminal, which the server cannot give it. \
+                 Run it yourself: `{line}`",
+            );
+        }
+        if !OFFERED_COMMANDS.contains(&subcommand.as_str()) {
+            anyhow::bail!(
+                "the server only runs the management commands it offers a lens for, \
+                 and `{subcommand}` is not one of them. Run it yourself: `{line}`",
+            );
+        }
+
+        let (mut process, notes) = match &runner {
+            Runner::ByRun => {
+                let by = self.by.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "this project has `.by` sources, so `{script}` runs through `by run`, \
+                         and this server was not started as a `by` it can run"
+                    )
+                })?;
+                // what `by run` says about writing back comes after the command's own last
+                // line, so it is written to a file of its own rather than to stderr
+                let notes = tempfile::Builder::new().prefix("by-manage").tempdir()?;
+                let mut process = std::process::Command::new(by);
+                process.arg("run");
+                if let Some(chosen) = chosen {
+                    process.arg("--python").arg(chosen.as_std_path());
+                }
+                process
+                    .arg("--notes")
+                    .arg(notes.path().join(NOTES_FILE))
+                    .arg(self.manage.as_std_path());
+                (process, Some(notes))
+            }
+            Runner::Python(python) => {
+                let mut process = std::process::Command::new(python);
+                process.arg(self.manage.as_std_path());
+                (process, None)
+            }
+        };
+        process
+            .args(&self.arguments)
+            // python buffers what it writes to stdout when that is a pipe, so a line reaches
+            // the pipe when the buffer fills or the process exits, after the stderr lines
+            // written since. the summary is the last line read, so each line has to reach its
+            // pipe when written
+            .env("PYTHONUNBUFFERED", "1")
+            // the server's own stdin is the editor's connection, which a command that asks a
+            // question, as `makemigrations` does about a renamed field, would read as its
+            // answer
+            .stdin(std::process::Stdio::null())
+            .current_dir(self.working_directory.as_std_path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        Ok(Plan {
+            process,
+            notes,
+            line,
+        })
+    }
+
+    /// the interpreter `by run` would run a program of `project` on, which is the one the editor
+    /// chose when it chose one
+    fn python(&self, project: &ProjectMetadata) -> crate::Result<String> {
+        let chosen = self
+            .chosen_environment
+            .as_deref()
+            .map(SystemPath::as_std_path);
+        let interpreter = by_stage::interpreter::discover_interpreter(chosen, project)
+            .with_context(|| format!("no python interpreter can run `{}`", self.script))?;
+        Ok(interpreter.path)
+    }
+}
+
+/// the environment the editor chose for the project, if it chose one: the python extension's
+/// active environment, or an `environment.python` sent as an editor setting
+///
+/// it is the one environment the server knows of that `by run` cannot find: `by run` discovers
+/// the rest from the project and the environment variables it inherits from the server, as the
+/// server does
+fn chosen_environment(db: &ProjectDatabase) -> Option<SystemPathBuf> {
+    let Ok(Some(environment)) = &db.project().program_settings(db).python_environment else {
+        return None;
+    };
+    matches!(environment.origin(), SysPrefixPathOrigin::Editor)
+        .then(|| environment.sys_prefix().to_path_buf())
+}
+
+/// what runs a management command
+enum Runner {
+    /// `by run`, for a project with a source it stages
+    ByRun,
+    /// this interpreter, for a project `by run` refuses
+    Python(String),
+}
+
+impl Runner {
+    /// the command line a management command runs as, which is what a log and a refusal name it
+    /// by
+    fn command_line(
+        &self,
+        chosen: Option<&SystemPath>,
+        script: &str,
+        arguments: &[String],
+    ) -> String {
+        let arguments = arguments.join(" ");
+        match (self, chosen) {
+            (Self::ByRun, Some(chosen)) => format!("by run --python {chosen} {script} {arguments}"),
+            (Self::ByRun, None) => format!("by run {script} {arguments}"),
+            (Self::Python(_), _) => format!("{script} {arguments}"),
+        }
+    }
+}
+
+/// a management command, ready to run
+struct Plan {
+    process: std::process::Command,
+    /// the directory `by run --notes` writes into, when it runs through `by run`
+    notes: Option<tempfile::TempDir>,
+    /// the command line it is named by
+    line: String,
+}
+
+impl Plan {
+    /// runs the command to its end, logging what it writes and showing what came of it
+    fn run(mut self, client: &Client) {
+        let line = &self.line;
+        log(client, MessageType::Info, format!("running {line}"));
+
+        match run_to_end(&mut self.process) {
+            Ok((output, summary)) => {
+                // django's test runner and most of its commands report on
+                // stderr, so both streams are the answer rather than one
+                for stream in [&output.stdout, &output.stderr] {
+                    let text = String::from_utf8_lossy(stream);
+                    if !text.trim().is_empty() {
+                        log(client, MessageType::Info, text.trim_end().to_string());
+                    }
+                }
+
+                let notes = match &self.notes {
+                    Some(notes) => read_notes(&notes.path().join(NOTES_FILE)),
+                    None => Ok(Vec::new()),
+                };
+                // read once, the directory has served its purpose, and is gone by the time
+                // anyone is shown the outcome
+                drop(self.notes.take());
+                let notes = notes.unwrap_or_else(|error| {
+                    vec![Note::new(
+                        Level::Warning,
+                        format!(
+                            "what `by run` said once the command ended could not be read: {error}"
+                        ),
+                    )]
+                });
+                for note in &notes {
+                    log(client, message_type(note.level), note.to_string());
+                }
+
+                let failed = !output.status.success();
+                let (kind, outcome) = if failed {
+                    (MessageType::Error, format!("failed ({})", output.status))
+                } else {
+                    (MessageType::Info, "succeeded".to_string())
+                };
+                log(client, kind, format!("{line} {outcome}"));
+                client.show_message(
+                    outcome_message(line, &outcome, summary.as_deref(), &notes),
+                    match notes.iter().map(|note| note.level).max() {
+                        Some(Level::Warning | Level::Error) if !failed => MessageType::Warning,
+                        _ => kind,
+                    },
+                );
+            }
+            Err(error) => {
+                let message = format!("{line} could not be started: {error}");
+                log(client, MessageType::Error, message.clone());
+                client.show_error_message(message);
+            }
+        }
+    }
 }
 
 /// the name of the file `by run --notes` is given, in a directory of its own
@@ -522,42 +677,6 @@ fn log(client: &Client, kind: MessageType, message: String) {
         kind,
         message,
     });
-}
-
-/// The interpreter of the environment whose packages the project is checked against.
-///
-/// ty resolves a python environment to find the project's third-party packages, and
-/// its `site-packages` is the one link back to the installation it came from — which
-/// is the installation that has django in it, and so the only one able to run
-/// `manage.py`. The layout is walked upwards and the candidate is *checked to
-/// exist* rather than assumed, so an environment shaped like nothing here expects
-/// yields no interpreter instead of an unrunnable path.
-fn interpreter(db: &ProjectDatabase) -> Option<SystemPathBuf> {
-    // `<prefix>/lib/python3.13/site-packages` on unix, `<prefix>/Lib/site-packages`
-    // on windows: three hops up covers the deeper of the two, and every shallower
-    // ancestor is tried on the way
-    const MAX_PREFIX_DEPTH: usize = 3;
-
-    const EXECUTABLES: &[&str] = &[
-        "bin/python3",
-        "bin/python",
-        "Scripts/python.exe",
-        "python.exe",
-    ];
-
-    let system = db.system();
-
-    db.project()
-        .program(db)
-        .search_paths(db)
-        .site_packages_paths()
-        .flat_map(|site_packages| site_packages.ancestors().take(MAX_PREFIX_DEPTH + 1))
-        .find_map(|prefix| {
-            EXECUTABLES
-                .iter()
-                .map(|executable| prefix.join(executable))
-                .find(|candidate| system.is_file(candidate))
-        })
 }
 
 /// Returns a string with detailed memory usage.

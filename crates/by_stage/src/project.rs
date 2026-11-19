@@ -320,7 +320,7 @@ pub fn build_project_db(
 /// an interpreter it was told about has to check it against that interpreter's packages: checked
 /// against another environment, an import the program will find is reported as unresolved, and
 /// one it will not find passes
-pub fn build_project_db_for(
+fn build_project_db_for(
     cwd: &Path,
     extensions: &[&str],
     output: Option<&Path>,
@@ -437,9 +437,13 @@ pub(crate) fn project_sources(
         .collect()
 }
 
-/// The project `by run` started in `cwd` runs: the one discovered from `cwd`, with the `.by`
+/// the project `by run` started in `cwd` runs: the one discovered from `cwd`, with the `.by`
 /// sources it stages, checked against the python environment `python` as
-/// [`build_project_db_for`] takes one.
+/// `build_project_db_for` takes one
+///
+/// the language server builds it from the directory it would start `by run` in, to run a
+/// program through `by run` exactly when `by run` would run it: with no source to stage, `by run`
+/// refuses to run (`no .by files found`)
 pub fn build_run_project_db(
     cwd: &Path,
     python: Option<&SystemPath>,
@@ -447,15 +451,11 @@ pub fn build_run_project_db(
     build_project_db_for(cwd, BY_SOURCES, None, python)
 }
 
-/// Whether `by run` started in `cwd` has a source to stage, which it refuses to run without
-/// (`no .by files found`).
-///
-/// The language server asks it of the directory it starts `by run` in, to run a program
-/// through `by run` exactly when `by run` would run it. The environment a project is checked
-/// against decides what its sources import, never which sources it has, so none is named.
-pub fn run_has_sources(cwd: &Path) -> anyhow::Result<bool> {
-    let (_, sources, _, _) = build_run_project_db(cwd, None)?;
-    Ok(!sources.is_empty())
+/// whether the project `db` holds has a source `by run` would stage, which the language server
+/// asks of its own db for a project `by run` cannot discover
+pub fn has_run_sources(db: &ProjectDatabase) -> bool {
+    let root = db.project().root(db).as_std_path();
+    !project_sources(db, BY_SOURCES, root, None).is_empty()
 }
 
 /// The project's first-party module roots, longest first, as absolute paths.

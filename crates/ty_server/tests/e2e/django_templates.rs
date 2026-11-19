@@ -1340,20 +1340,19 @@ fn a_management_command_that_wants_a_terminal_is_refused_rather_than_spawned() -
             work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
         });
 
-    let failure = server
-        .try_await_response::<lsp_types::ExecuteCommandRequest>(&id, None)
-        .expect_err("a refusal rather than a process nothing could stop");
-
-    assert!(
-        format!("{failure}").contains("needs a terminal"),
-        "got {failure}"
+    assert_eq!(
+        server.await_response::<lsp_types::ExecuteCommandRequest>(&id),
+        None
     );
 
-    // and the refusal is shown, since an error answer to a click is one an editor need not
-    // show anyone
+    // the refusal is shown, since an error answer to a click is one an editor need not show
+    // anyone
     let shown = server.await_notification::<lsp_types::ShowMessageNotification>();
     assert_eq!(shown.kind, lsp_types::MessageType::Error);
     assert!(shown.message.contains("needs a terminal"), "got {shown:?}");
+    // and logged, with what the server's commands log
+    let logged = server.await_notification::<lsp_types::LogMessageNotification>();
+    assert_eq!(logged.message, shown.message);
 
     Ok(())
 }

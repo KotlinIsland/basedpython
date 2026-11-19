@@ -268,11 +268,12 @@ fn what_uv_installed_is_picked_up_when_it_finishes() -> Result<()> {
     Ok(())
 }
 
-/// A stand-in for `by`, and for python, that records how it was called and then says what
-/// `manage.py makemigrations` says.
+/// a stand-in for `by`, and for python, that records how it was called and then says what
+/// `manage.py makemigrations` says
 ///
-/// As `by`, it writes the notes `by run --notes` writes: what it wrote back to the project, and
-/// one file it did not.
+/// as `by`, it writes the notes `by run --notes` writes: what it wrote back to the project. with
+/// a file `refuse` beside it, it also says what `by run` says of a file it did not write back,
+/// and of the staged tree it kept for it, and exits 1, as `by run` then does
 #[cfg(unix)]
 const MANAGE_STUB: &str = r#"#!/bin/sh
 { pwd -P; printf '%s\n' "$@"; } > "$(dirname "$0")/recorded"
@@ -283,15 +284,21 @@ while [ $# -gt 0 ]; do
 done
 echo "Migrations for 'app':"
 echo "  app/migrations/0001_initial.py"
+status=0
 if [ -n "$notes" ]; then
-    printf '%s\n' \
-        '{"level":"note","message":"wrote back app/migrations/0001_initial.py"}' \
-        '{"level":"warning","message":"not written back: app/admin.py was changed in the project while the program ran"}' \
-        > "$notes"
+    printf '%s\n' '{"level":"note","message":"wrote back app/migrations/0001_initial.py"}' > "$notes"
+    if [ -e "$(dirname "$0")/refuse" ]; then
+        printf '%s\n' \
+            '{"level":"warning","message":"not written back: app/admin.py was changed in the project while the program ran"}' \
+            '{"level":"warning","message":"kept the staged tree at /tmp/.tmpTree, which holds what was not written back"}' \
+            >> "$notes"
+        status=1
+    fi
 fi
+exit $status
 "#;
 
-/// A django project whose models module is `models`, with an interpreter the editor chose, as
+/// a django project whose models module is `models`, with an interpreter the editor chose, as
 /// the python extension chooses one: an environment the server finds only because it was told.
 /// `by` and the interpreter are both [`MANAGE_STUB`], recording into `env/bin/recorded` and
 /// `recorded` beside `by`
@@ -304,11 +311,7 @@ fn manage_project(models: &str) -> Result<TestServerBuilder> {
 /// workspace `src`
 #[cfg(unix)]
 fn manage_project_in(site: &SystemPath, models: &str) -> Result<TestServerBuilder> {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-
     let builder = TestServerBuilder::new()?;
-    let python = builder.file_path(SystemPath::new("env/bin/python3"));
     let options: ty_server::ClientOptions = serde_json::from_value(serde_json::json!({
         "pythonExtension": {
             "activeEnvironment": {
@@ -320,8 +323,26 @@ fn manage_project_in(site: &SystemPath, models: &str) -> Result<TestServerBuilde
         }
     }))?;
 
+    let builder = with_stub(
+        builder.with_workspace(SystemPath::new("src"), Some(options))?,
+        SystemPath::new("env/bin/python3"),
+    )?
+    .with_file(
+        SystemPath::new("env/lib/python3.13/site-packages/installed.py"),
+        "",
+    )?;
+    django_project(builder, site, models)
+}
+
+/// `builder` with a django project in `site` whose models module is `models`, started as the
+/// `by` at `by/by`, a [`MANAGE_STUB`]
+#[cfg(unix)]
+fn django_project(
+    builder: TestServerBuilder,
+    site: &SystemPath,
+    models: &str,
+) -> Result<TestServerBuilder> {
     let builder = builder
-        .with_workspace(SystemPath::new("src"), Some(options))?
         .with_file(
             site.join("manage.py"),
             "import os\n\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')\n",
@@ -332,20 +353,42 @@ fn manage_project_in(site: &SystemPath, models: &str) -> Result<TestServerBuilde
             "INSTALLED_APPS = ['app']\n",
         )?
         .with_file(site.join("app/__init__.py"), "")?
-        .with_file(site.join("app").join(models), "class Widget:\n    pass\n")?
-        .with_file(SystemPath::new("env/bin/python3"), MANAGE_STUB)?
-        .with_file(
-            SystemPath::new("env/lib/python3.13/site-packages/installed.py"),
-            "",
-        )?
-        .with_file(SystemPath::new("by/by"), MANAGE_STUB)?;
+        .with_file(site.join("app").join(models), "class Widget:\n    pass\n")?;
 
+    let builder = with_stub(builder, SystemPath::new("by/by"))?;
     let by = builder.file_path(SystemPath::new("by/by"));
-    for executable in [&python, &by] {
-        fs::set_permissions(executable.as_std_path(), fs::Permissions::from_mode(0o755))?;
-    }
-
     Ok(builder.with_by_executable(&by))
+}
+
+/// `builder` with a [`MANAGE_STUB`] at `path`, which records into `recorded` beside it
+#[cfg(unix)]
+fn with_stub(builder: TestServerBuilder, path: &SystemPath) -> Result<TestServerBuilder> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let builder = builder.with_file(path, MANAGE_STUB)?;
+    std::fs::set_permissions(
+        builder.file_path(path).as_std_path(),
+        std::fs::Permissions::from_mode(0o755),
+    )?;
+    Ok(builder)
+}
+
+/// `builder` with a virtual environment at `prefix` whose interpreter is a [`MANAGE_STUB`], for
+/// discovery to find as a `.venv` beside a project's `pyproject.toml`
+#[cfg(unix)]
+fn with_virtual_environment(
+    builder: TestServerBuilder,
+    prefix: &SystemPath,
+) -> Result<TestServerBuilder> {
+    let home = builder.file_path(SystemPath::new("base/bin"));
+    let builder = builder
+        .with_file(SystemPath::new("base/bin/python3"), "")?
+        .with_file(
+            prefix.join("pyvenv.cfg"),
+            format!("home = {home}\nversion_info = 3.13.0\n"),
+        )?
+        .with_file(prefix.join("lib/python3.13/site-packages/installed.py"), "")?;
+    with_stub(builder, &prefix.join("bin/python3"))
 }
 
 /// what the server showed once the command it ran had finished, with everything it logged
@@ -373,15 +416,16 @@ fn run_manage_command(server: &mut TestServer, arguments: &[&str]) -> lsp_server
 }
 
 /// python never imports a `.by` module, so in a project with a `.by` model a management
-/// command runs through `by run`, on the interpreter the project is checked against, from the
-/// directory `manage.py` is in. what `by run` wrote back is logged, and the outcome shown is
-/// the command's own last line, with what was not written back after it
+/// command runs through `by run`, from the directory `manage.py` is in, told the environment
+/// the editor chose, which `by run` could not find for itself. what `by run` wrote back is
+/// logged, and the outcome shown is the command's own last line, with what was not written back
+/// after it, which `by run` fails for. the directory `by run` wrote its notes into is gone by then
 #[cfg(unix)]
 #[test]
 fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Result<()> {
-    let builder = manage_project("models.by")?;
+    let builder = manage_project("models.by")?.with_file(SystemPath::new("by/refuse"), "")?;
     let root = builder.file_path(SystemPath::new("src"));
-    let python = builder.file_path(SystemPath::new("env/bin/python3"));
+    let environment = builder.file_path(SystemPath::new("env"));
     let recorded = builder.file_path(SystemPath::new("by/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
@@ -389,20 +433,25 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
+    let line = format!("by run --python {environment} manage.py makemigrations app");
     assert_eq!(
         shown.message,
-        "by run manage.py makemigrations app succeeded: app/migrations/0001_initial.py; \
-         warning: not written back: app/admin.py was changed in the project while the program ran"
+        format!(
+            "{line} failed (exit status: 1): app/migrations/0001_initial.py; \
+             warning: not written back: app/admin.py was changed in the project while the program ran \
+             (and 1 more in the log)"
+        )
     );
-    assert_eq!(shown.kind, lsp_types::MessageType::Warning);
+    assert_eq!(shown.kind, lsp_types::MessageType::Error);
     assert_eq!(
         logged,
         [
-            "running by run manage.py makemigrations app",
-            "Migrations for 'app':\n  app/migrations/0001_initial.py",
-            "note: wrote back app/migrations/0001_initial.py",
-            "warning: not written back: app/admin.py was changed in the project while the program ran",
-            "by run manage.py makemigrations app succeeded",
+            format!("running {line}"),
+            "Migrations for 'app':\n  app/migrations/0001_initial.py".to_string(),
+            "note: wrote back app/migrations/0001_initial.py".to_string(),
+            "warning: not written back: app/admin.py was changed in the project while the program ran".to_string(),
+            "warning: kept the staged tree at /tmp/.tmpTree, which holds what was not written back".to_string(),
+            format!("{line} failed (exit status: 1)"),
         ]
     );
 
@@ -412,18 +461,23 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
         directory,
         "run",
         "--python",
-        interpreter,
+        python,
         "--notes",
         notes,
         manage,
         arguments @ ..,
     ] = recorded.as_slice()
     else {
-        panic!("not a `by run` of the interpreter: {recorded:?}");
+        panic!("not a `by run` of the chosen environment: {recorded:?}");
     };
     assert_eq!(*directory, root.as_str());
-    assert_eq!(*interpreter, python.as_str());
+    assert_eq!(*python, environment.as_str());
     assert!(notes.ends_with("notes.jsonl"), "{notes}");
+    let notes = std::path::Path::new(notes);
+    assert!(
+        notes.parent().is_some_and(|directory| !directory.exists()),
+        "{notes:?} is left behind"
+    );
     assert_eq!(*manage, root.join("manage.py").as_str());
     assert_eq!(arguments, ["makemigrations", "app"]);
 
@@ -493,31 +547,193 @@ fn a_management_command_of_a_nested_project_without_by_sources_runs_on_its_inter
     Ok(())
 }
 
-/// a refusal hands back the command that runs it, which in a project with a `.by` model is
-/// `by run`'s
+/// a nested django project with an environment of its own, and no environment the editor chose:
+/// the workspace around it has one too, which the server checks the workspace against
+#[cfg(unix)]
+fn nested_project_with_its_own_environment(models: &str) -> Result<TestServerBuilder> {
+    let builder = TestServerBuilder::new()?.with_workspace(SystemPath::new("src"), None)?;
+    let builder = with_virtual_environment(builder, SystemPath::new("src/.venv"))?;
+    let builder = with_virtual_environment(builder, SystemPath::new("src/site/.venv"))?;
+    django_project(builder, SystemPath::new("src/site"), models)?
+        .with_file(
+            SystemPath::new("src/pyproject.toml"),
+            "[project]\nname = \"outer\"\n",
+        )?
+        .with_file(
+            SystemPath::new("src/site/pyproject.toml"),
+            "[project]\nname = \"site\"\n",
+        )
+}
+
+/// `by run` finds the interpreter it runs on from the project it runs, as it finds the project,
+/// so it is told none: the nested project's own environment is the one it runs on, not the
+/// workspace's
 #[cfg(unix)]
 #[test]
-fn a_refused_management_command_of_a_project_with_by_sources_hands_back_by_run() -> Result<()> {
-    let mut server = manage_project("models.by")?
-        .build()
-        .wait_until_workspaces_are_initialized();
+fn a_management_command_of_a_nested_project_runs_on_the_interpreter_by_run_finds() -> Result<()> {
+    let builder = nested_project_with_its_own_environment("models.by")?;
+    let site = builder.file_path(SystemPath::new("src/site"));
+    let recorded = builder.file_path(SystemPath::new("by/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["runserver", "8001"]);
-    let failure = server
-        .try_await_response::<ExecuteCommandRequest>(&id, None)
-        .expect_err("a refusal rather than a process nothing could stop");
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
-    assert!(
-        format!("{failure}").contains("Run it yourself: `by run manage.py runserver 8001`"),
-        "got {failure}"
-    );
-    let shown = server.await_notification::<lsp_types::ShowMessageNotification>();
+    let (shown, _) = shown_outcome(&mut server);
     assert!(
         shown
             .message
-            .contains("Run it yourself: `by run manage.py runserver 8001`"),
+            .starts_with("by run manage.py makemigrations app succeeded"),
+        "{shown:?}"
+    );
+    let recorded = std::fs::read_to_string(recorded.as_std_path())?;
+    let recorded: Vec<&str> = recorded.lines().collect();
+    let [directory, "run", "--notes", _, manage, arguments @ ..] = recorded.as_slice() else {
+        panic!("not a `by run` that finds its own interpreter: {recorded:?}");
+    };
+    assert_eq!(*directory, site.as_str());
+    assert_eq!(*manage, site.join("manage.py").as_str());
+    assert_eq!(arguments, ["makemigrations", "app"]);
+
+    Ok(())
+}
+
+/// a project `by run` refuses runs on the interpreter `by run` would have run it on, found the
+/// same way: the nested project's own environment
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_nested_project_without_by_sources_runs_on_the_interpreter_by_run_finds()
+-> Result<()> {
+    // an activated environment outranks a project's `.venv` for `by run`, and the server finds
+    // it from the environment variables of the process the test runs in, so with one activated
+    // that is what runs, and there is nothing here to check
+    if ["VIRTUAL_ENV", "CONDA_PREFIX"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return Ok(());
+    }
+    let builder = nested_project_with_its_own_environment("models.py")?;
+    let site = builder.file_path(SystemPath::new("src/site"));
+    let recorded = builder.file_path(SystemPath::new("src/site/.venv/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(
+        shown.message, "manage.py makemigrations app succeeded: app/migrations/0001_initial.py",
+        "{logged:#?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(recorded.as_std_path())?,
+        format!("{site}\n{site}/manage.py\nmakemigrations\napp\n")
+    );
+
+    Ok(())
+}
+
+/// `by run` cannot run a project it cannot discover, and python alone would run one with a `.by`
+/// model without it, so the command is refused with everything `by run` said, shown and logged,
+/// and nothing is run
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_project_by_run_cannot_find_is_refused() -> Result<()> {
+    let builder = manage_project_in(SystemPath::new("src/site"), "models.by")?
+        .with_file(SystemPath::new("src/site/pyproject.toml"), "[project\n")?;
+    let site = builder.file_path(SystemPath::new("src/site"));
+    let by_recorded = builder.file_path(SystemPath::new("by/recorded"));
+    let python_recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
+    let refusal = format!(
+        "`manage.py` runs through `by run` in a project with `.by` sources, and `by run` cannot \
+         find the project it is in: failed to discover project at {site}: "
+    );
+    assert!(shown.message.starts_with(&refusal), "{shown:?}");
+    // the whole chain, down to what is wrong with the file
+    assert!(shown.message.contains("pyproject.toml"), "{shown:?}");
+    assert_eq!(logged, [shown.message]);
+    assert!(!by_recorded.as_std_path().exists());
+    assert!(!python_recorded.as_std_path().exists());
+
+    Ok(())
+}
+
+/// the server loads a project whose configuration it cannot read as best it can; `by run`
+/// cannot run it at all. with no `.by` source in what the server loaded, python runs it as it
+/// is, and why `by run` did not is logged
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_project_by_run_cannot_find_without_by_sources_runs_on_its_interpreter()
+-> Result<()> {
+    let builder = manage_project("models.py")?.with_file(
+        SystemPath::new("src/pyproject.toml"),
+        "[project]\nname = \"site\"\n\n[tool.ty]\nunknown-key = 1\n",
+    )?;
+    let root = builder.file_path(SystemPath::new("src"));
+    let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+    let unloaded = server.await_notification::<lsp_types::ShowMessageNotification>();
+    assert!(
+        unloaded.message.starts_with("Failed to load project"),
+        "{unloaded:?}"
+    );
+
+    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(
+        shown.message, "manage.py makemigrations app succeeded: app/migrations/0001_initial.py",
+        "{logged:#?}"
+    );
+    let why = format!(
+        "`by run` cannot find the project `manage.py` is in, and it has no `.by` source, so it \
+         runs on python: failed to discover project at {root}: "
+    );
+    assert!(
+        logged.iter().any(|line| line.starts_with(&why)),
+        "{logged:#?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(recorded.as_std_path())?,
+        format!("{root}\n{root}/manage.py\nmakemigrations\napp\n")
+    );
+
+    Ok(())
+}
+
+/// a refusal is shown and logged, as an outcome is, and hands back the command that runs it,
+/// which in a project with a `.by` model is `by run`'s, told the environment the editor chose.
+/// the click itself is answered as any other is
+#[cfg(unix)]
+#[test]
+fn a_refused_management_command_of_a_project_with_by_sources_hands_back_by_run() -> Result<()> {
+    let builder = manage_project("models.by")?;
+    let environment = builder.file_path(SystemPath::new("env"));
+    let by_recorded = builder.file_path(SystemPath::new("by/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, &["runserver", "8001"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
+    assert!(
+        shown.message.ends_with(&format!(
+            "Run it yourself: `by run --python {environment} manage.py runserver 8001`"
+        )),
         "got {shown:?}"
     );
+    assert_eq!(logged, [shown.message]);
+    assert!(!by_recorded.as_std_path().exists());
 
     Ok(())
 }

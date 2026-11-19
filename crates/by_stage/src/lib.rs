@@ -57,8 +57,11 @@
 //!   project
 //! - [`run_notes`] — what `by run` says once the program has ended, for an editor to read apart
 //!   from the program's own output
+//! - [`interpreter`] — the python `by run` runs a program on, for an editor to start a program on
+//!   the same one
 
 pub mod emit;
+pub mod interpreter;
 pub mod layout;
 pub mod packages;
 pub mod project;
