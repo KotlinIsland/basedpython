@@ -110,7 +110,7 @@ pub(crate) fn cmd_repl(
         fs::write(path, "").with_context(|| format!("could not write {}", path.display()))?;
     }
     let events = flags.events.map(connect_events).transpose()?;
-    let mut repl = Repl::new(rebuilder, config, flags.module, session_file, events)?;
+    let mut repl = Repl::new(rebuilder, config, &cwd, flags.module, session_file, events)?;
     // a session that cannot start in the module it was asked to has said why, and does not start
     if !repl.prepare_start()? {
         return Ok(ExitStatus::Failure);
@@ -293,7 +293,7 @@ struct Repl {
 
 /// the module of the project a session starts in
 struct StartModule {
-    /// the name it was given, as `by run` takes one
+    /// its dotted name, which `--module` may have given as the path of its file
     name: String,
     /// its file
     path: PathBuf,
@@ -317,6 +317,7 @@ impl Repl {
     fn new(
         rebuilder: Rebuilder,
         config: Config,
+        cwd: &Path,
         start_in: Option<&str>,
         session_file: Option<PathBuf>,
         events: Option<TcpStream>,
@@ -339,11 +340,12 @@ impl Repl {
                     .with_context(|| format!("could not read {}", module_path.display()))?;
                 (rebuilder, db, module, Some(module_dir), None)
             }
-            Some(name) => {
+            Some(argument) => {
                 let db = rebuilder.project_database();
                 // the module `by run` would run: the session is its continuation, checked as
                 // the module itself, so a relative import resolves in it and in an input alike
-                let module = by_stage::run_module::module_file(&db, name)
+                let name = by_stage::run_module::run_argument(&db, cwd, argument)?.into_owned();
+                let module = by_stage::run_module::module_file(&db, &name)
                     .with_context(|| format!("no module named `{name}` in the project"))?;
                 let path = module
                     .path(&db)
@@ -352,11 +354,7 @@ impl Repl {
                     .as_std_path()
                     .to_path_buf();
                 let text = source_text(&db, module).as_str().to_owned();
-                let started_in = StartModule {
-                    name: name.to_owned(),
-                    path,
-                    text,
-                };
+                let started_in = StartModule { name, path, text };
                 (rebuilder, db, module, None, Some(started_in))
             }
         };

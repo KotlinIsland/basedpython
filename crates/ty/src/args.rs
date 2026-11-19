@@ -181,8 +181,8 @@ pub(crate) enum Command {
         /// `BY_REPL_EVENTS_TOKEN` holds, for the editor to know the connection is the session's
         #[arg(long, value_name = "PORT")]
         events: Option<u16>,
-        /// start in MODULE, a module of the project named as `by run` takes one: it runs
-        /// first, as `__main__`, and the session goes on from it with its names
+        /// start in MODULE, a module of the project named, or its file's path given, as `by run`
+        /// takes one: it runs first, as `__main__`, and the session goes on from it with its names
         ///
         /// the module's source is the session's first, and each input is checked and
         /// transpiled as its continuation, as the module itself, so a relative import resolves

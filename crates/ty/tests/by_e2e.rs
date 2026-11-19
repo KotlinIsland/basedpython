@@ -2744,6 +2744,23 @@ fn repl_starts_in_a_module() {
     );
 }
 
+/// `--module` takes the path of the module's file, as `by run` does
+#[test]
+fn repl_starts_in_a_module_given_by_its_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_with_a_program(dir.path());
+    let (status, stdout, stderr) = repl_session(
+        dir.path(),
+        "(__name__, __package__, answer)\n",
+        &["--module", "app/main.by"],
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        stdout, "answer is 42\n('__main__', 'app', 42)\n",
+        "{stderr}"
+    );
+}
+
 /// a module the project does not have is no session to start in
 #[test]
 fn repl_does_not_start_in_a_module_the_project_does_not_have() {
