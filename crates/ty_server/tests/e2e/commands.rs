@@ -737,3 +737,34 @@ fn a_refused_management_command_of_a_project_with_by_sources_hands_back_by_run()
 
     Ok(())
 }
+
+/// a management command runs the workspace's own code, `manage.py` and the project it imports,
+/// which is never run for a workspace the client does not trust: the command is refused, shown
+/// and logged, and nothing is run
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_an_untrusted_workspace_is_refused() -> Result<()> {
+    for models in ["models.by", "models.py"] {
+        let builder = manage_project(models)?
+            .with_raw_initialization_options(serde_json::json!({"untrustedWorkspace": true}));
+        let by_recorded = builder.file_path(SystemPath::new("by/recorded"));
+        let python_recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+        let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+        let id = run_manage_command(&mut server, &["test", "app"]);
+        assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+        let (shown, logged) = shown_outcome(&mut server);
+        assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
+        assert_eq!(
+            shown.message,
+            "`manage.py test` runs this workspace's code, which is not run in an untrusted \
+             workspace"
+        );
+        assert_eq!(logged, [shown.message]);
+        assert!(!by_recorded.as_std_path().exists(), "{models}");
+        assert!(!python_recorded.as_std_path().exists(), "{models}");
+    }
+
+    Ok(())
+}

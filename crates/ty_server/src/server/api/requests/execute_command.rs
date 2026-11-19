@@ -302,6 +302,9 @@ fn refuse(client: &Client, refusal: &anyhow::Error) {
 struct ManageRun {
     /// the arguments to `manage.py`, the subcommand first
     arguments: Vec<String>,
+    /// whether the client trusts the workspace's files, `manage.py` and whatever it imports
+    /// among them
+    trusted: bool,
     /// the environment the editor chose for the project, which `by run` cannot find for itself
     chosen_environment: Option<SystemPathBuf>,
     /// the project of the workspace `manage.py` was found in, which is what decides how a command
@@ -344,6 +347,7 @@ impl ManageRun {
 
         Ok(Self {
             arguments,
+            trusted: session.is_workspace_trusted(),
             chosen_environment: chosen_environment(db),
             workspace: db.project().metadata(db).clone(),
             // the project's files are in memory already, read when `manage.py` was looked for
@@ -361,6 +365,14 @@ impl ManageRun {
         let Some(subcommand) = self.arguments.first() else {
             anyhow::bail!("no management command was named");
         };
+        // the command runs the workspace's own code, which the server never runs for a workspace
+        // the client does not trust, as it runs nothing it analyses there
+        if !self.trusted {
+            anyhow::bail!(
+                "`{script} {subcommand}` runs this workspace's code, which is not run \
+                 in an untrusted workspace"
+            );
+        }
 
         // python never imports a `.by` module, so a project with a `.by` model run by python
         // alone has no such model: `makemigrations` finds no changes and `test` runs without

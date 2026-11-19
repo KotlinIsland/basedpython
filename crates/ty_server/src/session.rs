@@ -48,7 +48,7 @@ use crate::session::client::Client;
 use crate::session::file_watcher::LspFileWatcher;
 use crate::session::index::Document;
 use crate::session::request_queue::RequestQueue;
-use crate::system::{AnySystemPath, LSPSystem};
+use crate::system::{AnySystemPath, LSPSystem, WorkspaceTrust};
 use crate::{PositionEncoding, TextDocument};
 use index::Index;
 
@@ -280,6 +280,12 @@ impl Session {
     /// the `by` executable this server is part of, when it was started as one
     pub(crate) fn by_executable(&self) -> Option<&std::path::Path> {
         self.by.executable.as_deref()
+    }
+
+    /// whether the client trusts the files in the workspace, which an untrusted workspace's
+    /// code must never be run for
+    pub(crate) fn is_workspace_trusted(&self) -> bool {
+        self.initialization_options.workspace_trust == WorkspaceTrust::Trusted
     }
 
     pub(crate) fn request_queue(&self) -> &RequestQueue {

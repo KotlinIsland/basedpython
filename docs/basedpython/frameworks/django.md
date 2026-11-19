@@ -334,8 +334,10 @@ last line, with `Warning` when the command succeeded:
 `by run manage.py makemigrations app succeeded: + Create model Widget; warning: not written back: app/migrations/0001_initial.py is already in the project, holding something else`
 
 a command the server will not run — one that needs a terminal, such as
-`runserver` or `shell`, one no lens offers, or any of them in a project with no
-`manage.py`, no interpreter to run it, or one `by run` cannot discover — is
+`runserver` or `shell`, one no lens offers, or any of them in a workspace the
+editor does not trust, since the command runs the workspace's code, or in a
+project with no `manage.py`, no interpreter to run it, or one `by run` cannot
+discover — is
 refused: the click is answered as any other is, and the reason is shown with
 `Error` and logged, with every cause behind it. a command refused for what it is
 is handed back as the command line to run it with, the one the lens would have
