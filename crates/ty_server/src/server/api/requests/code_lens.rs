@@ -2,11 +2,13 @@ use std::borrow::Cow;
 
 use lsp_types::{CodeLens, CodeLensParams, CodeLensRequest, Uri};
 use ruff_db::files::FileRange;
-use ty_ide::{DjangoLensAction, django_python_code_lenses, django_template_code_lenses};
+use ty_ide::{
+    DjangoLensAction, django_manage_script, django_python_code_lenses, django_template_code_lenses,
+};
 use ty_project::ProjectDatabase;
 
-use crate::capabilities::SupportedCommand;
 use crate::document::{FileRangeExt, ToRangeExt};
+use crate::server::api::requests::execute_command::manage_command;
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -57,6 +59,10 @@ impl BackgroundDocumentRequestHandler for CodeLensRequestHandler {
         };
 
         let uri = snapshot.document().uri().clone();
+        // a run lens names the `manage.py` it was offered for, since the session may hold another
+        // project with a `manage.py` of its own
+        let manage = django_manage_script(db)
+            .and_then(|manage| Some(manage.path(db).as_system_path()?.to_path_buf()));
 
         let lenses: Vec<CodeLens> = lenses
             .into_iter()
@@ -67,14 +73,11 @@ impl BackgroundDocumentRequestHandler for CodeLensRequestHandler {
                     .local_range();
 
                 let command = match lens.action {
-                    DjangoLensAction::Run(arguments) => lsp_types::Command {
-                        title: lens.title,
-                        command: SupportedCommand::RunManage.identifier().to_string(),
-                        tooltip: None,
-                        arguments: Some(vec![serde_json::json!({
-                            "arguments": arguments,
-                        })]),
-                    },
+                    DjangoLensAction::Run(arguments) => manage_command(
+                        lens.title,
+                        manage.as_deref()?,
+                        arguments.into_iter().map(String::from).collect(),
+                    ),
                     DjangoLensAction::Navigate(targets) => {
                         let locations: Vec<lsp_types::Location> = targets
                             .into_iter()

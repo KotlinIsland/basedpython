@@ -49,7 +49,7 @@ impl SyncRequestHandler for ExecuteCommand {
                     .and_then(|argument| Ok(serde_json::from_value(argument)?))
                     .with_failure_code(ErrorCode::InvalidParams)?;
 
-                run_manage(session, client, arguments.arguments)
+                run_manage(session, client, arguments)
                     .with_failure_code(ErrorCode::InternalError)?;
 
                 Ok(None)
@@ -230,10 +230,33 @@ fn add_dependency(
 }
 
 /// What a `ty.runManageCommand` is asked to run.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct ManageArguments {
+    /// the `manage.py` the lens was offered for, which is the one run: a session can hold
+    /// several projects, each with a `manage.py` of its own
+    manage: String,
     /// The arguments to `manage.py`, the subcommand first.
     arguments: Vec<String>,
+}
+
+/// the command that asks the server to run `manage` with `arguments`, for a lens to carry
+pub(crate) fn manage_command(
+    title: String,
+    manage: &SystemPath,
+    arguments: Vec<String>,
+) -> types::Command {
+    let arguments = serde_json::to_value(ManageArguments {
+        manage: manage.to_string(),
+        arguments,
+    })
+    .expect("management command arguments to be serializable");
+
+    types::Command {
+        title,
+        command: SupportedCommand::RunManage.identifier().to_string(),
+        arguments: Some(vec![arguments]),
+        tooltip: None,
+    }
 }
 
 /// Django management commands that must not be run this way.
@@ -268,9 +291,13 @@ const OFFERED_COMMANDS: &[&str] = &["test", "makemigrations", "migrate", "sqlmig
 ///
 /// the process is spawned on a thread of its own so that a command that takes a while — a test
 /// suite is the whole point of this — doesn't stop the server answering anything else in the
-/// meantime. everything else is decided there too, refusals included: whether it runs through
-/// `by run` finds `by run`'s project and every one of its sources
-fn run_manage(session: &Session, client: &Client, arguments: Vec<String>) -> crate::Result<()> {
+/// meantime. how it runs is decided there too, and so is every refusal but one: whether it runs
+/// through `by run` finds `by run`'s project and every one of its sources. what is taken from the
+/// session first, on the main loop, is [`ManageRun::new`]'s: it finds the project whose
+/// `manage.py` was named among the session's, through the session's cached queries, refusing
+/// there a file that is no project's `manage.py`, and reads that project's settings and whether
+/// it has a `.by` source among the files the session holds
+fn run_manage(session: &Session, client: &Client, arguments: ManageArguments) -> crate::Result<()> {
     let client = client.clone();
     let manage_run = match ManageRun::new(session, arguments) {
         Ok(manage_run) => manage_run,
@@ -322,19 +349,22 @@ struct ManageRun {
 }
 
 impl ManageRun {
-    /// what the session says about running a command through the project's `manage.py`, or the
-    /// refusal when no project has one
-    fn new(session: &Session, arguments: Vec<String>) -> crate::Result<Self> {
-        let (db, manage) = session
+    /// what the session says about running a command through `manage.py`, or the refusal when
+    /// no project of the session's has that `manage.py`
+    fn new(session: &Session, arguments: ManageArguments) -> crate::Result<Self> {
+        let ManageArguments { manage, arguments } = arguments;
+        let manage = SystemPathBuf::from(manage);
+        // the path comes from the client, and what is run is a `manage.py` the server found
+        // for one of its projects, never whatever file a client names
+        let db = session
             .project_dbs()
-            .find_map(|db| {
-                let manage = ty_ide::django_manage_script(db)?
-                    .path(db)
-                    .as_system_path()?
-                    .to_path_buf();
-                Some((db, manage))
+            .find(|&db| {
+                ty_ide::django_manage_script(db)
+                    .is_some_and(|script| script.path(db).as_system_path() == Some(&*manage))
             })
-            .ok_or_else(|| anyhow::anyhow!("this project has no `manage.py`"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("`{manage}` is not the `manage.py` of a project of this session's")
+            })?;
 
         // django resolves its settings, its apps and its templates relative to the
         // directory `manage.py` sits in, which is why it is run from there rather than
@@ -409,18 +439,20 @@ impl ManageRun {
                 Runner::Python(self.python(&self.workspace)?)
             }
         };
-        let line = runner.command_line(chosen, script, &self.arguments);
+        let command = runner.command_line(chosen, script, &self.arguments);
+        let directory = &self.working_directory;
 
         if TERMINAL_COMMANDS.contains(&subcommand.as_str()) {
             anyhow::bail!(
                 "`{script} {subcommand}` needs a terminal, which the server cannot give it. \
-                 Run it yourself: `{line}`",
+                 Run it yourself in `{directory}`: `{command}`",
             );
         }
         if !OFFERED_COMMANDS.contains(&subcommand.as_str()) {
             anyhow::bail!(
                 "the server only runs the management commands it offers a lens for, \
-                 and `{subcommand}` is not one of them. Run it yourself: `{line}`",
+                 and `{subcommand}` is not one of them. Run it yourself in `{directory}`: \
+                 `{command}`",
             );
         }
 
@@ -470,7 +502,7 @@ impl ManageRun {
         Ok(Plan {
             process,
             notes,
-            line,
+            line: format!("{command} in {directory}"),
         })
     }
 
@@ -522,7 +554,7 @@ impl Runner {
         match (self, chosen) {
             (Self::ByRun, Some(chosen)) => format!("by run --python {chosen} {script} {arguments}"),
             (Self::ByRun, None) => format!("by run {script} {arguments}"),
-            (Self::Python(_), _) => format!("{script} {arguments}"),
+            (Self::Python(python), _) => format!("{python} {script} {arguments}"),
         }
     }
 }
@@ -532,7 +564,7 @@ struct Plan {
     process: std::process::Command,
     /// the directory `by run --notes` writes into, when it runs through `by run`
     notes: Option<tempfile::TempDir>,
-    /// the command line it is named by
+    /// the command line it is named by, with the directory it runs in
     line: String,
 }
 

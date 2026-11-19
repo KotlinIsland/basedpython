@@ -1202,12 +1202,18 @@ fn code_lenses(server: &mut TestServer, path: &SystemPath) -> Vec<String> {
             let arguments = command.arguments.clone().unwrap_or_default();
 
             let rendered = if command.command == "ty.runManageCommand" {
-                let arguments: Vec<String> = arguments
-                    .first()
+                let argument = arguments.first();
+                let manage = argument
+                    .and_then(|argument| argument.get("manage"))
+                    .and_then(serde_json::Value::as_str)
+                    .map_or("<no manage.py>".to_string(), |manage| {
+                        relative(&server.file_uri(SystemPath::new(manage)))
+                    });
+                let arguments: Vec<String> = argument
                     .and_then(|argument| argument.get("arguments").cloned())
                     .and_then(|arguments| serde_json::from_value(arguments).ok())
                     .unwrap_or_default();
-                format!("manage.py {}", arguments.join(" "))
+                format!("{manage} {}", arguments.join(" "))
             } else {
                 let locations: Vec<lsp_types::Location> = arguments
                     .get(2)
@@ -1336,7 +1342,10 @@ fn a_management_command_that_wants_a_terminal_is_refused_rather_than_spawned() -
     let id =
         server.send_request::<lsp_types::ExecuteCommandRequest>(lsp_types::ExecuteCommandParams {
             command: "ty.runManageCommand".to_string(),
-            arguments: Some(vec![serde_json::json!({"arguments": ["runserver"]})]),
+            arguments: Some(vec![serde_json::json!({
+                "manage": server.file_path("src/manage.py"),
+                "arguments": ["runserver"],
+            })]),
             work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
         });
 

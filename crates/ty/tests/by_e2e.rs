@@ -12864,7 +12864,7 @@ elif sys.argv[1:] == ['test', 'app']:
             &serde_json::json!({"jsonrpc": "2.0", "id": id,
                 "method": "workspace/executeCommand",
                 "params": {"command": "ty.runManageCommand",
-                    "arguments": [{"arguments": arguments}]}}),
+                    "arguments": [{"manage": dir.join("manage.py"), "arguments": arguments}]}}),
         );
         true
     };
@@ -12929,13 +12929,17 @@ elif sys.argv[1:] == ['test', 'app']:
         [
             (
                 serde_json::json!(3),
-                serde_json::json!(
-                    "by run manage.py makemigrations app succeeded: + Create model Widget"
-                )
+                serde_json::json!(format!(
+                    "by run manage.py makemigrations app in {} succeeded: + Create model Widget",
+                    dir.display()
+                ))
             ),
             (
                 serde_json::json!(3),
-                serde_json::json!("by run manage.py test app succeeded: OK")
+                serde_json::json!(format!(
+                    "by run manage.py test app in {} succeeded: OK",
+                    dir.display()
+                ))
             ),
         ],
         "{logged:#?}"

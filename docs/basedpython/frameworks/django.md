@@ -291,8 +291,11 @@ django template files get their own language support in the editor — completio
 a test case and its test methods, a migration and an app's models module carry
 code lenses that run `manage.py` — `test`, `makemigrations`, `migrate`,
 `sqlmigrate` — from the directory `manage.py` is in. a lens's command is
-`ty.runManageCommand`, its one argument `{ "arguments": ["test", "blog.tests.BookTest"] }`,
-and it answers at once, `null`, with the command running in the background
+`ty.runManageCommand`, its one argument
+`{ "manage": "/path/to/site/manage.py", "arguments": ["test", "blog.tests.BookTest"] }`,
+naming the `manage.py` the lens was offered for, so that with several projects
+open each runs its own. a file that is no project's `manage.py` is refused. the
+command answers at once, `null`, with the command running in the background
 
 python never imports a `.by` module, so in a project with a `.by` source the
 command runs through `by run` instead: `by run manage.py test blog.tests.BookTest`.
@@ -318,9 +321,11 @@ logged
 
 everything the command writes goes to the editor's log, as
 `window/logMessage`. when it has finished, what came of it is shown, as
-`window/showMessage`: `manage.py makemigrations blog succeeded: No changes detected`,
-with `Info`, or `manage.py test blog failed (exit status: 1): …`, with `Error` —
-the outcome, and the last line the command wrote, on either stream. that line is
+`window/showMessage`:
+`/path/to/site/.venv/bin/python manage.py makemigrations blog in /path/to/site succeeded: No changes detected`,
+with `Info`, or `/path/to/site/.venv/bin/python manage.py test blog in /path/to/site failed (exit status: 1): …`,
+with `Error` — the command, the directory it ran in, the outcome, and the last
+line the command wrote, on either stream. that line is
 the command's own, read as it is: django's test runner writes
 `Destroying test database for alias 'default'...` after its summary when a test
 used the database, so that is the line shown for it, and the summary is in the
@@ -330,8 +335,9 @@ exits, and with no standard input: a command that asks a question, as
 `makemigrations` asks whether a field was renamed, reads no answer. through `by run`, the run is named
 `by run manage.py …`, and what `by run` wrote back is logged after the
 command's output. a file it did not write back is shown after the command's
-last line, with `Warning` when the command succeeded:
-`by run manage.py makemigrations app succeeded: + Create model Widget; warning: not written back: app/migrations/0001_initial.py is already in the project, holding something else`
+last line, and as `by run` then keeps the tree it staged and exits 1, the
+command is shown as failed, with where the tree is in the log:
+`by run manage.py makemigrations app in /path/to/site failed (exit status: 1): + Create model Widget; warning: not written back: app/migrations/0001_initial.py is already in the project, holding something else (and 1 more in the log)`
 
 a command the server will not run — one that needs a terminal, such as
 `runserver` or `shell`, one no lens offers, or any of them in a workspace the
@@ -341,8 +347,10 @@ discover — is
 refused: the click is answered as any other is, and the reason is shown with
 `Error` and logged, with every cause behind it. a command refused for what it is
 is handed back as the command line to run it with, the one the lens would have
-run: `by run manage.py runserver` in a project with a `.by` source,
-`manage.py runserver` otherwise
+run, and the directory to run it in: `by run manage.py runserver` in a project
+with a `.by` source, and otherwise the interpreter it would have run on, as
+`/path/to/site/.venv/bin/python manage.py runserver`. the line is not quoted
+for a shell, so a path with a space in it has to be quoted to be run
 
 ## see also
 

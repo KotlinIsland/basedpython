@@ -406,11 +406,20 @@ fn shown_outcome(server: &mut TestServer) -> (lsp_types::ShowMessageParams, Vec<
     (shown, logged)
 }
 
+/// asks the server to run `manage`, a path below the test's directory, with `arguments`, as a
+/// lens for it asks
 #[cfg(unix)]
-fn run_manage_command(server: &mut TestServer, arguments: &[&str]) -> lsp_server::RequestId {
+fn run_manage_command(
+    server: &mut TestServer,
+    manage: &str,
+    arguments: &[&str],
+) -> lsp_server::RequestId {
+    let manage = server.file_path(manage);
     server.send_request::<ExecuteCommandRequest>(ExecuteCommandParams {
         command: "ty.runManageCommand".to_string(),
-        arguments: Some(vec![serde_json::json!({ "arguments": arguments })]),
+        arguments: Some(vec![
+            serde_json::json!({ "manage": manage, "arguments": arguments }),
+        ]),
         work_done_progress_params: WorkDoneProgressParams::default(),
     })
 }
@@ -429,11 +438,11 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
     let recorded = builder.file_path(SystemPath::new("by/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(&mut server, "src/manage.py", &["makemigrations", "app"]);
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
-    let line = format!("by run --python {environment} manage.py makemigrations app");
+    let line = format!("by run --python {environment} manage.py makemigrations app in {root}");
     assert_eq!(
         shown.message,
         format!(
@@ -490,16 +499,20 @@ fn a_management_command_of_a_project_with_by_sources_runs_through_by_run() -> Re
 fn a_management_command_of_a_project_without_by_sources_runs_on_its_interpreter() -> Result<()> {
     let builder = manage_project("models.py")?;
     let root = builder.file_path(SystemPath::new("src"));
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
     let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(&mut server, "src/manage.py", &["makemigrations", "app"]);
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, _) = shown_outcome(&mut server);
     assert_eq!(
         shown.message,
-        "manage.py makemigrations app succeeded: app/migrations/0001_initial.py"
+        format!(
+            "{python} manage.py makemigrations app in {root} succeeded: \
+             app/migrations/0001_initial.py"
+        )
     );
     assert_eq!(shown.kind, lsp_types::MessageType::Info);
     assert_eq!(
@@ -528,16 +541,24 @@ fn a_management_command_of_a_nested_project_without_by_sources_runs_on_its_inter
             "[project]\nname = \"site\"\n",
         )?;
     let site = builder.file_path(SystemPath::new("src/site"));
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
     let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(
+        &mut server,
+        "src/site/manage.py",
+        &["makemigrations", "app"],
+    );
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, _) = shown_outcome(&mut server);
     assert_eq!(
         shown.message,
-        "manage.py makemigrations app succeeded: app/migrations/0001_initial.py"
+        format!(
+            "{python} manage.py makemigrations app in {site} succeeded: \
+             app/migrations/0001_initial.py"
+        )
     );
     assert_eq!(
         std::fs::read_to_string(recorded.as_std_path())?,
@@ -576,14 +597,18 @@ fn a_management_command_of_a_nested_project_runs_on_the_interpreter_by_run_finds
     let recorded = builder.file_path(SystemPath::new("by/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(
+        &mut server,
+        "src/site/manage.py",
+        &["makemigrations", "app"],
+    );
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, _) = shown_outcome(&mut server);
     assert!(
-        shown
-            .message
-            .starts_with("by run manage.py makemigrations app succeeded"),
+        shown.message.starts_with(&format!(
+            "by run manage.py makemigrations app in {site} succeeded"
+        )),
         "{shown:?}"
     );
     let recorded = std::fs::read_to_string(recorded.as_std_path())?;
@@ -615,15 +640,24 @@ fn a_management_command_of_a_nested_project_without_by_sources_runs_on_the_inter
     }
     let builder = nested_project_with_its_own_environment("models.py")?;
     let site = builder.file_path(SystemPath::new("src/site"));
+    let python = builder.file_path(SystemPath::new("src/site/.venv/bin/python3"));
     let recorded = builder.file_path(SystemPath::new("src/site/.venv/bin/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(
+        &mut server,
+        "src/site/manage.py",
+        &["makemigrations", "app"],
+    );
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
     assert_eq!(
-        shown.message, "manage.py makemigrations app succeeded: app/migrations/0001_initial.py",
+        shown.message,
+        format!(
+            "{python} manage.py makemigrations app in {site} succeeded: \
+             app/migrations/0001_initial.py"
+        ),
         "{logged:#?}"
     );
     assert_eq!(
@@ -647,7 +681,11 @@ fn a_management_command_of_a_project_by_run_cannot_find_is_refused() -> Result<(
     let python_recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(
+        &mut server,
+        "src/site/manage.py",
+        &["makemigrations", "app"],
+    );
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
@@ -678,6 +716,7 @@ fn a_management_command_of_a_project_by_run_cannot_find_without_by_sources_runs_
         "[project]\nname = \"site\"\n\n[tool.ty]\nunknown-key = 1\n",
     )?;
     let root = builder.file_path(SystemPath::new("src"));
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
     let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
     let unloaded = server.await_notification::<lsp_types::ShowMessageNotification>();
@@ -686,12 +725,16 @@ fn a_management_command_of_a_project_by_run_cannot_find_without_by_sources_runs_
         "{unloaded:?}"
     );
 
-    let id = run_manage_command(&mut server, &["makemigrations", "app"]);
+    let id = run_manage_command(&mut server, "src/manage.py", &["makemigrations", "app"]);
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
     assert_eq!(
-        shown.message, "manage.py makemigrations app succeeded: app/migrations/0001_initial.py",
+        shown.message,
+        format!(
+            "{python} manage.py makemigrations app in {root} succeeded: \
+             app/migrations/0001_initial.py"
+        ),
         "{logged:#?}"
     );
     let why = format!(
@@ -717,23 +760,53 @@ fn a_management_command_of_a_project_by_run_cannot_find_without_by_sources_runs_
 #[test]
 fn a_refused_management_command_of_a_project_with_by_sources_hands_back_by_run() -> Result<()> {
     let builder = manage_project("models.by")?;
+    let root = builder.file_path(SystemPath::new("src"));
     let environment = builder.file_path(SystemPath::new("env"));
     let by_recorded = builder.file_path(SystemPath::new("by/recorded"));
     let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-    let id = run_manage_command(&mut server, &["runserver", "8001"]);
+    let id = run_manage_command(&mut server, "src/manage.py", &["runserver", "8001"]);
     assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
     let (shown, logged) = shown_outcome(&mut server);
     assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
     assert!(
         shown.message.ends_with(&format!(
-            "Run it yourself: `by run --python {environment} manage.py runserver 8001`"
+            "Run it yourself in `{root}`: `by run --python {environment} manage.py runserver 8001`"
         )),
         "got {shown:?}"
     );
     assert_eq!(logged, [shown.message]);
     assert!(!by_recorded.as_std_path().exists());
+
+    Ok(())
+}
+
+/// in a project with no `.by` source the command line a refusal hands back names the interpreter
+/// it would have run on, since `manage.py` alone is not a command that can be run
+#[cfg(unix)]
+#[test]
+fn a_refused_management_command_of_a_project_without_by_sources_hands_back_its_interpreter()
+-> Result<()> {
+    let builder = manage_project("models.py")?;
+    let root = builder.file_path(SystemPath::new("src"));
+    let python = builder.file_path(SystemPath::new("env/bin/python3"));
+    let recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, "src/manage.py", &["runserver", "8001"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
+    assert!(
+        shown.message.ends_with(&format!(
+            "Run it yourself in `{root}`: `{python} manage.py runserver 8001`"
+        )),
+        "got {shown:?}"
+    );
+    assert_eq!(logged, [shown.message]);
+    assert!(!recorded.as_std_path().exists());
 
     Ok(())
 }
@@ -751,7 +824,7 @@ fn a_management_command_of_an_untrusted_workspace_is_refused() -> Result<()> {
         let python_recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
         let mut server = builder.build().wait_until_workspaces_are_initialized();
 
-        let id = run_manage_command(&mut server, &["test", "app"]);
+        let id = run_manage_command(&mut server, "src/manage.py", &["test", "app"]);
         assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
 
         let (shown, logged) = shown_outcome(&mut server);
@@ -765,6 +838,77 @@ fn a_management_command_of_an_untrusted_workspace_is_refused() -> Result<()> {
         assert!(!by_recorded.as_std_path().exists(), "{models}");
         assert!(!python_recorded.as_std_path().exists(), "{models}");
     }
+
+    Ok(())
+}
+
+/// each project of the session runs its own `manage.py`: a lens names the one it was offered
+/// for, and the run is named by the directory it runs in
+#[cfg(unix)]
+#[test]
+fn a_management_command_runs_the_manage_py_of_the_lens_that_asked() -> Result<()> {
+    let mut builder = TestServerBuilder::new()?;
+    for workspace in ["one", "two"] {
+        let workspace = SystemPath::new(workspace);
+        builder = builder.with_workspace(workspace, None)?.with_file(
+            workspace.join("pyproject.toml"),
+            format!("[project]\nname = \"{workspace}\"\n"),
+        )?;
+        builder = django_project(builder, workspace, "models.by")?;
+    }
+    let recorded = builder.file_path(SystemPath::new("by/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    for workspace in ["two", "one"] {
+        let directory = server.file_path(workspace);
+        let id = run_manage_command(
+            &mut server,
+            &format!("{workspace}/manage.py"),
+            &["test", "app"],
+        );
+        assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+        let (shown, logged) = shown_outcome(&mut server);
+        assert!(
+            shown.message.starts_with(&format!(
+                "by run manage.py test app in {directory} succeeded"
+            )),
+            "{shown:?}\n{logged:#?}"
+        );
+        let recorded = std::fs::read_to_string(recorded.as_std_path())?;
+        assert_eq!(
+            recorded.lines().next(),
+            Some(directory.as_str()),
+            "{recorded}"
+        );
+    }
+
+    Ok(())
+}
+
+/// what is run is a `manage.py` the server found for one of its projects, never a file a client
+/// names
+#[cfg(unix)]
+#[test]
+fn a_management_command_of_a_file_that_is_no_project_s_manage_py_is_refused() -> Result<()> {
+    let builder = manage_project("models.py")?;
+    let python_recorded = builder.file_path(SystemPath::new("env/bin/recorded"));
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    let id = run_manage_command(&mut server, "src/app/models.py", &["test", "app"]);
+    assert_eq!(server.await_response::<ExecuteCommandRequest>(&id), None);
+
+    let (shown, logged) = shown_outcome(&mut server);
+    assert_eq!(shown.kind, lsp_types::MessageType::Error, "{shown:?}");
+    assert_eq!(
+        shown.message,
+        format!(
+            "`{}` is not the `manage.py` of a project of this session's",
+            server.file_path("src/app/models.py")
+        )
+    );
+    assert_eq!(logged, [shown.message]);
+    assert!(!python_recorded.as_std_path().exists());
 
     Ok(())
 }
