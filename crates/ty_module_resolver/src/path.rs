@@ -788,10 +788,16 @@ impl SearchPath {
     }
 
     fn is_valid_extension(&self, extension: &str) -> bool {
-        if self.is_standard_library() {
-            matches!(extension, "pyi" | "byi")
-        } else {
-            matches!(extension, "pyi" | "py" | "byi" | "by")
+        match &*self.0 {
+            // typeshed's standard library is stubs
+            SearchPathInner::StandardLibraryCustom(_)
+            | SearchPathInner::StandardLibraryVendored(_) => matches!(extension, "pyi" | "byi"),
+            // the interpreter's own is the source python runs
+            SearchPathInner::StandardLibraryReal(_) => extension == "py",
+            SearchPathInner::Extra(_)
+            | SearchPathInner::FirstParty(_)
+            | SearchPathInner::SitePackages(_)
+            | SearchPathInner::Editable(_) => matches!(extension, "pyi" | "py" | "byi" | "by"),
         }
     }
 
@@ -1277,6 +1283,25 @@ value = 1
         // Must be a path that is a child of `root`:
         let second_bad_absolute_path = SystemPath::new("bar/src/x.pyi");
         assert_eq!(root.relativize_system_path(second_bad_absolute_path), None);
+    }
+
+    /// the interpreter's standard library is python source, which names its modules as typeshed's
+    /// stubs name theirs
+    #[test]
+    fn relativize_real_stdlib_path() {
+        let TestCase { db, src, .. } = TestCaseBuilder::new().build();
+        let root = SearchPath::real_stdlib(db.system(), src.clone()).unwrap();
+        let module_path = root
+            .relativize_system_path(&src.join("json/decoder.py"))
+            .unwrap();
+        assert_eq!(
+            module_path.to_module_name(),
+            ModuleName::new("json.decoder")
+        );
+        assert_eq!(
+            root.relativize_system_path(&src.join("json/decoder.pyi")),
+            None
+        );
     }
 
     #[test]

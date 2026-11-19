@@ -5,7 +5,7 @@ use lsp_types::InlayHintRequest;
 use lsp_types::{InlayHintParams, Uri};
 use ruff_db::files::File;
 use ty_ide::{
-    InlayHint, InlayHintKind, InlayHintLabel, InlayHintTextEdit, TemplateInlayHint,
+    BlockPlacement, InlayHint, InlayHintKind, InlayHintLabel, InlayHintTextEdit, TemplateInlayHint,
     TemplateInlayHintKind, django_template_inlay_hints, inlay_hints,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
@@ -116,7 +116,10 @@ pub(super) fn lsp_inlay_hint(
         tooltip: None,
         padding_left: hint.padding_left.then_some(true),
         padding_right: hint.padding_right.then_some(true),
-        data: Some(kind_tag(hint.kind.setting())),
+        data: Some(match hint.placement {
+            Some(placement) => block_tag(hint.kind.setting(), placement),
+            None => kind_tag(hint.kind.setting()),
+        }),
         text_edits: Some(
             hint.text_edits
                 .into_iter()
@@ -165,6 +168,15 @@ fn template_inlay_hint(
 /// server does not offer
 fn kind_tag(setting: &str) -> serde_json::Value {
     serde_json::json!({ "kind": setting })
+}
+
+/// the tag of a hint drawn as whole lines of its own rather than inline: its kind, and
+/// `placement`, `"above"` or `"below"`, the side of the line holding its `position` its lines go
+/// on. its label is those lines, separated by `\n`, each with all the indentation it is drawn with.
+/// LSP has no such hint, so a client that does not read the tag draws the lines inline, at the
+/// position
+fn block_tag(setting: &str, placement: BlockPlacement) -> serde_json::Value {
+    serde_json::json!({ "kind": setting, "placement": placement.as_str() })
 }
 
 fn inlay_hint_kind(inlay_hint_kind: InlayHintKind) -> lsp_types::InlayHintKind {

@@ -6,6 +6,8 @@ use rustc_hash::FxHashMap;
 use strum_macros::EnumIter;
 
 use crate::import_order;
+
+mod stub;
 use crate::{Db, HasNavigationTargets, NavigationTarget};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
@@ -55,6 +57,27 @@ pub struct InlayHint {
     /// Whether the client separates the hint from the source after it.
     pub padding_right: bool,
     pub text_edits: Vec<InlayHintTextEdit>,
+    /// `None` for a hint drawn inline, at its position. a hint drawn as whole lines of its own,
+    /// as a member only the stub declares is, says here whether they go above or below the line
+    /// holding its position
+    pub placement: Option<BlockPlacement>,
+}
+
+/// which side of the line holding a whole-line hint's position the hint's lines are drawn on
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlockPlacement {
+    Above,
+    Below,
+}
+
+impl BlockPlacement {
+    /// what a client knows the placement by
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Above => "above",
+            Self::Below => "below",
+        }
+    }
 }
 
 impl InlayHint {
@@ -112,6 +135,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits,
+            placement: None,
         })
     }
 
@@ -132,6 +156,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -152,6 +177,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -173,6 +199,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: true,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -188,6 +215,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: true,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -203,6 +231,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: true,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -218,6 +247,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -234,6 +264,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: true,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -249,6 +280,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -270,6 +302,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -310,6 +343,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -337,6 +371,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -351,6 +386,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -369,6 +405,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -384,6 +421,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -409,6 +447,7 @@ impl InlayHint {
             padding_left: spaced,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -442,6 +481,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -485,6 +525,7 @@ impl InlayHint {
             padding_left: leading_space,
             padding_right: parameter_follows,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -536,6 +577,7 @@ impl InlayHint {
             padding_left: true,
             padding_right: false,
             text_edits,
+            placement: None,
         }
     }
 
@@ -564,6 +606,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -584,6 +627,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -606,6 +650,7 @@ impl InlayHint {
             padding_left: false,
             padding_right: false,
             text_edits: vec![],
+            placement: None,
         }
     }
 
@@ -677,6 +722,12 @@ pub enum InlayHintKind {
     ImplicitArgument,
     /// basedpython: the default a parameter takes from the method its `def` overrides
     InheritedDefault,
+    /// in a runtime module, an annotation or the bases its stub declares for a declaration that
+    /// does not spell them
+    StubTypes,
+    /// in a runtime module, a member its stub declares that the module does not, drawn as lines
+    /// of their own
+    StubOnlyMembers,
 }
 
 impl InlayHintKind {
@@ -707,7 +758,9 @@ impl InlayHintKind {
             | InlayHintKind::Invalidates
             | InlayHintKind::NumericPromotion
             | InlayHintKind::RevealedType
-            | InlayHintKind::EnumValue => false,
+            | InlayHintKind::EnumValue
+            | InlayHintKind::StubTypes
+            | InlayHintKind::StubOnlyMembers => false,
             InlayHintKind::CallArgumentName
             | InlayHintKind::ImplicitParameter
             | InlayHintKind::ImplicitSelf
@@ -787,6 +840,8 @@ hint_switches!(InlayHintKind, enabled, set_enabled, {
     ImplicitSelf => implicit_self = "implicitSelf",
     ImplicitArgument => implicit_arguments = "implicitArguments",
     InheritedDefault => inherited_parameter_defaults = "inheritedParameterDefaults",
+    StubTypes => stub_types = "stubTypes",
+    StubOnlyMembers => stub_only_members = "stubOnlyMembers",
 });
 
 #[derive(Debug, Clone)]
@@ -930,6 +985,7 @@ fn inlay_hints_inner(
 
     let mut visitor = InlayHintVisitor::new(db, file, importer, source.as_str(), range, settings);
 
+    visitor.add_stub_only_members(&ast);
     visitor.visit_body(ast.suite());
 
     // hints are collected in visit order, which is not quite source order: a
@@ -1180,6 +1236,21 @@ pub struct InlayHintSettings {
     /// ```
     pub enum_values: bool,
 
+    /// in a runtime module with a stub, whether to show the parameter annotations,
+    /// return annotation and bases the stub declares for a declaration that does
+    /// not spell them, where they would be written. a slot this hint covers gets
+    /// no inferred, inherited or return type hint beside it.
+    ///
+    /// ```python
+    /// def f(a": int")" -> None": ...
+    /// ```
+    pub stub_types: bool,
+
+    /// in a runtime module with a stub, whether to show each member the stub
+    /// declares and the module does not, as the stub writes it, on lines of its
+    /// own where the stub's order puts it.
+    pub stub_only_members: bool,
+
     /// django templates: whether to show the element type a `{% for %}` binding
     /// takes.
     ///
@@ -1228,6 +1299,8 @@ impl InlayHintSettings {
             property_types: false,
             implicit_arguments: false,
             enum_values: false,
+            stub_types: false,
+            stub_only_members: false,
             template_binding_types: false,
             resolved_templates: false,
         }
@@ -1260,6 +1333,8 @@ impl InlayHintSettings {
             property_types,
             implicit_arguments,
             enum_values,
+            stub_types,
+            stub_only_members,
             template_binding_types,
             resolved_templates,
         } = *self;
@@ -1289,6 +1364,8 @@ impl InlayHintSettings {
             || property_types
             || implicit_arguments
             || enum_values
+            || stub_types
+            || stub_only_members
             || template_binding_types
             || resolved_templates
     }
@@ -1322,6 +1399,8 @@ impl Default for InlayHintSettings {
             property_types: true,
             implicit_arguments: true,
             enum_values: true,
+            stub_types: true,
+            stub_only_members: true,
             template_binding_types: true,
             resolved_templates: true,
         }
@@ -1708,6 +1787,11 @@ struct InlayHintVisitor<'a, 'db> {
     union_siblings: Option<(TextRange, Vec<Type<'db>>)>,
     /// The class whose body we are directly inside, if any.
     enclosing_class: Option<Type<'db>>,
+    /// The stub describing this module, when one does and a hint drawn from it is on.
+    stub: Option<stub::StubContext<'db>>,
+    /// The positions of the annotation slots a `stubTypes` hint filled, which no other hint
+    /// fills beside it.
+    stub_covered: rustc_hash::FxHashSet<TextSize>,
 }
 
 impl<'a, 'db> InlayHintVisitor<'a, 'db> {
@@ -1734,6 +1818,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             in_lambda: false,
             union_siblings: None,
             enclosing_class: None,
+            stub: (settings.stub_types || settings.stub_only_members)
+                .then(|| stub::StubContext::new(db, file))
+                .flatten(),
+            stub_covered: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -2359,6 +2447,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             || self.in_lambda
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
+            || self.stub_covered.contains(&parameter.name.range().end())
         {
             return;
         }
@@ -2409,6 +2498,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             || self.in_lambda
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
+            || self.stub_covered.contains(&parameter.name.range().end())
         {
             return;
         }
@@ -2457,6 +2547,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             || function.returns.is_some()
             || function.is_asserts_return
             || !self.range.contains_inclusive(function.parameters.end())
+            || self.stub_covered.contains(&function.parameters.end())
         {
             return;
         }
@@ -2663,6 +2754,8 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             Stmt::FunctionDef(function) => {
+                // the stub's annotations first: a slot they fill gets no inferred hint
+                self.add_stub_types(function);
                 self.add_inferred_return(function);
                 self.add_inferred_raises(function);
                 self.add_inferred_reads(function);
@@ -2682,6 +2775,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                     class.inferred_type(model)
                 });
                 self.add_inferred_class_reification(class);
+                self.add_stub_bases(class);
                 self.add_inferred_base_type_arguments(class);
 
                 // a `case` variant is a member declaration with nowhere to write
@@ -4083,10 +4177,18 @@ Source with applied edits:
             ",
         );
 
+        // a module with a stub, for the hints it takes from the stub
+        let mut stubbed =
+            inlay_hint_test_in("stubbed.py", "def g(a):\n    pass\n", Options::default());
+        stubbed.with_extra_file(
+            "stubbed.pyi",
+            "def g(a: int) -> None: ...\ndef h() -> None: ...\n",
+        );
+
         let mut produced = FxHashSet::default();
         for kind in InlayHintKind::iter() {
             let settings = only(kind);
-            for test in [&mut by, &mut python] {
+            for test in [&mut by, &mut python, &mut stubbed] {
                 let hints = inlay_hints(
                     &test.db,
                     ProgramFile::new(
@@ -14201,6 +14303,641 @@ def each(fn: (int) -> None) -> None:
             inferred_return_types: true,
             ..InlayHintSettings::none()
         }));
+    }
+
+    fn stub_settings() -> InlayHintSettings {
+        InlayHintSettings {
+            stub_types: true,
+            stub_only_members: true,
+            ..InlayHintSettings::none()
+        }
+    }
+
+    impl InlayHintTest {
+        /// every whole-line hint, as `above 3:` or `below 3:` (the line the hint is drawn on the
+        /// side of) and its lines, and its kind and edits on the line after
+        fn block_hints(&self, settings: &InlayHintSettings) -> String {
+            let index = ruff_db::source::line_index(&self.db, self.file);
+            inlay_hints(
+                &self.db,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
+                self.range,
+                settings,
+            )
+            .into_iter()
+            .filter_map(|hint| {
+                let placement = hint.placement?;
+                let line = index.line_index(hint.position).get();
+                let label = hint
+                    .label
+                    .parts()
+                    .iter()
+                    .map(InlayHintLabelPart::text)
+                    .join("");
+                let target = hint
+                    .label
+                    .parts()
+                    .iter()
+                    .filter_map(|part| part.target())
+                    .map(|target| {
+                        let text = source_text(&self.db, target.file());
+                        format!(
+                            "{}@{:?}",
+                            target.file().path(&self.db),
+                            text[target.focus_range()]
+                                .lines()
+                                .next()
+                                .unwrap_or_default()
+                        )
+                    })
+                    .join(", ");
+                Some(format!(
+                    "{} {line}: ({}) -> {target}\n{label}",
+                    placement.as_str(),
+                    hint.kind.setting()
+                ))
+            })
+            .join("\n")
+        }
+    }
+
+    #[test]
+    fn stub_types_fill_what_a_runtime_def_leaves_out() {
+        let mut test = inlay_hint_test(
+            "
+            class Parser:
+                def parse(self, text, strict=False):
+                    return text.split()
+
+            def helper(a, *args, **kwargs):
+                pass
+
+            def annotated(a: int) -> int:
+                return a
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "class Parser:\n    def parse(self, text: str, strict: bool = ...) -> list[str]: ...\n\
+             def helper(a: int, *args: str, **kwargs: object) -> None: ...\n\
+             def annotated(a: str) -> str: ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+
+        class Parser:
+            def parse(self, text[: str], strict[: bool]=False)[ -> list[str]]:
+                return text.split()
+
+        def helper(a[: int], *args[: str], **kwargs[: object])[ -> None]:
+            pass
+
+        def annotated(a: int) -> int:
+            return a
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:2:27
+          |
+        2 |     def parse(self, text: str, strict: bool = ...) -> list[str]: ...
+          |                           ^^^
+        info: Source
+         --> main2.py:3:28
+          |
+        3 |     def parse(self, text[: str], strict[: bool]=False)[ -> list[str]]:
+          |                            ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:2:40
+          |
+        2 |     def parse(self, text: str, strict: bool = ...) -> list[str]: ...
+          |                                        ^^^^
+        info: Source
+         --> main2.py:3:43
+          |
+        3 |     def parse(self, text[: str], strict[: bool]=False)[ -> list[str]]:
+          |                                           ^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:2:55
+          |
+        2 |     def parse(self, text: str, strict: bool = ...) -> list[str]: ...
+          |                                                       ^^^^^^^^^
+        info: Source
+         --> main2.py:3:60
+          |
+        3 |     def parse(self, text[: str], strict[: bool]=False)[ -> list[str]]:
+          |                                                            ^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:15
+          |
+        3 | def helper(a: int, *args: str, **kwargs: object) -> None: ...
+          |               ^^^
+        info: Source
+         --> main2.py:6:16
+          |
+        6 | def helper(a[: int], *args[: str], **kwargs[: object])[ -> None]:
+          |                ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:27
+          |
+        3 | def helper(a: int, *args: str, **kwargs: object) -> None: ...
+          |                           ^^^
+        info: Source
+         --> main2.py:6:30
+          |
+        6 | def helper(a[: int], *args[: str], **kwargs[: object])[ -> None]:
+          |                              ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:42
+          |
+        3 | def helper(a: int, *args: str, **kwargs: object) -> None: ...
+          |                                          ^^^^^^
+        info: Source
+         --> main2.py:6:47
+          |
+        6 | def helper(a[: int], *args[: str], **kwargs[: object])[ -> None]:
+          |                                               ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:53
+          |
+        3 | def helper(a: int, *args: str, **kwargs: object) -> None: ...
+          |                                                     ^^^^
+        info: Source
+         --> main2.py:6:60
+          |
+        6 | def helper(a[: int], *args[: str], **kwargs[: object])[ -> None]:
+          |                                                            ^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        2 | class Parser:
+          -     def parse(self, text, strict=False):
+        3 +     def parse(self, text: str, strict: bool = False) -> list[str]:
+        4 |         return text.split()
+        5 |
+          - def helper(a, *args, **kwargs):
+        6 + def helper(a: int, *args: str, **kwargs: object) -> None:
+        7 |     pass
+          |
+        ");
+    }
+
+    #[test]
+    fn stub_types_of_overloads_are_only_what_every_overload_says() {
+        let mut test = inlay_hint_test(
+            "
+            def get(key, default=None):
+                return default
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "from typing import overload\n\
+             @overload\ndef get(key: str) -> str | None: ...\n\
+             @overload\ndef get(key: str, default: int) -> str | int: ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+
+        def get(key[: str], default=None):
+            return default
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:14
+          |
+        3 | def get(key: str) -> str | None: ...
+          |              ^^^
+        info: Source
+         --> main2.py:2:15
+          |
+        2 | def get(key[: str], default=None):
+          |               ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        1 |
+          - def get(key, default=None):
+        2 + def get(key: str, default=None):
+        3 |     return default
+          |
+        ");
+    }
+
+    #[test]
+    fn stub_types_take_the_version_branch_that_runs() {
+        let mut test = inlay_hint_test(
+            "
+            def f(a):
+                pass
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "import sys\nif sys.version_info >= (3, 0):\n    def f(a: int) -> None: ...\n\
+             else:\n    def f(a: str) -> None: ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+
+        def f(a[: int])[ -> None]:
+            pass
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:14
+          |
+        3 |     def f(a: int) -> None: ...
+          |              ^^^
+        info: Source
+         --> main2.py:2:11
+          |
+        2 | def f(a[: int])[ -> None]:
+          |           ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:22
+          |
+        3 |     def f(a: int) -> None: ...
+          |                      ^^^^
+        info: Source
+         --> main2.py:2:21
+          |
+        2 | def f(a[: int])[ -> None]:
+          |                     ^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        1 |
+          - def f(a):
+        2 + def f(a: int) -> None:
+        3 |     pass
+          |
+        ");
+    }
+
+    #[test]
+    fn stub_bases_go_where_a_class_lists_none() {
+        let mut test = inlay_hint_test(
+            "
+            class Base: ...
+
+            class A:
+                pass
+
+            class B():
+                pass
+
+            class C(Base):
+                pass
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "class Base: ...\nclass A(Base): ...\nclass B(Base, metaclass=type): ...\n\
+             class C(object): ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+
+        class Base: ...
+
+        class A[(Base)]:
+            pass
+
+        class B([Base, metaclass=type]):
+            pass
+
+        class C(Base):
+            pass
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:2:8
+          |
+        2 | class A(Base): ...
+          |        ^^^^^^
+        info: Source
+         --> main2.py:4:9
+          |
+        4 | class A[(Base)]:
+          |         ^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:8
+          |
+        3 | class B(Base, metaclass=type): ...
+          |        ^^^^^^^^^^^^^^^^^^^^^^
+        info: Source
+         --> main2.py:7:10
+          |
+        7 | class B([Base, metaclass=type]):
+          |          ^^^^^^^^^^^^^^^^^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        3 |
+          - class A:
+        4 + class A(Base):
+        5 |     pass
+        6 |
+          - class B():
+        7 + class B(Base, metaclass=type):
+        8 |     pass
+          |
+        ");
+    }
+
+    #[test]
+    fn a_slot_the_stub_fills_gets_no_inferred_hint() {
+        let mut test = sound_types_inlay_hint_test(
+            "
+            def f(a):
+                return a.name
+
+            def g(b):
+                return b.name
+            ",
+        );
+        test.with_extra_file("main.byi", "def f(a: str) -> int: ...\n");
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            stub_types: true,
+            inferred_return_types: true,
+            inferred_parameter_types: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        def f(a[: str])[ -> int]:
+            return a.name
+
+        def g(b[: some protocol(let name: Unknown)]):
+            return b.name
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.byi:1:10
+          |
+        1 | def f(a: str) -> int: ...
+          |          ^^^
+        info: Source
+         --> main2.py:2:11
+          |
+        2 | def f(a[: str])[ -> int]:
+          |           ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.byi:1:18
+          |
+        1 | def f(a: str) -> int: ...
+          |                  ^^^
+        info: Source
+         --> main2.py:2:21
+          |
+        2 | def f(a[: str])[ -> int]:
+          |                     ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+          |
+        1 |
+          - def f(a):
+        2 + def f(a: str) -> int:
+        3 |     return a.name
+          |
+        ");
+    }
+
+    #[test]
+    fn a_basedpython_stub_is_shown_in_python_to_a_python_module() {
+        let mut test = inlay_hint_test(
+            "
+            def f(a):
+                pass
+            ",
+        );
+        test.with_extra_file("main.byi", "def f(a: int?) -> (int) -> str: ...\n");
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+
+        def f(a[: int | None])[ -> (int, /) -> str]:
+            pass
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.byi:1:10
+          |
+        1 | def f(a: int?) -> (int) -> str: ...
+          |          ^^^^
+        info: Source
+         --> main2.py:2:11
+          |
+        2 | def f(a[: int | None])[ -> (int, /) -> str]:
+          |           ^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.byi:1:19
+          |
+        1 | def f(a: int?) -> (int) -> str: ...
+          |                   ^^^^^^^^^^^^
+        info: Source
+         --> main2.py:2:28
+          |
+        2 | def f(a[: int | None])[ -> (int, /) -> str]:
+          |                            ^^^^^^^^^^^^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        1 |
+          - def f(a):
+        2 + def f(a: int | None):
+        3 |     pass
+          |
+        ");
+    }
+
+    #[test]
+    fn stub_only_members_go_where_the_stub_puts_them() {
+        let mut test = inlay_hint_test(
+            "
+            import os
+
+            class Parser:
+                def parse(self, text):
+                    return text.split()
+
+            class Empty:
+                pass
+
+            def last(): ...
+            ",
+        );
+        test.with_extra_file(
+            "main.pyi",
+            "from typing import TypeVar\n\
+             _T = TypeVar('_T')\n\
+             VERSION: str\n\
+             class Parser:\n    \
+                 def __init__(self, strict: bool = ...) -> None: ...\n    \
+                 def parse(self, text: str) -> list[str]: ...\n    \
+                 def reset(self) -> None: ...\n\
+             class Empty:\n    size: int\n\
+             def _private() -> None: ...\n\
+             def last() -> None: ...\n\
+             class Tail:\n    \
+                 @property\n    \
+                 def name(self) -> str: ...\n",
+        );
+
+        assert_snapshot!(test.block_hints(&stub_settings()), @r#"
+        above 4: (stubOnlyMembers) -> /main.pyi@"VERSION"
+        VERSION: str
+        above 5: (stubOnlyMembers) -> /main.pyi@"__init__"
+            def __init__(self, strict: bool = ...) -> None: ...
+        below 6: (stubOnlyMembers) -> /main.pyi@"reset"
+            def reset(self) -> None: ...
+        below 9: (stubOnlyMembers) -> /main.pyi@"size"
+            size: int
+        below 11: (stubOnlyMembers) -> /main.pyi@"Tail"
+        class Tail:
+            @property
+            def name(self) -> str: ...
+        "#);
+        // the edits put each member where its hint is drawn
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            stub_only_members: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        import os
+
+        [VERSION: str]class Parser:
+        [    def __init__(self, strict: bool = ...) -> None: ...]    def parse(self, text):
+                return text.split()[    def reset(self) -> None: ...]
+
+        class Empty:
+            pass[    size: int]
+
+        def last(): ...[class Tail:
+            @property
+            def name(self) -> str: ...]
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:3:1
+          |
+        3 | VERSION: str
+          | ^^^^^^^
+        info: Source
+         --> main2.py:4:2
+          |
+        4 | [VERSION: str]class Parser:
+          |  ^^^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:5:9
+          |
+        5 |     def __init__(self, strict: bool = ...) -> None: ...
+          |         ^^^^^^^^
+        info: Source
+         --> main2.py:5:2
+          |
+        5 | [    def __init__(self, strict: bool = ...) -> None: ...]    def parse(self, text):
+          |  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:7:9
+          |
+        7 |     def reset(self) -> None: ...
+          |         ^^^^^
+        info: Source
+         --> main2.py:6:29
+          |
+        6 |         return text.split()[    def reset(self) -> None: ...]
+          |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.pyi:9:5
+          |
+        9 |     size: int
+          |     ^^^^
+        info: Source
+         --> main2.py:9:10
+          |
+        9 |     pass[    size: int]
+          |          ^^^^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> main.pyi:12:7
+           |
+        12 | class Tail:
+           |       ^^^^
+        info: Source
+          --> main2.py:11:17
+           |
+        11 |   def last(): ...[class Tail:
+           |  _________________^
+        12 | |     @property
+        13 | |     def name(self) -> str: ...]
+           | |______________________________^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+           |
+        3  |
+        4  + VERSION: str
+        5  | class Parser:
+        6  +     def __init__(self, strict: bool = ...) -> None: ...
+        7  |     def parse(self, text):
+        8  |         return text.split()
+        9  +     def reset(self) -> None: ...
+        10 |
+        11 | class Empty:
+        12 |     pass
+        13 +     size: int
+        14 |
+        15 | def last(): ...
+        16 + class Tail:
+        17 +     @property
+        18 +     def name(self) -> str: ...
+           |
+        ");
+    }
+
+    #[test]
+    fn a_module_with_no_stub_gets_no_stub_hints() {
+        let mut test = inlay_hint_test(
+            "
+            def f(a):
+                pass
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&stub_settings()), @"
+        def f(a):
+            pass
+        ");
     }
 
     impl InlayHintTextEdit {

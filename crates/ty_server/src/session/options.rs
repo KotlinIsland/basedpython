@@ -445,6 +445,8 @@ pub struct InlayHintOptions {
     property_types: Option<bool>,
     implicit_arguments: Option<bool>,
     enum_values: Option<bool>,
+    stub_types: Option<bool>,
+    stub_only_members: Option<bool>,
     template_binding_types: Option<bool>,
     resolved_templates: Option<bool>,
 }
@@ -477,6 +479,8 @@ impl InlayHintOptions {
             property_types: self.property_types.unwrap_or(true),
             implicit_arguments: self.implicit_arguments.unwrap_or(true),
             enum_values: self.enum_values.unwrap_or(true),
+            stub_types: self.stub_types.unwrap_or(true),
+            stub_only_members: self.stub_only_members.unwrap_or(true),
             template_binding_types: self.template_binding_types.unwrap_or(true),
             resolved_templates: self.resolved_templates.unwrap_or(true),
         }

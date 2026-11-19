@@ -78,6 +78,7 @@ mod rename;
 mod script_preparation;
 mod semantic_tokens;
 mod signature_help;
+mod stub_counterparts;
 mod super_members;
 mod syntax_outline;
 mod test_subjects;

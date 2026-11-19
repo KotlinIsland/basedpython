@@ -388,6 +388,49 @@ def my_function(): ...
         ");
     }
 
+    /// an attribute a stub declares in the class body is one the runtime class usually assigns
+    /// in a method, which is where goto-definition goes
+    #[test]
+    fn goto_definition_stub_map_instance_attribute() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+from mymodule import Point
+Point().<CURSOR>x
+",
+            )
+            .source(
+                "mymodule.py",
+                r#"
+class Point:
+    def __init__(self):
+        self.x = 0
+"#,
+            )
+            .source(
+                "mymodule.pyi",
+                r#"
+class Point:
+    x: int
+"#,
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.py:3:9
+          |
+        3 | Point().x
+          |         ^ Clicking here
+        info: Found 1 definition
+         --> mymodule.py:4:9
+          |
+        4 |         self.x = 0
+          |         ------
+        ");
+    }
+
     /// goto-definition on a module ref should go to the .py not the .pyi
     #[test]
     fn goto_definition_stub_map_module_ref() {

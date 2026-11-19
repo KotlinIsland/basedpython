@@ -91,6 +91,9 @@ pub struct InlayHintAbout {
     pub example: Option<&'static str>,
     /// what the example is written in: basedpython, but for a hint only python files show
     pub example_language: InlayHintExampleLanguage,
+    /// the stub the example's hints are drawn from, written beside it, for a hint a runtime
+    /// module takes from its stub
+    pub example_stub: Option<&'static str>,
 }
 
 /// the language of a kind's example
@@ -131,6 +134,7 @@ impl InlayHintKind {
                 attaches_to,
                 example: Some(example),
                 example_language: InlayHintExampleLanguage::BasedPython,
+                example_stub: None,
             }
         }
 
@@ -275,6 +279,36 @@ impl InlayHintKind {
                  class LoudGreeter(Greeter):\n    def greet(self, name: str) -> str:\n        \
                  return name.upper()\n",
             ),
+            Self::StubTypes => InlayHintAbout {
+                example_language: InlayHintExampleLanguage::Python,
+                example_stub: Some(
+                    "class Parser:\n    def parse(self, text: str, strict: bool = ...) -> list[str]: ...\n",
+                ),
+                ..about(
+                    "Stub types",
+                    Types,
+                    Preceding,
+                    "The annotations a module's stub declares for a parameter, a return or a \
+                     class's bases the module leaves out, where they would be written.",
+                    "class Parser:\n    def parse(self, text, strict=False):\n        \
+                     return text.split()\n",
+                )
+            },
+            Self::StubOnlyMembers => InlayHintAbout {
+                example_language: InlayHintExampleLanguage::Python,
+                example_stub: Some(
+                    "class Parser:\n    def parse(self, text: str) -> list[str]: ...\n    \
+                     def reset(self) -> None: ...\n\ndef parse_file(path: str) -> list[str]: ...\n",
+                ),
+                ..about(
+                    "Stub-only members",
+                    Effects,
+                    Following,
+                    "A member a module's stub declares that the module does not, on lines of its \
+                     own where the stub puts it.",
+                    "class Parser:\n    def parse(self, text):\n        return text.split()\n",
+                )
+            },
             Self::Override => about(
                 "Override",
                 Effects,
@@ -363,6 +397,7 @@ impl TemplateInlayHintKind {
                 attaches_to: InlayHintAttachment::Preceding,
                 example: None,
                 example_language: InlayHintExampleLanguage::BasedPython,
+                example_stub: None,
             },
             Self::Template => InlayHintAbout {
                 title: "Resolved templates",
@@ -372,6 +407,7 @@ impl TemplateInlayHintKind {
                 attaches_to: InlayHintAttachment::Preceding,
                 example: None,
                 example_language: InlayHintExampleLanguage::BasedPython,
+                example_stub: None,
             },
         }
     }
@@ -424,6 +460,7 @@ pub const INLAY_HINT_CATALOG: &[AnyInlayHintKind] = {
         Source(K::InheritedParameterType),
         Source(K::InferredParameterType),
         Source(K::PropertyType),
+        Source(K::StubTypes),
         // generics
         Source(K::CallTypeArguments),
         Source(K::TypeArgumentName),
@@ -442,6 +479,7 @@ pub const INLAY_HINT_CATALOG: &[AnyInlayHintKind] = {
         Source(K::Raises),
         Source(K::RevealedType),
         Source(K::EnumValue),
+        Source(K::StubOnlyMembers),
         // basedpython-ui
         Source(K::Reads),
         Source(K::Stability),
@@ -515,6 +553,13 @@ impl InlayHintExamples {
                 about.example_language.extension()
             ));
             system.fs().write_file_all(&path, example).ok()?;
+            // the stub resolves for the example's module ahead of the example itself, which makes
+            // the example the runtime module it describes
+            if let Some(stub) = about.example_stub {
+                let stub_path =
+                    path.with_extension(&format!("{}i", about.example_language.extension()));
+                system.fs().write_file_all(&stub_path, stub).ok()?;
+            }
             paths.push((kind, path));
         }
         for (path, source) in BASEDPYTHON_UI {

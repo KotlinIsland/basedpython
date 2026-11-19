@@ -74,6 +74,10 @@ pub(crate) struct InlayHintCatalogKind {
     file_kind: FileKind,
     /// `null` for a kind no standalone program shows
     example: Option<InlayHintCatalogExample>,
+    /// for a hint a runtime module takes from its stub, the stub the example's hints are drawn
+    /// from, written beside the example. absent for every other kind
+    #[serde(skip_serializing_if = "Option::is_none")]
+    example_stub: Option<String>,
 }
 
 /// which code a hint belongs with: the side of it a caret typed at its offset lands on
@@ -172,6 +176,7 @@ fn inlay_hint_catalog(encoding: PositionEncoding) -> InlayHintCatalog {
                     InlayHintFileKind::Template => FileKind::Template,
                 },
                 example,
+                example_stub: about.example_stub.map(str::to_string),
             }
         })
         .collect();

@@ -123,6 +123,22 @@ fn every_kind_is_listed_with_its_example_drawn() -> Result<()> {
         let templates = kind(&catalog, "resolvedTemplates");
         assert_eq!(templates["fileKind"], "template");
         assert!(templates["example"].is_null());
+
+        // a hint a module takes from its stub is drawn against the stub its entry carries, which
+        // no other kind has
+        let stub_types = kind(&catalog, "stubTypes");
+        assert!(stub_types["exampleStub"].is_string());
+        assert!(returns.get("exampleStub").is_none());
+        let stub_only = kind(&catalog, "stubOnlyMembers");
+        assert!(stub_only["exampleStub"].is_string());
+        let ghosts = own_hints(stub_only);
+        assert!(!ghosts.is_empty());
+        // a member only the stub declares is drawn as lines of its own, which its tag says
+        assert!(
+            ghosts.iter().all(|hint| {
+                matches!(hint["data"]["placement"].as_str(), Some("above" | "below"))
+            })
+        );
     }
 
     Ok(())

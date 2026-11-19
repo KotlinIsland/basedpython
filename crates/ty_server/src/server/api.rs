@@ -380,6 +380,12 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        // asked once per highlighting pass over a document, like its diagnostics
+        requests::DocumentCounterpartsRequestHandler::METHOD => background_document_request_task::<
+            requests::DocumentCounterpartsRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::DocumentUsageCountsRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentUsageCountsRequestHandler,
         >(

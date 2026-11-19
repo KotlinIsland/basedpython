@@ -377,6 +377,32 @@ pub fn file_to_module<'db>(
     })
 }
 
+/// Resolves the module a runtime source file is: what [`file_to_module`] answers, or, for a file
+/// only the search paths python imports from reach, the module it is there.
+///
+/// The standard library is the one such place: type checking reads the vendored stubs for it,
+/// so a `.py` of the interpreter's own standard library is in none of the paths
+/// [`file_to_module`] reads, though python imports it as the module it is.
+pub fn runtime_file_to_module<'db>(
+    db: &'db dyn Db,
+    resolver_file: ResolverFile<'db>,
+) -> Option<Module<'db>> {
+    file_to_module(db, resolver_file).or_else(|| {
+        let file = resolver_file.file(db);
+        let path = SystemOrVendoredPathRef::try_from_file(db, file)?;
+        file_to_module_impl(
+            db,
+            resolver_file,
+            path,
+            search_paths(
+                db,
+                resolver_file.environment(db),
+                ModuleResolveMode::Runtime,
+            ),
+        )
+    })
+}
+
 /// Resolves the runtime module corresponding to a stub file.
 ///
 /// Modules that are only available as stubs, including built-in modules, return `None`.

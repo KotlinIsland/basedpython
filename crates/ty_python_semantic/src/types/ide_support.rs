@@ -78,13 +78,13 @@ mod unreachable_code;
 #[path = "ide_support/unused_bindings.rs"]
 mod unused_binding_support;
 
+pub use crate::stub_mapping::map_stub_definition;
 use crate::types::definition_resolution::{
     self, find_symbol_in_scope, resolve_definition, user_visible_definitions,
 };
 pub use crate::types::definition_resolution::{ImportAliasResolution, ResolvedDefinition};
 pub use crate::types::overrides::is_constructor_like_method;
 pub use data_flow::{ConditionVerdict, DataFlow, ValueVerdict, data_flow};
-pub use stub_mapping::map_stub_definition;
 pub use unreachable_code::{UnreachableKind, UnreachableRange, unreachable_ranges};
 pub use unused_binding_support::{UnusedBinding, unused_bindings};
 
@@ -2338,170 +2338,6 @@ pub fn inlay_hint_call_argument_details<'db>(
         argument_names,
         type_arguments: resolved.type_arguments,
     })
-}
-
-mod stub_mapping {
-    use crate::lexical_name_path::{
-        lexical_name_path_component_for_node, lexical_name_path_for_definition,
-    };
-    use crate::types::definition_resolution::{
-        ImportAliasResolution, ResolvedDefinition, find_symbol_in_scope, resolve_definition,
-    };
-    use crate::{Db, ProgramEnvironment};
-    use ruff_db::files::vendored_path_to_file;
-    use ruff_db::parsed::parsed_module;
-    use ruff_db::system::SystemPath;
-    use ruff_db::vendored::VendoredPathBuf;
-    use tracing::trace;
-    use ty_module_resolver::stub_file_to_real_module;
-    use ty_python_core::{ProgramFile, global_scope, semantic_index};
-
-    /// Given a definition that may be in a stub file, find the "real" definition in a non-stub.
-    #[tracing::instrument(skip_all)]
-    pub fn map_stub_definition<'db>(
-        db: &'db dyn Db,
-        def: &ResolvedDefinition<'db>,
-        cached_vendored_typeshed: Option<&SystemPath>,
-    ) -> Option<Vec<ResolvedDefinition<'db>>> {
-        let Some(stub_program_file) = def.program_file(db) else {
-            trace!("Found arbitrary FileWithRange while stub mapping, giving up");
-            return None;
-        };
-        let env = ProgramEnvironment::from_file(stub_program_file);
-
-        // If the file isn't a stub, this is presumably the real definition
-        let stub_file = stub_program_file.file(db);
-        trace!("Stub mapping definition in: {}", stub_file.path(db));
-        if !stub_file.is_stub(db) {
-            trace!("File isn't a stub, no stub mapping to do");
-            return None;
-        }
-
-        // We write vendored typeshed stubs to disk in the cache, and consequently "forget"
-        // that they're typeshed when an IDE hands those paths back to us later. For most
-        // purposes this seemingly doesn't matter at all, and avoids issues with someone
-        // editing the cache by hand in their IDE and us getting confused about the contents
-        // of the file (hello and welcome to anyone who has found Bigger Issues this causes).
-        //
-        // The major exception is in exactly stub-mapping, where we need to "remember" that
-        // we're in typeshed to successfully stub-map to the Real Stdlib. So here we attempt
-        // to do just that. The resulting file must not be used for anything other than
-        // this module lookup, as the `ResolvedDefinition` we're handling isn't for that file.
-        let mut stub_file_for_module_lookup = stub_program_file;
-        if let Some(vendored_typeshed) = cached_vendored_typeshed
-            && let Some(stub_path) = stub_file.path(db).as_system_path()
-            && let Ok(rel_path) = stub_path.strip_prefix(vendored_typeshed)
-            && let Ok(typeshed_file) =
-                vendored_path_to_file(db, VendoredPathBuf::from(rel_path.as_str()))
-        {
-            trace!(
-                "Stub is cached vendored typeshed: {}",
-                typeshed_file.path(db)
-            );
-            stub_file_for_module_lookup = ProgramFile::new(db, typeshed_file, env.program(db));
-        }
-
-        // It's definitely a stub, so now rerun module resolution but with stubs disabled.
-        let resolver_file = stub_file_for_module_lookup.resolver_file(db);
-        let real_module = stub_file_to_real_module(db, resolver_file)?;
-        trace!("Found real module: {}", real_module.name(db));
-        let real_parse_file = ProgramFile::new(db, real_module.file(db)?, env.program(db));
-        let real_file = real_parse_file.file(db);
-        trace!("Found real file: {}", real_file.path(db));
-
-        // A definition's lexical name path describes its nesting within a module:
-        //
-        // ```
-        // class Outer:          # [Outer]
-        //     def method(): ... # [Outer, method]
-        // ```
-        //
-        // Compute the path in the stub file, then resolve the same path in the real file.
-        //
-        // NOTE: currently a path component is just a name, but in the future additional
-        // disambiguators (like "is a class def") could be added if needed.
-        let path = match *def {
-            ResolvedDefinition::Definition(definition) => {
-                let path = lexical_name_path_for_definition(db, definition)?;
-                trace!("Built lexical name path: {path:?}");
-                path
-            }
-            ResolvedDefinition::Module(_) => {
-                trace!(
-                    "Found module mapping: {} => {}",
-                    stub_file.path(db),
-                    real_file.path(db)
-                );
-                return Some(vec![ResolvedDefinition::Module(real_parse_file)]);
-            }
-            ResolvedDefinition::FileWithRange(_) => {
-                // Not yet implemented -- in this case we want to recover something like a Definition
-                // and build a lexical name path, but this input is a bit too abstract for now.
-                trace!("Found arbitrary FileWithRange while stub mapping, giving up");
-                return None;
-            }
-        };
-
-        // Walk down the lexical name path in the real file.
-        let mut definitions = Vec::new();
-        let index = semantic_index(db, real_parse_file);
-        let global_scope = global_scope(db, real_parse_file);
-        let real_parsed = parsed_module(db, global_scope.python_file(db));
-        let real_ref = real_parsed.load(db);
-        // Start our search in the module (global) scope
-        let mut scopes = vec![global_scope];
-        let mut path = path.iter().peekable();
-        while let Some(component) = path.next() {
-            trace!("Traversing lexical name path component: {}", component);
-            // We're doing essentially a breadth-first traversal of the definitions.
-            // If ever we find multiple matching scopes for a component, we need to continue
-            // walking down each of them to try to resolve the path. Here we loop over
-            // all the scopes at the current level of search.
-            for scope in std::mem::take(&mut scopes) {
-                if path.peek().is_none() {
-                    // We're at the end of the path, everything we find here is the final result
-                    definitions.extend(
-                        find_symbol_in_scope(db, scope, component.as_str())
-                            .into_iter()
-                            .flat_map(|definition| {
-                                resolve_definition(
-                                    db,
-                                    &env,
-                                    definition,
-                                    Some(component.as_str()),
-                                    ImportAliasResolution::ResolveAliases,
-                                )
-                            }),
-                    );
-                } else {
-                    // We're in the middle of the path, look for scopes that match the current component
-                    for (child_scope_id, child_scope) in index.child_scopes(scope.file_scope_id(db))
-                    {
-                        let scope_node = child_scope.node();
-                        if let Ok(Some(real_component)) =
-                            lexical_name_path_component_for_node(&real_ref, scope_node)
-                            && real_component == *component
-                        {
-                            scopes.push(child_scope_id.to_scope_id(db, real_parse_file));
-                        }
-                        scope.node(db);
-                    }
-                }
-            }
-            trace!(
-                "Found {} scopes and {} definitions",
-                scopes.len(),
-                definitions.len()
-            );
-        }
-        if definitions.is_empty() {
-            trace!("No definitions found in real file, stub mapping failed");
-            None
-        } else {
-            trace!("Found {} definitions from stub mapping", definitions.len());
-            Some(definitions)
-        }
-    }
 }
 
 /// Information about a class in the type hierarchy.

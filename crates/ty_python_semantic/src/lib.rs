@@ -106,6 +106,7 @@ mod preset;
 mod reachability;
 pub mod reified;
 mod semantic_model;
+pub mod stub_mapping;
 mod subscript;
 mod suppression;
 pub mod types;

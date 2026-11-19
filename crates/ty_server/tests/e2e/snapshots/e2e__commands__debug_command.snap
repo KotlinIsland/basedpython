@@ -42,6 +42,8 @@ Settings: WorkspaceSettings {
         property_types: true,
         implicit_arguments: true,
         enum_values: true,
+        stub_types: true,
+        stub_only_members: true,
         template_binding_types: true,
         resolved_templates: true,
     },

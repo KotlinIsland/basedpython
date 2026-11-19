@@ -356,6 +356,8 @@ on
 | `propertyTypes`              | the type a [property](properties.md) leaves to its accessors    |
 | `implicitArguments`          | the [context arguments](context-parameters.md) a call fills     |
 | `enumValues`                 | the value an [enum](enums.md) member takes implicitly           |
+| `stubTypes`                  | an annotation or bases the module's stub declares and it lacks  |
+| `stubOnlyMembers`            | a member only the stub declares, drawn as lines of their own    |
 | `templateBindingTypes`       | a django template `{% for %}` binding's element type            |
 | `resolvedTemplates`          | the file a django `{% extends %}` name resolves to              |
 
@@ -364,6 +366,12 @@ every hint also carries its setting's name as `data.kind` —
 or only while a key is held, without telling kinds apart by their text. lsp's
 own `kind` is only `Type` or `Parameter`, and a revealed `list[int]` and a
 call's `[int]` differ by a bracket
+
+a `stubOnlyMembers` hint is not drawn inline but as whole lines of its own,
+which its `data` says with a placement beside the kind —
+`{"kind": "stubOnlyMembers", "placement": "below"}` — the side of the line
+holding the hint's position the lines go on. its label is the member as the
+stub writes it, every line indented as it would be written there
 
 a hint is shown or hidden by its own setting alone, but one setting also
 changes what other hints say: in a `.by` file, `typeArgumentNames` names the

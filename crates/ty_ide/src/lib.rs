@@ -55,6 +55,7 @@ mod rename;
 mod selection_range;
 mod semantic_tokens;
 mod signature_help;
+mod stub_counterparts;
 mod stub_mapping;
 mod super_members;
 mod symbols;
@@ -112,7 +113,8 @@ pub use inlay_hint_catalog::{
     InlayHintExampleLanguage, InlayHintExamples, InlayHintFamily, InlayHintFileKind,
 };
 pub use inlay_hints::{
-    InlayHint, InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
+    BlockPlacement, InlayHint, InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit,
+    inlay_hints,
 };
 pub use markup::MarkupKind;
 pub use merge::{
@@ -151,6 +153,9 @@ pub use semantic_tokens::{
     mark_unreachable_code, semantic_tokens,
 };
 pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, signature_help};
+pub use stub_counterparts::{
+    CounterpartDeclaration, CounterpartKind, DocumentCounterparts, StubRole, document_counterparts,
+};
 pub use super_members::{OverridingMember, SuperMember, document_super_members, super_members};
 pub use symbols::{FlatSymbols, HierarchicalSymbols, SymbolId, SymbolInfo, SymbolKind};
 pub use syntax_outline::{
