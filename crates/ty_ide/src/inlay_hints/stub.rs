@@ -207,12 +207,11 @@ impl<'db> InlayHintVisitor<'_, 'db> {
             ) else {
                 continue;
             };
-            let Some(Some(stub_parameter)) = stub_parameters.first().copied() else {
-                continue;
-            };
             // the stub's type as this module reads it: its classes as this module's, its type
-            // variables as this function's own
-            let declared = stub_parameter
+            // variables as this function's own. it is the annotation's type, the type of one
+            // argument as the signature holds it, not the parameter's: `*args: str` binds a
+            // `tuple[str, ...]`, but takes `str`s
+            let declared = annotation
                 .inferred_type(&stub.stub_model)
                 .and_then(|ty| stub_type_in_runtime_function(&self.model, function, ty));
             // the hint says what the checker reads the parameter as, so a type naming something

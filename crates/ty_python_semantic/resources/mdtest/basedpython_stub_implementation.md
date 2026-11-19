@@ -38,6 +38,26 @@ from m import f
 reveal_type(f)  # revealed: def f(a: int, b: str = ...)
 ```
 
+## variadic parameters take the type of one argument
+
+`*args: str` in the stub takes `str`s, so the runtime body sees the tuple of them.
+
+`m.pyi`:
+
+```pyi
+def helper(a: int, *args: str, **kwargs: object) -> None: ...
+```
+
+`m.py`:
+
+```py
+def helper(a, *args, **kwargs):
+    reveal_type(args)  # revealed: tuple[str, ...]
+    reveal_type(kwargs)  # revealed: dict[str, object]
+
+reveal_type(helper)  # revealed: def helper(a: int, *args: str, **kwargs: object)
+```
+
 ## an explicit annotation wins
 
 the runtime module's own annotation is what its body is checked against. where it disagrees with the
