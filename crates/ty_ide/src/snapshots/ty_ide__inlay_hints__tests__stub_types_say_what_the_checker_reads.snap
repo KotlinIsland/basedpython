@@ -10,8 +10,12 @@ def get(key[: str], default[: int | str]=0)[ -> int | str]:
     reveal_type(default)
     return default
 
-def link(node, weight[: float])[ -> node]:
+def link(node[: Node], weight[: float])[ -> Node]:
+    reveal_type(node)
     return node
+
+def close(handle)[ -> None]:
+    pass
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
@@ -48,26 +52,48 @@ LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
    |                                                       ^^^
 
 info[inlay-hint-location]: Inlay Hint Target
+ --> main.pyi:7:16
+  |
+7 | def link(node: Node, weight: float) -> Node: ...
+  |                ^^^^
+info: Source
+ --> main2.py:9:17
+  |
+9 | def link(node[: Node], weight[: float])[ -> Node]:
+  |                 ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
  --> main.pyi:7:30
   |
 7 | def link(node: Node, weight: float) -> Node: ...
   |                              ^^^^^
 info: Source
- --> main2.py:9:25
+ --> main2.py:9:33
   |
-9 | def link(node, weight[: float])[ -> node]:
-  |                         ^^^^^
+9 | def link(node[: Node], weight[: float])[ -> Node]:
+  |                                 ^^^^^
 
 info[inlay-hint-location]: Inlay Hint Target
- --> main.py:9:10
+ --> main.pyi:7:40
   |
-9 | def link(node, weight):
-  |          ^^^^
+7 | def link(node: Node, weight: float) -> Node: ...
+  |                                        ^^^^
 info: Source
- --> main2.py:9:37
+ --> main2.py:9:45
   |
-9 | def link(node, weight[: float])[ -> node]:
-  |                                     ^^^^
+9 | def link(node[: Node], weight[: float])[ -> Node]:
+  |                                             ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.pyi:10:31
+   |
+10 | def close(handle: _Closer) -> None: ...
+   |                               ^^^^
+info: Source
+  --> main2.py:13:23
+   |
+13 | def close(handle)[ -> None]:
+   |                       ^^^^
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits
@@ -81,6 +107,11 @@ info[inlay-hint-edit]: Inlay hint edits
 7  |     return default
 8  |
    - def link(node, weight):
-9  + def link(node, weight: float):
-10 |     return node
+9  + def link(node: Node, weight: float) -> Node:
+10 |     reveal_type(node)
+11 |     return node
+12 |
+   - def close(handle):
+13 + def close(handle) -> None:
+14 |     pass
    |

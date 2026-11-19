@@ -43,10 +43,14 @@ class Square:
     is read
 - an annotation the module writes is what its body is checked against. where it
     disagrees with the stub, that is reported as below
-- a type the stub writes in terms only the stub has is not carried over: a class
-    the stub defines is not the module's class of the same name, and a type variable
-    it binds belongs to the stub's declaration. above, `scale` returns the stub's
-    `Square`, so the module's `scale` is left to its own body
+- the stub's types are read in the module's terms. a class the stub defines is the
+    module's class of the same name (above, `scale` returns the module's `Square`),
+    `Self` in a stub method is the module's method's, a type variable a stub
+    function binds makes the module's function generic over it, and one a stub class
+    binds is the module's class's type parameter in the same place
+- a type naming something only the stub has is not carried over: a class the
+    module doesn't define, a type variable of a class the module doesn't make
+    generic, an enum member or a `NewType` of the stub's own
 
 importers see the stub as they always did; nothing here changes what they read
 

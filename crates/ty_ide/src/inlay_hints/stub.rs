@@ -15,9 +15,10 @@
 //!   the checker reads such a slot as the union of what the overloads say, which the inherited
 //!   parameter type and return type hints show there instead.
 //!
-//!   the hint says what the checker reads the slot as, which is the stub's type only where the
-//!   stub's type means the same in the runtime module: a type naming one of the stub's own
-//!   classes or type variables is not carried into the runtime body, and is not hinted.
+//!   the hint says what the checker reads the slot as: the stub's type read in the runtime
+//!   module's terms, its classes as the module's own and its type variables as the function's. a
+//!   type naming something only the stub has (a class with no runtime counterpart) is not carried
+//!   into the runtime body, and is not hinted.
 //! - `stubOnlyMembers`: a member the stub declares and the runtime module (or class) does not,
 //!   drawn as its own lines, the stub's source as the stub writes it, where the stub's order puts
 //!   it among the runtime's members.
@@ -39,7 +40,7 @@ use ty_python_semantic::stub_mapping::{
     stub_counterpart_declarations, stub_pairing,
 };
 use ty_python_semantic::types::ide_support::{
-    inferred_return_type, inherited_parameter_annotation,
+    inferred_return_type, inherited_parameter_annotation, stub_type_in_runtime_function,
 };
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -209,10 +210,13 @@ impl<'db> InlayHintVisitor<'_, 'db> {
             let Some(Some(stub_parameter)) = stub_parameters.first().copied() else {
                 continue;
             };
-            let declared = stub_parameter.inferred_type(&stub.stub_model);
-            // the hint says what the checker reads the parameter as: a type the stub writes in
-            // terms only the stub has (its own classes, its type variables) is not carried into
-            // the runtime body, and is not hinted as though it were
+            // the stub's type as this module reads it: its classes as this module's, its type
+            // variables as this function's own
+            let declared = stub_parameter
+                .inferred_type(&stub.stub_model)
+                .and_then(|ty| stub_type_in_runtime_function(&self.model, function, ty));
+            // the hint says what the checker reads the parameter as, so a type naming something
+            // only the stub has, which the runtime body does not take, is not hinted
             if declared.is_none()
                 || inherited_parameter_annotation(&self.model, runtime_parameter) != declared
             {
@@ -236,7 +240,9 @@ impl<'db> InlayHintVisitor<'_, 'db> {
                 same_expression,
             )
         {
-            let declared = returns.inferred_type(&stub.stub_model);
+            let declared = returns
+                .inferred_type(&stub.stub_model)
+                .and_then(|ty| stub_type_in_runtime_function(&self.model, function, ty));
             if declared.is_some() && inferred_return_type(&self.model, function) == declared {
                 hints.push(self.stub_return_hint(function, returns, declared));
             }

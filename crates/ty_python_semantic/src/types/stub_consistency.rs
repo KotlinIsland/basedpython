@@ -3,9 +3,9 @@
 //! the checks run as the runtime module is inferred, one per declaration the stub pairs with
 //! (see [`crate::stub_mapping`]): a function's parameter list and annotations, a class's bases, a
 //! variable's annotation, and for the module and each class both declare, the members only one of
-//! them declares. a type that names something only the stub has (one of its own classes or type
-//! variables) cannot be compared with anything in the runtime module, so it is passed over, as
-//! [`is_statable_in_runtime`] decides for what the runtime body inherits from the stub.
+//! them declares. the stub's types are compared as the runtime module reads them (see
+//! `stub_implementation`), and one that names something only the stub has, which means nothing in
+//! the runtime module, is passed over.
 
 use ruff_db::diagnostic::{Annotation, Span};
 use ruff_db::parsed::parsed_module;
@@ -31,13 +31,9 @@ use crate::types::diagnostic::{
 };
 use crate::types::infer::original_class_type;
 use crate::types::signatures::{Parameter, ReturnCallableTypeVarScope};
-use crate::types::stub_implementation::{
-    StubSignature, is_statable_in_runtime, stub_declared_types, stub_signatures,
-    visible_binding_contexts,
-};
+use crate::types::stub_implementation::{StubSignature, stub_declared_types, stub_signatures};
 use crate::types::{
-    ClassLiteral, ProgramEnvironment, Type, UnionType, binding_type, infer_definition_types,
-    inferred_declaration,
+    ClassLiteral, ProgramEnvironment, Type, UnionType, infer_definition_types, inferred_declaration,
 };
 use crate::{Db, attribute_declarations};
 
@@ -114,7 +110,9 @@ pub(crate) fn check_scope_members<'db>(
             .then(|| dunder_all_names(db, program_file))
             .flatten();
         for (name, definition) in &stub_scope.runtime_only {
-            if name.starts_with('_') || is_dunder(name) {
+            // a type variable or an alias is typing's machinery in a module as in a stub
+            if is_dunder(name) || is_stub_only_by_design(db, name, std::slice::from_ref(definition))
+            {
                 continue;
             }
             let listed = dunder_all.map(|names| names.contains(name));
@@ -178,11 +176,10 @@ pub(crate) fn check_class<'db>(
         check_instance_attributes(context, body);
     }
 
-    // a decorator may replace the class with another (`enum._simple_enum` builds an enum out of
-    // a plain class), whose bases the class statement does not show
-    if !context.is_lint_enabled(&INCOMPATIBLE_STUB_BASES)
-        || binding_type(db, definition) != Type::ClassLiteral(runtime_class)
-    {
+    // a decorator may replace the class with another whose bases the class statement does not
+    // show: `enum._simple_enum(StrEnum)` builds a `StrEnum` out of a plain class, and is typed as
+    // handing back the class it is given
+    if !context.is_lint_enabled(&INCOMPATIBLE_STUB_BASES) || !class_node.decorator_list.is_empty() {
         return;
     }
     let runtime_mro: Vec<ClassLiteral<'db>> = runtime_class
@@ -352,9 +349,6 @@ pub(crate) fn check_function<'db>(
     let Some(function) = infer_definition_types(db, definition).function_type(definition) else {
         return;
     };
-    let Some(stub) = runtime_module_stub(db, definition.program_file(db)) else {
-        return;
-    };
     let env = ProgramEnvironment::from_file(definition.program_file(db));
     let overload = function.literal(db).last_definition;
     // the runtime module's own `@overload`s declare signatures of their own; the implementation
@@ -369,9 +363,6 @@ pub(crate) fn check_function<'db>(
         .iter()
         .skip(usize::from(binds_receiver))
         .collect();
-    let visible = visible_binding_contexts(db, definition);
-    let statable =
-        |ty: Type<'db>| is_statable_in_runtime(db, &env, ty, stub, |c| visible.contains(&c));
     let name = &node.name;
 
     let report = |range: TextRange, stub_signature: &StubSignature<'db>, message: String| {
@@ -440,7 +431,6 @@ pub(crate) fn check_function<'db>(
                 && !found.is_keyword_variadic()
                 && !stub_parameter.is_variadic()
                 && !stub_parameter.is_keyword_variadic()
-                && statable(stub_ty)
                 && !stub_ty.is_assignable_to(db, &env, found.annotated_type())
                 && let Some(parameter) = parameter_node(node, found)
                 && let Some(annotation) = parameter.annotation()
@@ -488,13 +478,13 @@ pub(crate) fn check_function<'db>(
     {
         let mut stub_returns = Vec::with_capacity(stub_signatures.len());
         for stub_signature in stub_signatures {
-            if !stub_signature.overload.has_explicit_return_annotation(db)
-                || stub_signature.is_async != node.is_async
-                || !statable(stub_signature.signature.return_ty)
-            {
+            if stub_signature.is_async != node.is_async {
                 return;
             }
-            stub_returns.push(stub_signature.signature.return_ty);
+            let Some(awaited) = stub_signature.awaited else {
+                return;
+            };
+            stub_returns.push(awaited);
         }
         let stub_return = UnionType::from_elements(db, &env, stub_returns);
         let runtime_return = overload

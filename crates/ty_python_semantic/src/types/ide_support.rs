@@ -4396,6 +4396,19 @@ pub fn inherited_parameter_annotation<'db>(
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
 }
 
+/// basedpython: `ty`, a type the stub of `function`'s module writes for it, as the runtime
+/// `function` reads it: the stub's classes as this module's and its type variables as the
+/// function's own. `None` where it names something only the stub has
+pub fn stub_type_in_runtime_function<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+    ty: Type<'db>,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let definition = semantic_index(db, model.program_file()).try_definition(function)?;
+    crate::types::stub_implementation::stub_type_for_function(db, definition, ty)
+}
+
 /// basedpython: whether the value of `expr` is a `bool`, as far as its type says. a value of a
 /// type nothing is known of may be one
 pub fn is_bool_value(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {

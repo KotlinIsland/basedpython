@@ -11263,6 +11263,14 @@ impl<'db> Type<'db> {
         tcx: TypeContext<'db>,
         visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Type<'db> {
+        if let TypeMapping::StubToRuntime(mapping) = type_mapping
+            && let Some(mapped) = mapping.map_type(db, env, self, |ty| {
+                ty.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor)
+            })
+        {
+            return mapped;
+        }
+
         if let TypeMapping::GeneralizeLocalTypes(scope) = type_mapping {
             match self.local_definition(db, *scope) {
                 // basedpython: every call makes a new class object, so a class the scope defines
@@ -11765,6 +11773,7 @@ impl<'db> Type<'db> {
                 | TypeMapping::ReplaceParameterDefaults
                 | TypeMapping::EagerExpansion
                 | TypeMapping::GeneralizeLocalTypes(_)
+                | TypeMapping::StubToRuntime(_)
                 | TypeMapping::RescopeReturnCallables(_)
                 | TypeMapping::AttachRegexGroups(_)
                 | TypeMapping::Promote(PromotionMode::Off, _)
@@ -11801,6 +11810,7 @@ impl<'db> Type<'db> {
                 | TypeMapping::ReplaceParameterDefaults
                 | TypeMapping::EagerExpansion
                 | TypeMapping::GeneralizeLocalTypes(_)
+                | TypeMapping::StubToRuntime(_)
                 | TypeMapping::RescopeReturnCallables(_)
                 | TypeMapping::AttachRegexGroups(_) => self,
                 TypeMapping::Materialize(materialization_kind) => match materialization_kind {
@@ -13356,6 +13366,11 @@ pub enum TypeMapping<'a, 'db> {
     /// basedpython: a nested class object becomes `type[C]`, which keeps its members without claiming
     /// every call returns the same class. an instance of it is left alone: it is not one object either
     GeneralizeLocalTypes(ScopeId<'db>),
+
+    /// basedpython: reads a type a stub writes as the runtime module it describes reads it: each
+    /// class the stub defines as the runtime module's class of the same name, and each type
+    /// variable the stub binds as the runtime declaration's own. see `stub_implementation`
+    StubToRuntime(&'a crate::types::stub_implementation::StubTypeMapping<'db>),
 }
 
 impl<'db> TypeMapping<'_, 'db> {
@@ -13429,6 +13444,7 @@ impl<'db> TypeMapping<'_, 'db> {
             | TypeMapping::ReplaceParameterDefaults
             | TypeMapping::EagerExpansion
             | TypeMapping::GeneralizeLocalTypes(_)
+            | TypeMapping::StubToRuntime(_)
             | TypeMapping::RescopeReturnCallables(_)
             | TypeMapping::AttachRegexGroups(_) => Some(context),
             TypeMapping::BindSelf(binding) => {
@@ -13490,6 +13506,7 @@ impl<'db> TypeMapping<'_, 'db> {
             | TypeMapping::ReplaceParameterDefaults
             | TypeMapping::EagerExpansion
             | TypeMapping::GeneralizeLocalTypes(_)
+            | TypeMapping::StubToRuntime(_)
             | TypeMapping::RescopeReturnCallables(_)
             | TypeMapping::AttachRegexGroups(_) => self.clone(),
         }

@@ -748,8 +748,8 @@ pub fn stub_counterpart_declarations<'db>(
         .cloned()
 }
 
-/// whether `member`, which a stub declares, is something only a type checker reads, so that a
-/// runtime module has no reason to define it
+/// whether a member declared by `stub_definitions` is something only a type checker reads, so
+/// that a runtime module has no reason to define it, nor a stub to declare it
 ///
 /// a stub declares a few things for itself: a private helper (`_T = TypeVar("_T")`,
 /// `class _SupportsRead(Protocol)`), anything `@type_check_only`, a type variable, a type alias,

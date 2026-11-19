@@ -199,6 +199,32 @@ error[incompatible-stub-signature]: Parameter `a` of `f` is annotated `str`, whi
   |     ------------------------ the stub's declaration
 ```
 
+the stub's own classes are compared as the module's classes of the same name:
+
+`n.pyi`:
+
+```pyi
+class Node:
+    def link(self, other: Node) -> Node: ...
+    def unlink(self, other: Node) -> None: ...
+
+current: Node
+```
+
+`n.py`:
+
+```py
+class Node:
+    def link(self, other: "Node") -> "Node":  # no diagnostic
+        return other
+
+    # error: [incompatible-stub-signature] "Parameter `other` of `unlink` is annotated `int`, which does not accept the stub's `Node`"
+    def unlink(self, other: int) -> None:
+        pass
+
+current: Node = Node()  # no diagnostic
+```
+
 ## an overloaded function is held to every overload
 
 `m.pyi`:
@@ -301,7 +327,9 @@ class P: ...
 class H: ...
 ```
 
-a decorator may replace the class with another, whose bases the class statement does not show:
+a decorator may replace the class with another whose bases the class statement does not show, even
+one typed as handing back the class it is given, as `enum._simple_enum(StrEnum)` builds a `StrEnum`
+out of a plain class:
 
 `n.pyi`:
 
@@ -312,9 +340,11 @@ class E(ValueError): ...
 `n.py`:
 
 ```py
-from typing import Any
+from typing import TypeVar
 
-def _rebuild(cls: type) -> Any:
+T = TypeVar("T")
+
+def _rebuild(cls: type[T]) -> type[T]:
     return cls
 
 @_rebuild

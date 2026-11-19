@@ -1998,7 +1998,7 @@ impl<'db> Signature<'db> {
         binds_receiver: bool,
         is_visible: impl Fn(BindingContext<'db>) -> bool,
     ) {
-        self.inherit_unannotated_parameters_where(db, env, sources, binds_receiver, |ty| {
+        let statable = |ty: Type<'db>| {
             !any_over_type(
                 db,
                 env,
@@ -2006,19 +2006,7 @@ impl<'db> Signature<'db> {
                 false,
                 |ty| matches!(ty, Type::TypeVar(typevar) if !is_visible(typevar.binding_context(db))),
             )
-        });
-    }
-
-    /// basedpython: [`Signature::inherit_unannotated_parameters`], inheriting only the types
-    /// `statable` accepts as meaning here what they mean in the source
-    pub(crate) fn inherit_unannotated_parameters_where(
-        &mut self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-        sources: &[(Signature<'db>, bool)],
-        binds_receiver: bool,
-        statable: impl Fn(Type<'db>) -> bool,
-    ) {
+        };
         let inherited: Vec<(usize, Type<'db>)> = self
             .parameters
             .iter()
@@ -2057,6 +2045,90 @@ impl<'db> Signature<'db> {
             if let Some(parameter) = parameters.get_mut(index) {
                 parameter.annotated_type = ty;
                 parameter.inferred_annotation = false;
+            }
+        }
+    }
+
+    /// basedpython: make this signature generic over every type variable bound to `definition`
+    /// that its parameters, or `also`, name and its generic context does not yet hold: one it took
+    /// from somewhere else, which binds it to this function the way an annotation written here
+    /// would have
+    pub(crate) fn bind_type_variables_of(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        definition: Definition<'db>,
+        also: Option<Type<'db>>,
+    ) {
+        let binder = BindingContext::Definition(definition);
+        let found: std::cell::RefCell<Vec<BoundTypeVarInstance<'db>>> =
+            std::cell::RefCell::new(Vec::new());
+        let collect = |ty: Type<'db>| {
+            any_over_type(db, env, ty, false, |ty| {
+                if let Type::TypeVar(typevar) = ty
+                    && typevar.binding_context(db) == binder
+                {
+                    found.borrow_mut().push(typevar);
+                }
+                false
+            });
+        };
+        for parameter in &self.parameters {
+            collect(parameter.annotated_type);
+        }
+        if let Some(also) = also {
+            collect(also);
+        }
+        let found = found.into_inner();
+        let held = |typevar: BoundTypeVarInstance<'db>| {
+            self.generic_context.is_some_and(|context| {
+                context
+                    .variables(db)
+                    .any(|variable| variable.is_same_occurrence(db, typevar))
+            })
+        };
+        let mut added: Vec<BoundTypeVarInstance<'db>> = Vec::new();
+        for typevar in found {
+            if !held(typevar)
+                && !added
+                    .iter()
+                    .any(|seen| seen.is_same_occurrence(db, typevar))
+            {
+                added.push(typevar);
+            }
+        }
+        if added.is_empty() {
+            return;
+        }
+        let existing = self
+            .generic_context
+            .into_iter()
+            .flat_map(|context| context.variables(db));
+        self.generic_context = Some(GenericContext::from_typevar_instances(
+            db,
+            env,
+            existing.chain(added),
+        ));
+    }
+
+    /// basedpython: every parameter annotation of this signature read through `map`, which answers
+    /// what the annotation means somewhere else, or `None` where it means nothing there. a
+    /// parameter `map` has no answer for reads as though it were not annotated, which is what it
+    /// says in that other place: see `stub_implementation`
+    pub(crate) fn map_parameter_annotations(
+        &mut self,
+        mut map: impl FnMut(Type<'db>) -> Option<Type<'db>>,
+    ) {
+        for parameter in &mut Arc::make_mut(&mut self.parameters.data).value {
+            if parameter.inferred_annotation {
+                continue;
+            }
+            match map(parameter.annotated_type) {
+                Some(mapped) => parameter.annotated_type = mapped,
+                None => {
+                    parameter.annotated_type = Type::unknown();
+                    parameter.inferred_annotation = true;
+                }
             }
         }
     }

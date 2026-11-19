@@ -246,10 +246,9 @@ fn a_stub_only_member_is_a_whole_line_hint() -> Result<()> {
                 .collect()
         })
         .collect();
-    // `load`'s overloads agree on what it returns and nothing else, and what they agree on is
-    // the stub's own `Parser`, not the runtime module's: the checker does not read the runtime
-    // `load` as returning it, so neither does a hint
-    assert_eq!(stub_types, [": str", "-> list[str]"]);
+    // `load`'s overloads agree on what it returns and nothing else: the stub's `Parser`, which the
+    // runtime `load` returns as the runtime module's `Parser`
+    assert_eq!(stub_types, [": str", "-> list[str]", "-> Parser"]);
     Ok(())
 }
 

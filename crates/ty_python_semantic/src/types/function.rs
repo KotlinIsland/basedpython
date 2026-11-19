@@ -98,10 +98,7 @@ use crate::types::signatures::{
     CallableSignature, DeferredAssertions, NarrowingGuard, NarrowingGuardKind, Parameters,
     ReturnCallableTypeVarScope, Signature,
 };
-use crate::types::stub_implementation::{
-    definition_stub, is_statable_in_runtime, stub_return_type, stub_signatures,
-    visible_binding_contexts,
-};
+use crate::types::stub_implementation::{stub_names_self, stub_return_type, stub_signatures};
 use crate::types::variance::{VarianceInferable, VarianceOrigin, VarianceTerm};
 use crate::types::visitor::any_over_type;
 use crate::types::{
@@ -1319,8 +1316,12 @@ impl<'db> OverloadLiteral<'db> {
             // We have not yet added an implicit annotation to the `self` parameter, so any
             // typevars that currently appear in the method's generic context come from explicit
             // annotations.
+            //
+            // basedpython: what the module's stub declares for the method counts as written here,
+            // so a stub that says `-> Self` makes the receiver the `Self` its callers solve
             let method_has_explicit_self = generic_context
-                .is_some_and(|context| context.variables(db).any(|v| v.typevar(db).is_self(db)));
+                .is_some_and(|context| context.variables(db).any(|v| v.typevar(db).is_self(db)))
+                || (!self.is_overload(db) && stub_names_self(db, env, definition));
 
             let class_scope_id = definition.scope(db);
             let class_scope = index.scope(class_scope_id.file_scope_id(db));
@@ -1461,32 +1462,37 @@ impl<'db> OverloadLiteral<'db> {
         // stub overloads is the union of what each overload says. an `@overload` of the runtime
         // module's own declares its signature itself, and only its implementation is the
         // stub's. the stub speaks for this very function, so it comes before the method it
-        // overrides. what the stub says in terms only the stub has (its own classes and type
-        // variables) is not carried; see `stub_implementation`
+        // overrides. the stub's types are read in this module's terms, its classes as this
+        // module's and its type variables as this function's own; see `stub_implementation`
         if !self.is_overload(db)
-            && raw_signature.has_inherited_annotations_to_fill()
             && let Some(stub_signatures) = stub_signatures(db, definition).as_deref()
-            && let Some(stub) = definition_stub(db, definition)
         {
-            let sources: Vec<(Signature<'db>, bool)> = stub_signatures
-                .iter()
-                .map(|stub_signature| {
-                    (
-                        stub_signature.signature.clone(),
-                        stub_signature.binds_receiver,
-                    )
-                })
-                .collect();
-            let visible = visible_binding_contexts(db, definition);
-            raw_signature.inherit_unannotated_parameters_where(
-                db,
-                env,
-                &sources,
-                self.binds_first_parameter(db),
-                |ty| {
-                    is_statable_in_runtime(db, env, ty, stub, |context| visible.contains(&context))
-                },
-            );
+            if raw_signature.has_inherited_annotations_to_fill() {
+                let sources: Vec<(Signature<'db>, bool)> = stub_signatures
+                    .iter()
+                    .map(|stub_signature| {
+                        (
+                            stub_signature.signature.clone(),
+                            stub_signature.binds_receiver,
+                        )
+                    })
+                    .collect();
+                raw_signature.inherit_unannotated_parameters(
+                    db,
+                    env,
+                    &sources,
+                    self.binds_first_parameter(db),
+                    |_| true,
+                );
+            }
+            // a type variable of the stub's function is this function's now, so this function is
+            // generic over it wherever its parameters or the return type it takes from the stub
+            // name it
+            let stub_return = (function_stmt_node.returns.is_none()
+                && self.previous_overload(db).is_none())
+            .then(|| stub_return_type(db, env, definition, function_stmt_node.is_async))
+            .flatten();
+            raw_signature.bind_type_variables_of(db, env, definition, stub_return);
         }
 
         // basedpython: an unannotated method inherits its parameter types from the methods it

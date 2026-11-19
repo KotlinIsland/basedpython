@@ -2379,6 +2379,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             | TypeMapping::BindLegacyTypevars(_)
             | TypeMapping::EagerExpansion
             | TypeMapping::GeneralizeLocalTypes(_)
+            | TypeMapping::StubToRuntime(_)
             | TypeMapping::RescopeReturnCallables(_)
             | TypeMapping::ApplyRecursiveSubstitution(_)
             | TypeMapping::AttachRegexGroups(_) => Type::TypeVar(self),

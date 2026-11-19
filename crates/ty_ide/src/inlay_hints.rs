@@ -14573,8 +14573,8 @@ def each(fn: (int) -> None) -> None:
     /// the hints in a runtime module's signature say what the checker reads it as, and the
     /// checker reads it as the stub declares it: a slot the stub's overloads agree on takes the
     /// stub's own words, one they disagree on the union the checker reads (the hint of a
-    /// parameter type taken from elsewhere), and one the stub types with its own class nothing,
-    /// since the stub's class is not the runtime module's
+    /// parameter type taken from elsewhere), one the stub types with its own class that class as
+    /// the runtime module's, and one the stub types with a class the module lacks nothing
     #[test]
     fn stub_types_say_what_the_checker_reads() {
         let mut test = inlay_hint_test(
@@ -14587,16 +14587,22 @@ def each(fn: (int) -> None) -> None:
                 return default
 
             def link(node, weight):
+                reveal_type(node)
                 return node
+
+            def close(handle):
+                pass
             ",
         );
         test.with_extra_file(
             "main.pyi",
-            "from typing import overload\n\
+            "from typing import overload, type_check_only\n\
              class Node: ...\n\
              @overload\ndef get(key: str, default: int) -> int: ...\n\
              @overload\ndef get(key: str, default: str) -> str: ...\n\
-             def link(node: Node, weight: float) -> Node: ...\n",
+             def link(node: Node, weight: float) -> Node: ...\n\
+             @type_check_only\nclass _Closer: ...\n\
+             def close(handle: _Closer) -> None: ...\n",
         );
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
@@ -14617,7 +14623,11 @@ def each(fn: (int) -> None) -> None:
             .collect();
         assert_eq!(
             revealed,
-            ["Revealed type: `str`", "Revealed type: `int | str`"]
+            [
+                "Revealed type: `str`",
+                "Revealed type: `int | str`",
+                "Revealed type: `Node`"
+            ]
         );
     }
 

@@ -177,12 +177,129 @@ def f(a):
     reveal_type(a)  # revealed: int
 ```
 
-## types only the stub has are not carried
+## the stub's own classes are the module's
 
-a class the stub defines is not the runtime module's class of the same name, and a type variable the
-stub binds is bound to the stub's declaration, so a type that names either says nothing the runtime
-body could be held to. such a parameter is left as it would be without the stub: here, an anonymous
-type parameter of its own.
+a class the stub defines describes the runtime module's class of the same name, so a type that names
+it is read as naming the runtime class: a body that takes one, or returns one, is checked against
+the class it actually defines.
+
+`m.pyi`:
+
+```pyi
+class Node:
+    def link(self, other: Node) -> Node: ...
+
+def make() -> Node: ...
+def wrap(nodes: list[Node], kind: type[Node]) -> tuple[Node, ...]: ...
+```
+
+`m.py`:
+
+```py
+class Node:
+    def link(self, other):
+        reveal_type(other)  # revealed: Node
+        return other
+
+def make():
+    return Node()
+
+def wrap(nodes, kind):
+    reveal_type(nodes)  # revealed: list[Node]
+    reveal_type(kind)  # revealed: type[Node]
+    return tuple(nodes)
+
+def broken():
+    return make().missing  # error: [unresolved-attribute]
+
+reveal_type(make())  # revealed: Node
+```
+
+a class nested in another is found the same way:
+
+`n.pyi`:
+
+```pyi
+class Outer:
+    class Inner: ...
+
+    def inner(self) -> Inner: ...
+```
+
+`n.py`:
+
+```py
+class Outer:
+    class Inner: ...
+
+    def inner(self):
+        return 1  # error: [invalid-return-type] "Return type does not match returned value: expected `Inner`, found `Literal[1]`"
+```
+
+## a stub class with no runtime counterpart is not carried
+
+a class the stub defines and the module does not (often a protocol the stub declares only for
+itself) means nothing in the module, so a type naming it is not carried, and the parameter is left
+as it would be without the stub: here, an anonymous type parameter of its own.
+
+`m.pyi`:
+
+```pyi
+from typing import Protocol, type_check_only
+
+@type_check_only
+class _SupportsClose(Protocol):
+    def close(self) -> None: ...
+
+def shut(a: _SupportsClose, b: int) -> None: ...
+```
+
+`m.py`:
+
+```py
+def shut(a, b):
+    reveal_type(a)  # revealed: a@shut
+    reveal_type(b)  # revealed: int
+```
+
+## `Self` is the runtime method's
+
+`m.pyi`:
+
+```pyi
+from typing import Self
+
+class Builder:
+    def copy(self) -> Self: ...
+    def merge(self, other: Self) -> Self: ...
+```
+
+`m.py`:
+
+```py
+class Builder:
+    def copy(self):
+        reveal_type(self)  # revealed: Self@copy
+        return self
+
+    def merge(self, other):
+        reveal_type(other)  # revealed: Self@merge
+        return Builder()  # error: [invalid-return-type]
+
+class Sub(Builder): ...
+
+reveal_type(Sub().copy())  # revealed: Sub
+```
+
+## a generic function's type variables are the runtime function's
+
+the runtime function becomes generic over the stub function's type variables: its body sees them as
+type parameters, and its callers in the module solve them.
+
+```toml
+[environment]
+python-version = "3.12"
+```
 
 `m.pyi`:
 
@@ -191,25 +308,109 @@ from typing import TypeVar
 
 T = TypeVar("T")
 
-class A: ...
-
-def f(a: A, b: int) -> A: ...
-def g(a: T) -> T: ...
+def first(items: list[T]) -> T: ...
+def same[U](a: U, b: U) -> U: ...
 ```
 
 `m.py`:
 
 ```py
-class A: ...
+def first(items):
+    reveal_type(items)  # revealed: list[T@first]
+    return items[0]
 
-def f(a, b):
-    reveal_type(a)  # revealed: a@f
-    reveal_type(b)  # revealed: int
-    return A()
+def same(a, b):
+    reveal_type(a)  # revealed: U@same
+    return 1  # error: [invalid-return-type]
 
-def g(a):
-    reveal_type(a)  # revealed: a@g
-    return a
+reveal_type(first([1, 2]))  # revealed: int
+reveal_type(same("a", "b"))  # revealed: Literal["a", "b"]
+```
+
+a type variable bounded by one of the stub's classes is bounded by the runtime module's:
+
+`n.pyi`:
+
+```pyi
+from typing import TypeVar
+
+class Action: ...
+
+A = TypeVar("A", bound=Action)
+
+def register(action: A) -> A: ...
+```
+
+`n.py`:
+
+```py
+class Action: ...
+
+def register(action):
+    return action
+
+reveal_type(register(Action()))  # revealed: Action
+register(1)  # error: [invalid-argument-type]
+```
+
+## a generic class's type parameters are the runtime class's
+
+a type variable a stub class binds is the runtime class's type parameter in the same position.
+
+`m.pyi`:
+
+```pyi
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def get(self) -> T: ...
+    def put(self, item: T) -> None: ...
+    def copy(self) -> Box[T]: ...
+```
+
+`m.py`:
+
+```py
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def get(self):
+        return 1  # error: [invalid-return-type]
+
+    def put(self, item):
+        reveal_type(item)  # revealed: T@Box
+
+    def copy(self):
+        return self
+
+reveal_type(Box[int]().copy())  # revealed: Box[int]
+```
+
+where the runtime class is not generic, it has no type parameter for the stub's to be, so a type
+naming one is not carried:
+
+`n.pyi`:
+
+```pyi
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def put(self, item: T, count: int) -> None: ...
+```
+
+`n.py`:
+
+```py
+class Box:
+    def put(self, item, count):
+        reveal_type(item)  # revealed: item@put
+        reveal_type(count)  # revealed: int
 ```
 
 ## a module variable takes the type the stub declares

@@ -2311,7 +2311,7 @@ declare_lint! {
     ///
     /// A member is public when its name has no leading underscore and it is not a dunder, and
     /// where the module defines `__all__`, when `__all__` lists it. An import counts only when
-    /// `__all__` lists it.
+    /// `__all__` lists it, and a type variable or type alias does not count.
     ///
     /// ## Example
     ///
@@ -2414,7 +2414,8 @@ declare_lint! {
     /// not inherit from it fails both at runtime.
     ///
     /// Protocol bases are structural and are not checked, and nor is a base the stub defines for
-    /// itself with no runtime class to compare against.
+    /// itself with no runtime class to compare against, or a class with a decorator, which may
+    /// replace it with a class of other bases.
     ///
     /// ## Example
     ///
