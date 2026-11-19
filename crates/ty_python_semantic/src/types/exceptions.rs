@@ -321,6 +321,29 @@ pub(crate) fn inferred_exceptions<'db>(
     )
 }
 
+/// each place in `overload`'s body that something escapes from — a `raise`, an `assert`, or a
+/// call whose exceptions are not all caught around it — paired with what escapes there: the parts
+/// [`inferred_exceptions`] is the union of, found the same way
+pub(crate) fn inferred_exception_sites<'db>(
+    db: &'db dyn Db,
+    overload: OverloadLiteral<'db>,
+) -> Vec<(TextRange, Type<'db>)> {
+    let env = &ProgramEnvironment::from_file(overload.program_file(db));
+    let body_scope = overload.body_scope(db);
+    let visible = visible_binding_contexts(db, overload.program_file(db), body_scope);
+    escaping_sites(
+        db,
+        env,
+        body_exception_effects(db, overload),
+        &CallSite {
+            body_scope,
+            visible: &visible,
+            resolves_recursion: true,
+        },
+        &[],
+    )
+}
+
 /// [`ExceptionEffects`] for `overload`'s body, read off its own inferred types.
 #[salsa::tracked(
     returns(ref),

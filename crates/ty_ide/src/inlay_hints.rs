@@ -10,7 +10,7 @@ use crate::import_order;
 mod stub;
 use crate::{Db, HasNavigationTargets, NavigationTarget};
 use ruff_db::parsed::parsed_module;
-use ruff_db::source::source_text;
+use ruff_db::source::{line_index, source_text};
 use ruff_python_ast::helpers::is_compound_statement;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
@@ -22,6 +22,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 pub(crate) use stub::stub_member_fixes;
 use ty_module_resolver::file_to_module;
 use ty_python_core::ProgramFile;
+use ty_python_core::scope::FileScopeId;
 use ty_python_semantic::importer::{ImportAction, ImportRequest, Importer, MembersInScope};
 use ty_python_semantic::reified::{
     inferred_reified_class_type_param_names, inferred_reified_type_param_names,
@@ -29,12 +30,13 @@ use ty_python_semantic::reified::{
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     BaseTypeArgument, InferredInvalidations, InferredReturnPredicate, InferredStateReads,
-    InlayHintCallArgumentDetails, StateRead, WriteSite, hintable_parameter_type,
-    implicit_enum_member_value, implicit_type_name_module, inferred_base_type_arguments,
-    inferred_derived_dependencies, inferred_invalidations, inferred_override,
-    inferred_parameter_bound, inferred_parameter_holes, inferred_property_type, inferred_raises,
-    inferred_return_predicate, inferred_return_type, inferred_state_reads,
-    inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
+    InlayHintCallArgumentDetails, ParameterTypeSource, StateRead, WriteSite,
+    hintable_parameter_type, implicit_enum_member_value, implicit_type_name_module,
+    inferred_base_type_arguments, inferred_derived_dependencies, inferred_invalidations,
+    inferred_override, inferred_parameter_bound, inferred_parameter_holes, inferred_property_type,
+    inferred_raise_sites, inferred_raises, inferred_return_predicate, inferred_return_type,
+    inferred_state_reads, inferred_type_param_variance, inherited_default_source,
+    inherited_parameter_annotation, inherited_parameter_default, inherited_parameter_source,
     inlay_hint_call_argument_details, is_composable_function, is_inferred_parameter_hole,
     is_reveal_type_function, is_union_special_form, numeric_promotion, parameter_stability,
     trailing_lambda_implicit_parameters, type_parameter_names,
@@ -63,6 +65,9 @@ pub struct InlayHint {
     /// as a member only the stub declares is, says here whether they go above or below the line
     /// holding its position
     pub placement: Option<BlockPlacement>,
+    /// markdown saying what the label does not: where the hint comes from, or why it is there.
+    /// `None` where the label says all there is to say
+    pub tooltip: Option<String>,
 }
 
 /// which side of the line holding a whole-line hint's position the hint's lines are drawn on
@@ -138,13 +143,18 @@ impl InlayHint {
             padding_right: false,
             text_edits,
             placement: None,
+            tooltip: None,
         })
     }
 
+    /// the name of the parameter a positional argument is passed to, before it. the edit that
+    /// writes it is the call's to give, see `name_positional_arguments`, and the tooltip is the
+    /// parameter as its signature declares it
     fn call_argument_name(
         position: TextSize,
         name: &str,
         navigation_target: Option<NavigationTarget>,
+        declaration: Option<&str>,
     ) -> Self {
         let label_parts = vec![
             InlayHintLabelPart::new(name).with_target(navigation_target),
@@ -159,33 +169,60 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: declaration.map(|declaration| {
+                crate::MarkupKind::Markdown
+                    .fenced_code_block(declaration, "python")
+                    .to_string()
+            }),
         }
     }
 
     /// basedpython: the exception set inferred for a function with no `raises`
-    /// clause, shown where the clause would be written.
-    fn inferred_raises(
-        db: &dyn Db,
-        env: &ProgramEnvironment<'_>,
+    /// clause, shown where the clause would be written, with the edit that writes
+    /// it there and imports what it names.
+    ///
+    /// the tooltip lists where each exception escapes the body from.
+    fn inferred_raises<'db>(
+        context: InlayHintImportContext<'_, 'db>,
+        function: &ast::StmtFunctionDef,
         position: TextSize,
-        raised: Type,
+        raised: Type<'db>,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
+        tooltip: Option<String>,
     ) -> Self {
+        let mut imports = FxHashMap::default();
+        let mut speller = HintSpeller::new(
+            context,
+            &mut imports,
+            function.into(),
+            function.start(),
+            type_params_in_scope,
+            &[],
+        );
+        speller.text("raises ");
+        speller.ty(raised);
+        let (parts, written) = speller.finish();
+
         Self {
             position,
             kind: InlayHintKind::Raises,
-            label: InlayHintLabel {
-                parts: vec![format!("raises {}", raised.display(db, env)).into()],
-            },
+            label: InlayHintLabel { parts },
             padding_left: true,
             padding_right: false,
-            text_edits: vec![],
+            // the label's padding is the client's, so the edit writes the space itself
+            text_edits: insertion_edits(position, written, |text| format!(" {text}")),
             placement: None,
+            tooltip,
         }
     }
 
     /// basedpython: the variance inferred for a type parameter that declares
-    /// none, shown where the keyword would be written.
-    fn inferred_variance(position: TextSize, variance: ast::Variance) -> Self {
+    /// none, shown where the keyword would be written: before the name, after a
+    /// `reified` the parameter writes.
+    ///
+    /// `writable` says the keyword can be written there: a variadic pack has no
+    /// variance syntax, and a reified parameter may not declare one.
+    fn inferred_variance(position: TextSize, variance: ast::Variance, writable: bool) -> Self {
         let keyword = match variance {
             ast::Variance::Covariant => "out",
             ast::Variance::Contravariant => "in",
@@ -200,14 +237,25 @@ impl InlayHint {
             },
             padding_left: false,
             padding_right: true,
-            text_edits: vec![],
+            text_edits: if writable {
+                vec![InlayHintTextEdit {
+                    range: TextRange::empty(position),
+                    new_text: format!("{keyword} "),
+                }]
+            } else {
+                vec![]
+            },
             placement: None,
+            tooltip: None,
         }
     }
 
     /// basedpython: a type parameter reified by a value-position use in the
     /// body rather than by the keyword, shown where the keyword would go.
-    fn inferred_reification(position: TextSize) -> Self {
+    ///
+    /// `writable` says the keyword can be written there: a parameter that
+    /// declares a variance cannot also be reified.
+    fn inferred_reification(position: TextSize, writable: bool) -> Self {
         Self {
             position,
             kind: InlayHintKind::Reification,
@@ -216,14 +264,27 @@ impl InlayHint {
             },
             padding_left: false,
             padding_right: true,
-            text_edits: vec![],
+            text_edits: if writable {
+                vec![InlayHintTextEdit {
+                    range: TextRange::empty(position),
+                    new_text: "reified ".to_string(),
+                }]
+            } else {
+                vec![]
+            },
             placement: None,
+            tooltip: None,
         }
     }
 
     /// basedpython: a method that overrides a superclass member without saying
-    /// so, shown where the `override` modifier would be written.
-    fn inferred_override(position: TextSize, superclass: Option<NavigationTarget>) -> Self {
+    /// so, shown where the `override` modifier would be written, with the edit
+    /// that writes it, and naming the member it overrides as its tooltip.
+    fn inferred_override(
+        position: TextSize,
+        superclass: Option<NavigationTarget>,
+        overridden: &str,
+    ) -> Self {
         Self {
             position,
             kind: InlayHintKind::Override,
@@ -232,8 +293,14 @@ impl InlayHint {
             },
             padding_left: false,
             padding_right: true,
-            text_edits: vec![],
+            // modifiers are written in any order ahead of the `def`, so this is a
+            // place for one whatever the definition already writes
+            text_edits: vec![InlayHintTextEdit {
+                range: TextRange::empty(position),
+                new_text: "override ".to_string(),
+            }],
             placement: None,
+            tooltip: Some(format!("Overrides {}", inline_code(overridden))),
         }
     }
 
@@ -250,6 +317,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -267,6 +335,7 @@ impl InlayHint {
             padding_right: true,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -283,6 +352,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -305,38 +375,51 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
     /// The type arguments inferred for a generic call, shown between the callee
     /// and its argument list — where an explicit specialization would be written.
-    fn call_type_arguments(
-        db: &dyn Db,
-        env: &ProgramEnvironment<'_>,
+    ///
+    /// `writable` says the file can specialize the callee there: a `.by` file can
+    /// any generic callee, a `.py` file only a class, since a python function has
+    /// no `__getitem__`.
+    fn call_type_arguments<'db>(
+        context: InlayHintImportContext<'_, 'db>,
+        call: &ast::ExprCall,
         position: TextSize,
-        arguments: &[(Name, Type)],
+        arguments: &[(Name, Type<'db>)],
         named: bool,
+        writable: bool,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
     ) -> Self {
-        let mut parts = vec!["[".into()];
-
         // a lone type parameter has nothing to disambiguate, so naming it would
         // be noise rather than orientation
         let named = named && arguments.len() > 1;
 
+        let among: Vec<_> = arguments.iter().map(|(_, argument)| *argument).collect();
+        let mut imports = FxHashMap::default();
+        let mut speller = HintSpeller::new(
+            context,
+            &mut imports,
+            call.into(),
+            call.start(),
+            type_params_in_scope,
+            &among,
+        );
+        speller.text("[");
         for (index, (parameter, argument)) in arguments.iter().enumerate() {
             if index > 0 {
-                parts.push(", ".into());
+                speller.text(", ");
             }
             if named {
-                parts.push(format!("{parameter}=").into());
+                speller.text(&format!("{parameter}="));
             }
-            parts.push(
-                InlayHintLabelPart::new(argument.display(db, env).to_string())
-                    .with_target(argument.navigation_targets(db, env).into_iter().next()),
-            );
+            speller.ty(*argument);
         }
-
-        parts.push("]".into());
+        speller.text("]");
+        let (parts, written) = speller.finish();
 
         Self {
             position,
@@ -344,8 +427,13 @@ impl InlayHint {
             label: InlayHintLabel { parts },
             padding_left: false,
             padding_right: false,
-            text_edits: vec![],
+            text_edits: if writable {
+                insertion_edits(position, written, |text| text)
+            } else {
+                vec![]
+            },
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -374,6 +462,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -389,6 +478,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -408,6 +498,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -424,6 +515,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -432,7 +524,20 @@ impl InlayHint {
     ///
     /// `spaced` follows what the lowering writes into the signature, which follows python style:
     /// `a=1` for a bare parameter, `a: int = 1` for an annotated one.
-    fn inherited_default(position: TextSize, value: &str, spaced: bool) -> Self {
+    ///
+    /// the value is a literal, which reads the same written here as in the base, so the hint
+    /// writes itself. `inherited_from` names the method it comes from, which is the tooltip.
+    fn inherited_default(
+        position: TextSize,
+        value: &str,
+        spaced: bool,
+        inherited_from: Option<&str>,
+    ) -> Self {
+        let written = if spaced {
+            format!(" = {value}")
+        } else {
+            format!("={value}")
+        };
         Self {
             position,
             kind: InlayHintKind::InheritedDefault,
@@ -448,8 +553,12 @@ impl InlayHint {
             },
             padding_left: spaced,
             padding_right: false,
-            text_edits: vec![],
+            text_edits: vec![InlayHintTextEdit {
+                range: TextRange::empty(position),
+                new_text: written,
+            }],
             placement: None,
+            tooltip: inherited_from.map(|method| format!("Inherited from {}", inline_code(method))),
         }
     }
 
@@ -484,6 +593,7 @@ impl InlayHint {
             padding_right: false,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -528,6 +638,7 @@ impl InlayHint {
             padding_right: parameter_follows,
             text_edits: vec![],
             placement: None,
+            tooltip: None,
         }
     }
 
@@ -601,79 +712,106 @@ impl InlayHint {
             padding_right: false,
             text_edits,
             placement: None,
+            tooltip: None,
         }
     }
 
     /// basedpython: the type arguments a generic base takes from the class
-    /// body, where they would be written
-    fn inferred_base_type_arguments(
-        db: &dyn Db,
-        env: &ProgramEnvironment<'_>,
-        position: TextSize,
-        arguments: &[BaseTypeArgument],
+    /// body, where they would be written, with the edit that writes them there
+    fn inferred_base_type_arguments<'db>(
+        context: InlayHintImportContext<'_, 'db>,
+        base: &Expr,
+        arguments: &[BaseTypeArgument<'db>],
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
     ) -> Self {
-        let arguments = arguments
+        let position = base.end();
+        let among: Vec<_> = arguments
             .iter()
             .map(|argument| match argument {
-                BaseTypeArgument::Type(ty) => ty.display(db, env).to_string(),
-                BaseTypeArgument::Unpacked(ty) => format!("*{}", ty.display(db, env)),
+                BaseTypeArgument::Type(ty) | BaseTypeArgument::Unpacked(ty) => *ty,
             })
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect();
+        let mut imports = FxHashMap::default();
+        let mut speller = HintSpeller::new(
+            context,
+            &mut imports,
+            base.into(),
+            base.start(),
+            type_params_in_scope,
+            &among,
+        );
+        speller.text("[");
+        for (index, argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                speller.text(", ");
+            }
+            match argument {
+                BaseTypeArgument::Type(ty) => speller.ty(*ty),
+                BaseTypeArgument::Unpacked(ty) => {
+                    speller.text("*");
+                    speller.ty(*ty);
+                }
+            }
+        }
+        speller.text("]");
+        let (parts, written) = speller.finish();
+
         Self {
             position,
             kind: InlayHintKind::InferredBaseTypeArguments,
-            label: InlayHintLabel {
-                parts: vec![format!("[{arguments}]").into()],
-            },
+            label: InlayHintLabel { parts },
             padding_left: false,
             padding_right: false,
-            text_edits: vec![],
+            text_edits: insertion_edits(position, written, |text| text),
             placement: None,
-        }
-    }
-
-    /// basedpython: the bound recovered for an unannotated parameter, as the
-    /// `some` annotation that would declare it
-    fn inferred_parameter_bound(
-        db: &dyn Db,
-        env: &ProgramEnvironment<'_>,
-        position: TextSize,
-        bound: Type,
-    ) -> Self {
-        Self {
-            position,
-            kind: InlayHintKind::InferredParameterType,
-            label: InlayHintLabel {
-                parts: vec![format!(": some {}", bound.display(db, env)).into()],
-            },
-            padding_left: false,
-            padding_right: false,
-            text_edits: vec![],
-            placement: None,
+            tooltip: None,
         }
     }
 
     /// the type of a place the source leaves unannotated — a parameter, or a
     /// basedpython property declaration — shown where the annotation would be
-    /// written
-    fn inferred_annotation(
-        db: &dyn Db,
-        env: &ProgramEnvironment<'_>,
+    /// written: `: int`, or the `some` annotation that would declare a
+    /// parameter's inferred bound, `: some Sized`
+    ///
+    /// the edit is the caller's to place, see [`AnnotationSlot`], since where an
+    /// annotation goes depends on what the source writes around it
+    fn inferred_annotation<'db>(
+        context: InlayHintImportContext<'_, 'db>,
         kind: InlayHintKind,
-        position: TextSize,
-        ty: Type,
+        slot: &AnnotationSlot<'_>,
+        prefix: &str,
+        ty: Type<'db>,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
+        tooltip: Option<String>,
     ) -> Self {
+        let mut imports = FxHashMap::default();
+        let mut speller = HintSpeller::new(
+            context,
+            &mut imports,
+            slot.scope_node,
+            slot.scope_node.start(),
+            type_params_in_scope,
+            &[],
+        );
+        speller.text(prefix);
+        speller.ty(ty);
+        let (parts, written) = speller.finish();
+
         Self {
-            position,
+            position: slot.position,
             kind,
-            label: InlayHintLabel {
-                parts: vec![format!(": {}", ty.display(db, env)).into()],
-            },
+            label: InlayHintLabel { parts },
             padding_left: false,
             padding_right: false,
-            text_edits: vec![],
+            text_edits: written
+                .map(|(annotation, imports)| {
+                    let mut edits = slot.edits(context.db, context.file, &annotation);
+                    edits.extend(imports);
+                    edits
+                })
+                .unwrap_or_default(),
             placement: None,
+            tooltip,
         }
     }
 
@@ -908,6 +1046,9 @@ pub struct InlayHintLabelPart {
     text: String,
 
     target: Option<NavigationTarget>,
+
+    /// markdown about this part alone, which a client shows over it rather than over the hint
+    tooltip: Option<String>,
 }
 
 impl InlayHintLabelPart {
@@ -915,6 +1056,7 @@ impl InlayHintLabelPart {
         Self {
             text: text.into(),
             target: None,
+            tooltip: None,
         }
     }
 
@@ -933,23 +1075,25 @@ impl InlayHintLabelPart {
     pub fn with_target(self, target: Option<NavigationTarget>) -> Self {
         Self { target, ..self }
     }
+
+    pub fn tooltip(&self) -> Option<&str> {
+        self.tooltip.as_deref()
+    }
+
+    pub fn with_tooltip(self, tooltip: Option<String>) -> Self {
+        Self { tooltip, ..self }
+    }
 }
 
 impl From<String> for InlayHintLabelPart {
     fn from(s: String) -> Self {
-        Self {
-            text: s,
-            target: None,
-        }
+        Self::new(s)
     }
 }
 
 impl From<&str> for InlayHintLabelPart {
     fn from(s: &str) -> Self {
-        Self {
-            text: s.to_string(),
-            target: None,
-        }
+        Self::new(s)
     }
 }
 
@@ -981,6 +1125,145 @@ fn state_read_parts(prefix: &str, reads: &[StateRead], opaque: bool) -> Vec<Inla
 pub struct InlayHintTextEdit {
     pub range: TextRange,
     pub new_text: String,
+}
+
+/// the edits that write a hint spelled as `written` at `position`, the text it inserts made by
+/// `insert` from what the speller wrote, followed by the imports it needs. none when the hint
+/// cannot be written
+fn insertion_edits(
+    position: TextSize,
+    written: Option<(String, Vec<InlayHintTextEdit>)>,
+    insert: impl FnOnce(String) -> String,
+) -> Vec<InlayHintTextEdit> {
+    let Some((text, imports)) = written else {
+        return vec![];
+    };
+    std::iter::once(InlayHintTextEdit {
+        range: TextRange::empty(position),
+        new_text: insert(text),
+    })
+    .chain(imports)
+    .collect()
+}
+
+/// `text` as markdown inline code, fenced by more backticks than it holds in a row
+fn inline_code(text: &str) -> String {
+    let longest = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    // a span that starts or ends with a backtick needs a space between it and the fence
+    if text.starts_with('`') || text.ends_with('`') {
+        format!("{fence} {text} {fence}")
+    } else {
+        format!("{fence}{text}{fence}")
+    }
+}
+
+/// the tooltip of an inferred `raises` hint: each place in the body something escapes from, as
+/// its line, the first line of the statement or call there, and what escapes from it. `None` when
+/// there are none to list
+fn raise_sites_tooltip<'db>(
+    source: &str,
+    line_index: &ruff_source_file::LineIndex,
+    sites: &[(TextRange, Type<'db>)],
+    display: impl Fn(Type<'db>) -> String,
+) -> Option<String> {
+    use std::fmt::Write as _;
+
+    // a long body lists what a reader can take in; the rest is a count
+    const SHOWN: usize = 8;
+    // a site is quoted by its first line, cut short past this many characters
+    const QUOTED: usize = 60;
+
+    if sites.is_empty() {
+        return None;
+    }
+    let mut tooltip = String::from("Raised by:");
+    for (range, raised) in sites.iter().take(SHOWN) {
+        let line = line_index.line_index(range.start());
+        let text = source.get(range.to_std_range()).unwrap_or_default();
+        let first_line = text.lines().next().unwrap_or_default().trim_end();
+        let quoted: String = if first_line.chars().count() > QUOTED || first_line.len() < text.len()
+        {
+            let mut cut: String = first_line.chars().take(QUOTED).collect();
+            cut.push('…');
+            cut
+        } else {
+            first_line.to_string()
+        };
+        let _ = write!(
+            tooltip,
+            "\n- line {line}, {}: {}",
+            inline_code(&quoted),
+            inline_code(&display(*raised))
+        );
+    }
+    if sites.len() > SHOWN {
+        let _ = write!(tooltip, "\n- and {} more", sites.len() - SHOWN);
+    }
+    Some(tooltip)
+}
+
+/// where an annotation a parameter or a property declaration leaves out would be written
+struct AnnotationSlot<'a> {
+    /// after the name it annotates
+    position: TextSize,
+    /// the node whose scope the annotation is read in: the `def` or `lambda` a parameter belongs
+    /// to, or a property's getter
+    scope_node: AnyNodeRef<'a>,
+    /// the parameter's default, which an annotation is written before with spaces around the `=`
+    /// it would otherwise go without: `a=1` takes `: int` as `a: int = 1`
+    default: Option<&'a Expr>,
+    /// the parameters of a basedpython lambda written without the parentheses an annotated one
+    /// needs: `lambda (n: int): ...`
+    parenthesize: Option<TextRange>,
+}
+
+impl AnnotationSlot<'_> {
+    /// the edits writing `annotation`, `: int`, into the slot
+    fn edits(
+        &self,
+        db: &dyn Db,
+        file: ProgramFile<'_>,
+        annotation: &str,
+    ) -> Vec<InlayHintTextEdit> {
+        let source = source_text(db, file.file(db));
+        let mut edits = Vec::new();
+        if let Some(parameters) = self.parenthesize {
+            edits.push(InlayHintTextEdit {
+                range: TextRange::empty(parameters.start()),
+                new_text: "(".to_string(),
+            });
+        }
+        // only the `=` and the spaces around it are replaced: anything else between the name and
+        // the default, a comment or a line break, stays as it was, and the annotation goes in
+        // unspaced before it
+        let respaced = self.default.and_then(|default| {
+            let between = TextRange::new(self.position, default.start());
+            let text = source.get(between.to_std_range())?;
+            (text.trim_matches([' ', '\t']) == "=").then_some(between)
+        });
+        edits.push(match respaced {
+            Some(between) => InlayHintTextEdit {
+                range: between,
+                new_text: format!("{annotation} = "),
+            },
+            None => InlayHintTextEdit {
+                range: TextRange::empty(self.position),
+                new_text: annotation.to_string(),
+            },
+        });
+        if let Some(parameters) = self.parenthesize {
+            edits.push(InlayHintTextEdit {
+                range: TextRange::empty(parameters.end()),
+                new_text: ")".to_string(),
+            });
+        }
+        edits
+    }
 }
 
 pub fn inlay_hints(
@@ -1438,10 +1721,34 @@ fn type_display_details<'db>(
     named_type_arguments: bool,
     type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> TypeDisplayDetails<'db> {
+    type_display_details_among(
+        db,
+        file,
+        ty,
+        &[],
+        named_type_arguments,
+        type_params_in_scope,
+    )
+}
+
+/// [`type_display_details`] for `ty` shown beside the types in `among`, so that a class whose
+/// name one of them shares is qualified in both
+fn type_display_details_among<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    ty: Type<'db>,
+    among: &[Type<'db>],
+    named_type_arguments: bool,
+    type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
+) -> TypeDisplayDetails<'db> {
     let env = ProgramEnvironment::from_file(file);
-    let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty])
-        .with_hidden_type_variable_scopes()
-        .with_type_params_in_scope(db, type_params_in_scope.iter().cloned());
+    let settings = DisplaySettings::from_possibly_ambiguous_types(
+        db,
+        &env,
+        std::iter::once(ty).chain(among.iter().copied()),
+    )
+    .with_hidden_type_variable_scopes()
+    .with_type_params_in_scope(db, type_params_in_scope.iter().cloned());
     let settings = if named_type_arguments {
         settings.with_named_type_arguments()
     } else {
@@ -1491,12 +1798,40 @@ fn spell_type<'db>(
     details: &TypeDisplayDetails<'db>,
     type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> SpelledType {
-    let InlayHintImportContext { db, file, importer } = context;
+    let mut dynamic_importer = DynamicImporter::new(
+        context.importer,
+        context.scope_members,
+        scope_node,
+        scope_offset,
+        dynamic_imports,
+    );
+    let (label_parts, edit_label, editable) = spell_type_with(
+        context,
+        &mut dynamic_importer,
+        details,
+        type_params_in_scope,
+    );
+    SpelledType {
+        label_parts,
+        edit_label,
+        import_edits: dynamic_importer.text_edits(),
+        editable,
+        imported: dynamic_importer.imported_members,
+    }
+}
+
+/// [`spell_type`] with the imports made through `dynamic_importer`, which the caller turns into
+/// edits once it has spelled everything they are applied together with. answers the label's
+/// parts, the annotation to write, and whether it can be written
+fn spell_type_with<'db>(
+    context: InlayHintImportContext<'_, 'db>,
+    dynamic_importer: &mut DynamicImporter<'_, 'db>,
+    details: &TypeDisplayDetails<'db>,
+    type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
+) -> (Vec<InlayHintLabelPart>, String, bool) {
+    let InlayHintImportContext { db, file, .. } = context;
     let env = ProgramEnvironment::from_file(file);
     let mut editable = details.is_valid_syntax;
-
-    let mut dynamic_importer =
-        DynamicImporter::new(importer, scope_node, scope_offset, dynamic_imports);
 
     // Ok so the idea here is that we potentially have a random soup of spans here,
     // and each byte of the string can have at most one target associate with it.
@@ -1606,7 +1941,7 @@ fn spell_type<'db>(
                 // Ok, this is the first type that claimed these bytes, give it the target
                 if start >= offset {
                     // Try to import the symbol and update the edit label if required
-                    if let Some(qualified_name) = qualified_name(&mut dynamic_importer) {
+                    if let Some(qualified_name) = qualified_name(dynamic_importer) {
                         let edit_start = (start.cast_signed() + edit_offset).cast_unsigned();
                         let edit_end = (end.cast_signed() + edit_offset).cast_unsigned();
 
@@ -1635,12 +1970,89 @@ fn spell_type<'db>(
         label_parts.push(details.label[offset..details.label.len()].into());
     }
 
-    SpelledType {
-        label_parts,
-        edit_label,
-        import_edits: dynamic_importer.text_edits(),
-        editable,
-        imported: dynamic_importer.imported_members,
+    (label_parts, edit_label, editable)
+}
+
+/// a hint's label and the source that writes it, built side by side, piece by piece: text,
+/// which reads the same in both, and types, which the label shows as the file displays them, each
+/// linked to its definition, and the source writes as an annotation of the file, importing what it
+/// names
+///
+/// one hint is applied as a whole, so its imports are made once for all of its types, and it can
+/// be written only when every type in it can
+struct HintSpeller<'a, 'db> {
+    context: InlayHintImportContext<'a, 'db>,
+    importer: DynamicImporter<'a, 'db>,
+    type_params_in_scope: &'a [(BoundTypeVarInstance<'db>, Name)],
+    /// every type the hint shows, so that two of them sharing a name are told apart in both
+    among: &'a [Type<'db>],
+    parts: Vec<InlayHintLabelPart>,
+    written: String,
+    editable: bool,
+}
+
+impl<'a, 'db> HintSpeller<'a, 'db> {
+    /// a speller for a hint in the scope around `scope_node`, where the types in
+    /// `type_params_in_scope` are written by the names they come with
+    fn new(
+        context: InlayHintImportContext<'a, 'db>,
+        dynamic_imports: &'a mut FxHashMap<DynamicallyImportedMember, ImportAction>,
+        scope_node: AnyNodeRef<'a>,
+        scope_offset: TextSize,
+        type_params_in_scope: &'a [(BoundTypeVarInstance<'db>, Name)],
+        among: &'a [Type<'db>],
+    ) -> Self {
+        Self {
+            context,
+            importer: DynamicImporter::new(
+                context.importer,
+                context.scope_members,
+                scope_node,
+                scope_offset,
+                dynamic_imports,
+            ),
+            type_params_in_scope,
+            among,
+            parts: Vec::new(),
+            written: String::new(),
+            editable: true,
+        }
+    }
+
+    /// `text`, as both the label and the source write it
+    fn text(&mut self, text: &str) {
+        self.parts.push(text.into());
+        self.written.push_str(text);
+    }
+
+    /// `ty`, as the label shows it and an annotation of the file writes it
+    fn ty(&mut self, ty: Type<'db>) {
+        let InlayHintImportContext { db, file, .. } = self.context;
+        let details =
+            type_display_details_among(db, file, ty, self.among, false, self.type_params_in_scope);
+        let (parts, written, editable) = spell_type_with(
+            self.context,
+            &mut self.importer,
+            &details,
+            self.type_params_in_scope,
+        );
+        self.parts.extend(parts);
+        self.written.push_str(&written);
+        self.editable &= editable;
+    }
+
+    /// the label, and what writes the hint: the text to put at its position and the imports it
+    /// needs, `None` when a type in it cannot be written
+    fn finish(
+        self,
+    ) -> (
+        Vec<InlayHintLabelPart>,
+        Option<(String, Vec<InlayHintTextEdit>)>,
+    ) {
+        let written = self
+            .editable
+            .then(|| (self.written, self.importer.text_edits()));
+        (self.parts, written)
     }
 }
 
@@ -1668,6 +2080,7 @@ pub(crate) fn annotation_for_type<'db>(
                 db,
                 file,
                 importer: &importer,
+                scope_members: None,
             },
             &mut FxHashMap::default(),
             scope_node,
@@ -1713,6 +2126,7 @@ impl<'db> AnnotationSpeller<'_, 'db> {
                     db,
                     file,
                     importer: self.importer,
+                    scope_members: None,
                 },
                 &mut self.dynamic_imports,
                 scope_node,
@@ -1746,6 +2160,7 @@ impl<'db> AnnotationSpeller<'_, 'db> {
     ) -> String {
         let mut importer = DynamicImporter::new(
             self.importer,
+            None,
             scope_node,
             scope_offset,
             &mut self.dynamic_imports,
@@ -1782,12 +2197,51 @@ struct InlayHintImportContext<'a, 'db> {
     db: &'db dyn Db,
     file: ProgramFile<'db>,
     importer: &'a Importer<'db>,
+    /// the members in scope in each scope the hints of one request import into, when they are
+    /// kept across hints
+    scope_members: Option<&'a ScopeMembers<'db>>,
+}
+
+/// the members in scope in each scope one request's hints import into
+///
+/// what is in scope depends only on the scope, and building it reads the type of every name the
+/// scope and the scopes around it bind, builtins included. one request asks for it once per hint
+/// that names a type, hundreds of times in a large file, where it measured a third of the request
+struct ScopeMembers<'db> {
+    model: SemanticModel<'db>,
+    scopes: std::cell::RefCell<FxHashMap<Option<FileScopeId>, MembersInScope<'db>>>,
+}
+
+impl<'db> ScopeMembers<'db> {
+    fn new(db: &'db dyn Db, file: ProgramFile<'db>) -> Self {
+        Self {
+            model: SemanticModel::new(db, file),
+            scopes: std::cell::RefCell::default(),
+        }
+    }
+
+    /// the members in scope at `node`, for an import needed at `at`
+    fn at(
+        &self,
+        importer: &Importer<'db>,
+        node: AnyNodeRef<'_>,
+        at: TextSize,
+    ) -> MembersInScope<'db> {
+        let scope = self.model.scope(node);
+        if let Some(members) = self.scopes.borrow().get(&scope) {
+            return members.at(at);
+        }
+        let members = importer.members_in_scope_at(node, at);
+        self.scopes.borrow_mut().insert(scope, members.clone());
+        members
+    }
 }
 
 struct InlayHintVisitor<'a, 'db> {
     db: &'db dyn Db,
     model: SemanticModel<'db>,
     importer: Importer<'db>,
+    scope_members: ScopeMembers<'db>,
     source: &'a str,
     hints: Vec<InlayHint>,
     assignment_rhs: Option<&'a Expr>,
@@ -1801,8 +2255,16 @@ struct InlayHintVisitor<'a, 'db> {
     /// Whether we are inside a type expression, where `float` promotes and a
     /// subscript's arguments fill type parameters.
     in_type_expression: bool,
-    /// Whether we are inside a `lambda`'s parameter list.
-    in_lambda: bool,
+    /// The `lambda` whose parameter list or body we are inside, if any.
+    lambda: Option<&'a ast::ExprLambda>,
+    /// The `def` whose signature or body we are inside, if any: the one a parameter visited
+    /// outside a lambda belongs to.
+    signature_of: Option<&'a ast::StmtFunctionDef>,
+    /// The default of the parameter being visited, if it writes one.
+    parameter_default: Option<&'a Expr>,
+    /// Whether the call being visited is the callee of a basedpython trailing lambda, which the
+    /// lowering passes the block to as its last positional argument.
+    in_trailing_lambda_callee: bool,
     /// The operand of a union in a type expression currently being visited, and what the
     /// operands written beside it denote. Read by numeric promotion, which adds nothing an
     /// operand already spells.
@@ -1829,6 +2291,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             db,
             model: SemanticModel::new(db, file),
             importer,
+            scope_members: ScopeMembers::new(db, file),
             source,
             hints: Vec::new(),
             assignment_rhs: None,
@@ -1837,7 +2300,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             in_no_edits_allowed: false,
             source_type: file.file(db).source_type(db),
             in_type_expression: false,
-            in_lambda: false,
+            lambda: None,
+            signature_of: None,
+            parameter_default: None,
+            in_trailing_lambda_callee: false,
             union_siblings: None,
             enclosing_class: None,
             stub: (settings.stub_types || settings.stub_only_members)
@@ -1882,11 +2348,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
         let named_type_arguments = self.names_type_arguments();
 
-        let context = InlayHintImportContext {
-            db: self.db,
-            file: self.model.program_file(),
-            importer: &self.importer,
-        };
+        let context = self.import_context();
 
         let type_params_in_scope = self.model.type_params_in_scope(expr.into());
         if let Some(inlay_hint) = InlayHint::variable_type(
@@ -1912,10 +2374,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(raised) = function
-            .inferred_type(&self.model)
-            .and_then(|ty| inferred_raises(self.db, env, ty))
-        else {
+        let Some(function_type) = function.inferred_type(&self.model) else {
+            return;
+        };
+        let Some(raised) = inferred_raises(self.db, env, function_type) else {
             return;
         };
 
@@ -1924,14 +2386,33 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             .as_deref()
             .map_or_else(|| function.parameters.end(), Ranged::end);
 
-        self.push(InlayHint::inferred_raises(self.db, env, position, raised));
+        let tooltip = raise_sites_tooltip(
+            self.source,
+            &line_index(self.db, self.model.file()),
+            &inferred_raise_sites(self.db, function_type),
+            |ty| ty.display(self.db, env).to_string(),
+        );
+        let context = self.import_context();
+        let type_params_in_scope = self.model.type_params_in_signature(function);
+        self.push(InlayHint::inferred_raises(
+            context,
+            function,
+            position,
+            raised,
+            &type_params_in_scope,
+            tooltip,
+        ));
     }
 
     /// basedpython: hint the variance ty infers for each type parameter of
     /// `class` that does not declare one.
+    ///
+    /// `reified` names the type parameters the owner reifies without saying so, which may not
+    /// declare a variance any more than one that says so may.
     fn add_inferred_variances(
         &mut self,
         type_params: Option<&ast::TypeParams>,
+        reified: &[Name],
         owner: impl FnOnce(&SemanticModel<'db>) -> Option<Type<'db>>,
     ) {
         if !self.settings.enabled(InlayHintKind::Variance) || !self.is_basedpython() {
@@ -1967,10 +2448,18 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                 continue;
             };
 
-            self.push(InlayHint::inferred_variance(
-                type_param.range().start(),
-                variance,
-            ));
+            // the keyword goes before the name, after a `reified` the parameter writes. a pack
+            // has no keyword, so its hint stays where the parameter starts
+            let (position, writable) = match type_param {
+                ast::TypeParam::TypeVar(type_var) => (
+                    type_var.name.start(),
+                    !type_var.is_reified && !reified.contains(&type_var.name.id),
+                ),
+                ast::TypeParam::TypeVarTuple(_) | ast::TypeParam::ParamSpec(_) => {
+                    (type_param.range().start(), false)
+                }
+            };
+            self.push(InlayHint::inferred_variance(position, variance, writable));
         }
     }
 
@@ -1987,35 +2476,49 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     }
 
     /// basedpython: the same hint on a class, which reifies a type parameter its
-    /// methods read through their receiver.
-    fn add_inferred_class_reification(&mut self, class: &ast::StmtClassDef) {
+    /// methods read through their receiver. answers the names it reifies so.
+    fn add_inferred_class_reification(&mut self, class: &ast::StmtClassDef) -> Vec<Name> {
         let inferred =
             |hints: &mut Self| inferred_reified_class_type_param_names(hints.source_type, class);
-        self.add_inferred_reification_of(class.type_params.as_deref(), inferred);
+        self.add_inferred_reification_of(class.type_params.as_deref(), inferred)
     }
 
+    /// answers the names reified without saying so, hinted or not
     fn add_inferred_reification_of(
         &mut self,
         type_params: Option<&ast::TypeParams>,
         inferred: impl FnOnce(&mut Self) -> Vec<Name>,
-    ) {
-        if !self.settings.enabled(InlayHintKind::Reification) || !self.is_basedpython() {
-            return;
+    ) -> Vec<Name> {
+        if !self.is_basedpython() {
+            return Vec::new();
         }
 
         let Some(type_params) = type_params else {
-            return;
+            return Vec::new();
         };
 
         let inferred = inferred(self);
 
+        if !self.settings.enabled(InlayHintKind::Reification) {
+            return inferred;
+        }
+
         // the hint goes where the keyword would be written, which is ahead of
-        // everything the parameter's own declaration spells
+        // everything the parameter's own declaration spells. a parameter that
+        // declares a variance cannot take the keyword: a reified one is invariant
         for type_param in type_params {
             if inferred.contains(&type_param.name().id) {
-                self.push(InlayHint::inferred_reification(type_param.range().start()));
+                let writable = match type_param {
+                    ast::TypeParam::TypeVar(type_var) => type_var.variance.is_none(),
+                    ast::TypeParam::TypeVarTuple(_) | ast::TypeParam::ParamSpec(_) => true,
+                };
+                self.push(InlayHint::inferred_reification(
+                    type_param.range().start(),
+                    writable,
+                ));
             }
         }
+        inferred
     }
 
     /// Hint the value an enum member takes when its declaration does not write
@@ -2054,7 +2557,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(superclass) = inferred_override(&self.model, function) else {
+        let Some(overridden) = inferred_override(&self.model, function) else {
             return;
         };
 
@@ -2062,10 +2565,12 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         // position even on a decorated method
         self.push(InlayHint::inferred_override(
             function.range().start(),
-            superclass
+            overridden
+                .superclass
                 .navigation_targets(self.db, env)
                 .into_iter()
                 .next(),
+            &format!("{}.{}", overridden.superclass_name, function.name.id),
         ));
     }
 
@@ -2175,7 +2680,6 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
     /// Hint the type arguments inferred for a generic call.
     fn add_call_type_arguments(&mut self, call: &ast::ExprCall, arguments: &[(Name, Type<'db>)]) {
-        let env = &self.model.program_environment();
         if !self.settings.enabled(InlayHintKind::CallTypeArguments) || arguments.is_empty() {
             return;
         }
@@ -2188,12 +2692,23 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
+        // a `.py` file runs as written, and only a class has a `__getitem__` to
+        // specialize it with there
+        let writable = self.is_basedpython()
+            || call
+                .func
+                .inferred_type(&self.model)
+                .is_some_and(|callee| matches!(callee, Type::ClassLiteral(_)));
+        let context = self.import_context();
+        let type_params_in_scope = self.model.type_params_in_scope(call.into());
         self.push(InlayHint::call_type_arguments(
-            self.db,
-            env,
+            context,
+            call,
             call.func.range().end(),
             arguments,
             self.names_type_arguments(),
+            writable,
+            &type_params_in_scope,
         ));
     }
 
@@ -2272,11 +2787,21 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
+        let mut hinted = Vec::new();
         for (name, argument) in names.iter().zip(subscript_arguments(&subscript.slice)) {
-            self.push(InlayHint::type_argument_name(
-                argument.range().start(),
-                name,
-            ));
+            let index = self
+                .push(InlayHint::type_argument_name(
+                    argument.range().start(),
+                    name,
+                ))
+                .then(|| self.hints.len() - 1);
+            hinted.push((argument, Some(name.as_str()), index));
+        }
+
+        // basedpython's keyword subscript names a type argument as a call names an argument, and
+        // python's subscript has no keyword form
+        if self.is_basedpython() {
+            self.name_positional_arguments(&hinted);
         }
     }
 
@@ -2436,9 +2961,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
     /// Hint the inferred type of an unannotated lambda parameter.
     fn add_lambda_parameter_type(&mut self, parameter: &ast::Parameter) {
-        let env = &self.model.program_environment();
         if !self.settings.enabled(InlayHintKind::LambdaParameterType)
-            || !self.in_lambda
+            || self.lambda.is_none()
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
         {
@@ -2448,14 +2972,40 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         let Some(ty) = hintable_parameter_type(&self.model, parameter) else {
             return;
         };
+        let Some(lambda) = self.lambda else {
+            return;
+        };
 
-        self.push(InlayHint::inferred_annotation(
-            self.db,
-            env,
+        let type_params_in_scope = self.model.type_params_in_scope(lambda.into());
+        let mut hint = InlayHint::inferred_annotation(
+            self.import_context(),
             InlayHintKind::LambdaParameterType,
-            parameter.name.range().end(),
+            &AnnotationSlot {
+                position: parameter.name.range().end(),
+                scope_node: lambda.into(),
+                default: self.parameter_default,
+                parenthesize: lambda.parameters.as_deref().and_then(|parameters| {
+                    (self.source.as_bytes().get(parameters.start().to_usize()) != Some(&b'('))
+                        .then(|| parameters.range())
+                }),
+            },
+            ": ",
             ty,
-        ));
+            &type_params_in_scope,
+            None,
+        );
+        // only basedpython's parenthesized lambda takes annotations, and a pack's annotation is
+        // what each of its elements is rather than the tuple the hint shows
+        let is_pack = lambda.parameters.as_deref().is_some_and(|parameters| {
+            [parameters.vararg.as_deref(), parameters.kwarg.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|pack| pack.range() == parameter.range())
+        });
+        if !self.is_basedpython() || is_pack {
+            hint.text_edits.clear();
+        }
+        self.push(hint);
     }
 
     /// basedpython: hint the type an unannotated parameter of a `def` takes from
@@ -2464,9 +3014,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// A lambda's parameters are typed from the call site instead, and are hinted
     /// under their own setting.
     fn add_inherited_parameter_type(&mut self, parameter: &ast::Parameter) {
-        let env = &self.model.program_environment();
         if !self.settings.enabled(InlayHintKind::InheritedParameterType)
-            || self.in_lambda
+            || self.lambda.is_some()
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
             || self.stub_covered.contains(&parameter.name.range().end())
@@ -2477,20 +3026,42 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         let Some(ty) = inherited_parameter_annotation(&self.model, parameter) else {
             return;
         };
+        let Some(function) = self.signature_of else {
+            return;
+        };
 
+        let tooltip =
+            inherited_parameter_source(&self.model, parameter).map(|source| match source {
+                ParameterTypeSource::Overloads(function) => format!(
+                    "Inherited from the overloads of {}",
+                    inline_code(function.as_str())
+                ),
+                ParameterTypeSource::Method(method) => {
+                    format!("Inherited from {}", inline_code(&method))
+                }
+            });
+        let type_params_in_scope = self.model.type_params_in_signature(function);
+        // a pack's inherited annotation is its elements', as the base writes it, so it is
+        // written as it is shown
         self.push(InlayHint::inferred_annotation(
-            self.db,
-            env,
+            self.import_context(),
             InlayHintKind::InheritedParameterType,
-            parameter.name.range().end(),
+            &AnnotationSlot {
+                position: parameter.name.range().end(),
+                scope_node: function.into(),
+                default: self.parameter_default,
+                parenthesize: None,
+            },
+            ": ",
             ty,
+            &type_params_in_scope,
+            tooltip,
         ));
     }
 
     /// basedpython: hint the type arguments each generic base a class writes
     /// without them takes from the members its body overrides, after the base
     fn add_inferred_base_type_arguments(&mut self, class: &ast::StmtClassDef) {
-        let env = &self.model.program_environment();
         if !self
             .settings
             .enabled(InlayHintKind::InferredBaseTypeArguments)
@@ -2501,11 +3072,19 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             if self.range.intersect(base).is_none() {
                 continue;
             }
+            let Some(base) = class
+                .bases()
+                .iter()
+                .find(|expression| expression.range() == base)
+            else {
+                continue;
+            };
+            let type_params_in_scope = self.model.type_params_in_scope(base.into());
             self.push(InlayHint::inferred_base_type_arguments(
-                self.db,
-                env,
-                base.end(),
+                self.import_context(),
+                base,
                 &arguments,
+                &type_params_in_scope,
             ));
         }
     }
@@ -2513,11 +3092,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// basedpython: hint the bound an unannotated parameter of a `def` takes from
     /// what its body does with it, as the `some` annotation that would declare it
     fn add_inferred_parameter_type(&mut self, parameter: &ast::Parameter) {
-        let env = &self.model.program_environment();
         // a `.py` file has no `some` to write the bound with
         if !self.settings.enabled(InlayHintKind::InferredParameterType)
             || !self.is_basedpython()
-            || self.in_lambda
+            || self.lambda.is_some()
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
             || self.stub_covered.contains(&parameter.name.range().end())
@@ -2528,12 +3106,24 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         let Some(bound) = inferred_parameter_bound(&self.model, parameter) else {
             return;
         };
+        let Some(function) = self.signature_of else {
+            return;
+        };
 
-        self.push(InlayHint::inferred_parameter_bound(
-            self.db,
-            env,
-            parameter.name.range().end(),
+        let type_params_in_scope = self.model.type_params_in_signature(function);
+        self.push(InlayHint::inferred_annotation(
+            self.import_context(),
+            InlayHintKind::InferredParameterType,
+            &AnnotationSlot {
+                position: parameter.name.range().end(),
+                scope_node: function.into(),
+                default: self.parameter_default,
+                parenthesize: None,
+            },
+            ": some ",
             bound,
+            &type_params_in_scope,
+            None,
         ));
     }
 
@@ -2541,7 +3131,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// overrides, where the parameter's own default would be written.
     fn add_inherited_parameter_default(&mut self, parameter: &ast::ParameterWithDefault) {
         if !self.settings.enabled(InlayHintKind::InheritedDefault)
-            || self.in_lambda
+            || self.lambda.is_some()
             || parameter.parameter.range().is_empty()
         {
             return;
@@ -2551,10 +3141,14 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
+        let inherited_from = self
+            .signature_of
+            .and_then(|function| inherited_default_source(&self.model, function));
         self.push(InlayHint::inherited_default(
             parameter.parameter.range().end(),
             &value,
             parameter.parameter.annotation.is_some(),
+            inherited_from.as_deref(),
         ));
     }
 
@@ -2586,11 +3180,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let context = InlayHintImportContext {
-            db: self.db,
-            file: self.model.program_file(),
-            importer: &self.importer,
-        };
+        let context = self.import_context();
         // a predicate's `TypeIs[T]` narrows the first argument a call passes (after the receiver,
         // for a method), so a recovered one is spelled as the guard it stands for, which only
         // basedpython can write. python has no spelling for a guard on any other place
@@ -2635,13 +3225,20 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        let env = &self.model.program_environment();
+        let type_params_in_scope = self.model.type_params_in_scope(getter.into());
         self.push(InlayHint::inferred_annotation(
-            self.db,
-            env,
+            self.import_context(),
             InlayHintKind::PropertyType,
-            getter.name.range().end(),
+            &AnnotationSlot {
+                position: getter.name.range().end(),
+                scope_node: getter.into(),
+                default: None,
+                parenthesize: None,
+            },
+            ": ",
             ty,
+            &type_params_in_scope,
+            None,
         ));
     }
 
@@ -2657,6 +3254,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         position: TextSize,
         name: &str,
         navigation_target: Option<NavigationTarget>,
+        declaration: Option<&str>,
     ) -> bool {
         if !self.settings.enabled(InlayHintKind::CallArgumentName) {
             return false;
@@ -2666,9 +3264,50 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return false;
         }
 
-        let inlay_hint = InlayHint::call_argument_name(position, name, navigation_target);
+        let inlay_hint =
+            InlayHint::call_argument_name(position, name, navigation_target, declaration);
 
         self.push(inlay_hint)
+    }
+
+    /// give each hinted positional argument of one argument list the edit that names it: `x=`
+    /// before it, and before every positional argument after it, since one passed by position
+    /// cannot follow one passed by name
+    ///
+    /// `arguments` are the list's positional arguments in source order, each with the name of
+    /// the parameter it fills, if it can be passed by one, and the index of its hint, if it has
+    /// one. an argument is named only where every argument after it can be: none is unpacked,
+    /// which fills its parameters by position and so cannot follow a named one either, and each
+    /// fills one parameter that takes a name
+    fn name_positional_arguments(&mut self, arguments: &[(&Expr, Option<&str>, Option<usize>)]) {
+        let mut names_from_here: Option<Vec<InlayHintTextEdit>> = Some(Vec::new());
+        for (argument, name, hint) in arguments.iter().rev() {
+            names_from_here = match (names_from_here, name) {
+                (Some(mut edits), Some(name)) if !argument.is_starred_expr() => {
+                    edits.insert(
+                        0,
+                        InlayHintTextEdit {
+                            range: TextRange::empty(argument.start()),
+                            new_text: format!("{name}="),
+                        },
+                    );
+                    Some(edits)
+                }
+                _ => None,
+            };
+            if let (Some(edits), Some(hint)) = (&names_from_here, hint) {
+                self.hints[*hint].text_edits.clone_from(edits);
+            }
+        }
+    }
+
+    fn import_context(&self) -> InlayHintImportContext<'_, 'db> {
+        InlayHintImportContext {
+            db: self.db,
+            file: self.model.program_file(),
+            importer: &self.importer,
+            scope_members: Some(&self.scope_members),
+        }
     }
 }
 
@@ -2764,7 +3403,9 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 // decorator and the `it` parameter has no source of its own —
                 // so walk the two parts that are real
                 for decorator in &function.decorator_list {
+                    self.in_trailing_lambda_callee = decorator.expression.is_call_expr();
                     self.visit_decorator(decorator);
+                    self.in_trailing_lambda_callee = false;
                 }
 
                 let enclosing_class = self.enclosing_class.take();
@@ -2798,16 +3439,19 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
                 // a function nested in a method is not itself a class member
                 let enclosing_class = self.enclosing_class.take();
+                let signature_of = self.signature_of.replace(function);
                 source_order::walk_stmt(self, stmt);
+                self.signature_of = signature_of;
                 self.enclosing_class = enclosing_class;
 
                 return;
             }
             Stmt::ClassDef(class) => {
-                self.add_inferred_variances(class.type_params.as_deref(), |model| {
+                // `reified` is written ahead of a variance, so its hint goes first
+                let reified = self.add_inferred_class_reification(class);
+                self.add_inferred_variances(class.type_params.as_deref(), &reified, |model| {
                     class.inferred_type(model)
                 });
-                self.add_inferred_class_reification(class);
                 self.add_stub_bases(class);
                 self.add_inferred_base_type_arguments(class);
 
@@ -2825,7 +3469,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             Stmt::TypeAlias(type_alias) => {
-                self.add_inferred_variances(type_alias.type_params.as_deref(), |model| {
+                self.add_inferred_variances(type_alias.type_params.as_deref(), &[], |model| {
                     type_alias.inferred_type(model)
                 });
 
@@ -2851,19 +3495,29 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
     }
 
     fn visit_parameter_with_default(&mut self, parameter: &'a ast::ParameterWithDefault) {
+        // read, and cleared, by the parameter, which is visited before its default
+        self.parameter_default = parameter.default.as_deref();
+        source_order::walk_parameter_with_default(self, parameter);
+        self.parameter_default = None;
+
+        // after the parameter's own hints: an inherited default is written after the annotation
+        // an unannotated parameter's type hint sits at the same place
         if self.enter_node(parameter.into()).is_traverse() {
             self.add_inherited_parameter_default(parameter);
         }
-
-        source_order::walk_parameter_with_default(self, parameter);
     }
 
     fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
+        // the default is this parameter's alone: whatever is visited below it, a lambda in an
+        // annotation, has parameters of its own
+        let default = self.parameter_default.take();
         if self.enter_node(parameter.into()).is_traverse() {
+            self.parameter_default = default;
             self.add_implicit_self(parameter);
             self.add_lambda_parameter_type(parameter);
             self.add_inherited_parameter_type(parameter);
             self.add_inferred_parameter_type(parameter);
+            self.parameter_default = None;
         }
 
         source_order::walk_parameter(self, parameter);
@@ -2899,9 +3553,9 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.add_invalidations(WriteSite::Lambda(lambda));
 
                 // every parameter below a lambda belongs to a lambda
-                let in_lambda = std::mem::replace(&mut self.in_lambda, true);
+                let outer = self.lambda.replace(lambda);
                 source_order::walk_expr(self, expr);
-                self.in_lambda = in_lambda;
+                self.lambda = outer;
             }
             // a union in a type expression, written either way. its operands are visited by
             // hand so each one knows what the others already spell
@@ -2963,29 +3617,37 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 }
                 self.add_implicit_context_arguments(call, callee);
 
+                // the block of a trailing lambda is passed after the arguments the call
+                // writes, by position, so none of those can be named
+                let names_arguments = !std::mem::take(&mut self.in_trailing_lambda_callee);
+
                 self.visit_expr(&call.func);
 
-                let mut last_editable_hint_index: Option<usize> = None;
+                let mut positionals = Vec::new();
 
                 // `argument_names` is keyed by positional-arg index, not source-order index,
                 // so track them separately to stay in sync after keyword args appear mid-call.
                 let mut positional_index = 0;
                 for arg_or_keyword in call.arguments.iter_source_order() {
                     if let ArgOrKeyword::Arg(argument) = arg_or_keyword {
-                        if let Some((name, parameter_label_offset)) =
-                            details.argument_names.get(&positional_index)
-                            && !arg_matches_name(argument, name)
-                        {
-                            if self.add_call_argument_name(
+                        let parameter = details.argument_names.get(&positional_index);
+                        let mut hint = None;
+                        if let Some(parameter) = parameter
+                            && !arg_matches_name(argument, &parameter.name)
+                            && self.add_call_argument_name(
                                 arg_or_keyword.range().start(),
-                                name,
-                                parameter_label_offset.map(NavigationTarget::from),
-                            ) {
-                                if !argument.is_starred_expr() {
-                                    last_editable_hint_index = Some(self.hints.len() - 1);
-                                }
-                            }
+                                &parameter.name,
+                                parameter.name_range.map(NavigationTarget::from),
+                                parameter.declaration.as_deref(),
+                            )
+                        {
+                            hint = Some(self.hints.len() - 1);
                         }
+                        positionals.push((
+                            argument,
+                            parameter.map(|parameter| parameter.name.as_str()),
+                            hint,
+                        ));
 
                         positional_index += 1;
                     }
@@ -2993,14 +3655,8 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                     self.visit_expr(arg_or_keyword.value());
                 }
 
-                // For the last positional argument, provide an edit to insert
-                // the inlay hint.
-                if let Some(index) = last_editable_hint_index {
-                    let hint: &mut InlayHint = &mut self.hints[index];
-                    hint.text_edits = vec![InlayHintTextEdit {
-                        range: TextRange::empty(hint.position),
-                        new_text: format!("{}=", hint.label.parts()[0].text()),
-                    }];
+                if names_arguments {
+                    self.name_positional_arguments(&positionals);
                 }
             }
             _ => {
@@ -3214,6 +3870,8 @@ struct DynamicallyImportedMember {
 
 struct DynamicImporter<'a, 'db> {
     importer: &'a Importer<'db>,
+    /// where the members in scope are kept across importers, if they are
+    scope_members: Option<&'a ScopeMembers<'db>>,
     /// The node used to compute members in scope (lazily).
     scope_node: AnyNodeRef<'a>,
     scope_offset: TextSize,
@@ -3228,12 +3886,14 @@ struct DynamicImporter<'a, 'db> {
 impl<'a, 'db> DynamicImporter<'a, 'db> {
     fn new(
         importer: &'a Importer<'db>,
+        scope_members: Option<&'a ScopeMembers<'db>>,
         scope_node: AnyNodeRef<'a>,
         scope_offset: TextSize,
         dynamic_imports: &'a mut FxHashMap<DynamicallyImportedMember, ImportAction>,
     ) -> Self {
         Self {
             importer,
+            scope_members,
             scope_node,
             scope_offset,
             members: None,
@@ -3262,10 +3922,16 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
         use std::collections::hash_map::Entry;
 
         // Ensure members are computed before borrowing other fields.
-        let members = self.members.get_or_insert_with(|| {
-            self.importer
-                .members_in_scope_at(self.scope_node, self.scope_offset)
-        });
+        let members = self
+            .members
+            .get_or_insert_with(|| match self.scope_members {
+                Some(scope_members) => {
+                    scope_members.at(self.importer, self.scope_node, self.scope_offset)
+                }
+                None => self
+                    .importer
+                    .members_in_scope_at(self.scope_node, self.scope_offset),
+            });
 
         // Check if the label is like `foo.A`
         let mut is_possibly_qualified_name = label_text.contains('.');
@@ -3315,10 +3981,16 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
     fn import_name(&mut self, module_name: &str, symbol_name: Option<&str>) -> String {
         use std::collections::hash_map::Entry;
 
-        let members = self.members.get_or_insert_with(|| {
-            self.importer
-                .members_in_scope_at(self.scope_node, self.scope_offset)
-        });
+        let members = self
+            .members
+            .get_or_insert_with(|| match self.scope_members {
+                Some(scope_members) => {
+                    scope_members.at(self.importer, self.scope_node, self.scope_offset)
+                }
+                None => self
+                    .importer
+                    .members_in_scope_at(self.scope_node, self.scope_offset),
+            });
         let key = DynamicallyImportedMember {
             module: module_name.to_string(),
             name: symbol_name.unwrap_or_default().to_string(),
@@ -3377,7 +4049,6 @@ mod tests {
         source::source_text,
     };
     use ruff_diagnostics::{Edit, Fix};
-    use ruff_python_ast::PySourceType;
     use ruff_python_parser::parse_unchecked_source;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::{TextLen, TextSize};
@@ -3750,6 +4421,28 @@ mod tests {
         LL | class int:
            |       ^^^
         info: Source
+          --> main2.py:LL:20
+           |
+        LL | def overloaded(x[: int | str])[ -> int | str]:
+           |                    ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:26
+           |
+        LL | def overloaded(x[: int | str])[ -> int | str]:
+           |                          ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
           --> main2.py:LL:36
            |
         LL | def overloaded(x[: int | str])[ -> int | str]:
@@ -3772,7 +4465,7 @@ mod tests {
            |
         8  | def overloaded(x: str) -> str: ...
            - def overloaded(x):
-        9  + def overloaded(x) -> int | str:
+        9  + def overloaded(x: int | str) -> int | str:
         10 |     return "a" if isinstance(x, str) else 0
            |
         "#);
@@ -3868,6 +4561,16 @@ mod tests {
         ");
     }
 
+    /// `source` with `edits` applied, which may be in any order but do not overlap
+    fn apply_text_edits(source: &str, edits: &[InlayHintTextEdit]) -> String {
+        let mut edited = source.to_string();
+        // from the end back, so each edit's range is still where it was
+        for edit in edits.iter().sorted_by_key(|edit| edit.range.start()).rev() {
+            edited.replace_range(edit.range.to_std_range(), &edit.new_text);
+        }
+        edited
+    }
+
     struct InlayHintTest {
         db: ty_project::TestDb,
         file: File,
@@ -3942,8 +4645,25 @@ mod tests {
 
             let mut inlay_hint_buf = source_text(&self.db, self.file).as_str().to_string();
             let mut text_edit_buf = inlay_hint_buf.clone();
+            // a `.by` file is read as basedpython, whose syntax several edits write
+            let source_type = self.file.source_type(&self.db);
             let source_has_errors =
-                parse_unchecked_source(&text_edit_buf, PySourceType::Python).has_invalid_syntax();
+                parse_unchecked_source(&text_edit_buf, source_type).has_invalid_syntax();
+
+            // each hint is applied on its own, so each one's edits must make valid source
+            // alone, whatever the others write
+            if !source_has_errors {
+                for hint in &hints {
+                    let edited = apply_text_edits(&text_edit_buf, &hint.text_edits);
+                    let parsed = parse_unchecked_source(&edited, source_type);
+                    assert!(
+                        !parsed.has_invalid_syntax(),
+                        "the edits of the hint `{}` alone make a syntax error:\n{}\n{edited}",
+                        hint.display(),
+                        parsed.errors().iter().map(|error| &error.error).join("\n"),
+                    );
+                }
+            }
 
             let mut tbd_diagnostics = Vec::new();
 
@@ -3998,7 +4718,7 @@ mod tests {
                 edit_offset += edit.new_text.text_len() - edit.range.len();
             }
 
-            let edited = parse_unchecked_source(&text_edit_buf, PySourceType::Python);
+            let edited = parse_unchecked_source(&text_edit_buf, source_type);
             if edited.has_invalid_syntax() && !source_has_errors {
                 let syntax_errors = edited.errors().iter().map(|error| &error.error).join("\n");
 
@@ -4045,6 +4765,115 @@ Source with applied edits:
             };
 
             format!("{inlay_hint_buf}{rendered_diagnostics}{fixes}")
+        }
+
+        /// every hint that writes itself, applied alone, as a client applies one: the label,
+        /// then each line the edited file has that the source does not
+        ///
+        /// asserts that what each writes is what it says: the edited file parses where the
+        /// source does, checks with no diagnostic the source did not have, and no longer shows
+        /// the hint, since the source now says it
+        fn edits_applied_alone(&mut self) -> String {
+            let settings = InlayHintSettings::default();
+            let path = self
+                .file
+                .path(&self.db)
+                .as_system_path()
+                .expect("a test file is a system file")
+                .to_path_buf();
+            let source = source_text(&self.db, self.file).as_str().to_string();
+            let source_type = self.file.source_type(&self.db);
+            let whole = TextRange::up_to(source.text_len());
+
+            let hints = self.hints_with(whole, &settings);
+            let diagnostics = self.diagnostic_messages();
+            let shown = |hints: &[InlayHint], hint: &InlayHint| {
+                hints
+                    .iter()
+                    .filter(|other| {
+                        other.kind == hint.kind
+                            && other.display().to_string() == hint.display().to_string()
+                    })
+                    .count()
+            };
+
+            let mut rendered = Vec::new();
+            for hint in hints.iter().filter(|hint| !hint.text_edits.is_empty()) {
+                let edited = apply_text_edits(&source, &hint.text_edits);
+                let label = hint.display().to_string();
+
+                let parsed = parse_unchecked_source(&edited, source_type);
+                assert!(
+                    !parsed.has_invalid_syntax(),
+                    "`{label}` writes a syntax error:\n{edited}"
+                );
+
+                self.db.write_file(&path, &edited).unwrap();
+                let introduced: Vec<_> = self
+                    .diagnostic_messages()
+                    .into_iter()
+                    .filter(|message| !diagnostics.contains(message))
+                    .collect();
+                assert!(
+                    introduced.is_empty(),
+                    "`{label}` writes source that checks with {introduced:#?}:\n{edited}"
+                );
+                let after = self.hints_with(TextRange::up_to(edited.text_len()), &settings);
+                assert!(
+                    shown(&after, hint) < shown(&hints, hint),
+                    "`{label}` is still shown once written:\n{edited}"
+                );
+
+                let added = edited
+                    .lines()
+                    .filter(|line| !source.lines().any(|original| original == *line))
+                    .map(|line| format!("  {line}"))
+                    .join("\n");
+                rendered.push(format!("«{label}» {:?}\n{added}", hint.kind));
+            }
+            self.db.write_file(&path, &source).unwrap();
+            rendered.join("\n")
+        }
+
+        /// every hint's tooltip, and every label part's, after its label
+        fn tooltips(&mut self) -> String {
+            let hints = self.hints_with(self.range, &InlayHintSettings::default());
+            hints
+                .iter()
+                .flat_map(|hint| {
+                    let label = hint.display().to_string();
+                    let parts = hint.label.parts().iter().filter_map(move |part| {
+                        Some(format!("«{}» part: {}", part.text(), part.tooltip()?))
+                    });
+                    hint.tooltip
+                        .as_ref()
+                        .map(|tooltip| format!("«{label}»: {tooltip}"))
+                        .into_iter()
+                        .chain(parts)
+                        .collect::<Vec<_>>()
+                })
+                .join("\n")
+        }
+
+        fn hints_with(&self, range: TextRange, settings: &InlayHintSettings) -> Vec<InlayHint> {
+            inlay_hints(
+                &self.db,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
+                range,
+                settings,
+            )
+        }
+
+        /// what the file's check reports, by rule and message, without where
+        fn diagnostic_messages(&self) -> Vec<String> {
+            ty_project::check_file_ignoring_check_mode(&self.db, self.file)
+                .iter()
+                .map(|diagnostic| format!("{}: {}", diagnostic.id(), diagnostic.concise_message()))
+                .collect()
         }
 
         fn render_diagnostic<D>(&self, diagnostic: D) -> String
@@ -7539,10 +8368,10 @@ Source with applied edits:
            - y = (MyClass([42], ("a", "b")), MyClass([42], ("a", "b")))
            - a, b = MyClass([42], ("a", "b")), MyClass([42], ("a", "b"))
            - c, d = (MyClass([42], ("a", "b")), MyClass([42], ("a", "b")))
-        7  + x: MyClass[int, str] = MyClass([42], y=("a", "b"))
-        8  + y: tuple[MyClass[int, str], MyClass[int, str]] = (MyClass([42], y=("a", "b")), MyClass([42], y=("a", "b")))
-        9  + a, b = MyClass([42], y=("a", "b")), MyClass([42], y=("a", "b"))
-        10 + c, d = (MyClass([42], y=("a", "b")), MyClass([42], y=("a", "b")))
+        7  + x: MyClass[int, str] = MyClass[int, str](x=[42], y=("a", "b"))
+        8  + y: tuple[MyClass[int, str], MyClass[int, str]] = (MyClass[int, str](x=[42], y=("a", "b")), MyClass[int, str](x=[42], y=("a", "b")))
+        9  + a, b = MyClass[int, str](x=[42], y=("a", "b")), MyClass[int, str](x=[42], y=("a", "b"))
+        10 + c, d = (MyClass[int, str](x=[42], y=("a", "b")), MyClass[int, str](x=[42], y=("a", "b")))
            |
         "#);
     }
@@ -8039,15 +8868,6 @@ Source with applied edits:
           |
         4 | foo([a=]'foo', *t, d='bar')
           |      ^
-
-        ---------------------------------------------
-        info[inlay-hint-edit]: Inlay hint edits
-        --> main.py:1:1
-          |
-        3 | t: tuple[int, int] = (23, 42)
-          - foo('foo', *t, d='bar')
-        4 + foo(a='foo', *t, d='bar')
-          |
         ");
     }
 
@@ -8147,15 +8967,6 @@ Source with applied edits:
           |
         4 | foo([a=]1, [b=]*t)
           |             ^
-
-        ---------------------------------------------
-        info[inlay-hint-edit]: Inlay hint edits
-        --> main.py:1:1
-          |
-        3 | t: tuple[int] = (2,)
-          - foo(1, *t)
-        4 + foo(a=1, *t)
-          |
         ");
     }
 
@@ -8355,7 +9166,7 @@ Source with applied edits:
           |
         7 |
           - Foo(1, 'a')
-        8 + Foo(1, y='a')
+        8 + Foo(x=1, y='a')
           |
         ");
     }
@@ -8759,7 +9570,7 @@ Source with applied edits:
           |
         2 | def foo(x: int, y: str, z: bool): pass
           - foo(1, 'hello', True)
-        3 + foo(1, 'hello', z=True)
+        3 + foo(x=1, y='hello', z=True)
           |
         ");
     }
@@ -8820,7 +9631,7 @@ Source with applied edits:
           |
         4 |
           - total = add(3, 2, y=4)
-        5 + total: int = add(3, b=2, y=4)
+        5 + total: int = add(x=3, b=2, y=4)
           |
         ");
     }
@@ -8989,8 +9800,8 @@ Source with applied edits:
           - foo(1, 'custom')
           - foo(1, 'custom', True)
         3 + foo(x=1)
-        4 + foo(1, y='custom')
-        5 + foo(1, 'custom', z=True)
+        4 + foo(x=1, y='custom')
+        5 + foo(x=1, y='custom', z=True)
           |
         ");
     }
@@ -9094,7 +9905,7 @@ Source with applied edits:
            |
         9  |
            - baz(foo(5), bar(bar('test')), True)
-        10 + baz(foo(x=5), bar(y=bar(y='test')), c=True)
+        10 + baz(a=foo(x=5), b=bar(y=bar(y='test')), c=True)
            |
         ");
     }
@@ -9243,7 +10054,7 @@ Source with applied edits:
           - foo(5)
           - bar(1, 2)
         4 + foo(x=5)
-        5 + bar(1, b=2)
+        5 + bar(a=1, b=2)
           |
         ");
     }
@@ -9585,7 +10396,7 @@ Source with applied edits:
         2 | def foo(a: int, b: str, /, c: float, d: bool = True, *, e: int, f: str = 'default'): pass
           - foo(1, 'pos', 3.14, False, e=42)
           - foo(1, 'pos', 3.14, e=42, f='custom')
-        3 + foo(1, 'pos', 3.14, d=False, e=42)
+        3 + foo(1, 'pos', c=3.14, d=False, e=42)
         4 + foo(1, 'pos', c=3.14, e=42, f='custom')
           |
         ");
@@ -9669,6 +10480,28 @@ Source with applied edits:
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
            |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:13
+           |
+        LL | def foo(x[: int | str])[ -> str | int]:
+           |             ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:19
+           |
+        LL | def foo(x[: int | str])[ -> str | int]:
+           |                   ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
         LL | class str(Sequence[str]):
            |       ^^^
         info: Source
@@ -9716,7 +10549,7 @@ Source with applied edits:
            |
         7  | def foo(x: str) -> int: ...
            - def foo(x):
-        8  + def foo(x) -> str | int:
+        8  + def foo(x: int | str) -> str | int:
         9  |     return x
         10 |
            - foo(42)
@@ -9856,6 +10689,28 @@ Source with applied edits:
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
            |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:11
+           |
+        LL | def f(x[: int | str])[ -> str | int]:
+           |           ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:17
+           |
+        LL | def f(x[: int | str])[ -> str | int]:
+           |                 ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
         LL | class str(Sequence[str]):
            |       ^^^
         info: Source
@@ -9892,7 +10747,7 @@ Source with applied edits:
            |
         7  | def f(x: str, y: str) -> int: ...
            - def f(x):
-        8  + def f(x) -> str | int:
+        8  + def f(x: int | str) -> str | int:
         9  |     return x
         10 |
            - f([])
@@ -10242,7 +11097,7 @@ Source with applied edits:
           |
         6 |
           - foo(1, 2)
-        7 + foo(1, y=2)
+        7 + foo(x=1, y=2)
           |
         ");
     }
@@ -10623,7 +11478,7 @@ Source with applied edits:
           |
         3 |
           - N = NewType('N', str)
-        4 + N = NewType('N', tp=str)
+        4 + N = NewType(name='N', tp=str)
         5 |
           |
         ");
@@ -10885,7 +11740,7 @@ Source with applied edits:
           |
         2 | from typing_extensions import TypeAliasType
           - A = TypeAliasType('A', str)
-        3 + A = TypeAliasType('A', value=str)
+        3 + A = TypeAliasType(name='A', value=str)
           |
         ");
     }
@@ -11557,7 +12412,7 @@ Source with applied edits:
           |
         5 |
           - a = D(Baz)
-        6 + a: D[Baz] = D(x=Baz)
+        6 + a: D[Baz] = D[Baz](x=Baz)
           |
         ");
     }
@@ -11674,15 +12529,26 @@ Source with applied edits:
            |                       ^^^^^^
 
         info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing.byi:LL:1
+           |
+        LL | Literal: _SpecialForm
+           | ^^^^^^^
+        info: Source
+          --> main2.py:LL:43
+           |
+        LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
+           |                                           ^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ^^^
         info: Source
-          --> main2.py:LL:43
+          --> main2.py:LL:51
            |
         LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
-           |                                           ^^^^^^^^^^^^^^^
+           |                                                   ^^^^^^
 
         ---------------------------------------------
         info[inlay-hint-edit]: Inlay hint edits
@@ -12078,7 +12944,7 @@ Source with applied edits:
            |
         10 |
            - b = B(foo.A())
-        11 + b: B[foo.A] = B(x=foo.A())
+        11 + b: B[foo.A] = B[foo.A](x=foo.A())
            |
         ");
     }
@@ -14808,6 +15674,17 @@ def each(fn: (int) -> None) -> None:
         2 | def f(a[: str])[ -> int]:
           |                     ^^^
 
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/ty_extensions/_internal.pyi:LL:1
+           |
+        LL | Unknown: _SpecialForm
+           | ^^^^^^^
+        info: Source
+          --> main2.py:LL:35
+           |
+        LL | def g(b[: some protocol(let name: Unknown)]):
+           |                                   ^^^^^^^
+
         ---------------------------------------------
         info[inlay-hint-edit]: Inlay hint edits
         --> main.by:1:1
@@ -15325,6 +16202,759 @@ def each(fn: (int) -> None) -> None:
         31 +     def klass(cls, x: object) -> TypeIs[int]:
         32 |         return isinstance(x, int)
            |
+        ");
+    }
+
+    /// `override` is written where the hint sits, ahead of any modifier and of `async`, and the
+    /// tooltip names the member it overrides
+    #[test]
+    fn an_inferred_override_writes_itself_and_names_the_overridden_member() {
+        let mut test = basedpython_inlay_hint_test(
+            r#"
+            class Animal:
+                def speak(self) -> str:
+                    return ""
+                async def run(self):
+                    pass
+
+            class Dog(Animal):
+                def speak(self) -> str:
+                    return "woof"
+                final async def run(self):
+                    pass
+            "#,
+        );
+
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «override » Override
+              override def speak(self) -> str:
+        «override » Override
+              override final async def run(self):
+        ");
+        assert_snapshot!(test.tooltips(), @"
+        «override »: Overrides `Animal.speak`
+        «override »: Overrides `Animal.run`
+        ");
+    }
+
+    /// a variance keyword is written before the name, and only where a parameter can declare
+    /// one: not on a pack, nor on a reified parameter, written or inferred
+    #[test]
+    fn an_inferred_variance_writes_itself_where_it_can() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Source[T]:
+                def get(self) -> T: ...
+
+            class Sink[T]:
+                def put(self, value: T) -> None: ...
+
+            class Both[T]:
+                value: T
+
+            class Packed[*Ts]:
+                def get(self) -> tuple[*Ts]: ...
+
+            class Written[reified T]:
+                def get(self) -> T: ...
+
+            class Inferred[T]:
+                def get(self) -> T: ...
+                def kind(self):
+                    print(T)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_variance: true,
+            inferred_reification: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        class Source[[out ]T]:
+            def get(self) -> T: ...
+
+        class Sink[[in ]T]:
+            def put(self, value: T) -> None: ...
+
+        class Both[[in out ]T]:
+            value: T
+
+        class Packed[[out ]*Ts]:
+            def get(self) -> tuple[*Ts]: ...
+
+        class Written[reified [in out ]T]:
+            def get(self) -> T: ...
+
+        class Inferred[[reified ][in out ]T]:
+            def get(self) -> T: ...
+            def kind(self):
+                print(T)
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+           |
+        1  |
+           - class Source[T]:
+        2  + class Source[out T]:
+        3  |     def get(self) -> T: ...
+        4  |
+           - class Sink[T]:
+        5  + class Sink[in T]:
+        6  |     def put(self, value: T) -> None: ...
+        7  |
+           - class Both[T]:
+        8  + class Both[in out T]:
+        9  |     value: T
+        --------------------------------------------------------------------------------
+        16 |
+           - class Inferred[T]:
+        17 + class Inferred[reified T]:
+        18 |     def get(self) -> T: ...
+           |
+        ");
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «out » Variance
+          class Source[out T]:
+        «in » Variance
+          class Sink[in T]:
+        «in out » Variance
+          class Both[in out T]:
+        «reified » Reification
+          class Inferred[reified T]:
+        ");
+    }
+
+    /// the inferred exception set is written as a `raises` clause, importing an exception the file
+    /// does not bind, and not written at all when it names a class only a function body declares;
+    /// the tooltip lists where each one escapes from
+    #[test]
+    fn an_inferred_raises_writes_itself_with_its_imports() {
+        let mut test = basedpython_inlay_hint_test(
+            r#"
+            from errors import parse
+
+            def load(text: str) -> int:
+                if not text:
+                    raise ValueError("empty")
+                return parse(text)
+
+            def local():
+                class Local(Exception): ...
+                raise Local()
+            "#,
+        );
+        test.with_extra_file(
+            "errors.by",
+            "class ParseError(Exception): ...\n\ndef parse(text: str) -> int:\n    raise ParseError()\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_raises: true,
+            ..InlayHintSettings::none()
+        }), @r#"
+
+        from errors import parse
+
+        def load(text: str) -> int[ raises ValueError | ParseError]:
+            if not text:
+                raise ValueError("empty")
+            return parse(text)
+
+        def local()[ raises Local]:
+            class Local(Exception): ...
+            raise Local()
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class ValueError(Exception):
+           |       ^^^^^^^^^^
+        info: Source
+          --> main2.py:LL:36
+           |
+        LL | def load(text: str) -> int[ raises ValueError | ParseError]:
+           |                                    ^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> errors.by:1:7
+          |
+        1 | class ParseError(Exception): ...
+          |       ^^^^^^^^^^
+        info: Source
+         --> main2.py:4:49
+          |
+        4 | def load(text: str) -> int[ raises ValueError | ParseError]:
+          |                                                 ^^^^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> main.by:10:11
+           |
+        10 |     class Local(Exception): ...
+           |           ^^^^^
+        info: Source
+         --> main2.py:9:21
+          |
+        9 | def local()[ raises Local]:
+          |                     ^^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+          |
+        1 |
+          - from errors import parse
+        2 + from errors import ParseError, parse
+        3 |
+          - def load(text: str) -> int:
+        4 + def load(text: str) -> int raises ValueError | ParseError:
+        5 |     if not text:
+          |
+        "#);
+        assert_snapshot!(test.edits_applied_alone(), @"
+        « raises ValueError | ParseError» Raises
+          from errors import ParseError, parse
+          def load(text: str) -> int raises ValueError | ParseError:
+        « -> Never» InferredReturnType
+          def local() -> Never:
+        ");
+        assert_snapshot!(test.tooltips(), @r#"
+        « raises ValueError | ParseError»: Raised by:
+        - line 6, `raise ValueError("empty")`: `ValueError`
+        - line 7, `parse(text)`: `ParseError`
+        « raises Local»: Raised by:
+        - line 11, `raise Local()`: `Local`
+        "#);
+    }
+
+    /// an inherited annotation is written as the source would write it: spaced around a default,
+    /// importing what the base's module names, and on a pack as each element's; the tooltip names
+    /// where it comes from
+    #[test]
+    fn an_inherited_parameter_type_writes_itself() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            from shapes import Shape
+
+            class Circle(Shape):
+                def scale(self, factor, origin=None, *rest):
+                    return self
+
+            def area(r: int) -> int: ...
+            def area(r: str) -> str: ...
+            def area(r):
+                return r
+            ",
+        );
+        test.with_extra_file(
+            "shapes.by",
+            "from decimal import Decimal\n\nclass Shape:\n    def scale(self, factor: Decimal, origin: tuple[int, int] | None = None, *rest: int) -> Shape:\n        return self\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_types: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        from shapes import Shape
+
+        class Circle(Shape):
+            def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+                return self
+
+        def area(r: int) -> int: ...
+        def area(r: str) -> str: ...
+        def area(r):
+            return r
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/decimal.byi:LL:7
+           |
+        LL | class Decimal:
+           |       ^^^^^^^
+        info: Source
+          --> main2.py:LL:30
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                              ^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class tuple[out Element](Sequence[Element]):
+           |       ^^^^^
+        info: Source
+          --> main2.py:LL:49
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                                                 ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:50
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                                                  ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:55
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                                                       ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/types.byi:LL:13
+           |
+        LL | final class NoneType:
+           |             ^^^^^^^^
+        info: Source
+          --> main2.py:LL:62
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                                                              ^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:82
+           |
+        LL |     def scale(self, factor[: Decimal], origin[: (int, int) | None]=None, *rest[: int]):
+           |                                                                                  ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+          |
+        1 |
+        2 + from decimal import Decimal
+        3 +
+        4 | from shapes import Shape
+        5 |
+        6 | class Circle(Shape):
+          -     def scale(self, factor, origin=None, *rest):
+        7 +     def scale(self, factor: Decimal, origin: (int, int) | None = None, *rest: int):
+        8 |         return self
+          |
+        ");
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «override » Override
+              override def scale(self, factor, origin=None, *rest):
+        «: Decimal» InheritedParameterType
+          from decimal import Decimal
+              def scale(self, factor: Decimal, origin=None, *rest):
+        «: (int, int) | None» InheritedParameterType
+              def scale(self, factor, origin: (int, int) | None = None, *rest):
+        «: int» InheritedParameterType
+              def scale(self, factor, origin=None, *rest: int):
+        « -> Shape» InferredReturnType
+              def scale(self, factor, origin=None, *rest) -> Shape:
+        ");
+        assert_snapshot!(test.tooltips(), @"
+        «override »: Overrides `Shape.scale`
+        «: Decimal»: Inherited from `Shape.scale`
+        «: (int, int) | None»: Inherited from `Shape.scale`
+        «: int»: Inherited from `Shape.scale`
+        ");
+    }
+
+    /// basedpython's lambda takes annotations in parentheses, which the edit adds where the
+    /// lambda has none; a python lambda takes none at all
+    #[test]
+    fn a_lambda_parameter_type_writes_itself_in_basedpython() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(f: (int, str) -> str) -> None: ...
+
+            apply(lambda n, s: s * n)
+            apply(lambda (n, s=''): s * n)
+            ",
+        );
+
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «f=» CallArgumentName
+          apply(f=lambda n, s: s * n)
+        «: int» LambdaParameterType
+          apply(lambda (n: int, s): s * n)
+        «: str» LambdaParameterType
+          apply(lambda (n, s: str): s * n)
+        «f=» CallArgumentName
+          apply(f=lambda (n, s=''): s * n)
+        «: int» LambdaParameterType
+          apply(lambda (n: int, s=''): s * n)
+        «: str» LambdaParameterType
+          apply(lambda (n, s: str = ''): s * n)
+        ");
+
+        let mut test = inlay_hint_test(
+            "
+            from typing import Callable
+            def apply(f: Callable[[int], str]) -> None: ...
+
+            apply(lambda n: str(n))
+            ",
+        );
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «f=» CallArgumentName
+          apply(f=lambda n: str(n))
+        «object=» CallArgumentName
+          apply(lambda n: str(object=n))
+        ");
+    }
+
+    /// a `some` bound, a property's type and a base's type arguments are written where they are
+    /// shown
+    #[test]
+    fn annotations_basedpython_infers_write_themselves() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def greet(person, times=1):
+                name: str = person.name
+                count: int = times + 1
+                return name * count
+
+            class Temperature:
+                celsius: float
+                let fahrenheit
+                    get() = self.celsius * 9 / 5 + 32
+
+            class Box[T]:
+                item: T
+
+            class IntBox(Box):
+                item = 0
+            ",
+        );
+
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «: some protocol(let name: str)» InferredParameterType
+          def greet(person: some protocol(let name: str), times=1):
+        «: some int» InferredParameterType
+          def greet(person, times: some int = 1):
+        « -> str» InferredReturnType
+          def greet(person, times=1) -> str:
+        «: float» PropertyType
+              let fahrenheit: float
+        «in out » Variance
+          class Box[in out T]:
+        «[int]» InferredBaseTypeArguments
+          class IntBox(Box[int]):
+        ");
+    }
+
+    /// a call is specialized where its type arguments are shown: any generic callee in a `.by`
+    /// file, but only a class in a `.py` file, where a function has no `__getitem__`
+    #[test]
+    fn call_type_arguments_write_themselves_where_the_callee_takes_them() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def first[T](items: list[T]) -> T:
+                return items[0]
+
+            class Pair[A, B]:
+                def __init__(self, a: A, b: B) -> None: ...
+
+            top = first([3.0, 1.0])
+            pair = Pair(1.5, 'x')
+            ",
+        );
+        assert_snapshot!(test.edits_applied_alone(), @r#"
+        «out » Variance
+          class Pair[out A, B]:
+        «out » Variance
+          class Pair[A, out B]:
+        «: float» VariableType
+          top: float = first([3.0, 1.0])
+        «[float]» CallTypeArguments
+          top = first[float]([3.0, 1.0])
+        «items=» CallArgumentName
+          top = first(items=[3.0, 1.0])
+        «: Pair[A=1.5, B="x"]» VariableType
+          pair: Pair[A=1.5, B="x"] = Pair(1.5, 'x')
+        «[A=1.5, B="x"]» CallTypeArguments
+          pair = Pair[A=1.5, B="x"](1.5, 'x')
+        «a=» CallArgumentName
+          pair = Pair(a=1.5, b='x')
+        «b=» CallArgumentName
+          pair = Pair(1.5, b='x')
+        "#);
+
+        let mut test = inlay_hint_test(
+            "
+            def first[T](items: list[T]) -> T:
+                return items[0]
+
+            class Box[T]:
+                def __init__(self, item: T) -> None: ...
+
+            top = first([3.0, 1.0])
+            box = Box(1.5)
+            ",
+        );
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_type_arguments: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        def first[T](items: list[T]) -> T:
+            return items[0]
+
+        class Box[T]:
+            def __init__(self, item: T) -> None: ...
+
+        top = first[[int | float]]([3.0, 1.0])
+        box = Box[[float]](1.5)
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:14
+           |
+        LL | top = first[[int | float]]([3.0, 1.0])
+           |              ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class float:
+           |       ^^^^^
+        info: Source
+          --> main2.py:LL:20
+           |
+        LL | top = first[[int | float]]([3.0, 1.0])
+           |                    ^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class float:
+           |       ^^^^^
+        info: Source
+          --> main2.py:LL:12
+           |
+        LL | box = Box[[float]](1.5)
+           |            ^^^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        8 | top = first([3.0, 1.0])
+          - box = Box(1.5)
+        9 + box = Box[float](1.5)
+          |
+        ");
+    }
+
+    /// an inherited default is a literal, which reads the same anywhere, so it is written where
+    /// it is shown; an enum member, which would be written through a class this file may not
+    /// bind, is not shown at all. the tooltip names the method it comes from
+    #[test]
+    fn an_inherited_default_writes_itself() {
+        let mut test = basedpython_inlay_hint_test(
+            r#"
+            from colors import Color, Painter
+
+            class Greeter:
+                def greet(self, name: str = "world", times=2) -> str:
+                    return name
+
+            class LoudGreeter(Greeter):
+                def greet(self, name: str, times) -> str:
+                    return name.upper()
+
+            class Brush(Painter):
+                def paint(self, color) -> None: ...
+            "#,
+        );
+        test.with_extra_file(
+            "colors.by",
+            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\nclass Painter:\n    def paint(self, color: Color = Color.RED) -> None: ...\n",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_defaults: true,
+            ..InlayHintSettings::none()
+        }), @r#"
+
+        from colors import Color, Painter
+
+        class Greeter:
+            def greet(self, name: str = "world", times=2) -> str:
+                return name
+
+        class LoudGreeter(Greeter):
+            def greet(self, name: str[ = "world"], times[=2]) -> str:
+                return name.upper()
+
+        class Brush(Painter):
+            def paint(self, color) -> None: ...
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+           |
+        8  | class LoudGreeter(Greeter):
+           -     def greet(self, name: str, times) -> str:
+        9  +     def greet(self, name: str = "world", times=2) -> str:
+        10 |         return name.upper()
+           |
+        "#);
+        assert_snapshot!(test.edits_applied_alone(), @r#"
+        «: some int» InferredParameterType
+              def greet(self, name: str = "world", times: some int = 2) -> str:
+        «override » Override
+              override def greet(self, name: str, times) -> str:
+        « = "world"» InheritedDefault
+              def greet(self, name: str = "world", times) -> str:
+        «=2» InheritedDefault
+              def greet(self, name: str, times=2) -> str:
+        «override » Override
+              override def paint(self, color) -> None: ...
+        «: Color» InheritedParameterType
+              def paint(self, color: Color) -> None: ...
+        "#);
+        assert_snapshot!(test.tooltips(), @r#"
+        «override »: Overrides `Greeter.greet`
+        « = "world"»: Inherited from `Greeter.greet`
+        «=2»: Inherited from `Greeter.greet`
+        «override »: Overrides `Painter.paint`
+        «: Color»: Inherited from `Painter.paint`
+        "#);
+    }
+
+    /// every hinted positional argument writes its name, and every positional argument's after
+    /// it, since a positional argument cannot follow a named one. one followed by an unpacked
+    /// argument, or by one passed to a parameter that takes no name, writes nothing; the tooltip
+    /// is the parameter's declaration
+    #[test]
+    fn call_argument_names_write_themselves_and_every_one_after() {
+        let mut test = inlay_hint_test(
+            "
+            def connect(host: str, port: int = 80, timeout: float = 1.0): ...
+            def spread(a: int, b: int, c: int): ...
+            def only(a: int, /, b: int, *args: int): ...
+
+            port = 8080
+            connect('localhost', port, 2.5)
+            t: tuple[int] = (2,)
+            spread(1, *t, 3)
+            only(1, 2, 3)
+            ",
+        );
+
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «host=» CallArgumentName
+          connect(host='localhost', port=port, timeout=2.5)
+        «timeout=» CallArgumentName
+          connect('localhost', port, timeout=2.5)
+        «c=» CallArgumentName
+          spread(1, *t, c=3)
+        ");
+        assert_snapshot!(test.tooltips(), @"
+        «host=»: ```python
+        host: str
+        ```
+        «timeout=»: ```python
+        timeout: float = 1.0
+        ```
+        «a=»: ```python
+        a: int
+        ```
+        «b=»: ```python
+        b: int
+        ```
+        «c=»: ```python
+        c: int
+        ```
+        «b=»: ```python
+        b: int
+        ```
+        ");
+    }
+
+    /// the block of a trailing lambda is passed after the arguments the call writes, so none of
+    /// them is named
+    #[test]
+    fn a_trailing_lambda_callee_names_no_argument() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def repeat(times: int, action: (int) -> None): ...
+
+            repeat(3):
+                print(it)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_argument_names: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        def repeat(times: int, action: (int) -> None): ...
+
+        repeat([times=]3):
+            print(it)
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.by:2:12
+          |
+        2 | def repeat(times: int, action: (int) -> None): ...
+          |            ^^^^^
+        info: Source
+         --> main2.py:4:9
+          |
+        4 | repeat([times=]3):
+          |         ^^^^^
+        ");
+    }
+
+    /// basedpython's keyword subscript names a type argument as a call names an argument, so a
+    /// type argument name writes itself and every one after it; python's subscript has no keyword
+    #[test]
+    fn type_argument_names_write_themselves_in_basedpython() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            scores: dict[str, int] = {}
+            ",
+        );
+        assert_snapshot!(test.edits_applied_alone(), @"
+        «Key=» TypeArgumentName
+          scores: dict[Key=str, Value=int] = {}
+        «Value=» TypeArgumentName
+          scores: dict[str, Value=int] = {}
+        ");
+
+        let mut test = inlay_hint_test(
+            "
+            scores: dict[str, int] = {}
+            ",
+        );
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }), @"
+
+        scores: dict[[Key=]str, [Value=]int] = {}
         ");
     }
 

@@ -23,15 +23,37 @@ Box[str]('a')
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/typing.byi:LL:1
+   |
+LL | Literal: _SpecialForm
+   | ^^^^^^^
+info: Source
+  --> main2.py:LL:11
+   |
+LL | identity[[Literal[1]]](1)
+   |           ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
 info: Source
-  --> main2.py:LL:11
+  --> main2.py:LL:19
    |
 LL | identity[[Literal[1]]](1)
-   |           ^^^^^^^^^^
+   |                   ^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/typing.byi:LL:1
+   |
+LL | Literal: _SpecialForm
+   | ^^^^^^^
+info: Source
+  --> main2.py:LL:7
+   |
+LL | pair[[Literal["a"], Literal[2]]]('a', 2)
+   |       ^^^^^^^
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
@@ -39,21 +61,21 @@ info[inlay-hint-location]: Inlay Hint Target
 LL | class str(Sequence[str]):
    |       ^^^
 info: Source
-  --> main2.py:LL:7
+  --> main2.py:LL:15
    |
 LL | pair[[Literal["a"], Literal[2]]]('a', 2)
-   |       ^^^^^^^^^^^^
+   |               ^^^
 
 info[inlay-hint-location]: Inlay Hint Target
-  --> stdlib/builtins.byi:LL:7
+  --> stdlib/typing.byi:LL:1
    |
-LL | class int:
-   |       ^^^
+LL | Literal: _SpecialForm
+   | ^^^^^^^
 info: Source
   --> main2.py:LL:21
    |
 LL | pair[[Literal["a"], Literal[2]]]('a', 2)
-   |                     ^^^^^^^^^^
+   |                     ^^^^^^^
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
@@ -61,7 +83,43 @@ info[inlay-hint-location]: Inlay Hint Target
 LL | class int:
    |       ^^^
 info: Source
+  --> main2.py:LL:29
+   |
+LL | pair[[Literal["a"], Literal[2]]]('a', 2)
+   |                             ^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/typing.byi:LL:1
+   |
+LL | Literal: _SpecialForm
+   | ^^^^^^^
+info: Source
   --> main2.py:LL:6
    |
 LL | Box[[Literal[1]]](1)
-   |      ^^^^^^^^^^
+   |      ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:14
+   |
+LL | Box[[Literal[1]]](1)
+   |              ^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.py:1:1
+   |
+1  + from typing import Literal
+2  +
+3  |
+--------------------------------------------------------------------------------
+18 | plain(1)
+   - Box(1)
+19 + Box[Literal[1]](1)
+20 | Box[str]('a')
+   |

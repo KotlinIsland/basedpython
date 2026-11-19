@@ -23,3 +23,12 @@ info: Source
    |
 LL | b = pair[[1]]('lit', 1)
    |           ^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+8 | a = echo('lit')
+  - b = pair('lit', 1)
+9 + b = pair[1]('lit', 1)
+  |

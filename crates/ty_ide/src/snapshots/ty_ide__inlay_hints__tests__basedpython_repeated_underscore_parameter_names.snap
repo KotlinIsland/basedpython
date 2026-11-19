@@ -7,7 +7,7 @@ class A:
     def f(self, x: int = 1, y: str = 'a') -> None: ...
 
 class B(A):
-    override def f(self, _[=1][: int], _[="a"][: str]) -> None: ...
+    override def f(self, _[: int][=1], _[: str][="a"]) -> None: ...
 
 def g(_: int, _: int) -> None: ...
 
@@ -15,6 +15,28 @@ B().f([x=]1, [y=]'b')
 g(1, 2)
 
 ---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:30
+   |
+LL |     override def f(self, _[: int][=1], _[: str][="a"]) -> None: ...
+   |                              ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:44
+   |
+LL |     override def f(self, _[: int][=1], _[: str][="a"]) -> None: ...
+   |                                            ^^^
+
 info[inlay-hint-location]: Inlay Hint Target
  --> main.by:6:26
   |
@@ -41,8 +63,13 @@ info: Source
 info[inlay-hint-edit]: Inlay hint edits
 --> main.by:1:1
    |
+5  | class B(A):
+   -     override def f(self, _, _) -> None: ...
+6  +     override def f(self, _: int=1, _: str="a") -> None: ...
+7  |
+8  | def g(_: int, _: int) -> None: ...
 9  |
    - B().f(1, 'b')
-10 + B().f(1, y='b')
+10 + B().f(x=1, y='b')
 11 | g(1, 2)
    |

@@ -14,3 +14,25 @@ class C(A[object]):
 
 class D(A):
     y = 1
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:12
+   |
+LL | class B(A[[int]]):
+   |            ^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+4 |
+  - class B(A):
+5 + class B(A[int]):
+6 |     x = 1
+  |

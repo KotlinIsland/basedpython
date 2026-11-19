@@ -70,5 +70,5 @@ info[inlay-hint-edit]: Inlay hint edits
   |
 4 |
   - a = A(1, 2)
-5 + a: A[1, 2] = A(1, 2)
+5 + a: A[1, 2] = A[1, 2](1, 2)
   |

@@ -13,6 +13,7 @@ The main differences here are:
 
 use std::cell::OnceCell;
 use std::ops::Range;
+use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
@@ -1210,10 +1211,10 @@ fn top_level_imports(db: &dyn Db, file: PythonFile<'_>) -> Box<[AstNodeRef<ast::
 /// silently do nothing. Perhaps in the future we can find a way to prompt end
 /// users for a decision. This behavior is modeled after rust-analyzer, which
 /// does the same thing for auto-import on unimported completions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MembersInScope<'ast> {
     at: TextSize,
-    map: FxHashMap<Name, MemberInScope<'ast>>,
+    map: Rc<FxHashMap<Name, MemberInScope<'ast>>>,
 }
 
 impl<'ast> MembersInScope<'ast> {
@@ -1225,7 +1226,17 @@ impl<'ast> MembersInScope<'ast> {
     pub fn empty(at: TextSize) -> Self {
         Self {
             at,
-            map: FxHashMap::default(),
+            map: Rc::default(),
+        }
+    }
+
+    /// the same members, for an import needed at `at` in the same scope: what is in scope depends
+    /// only on the scope, so a caller importing at many places in one builds each scope's once
+    #[must_use]
+    pub fn at(&self, at: TextSize) -> Self {
+        Self {
+            at,
+            map: Rc::clone(&self.map),
         }
     }
 
@@ -1263,7 +1274,10 @@ impl<'ast> MembersInScope<'ast> {
                 )
             })
             .collect();
-        MembersInScope { at, map }
+        MembersInScope {
+            at,
+            map: Rc::new(map),
+        }
     }
 
     pub fn find_member(&self, symbol_name: &str) -> Option<&MemberInScope<'ast>> {

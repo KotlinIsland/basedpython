@@ -109,7 +109,8 @@ info[inlay-hint-edit]: Inlay hint edits
 7  |
    - a = Pair(1, 'x')
    - b = One(1)
-8  + a: Pair[Key=1, Value="x"] = Pair(1, 'x')
-9  + b: One[1] = One(1)
-10 | c: dict[str, int] = {}
+   - c: dict[str, int] = {}
+8  + a: Pair[Key=1, Value="x"] = Pair[Key=1, Value="x"](1, 'x')
+9  + b: One[1] = One[1](1)
+10 + c: dict[Key=str, Value=int] = {}
    |

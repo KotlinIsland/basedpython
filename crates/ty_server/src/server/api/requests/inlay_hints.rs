@@ -113,7 +113,9 @@ pub(super) fn lsp_inlay_hint(
             .local_position(),
         label: inlay_hint_label(&hint.label, db, encoding),
         kind: Some(inlay_hint_kind(hint.kind)),
-        tooltip: None,
+        tooltip: hint
+            .tooltip
+            .map(|value| lsp_types::Tooltip::MarkupContent(markdown(value))),
         padding_left: hint.padding_left.then_some(true),
         padding_right: hint.padding_right.then_some(true),
         data: Some(match hint.placement {
@@ -199,11 +201,21 @@ fn inlay_hint_label(
             location: part
                 .target()
                 .and_then(|target| target.to_location(db, encoding)),
-            tooltip: None,
+            tooltip: part
+                .tooltip()
+                .map(|value| lsp_types::Tooltip::MarkupContent(markdown(value.to_string()))),
             command: None,
         });
     }
     lsp_types::Label::InlayHintLabelPartList(label_parts)
+}
+
+/// a tooltip, which `ty_ide` writes in markdown: a type or a declaration in it is code
+fn markdown(value: String) -> lsp_types::MarkupContent {
+    lsp_types::MarkupContent {
+        kind: lsp_types::MarkupKind::Markdown,
+        value,
+    }
 }
 
 fn inlay_hint_text_edit(

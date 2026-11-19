@@ -12,3 +12,55 @@ class A:
 
     let n[: None]
         get(): pass
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:21
+   |
+LL |     private let b[: "b"]
+   |                     ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:20
+   |
+LL |     static let c[: 3]
+   |                    ^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/types.byi:LL:13
+   |
+LL | final class NoneType:
+   |             ^^^^^^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL |     let n[: None]
+   |             ^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+2  | class A:
+   -     private let b
+3  +     private let b: "b"
+4  |         get() = 'b'
+5  |
+   -     static let c
+6  +     static let c: 3
+7  |         get() = 3
+8  |
+   -     let n
+9  +     let n: None
+10 |         get(): pass
+   |

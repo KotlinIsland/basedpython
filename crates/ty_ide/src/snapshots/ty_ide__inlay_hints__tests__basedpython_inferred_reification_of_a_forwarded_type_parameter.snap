@@ -15,3 +15,17 @@ def hop[[reified ]U](u: U) -> object:
 
 def erased[V](v: V) -> list[V]:
     return [v]
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+5  |
+   - def forwarded[T](t: T) -> object:
+6  + def forwarded[reified T](t: T) -> object:
+7  |     return Box(t)
+8  |
+   - def hop[U](u: U) -> object:
+9  + def hop[reified U](u: U) -> object:
+10 |     return forwarded(u)
+   |

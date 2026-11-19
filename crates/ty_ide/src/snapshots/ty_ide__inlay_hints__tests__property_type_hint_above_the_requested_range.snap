@@ -6,3 +6,25 @@ expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ property_types
 class A:
     let a[: 1]
         get() = 1
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL |     let a[: 1]
+   |             ^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+2 | class A:
+  -     let a
+3 +     let a: 1
+4 |         get() = 1
+  |

@@ -62,6 +62,17 @@ info: Source
 LL | def raiser()[ -> Never][ raises TypeError]:
    |                  ^^^^^
 
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class TypeError(Exception):
+   |       ^^^^^^^^^
+info: Source
+  --> main2.py:LL:33
+   |
+LL | def raiser()[ -> Never][ raises TypeError]:
+   |                                 ^^^^^^^^^
+
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits
 --> main.by:1:1
@@ -79,6 +90,6 @@ info[inlay-hint-edit]: Inlay hint edits
 11 |     return None
 12 |
    - def raiser():
-13 + def raiser() -> Never:
+13 + def raiser() -> Never raises TypeError:
 14 |     raise TypeError
    |

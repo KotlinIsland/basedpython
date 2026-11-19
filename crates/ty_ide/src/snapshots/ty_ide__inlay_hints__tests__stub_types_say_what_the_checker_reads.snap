@@ -35,6 +35,28 @@ info[inlay-hint-location]: Inlay Hint Target
 LL | class int:
    |       ^^^
 info: Source
+  --> main2.py:LL:31
+   |
+LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
+   |                               ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:37
+   |
+LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
+   |                                     ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
   --> main2.py:LL:49
    |
 LL | def get(key[: str], default[: int | str]=0)[ -> int | str]:
@@ -101,7 +123,7 @@ info[inlay-hint-edit]: Inlay hint edits
    |
 3  |
    - def get(key, default=0):
-4  + def get(key: str, default=0) -> int | str:
+4  + def get(key: str, default: int | str = 0) -> int | str:
 5  |     reveal_type(key)
 6  |     reveal_type(default)
 7  |     return default

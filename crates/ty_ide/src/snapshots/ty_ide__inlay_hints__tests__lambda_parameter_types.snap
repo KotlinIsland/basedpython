@@ -9,3 +9,15 @@ from typing import Callable
 
 apply(lambda x[: int]: str(x))
 f = lambda y: y
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:18
+   |
+LL | apply(lambda x[: int]: str(x))
+   |                  ^^^

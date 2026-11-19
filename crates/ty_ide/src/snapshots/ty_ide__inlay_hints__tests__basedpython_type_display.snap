@@ -39,6 +39,6 @@ info[inlay-hint-edit]: Inlay hint edits
   |
 4 |
   - a = identity(1)
-5 + a: 1 = identity(1)
+5 + a: 1 = identity[1](1)
 6 | b = (1, 'two')
   |

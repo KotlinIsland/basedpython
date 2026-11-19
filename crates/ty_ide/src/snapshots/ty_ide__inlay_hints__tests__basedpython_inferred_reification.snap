@@ -21,3 +21,27 @@ def half_declared[reified T, [reified ]U]():
 class C:
     def method[[reified ]T](self):
         print(T)
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+1  |
+   - def value_use[T]():
+2  + def value_use[reified T]():
+3  |     print(T)
+4  |
+   - def pack_use[*Ts, **Kwargs]():
+5  + def pack_use[reified *Ts, reified **Kwargs]():
+6  |     print(Ts, Kwargs)
+--------------------------------------------------------------------------------
+13 |
+   - def half_declared[reified T, U]():
+14 + def half_declared[reified T, reified U]():
+15 |     print(U)
+16 |
+17 | class C:
+   -     def method[T](self):
+18 +     def method[reified T](self):
+19 |         print(T)
+   |

@@ -105,7 +105,9 @@ pub(crate) struct InlayHintCatalogExample {
     source: String,
     /// every hint this server draws on `source` with every kind enabled, of whichever kind, as
     /// `textDocument/inlayHint` returns them, without what only means something in a file of a
-    /// project: where a label part leads, and the edits that would write a hint into the source
+    /// project: where a label part leads, and the edits that would write a hint into the source.
+    /// a tooltip stays, since it says what a hint is about wherever it is drawn: a preview that
+    /// shows it on hover shows what an editor would
     hints: Vec<lsp_types::InlayHint>,
 }
 
@@ -186,7 +188,7 @@ fn inlay_hint_catalog(encoding: PositionEncoding) -> InlayHintCatalog {
 }
 
 /// `hint` as a preview draws it: an example is no file of a project, so a label part leads nowhere
-/// and there is no source to write the hint into
+/// and there is no source to write the hint into. its tooltips stay
 fn scratch_hint(mut hint: lsp_types::InlayHint) -> lsp_types::InlayHint {
     if let lsp_types::Label::InlayHintLabelPartList(parts) = &mut hint.label {
         for part in parts {
@@ -239,6 +241,38 @@ mod tests {
                 FileKind::Template => assert!(kind.example.is_none()),
             }
         }
+    }
+
+    /// a preview shows a hint's tooltip on hover as an editor does, so an example keeps it
+    #[test]
+    fn an_example_keeps_its_tooltips() {
+        let catalog = inlay_hint_catalog(PositionEncoding::UTF16);
+        let tooltip = |setting: &str| {
+            let kind = catalog
+                .kinds
+                .iter()
+                .find(|kind| kind.setting == setting)
+                .unwrap_or_else(|| panic!("no {setting}"));
+            let hint = kind
+                .example
+                .as_ref()
+                .expect("an example")
+                .hints
+                .iter()
+                .find(|hint| {
+                    hint.data.as_ref().and_then(|data| data["kind"].as_str()) == Some(setting)
+                })
+                .expect("a hint of its own");
+            match &hint.tooltip {
+                Some(lsp_types::Tooltip::MarkupContent(content)) => {
+                    assert_eq!(content.kind, lsp_types::MarkupKind::Markdown);
+                    content.value.clone()
+                }
+                other => panic!("{setting}'s tooltip is {other:?}"),
+            }
+        };
+        assert_eq!(tooltip("inferredOverride"), "Overrides `Animal.speak`");
+        assert_eq!(tooltip("callArgumentNames"), "```python\nhost: str\n```");
     }
 
     #[test]

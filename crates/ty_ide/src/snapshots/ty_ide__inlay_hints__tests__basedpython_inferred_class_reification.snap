@@ -16,3 +16,18 @@ class Declared[reified T]:
 class HalfDeclared[reified T, [reified ]U]:
     def kind(self):
         return U
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+1  |
+   - class ValueUse[T]:
+2  + class ValueUse[reified T]:
+3  |     def kind(self):
+--------------------------------------------------------------------------------
+11 |
+   - class HalfDeclared[reified T, U]:
+12 + class HalfDeclared[reified T, reified U]:
+13 |     def kind(self):
+   |

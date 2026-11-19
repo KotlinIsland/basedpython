@@ -19,3 +19,67 @@ def annotated(a: int):
 class C:
     def m(self, a[: some protocol(let foo: object)]):
         _ = a.foo
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class object:
+   |       ^^^^^^
+info: Source
+  --> main2.py:LL:37
+   |
+LL | def read(a[: some protocol(let foo: object)]):
+   |                                     ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:51
+   |
+LL | def called(a[: some protocol(def size(self, /) -> int)], b[: some int]=1):
+   |                                                   ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:67
+   |
+LL | def called(a[: some protocol(def size(self, /) -> int)], b[: some int]=1):
+   |                                                                   ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class object:
+   |       ^^^^^^
+info: Source
+  --> main2.py:LL:44
+   |
+LL |     def m(self, a[: some protocol(let foo: object)]):
+   |                                            ^^^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+1  |
+   - def read(a):
+2  + def read(a: some protocol(let foo: object)):
+3  |     _ = a.foo
+4  |
+   - def called(a, b=1):
+5  + def called(a, b: some int = 1):
+6  |     x: int = a.size()
+--------------------------------------------------------------------------------
+15 | class C:
+   -     def m(self, a):
+16 +     def m(self, a: some protocol(let foo: object)):
+17 |         _ = a.foo
+   |

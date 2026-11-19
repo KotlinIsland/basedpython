@@ -17,3 +17,62 @@ class D:
 
 class E(D):
     def f(self, a[: int], *args[: str]): ...
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:21
+   |
+LL |     def f(self, a[: int], b[: str]='y') -> None: ...
+   |                     ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:31
+   |
+LL |     def f(self, a[: int], b[: str]='y') -> None: ...
+   |                               ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:21
+   |
+LL |     def f(self, a[: int], *args[: str]): ...
+   |                     ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:35
+   |
+LL |     def f(self, a[: int], *args[: str]): ...
+   |                                   ^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+5  | class B(A):
+   -     def f(self, a, b='y') -> None: ...
+6  +     def f(self, a: int, b: str = 'y') -> None: ...
+7  |
+--------------------------------------------------------------------------------
+14 | class E(D):
+   -     def f(self, a, *args): ...
+15 +     def f(self, a: int, *args: str): ...
+   |

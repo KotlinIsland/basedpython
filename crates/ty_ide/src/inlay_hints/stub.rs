@@ -45,8 +45,8 @@ use ty_python_semantic::types::ide_support::{
 use ty_python_semantic::{HasType, SemanticModel};
 
 use super::{
-    BlockPlacement, InlayHint, InlayHintImportContext, InlayHintKind, InlayHintLabel,
-    InlayHintLabelPart, InlayHintTextEdit, InlayHintVisitor, spell_type, type_display_details,
+    BlockPlacement, InlayHint, InlayHintKind, InlayHintLabel, InlayHintLabelPart,
+    InlayHintTextEdit, InlayHintVisitor, spell_type, type_display_details,
 };
 use crate::{Db, NavigationTarget};
 
@@ -306,6 +306,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
             padding_right: false,
             text_edits,
             placement: None,
+            tooltip: None,
         })
     }
 
@@ -346,6 +347,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
             padding_right: false,
             text_edits,
             placement: None,
+            tooltip: None,
         })
     }
 
@@ -381,11 +383,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
         }
         let declared = declared?;
         let file = self.model.program_file();
-        let context = InlayHintImportContext {
-            db: self.db,
-            file,
-            importer: &self.importer,
-        };
+        let context = self.import_context();
         let type_params_in_scope = self.model.type_params_in_signature(function);
         let details = type_display_details(self.db, file, declared, false, &type_params_in_scope);
         let spelled = spell_type(
@@ -508,6 +506,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
                 Vec::new()
             },
             placement: None,
+            tooltip: None,
         };
         self.push(hint);
     }
@@ -645,6 +644,7 @@ impl<'db> InlayHintVisitor<'_, 'db> {
                     padding_right: false,
                     text_edits,
                     placement: Some(placement),
+                    tooltip: None,
                 });
             }
         }

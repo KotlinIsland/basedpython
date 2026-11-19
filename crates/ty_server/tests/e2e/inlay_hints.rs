@@ -185,6 +185,10 @@ y = foo(Thing())
             "newText": "a="
           }
         ],
+        "tooltip": {
+          "kind": "markdown",
+          "value": "```python\na: Thing\n```"
+        },
         "data": {
           "kind": "callArgumentNames"
         }

@@ -8,3 +8,25 @@ def rethrow[T: BaseException](error: T) raises T:
 
 def caller()[ raises TypeError]:
     rethrow(TypeError())
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class TypeError(Exception):
+   |       ^^^^^^^^^
+info: Source
+  --> main2.py:LL:22
+   |
+LL | def caller()[ raises TypeError]:
+   |                      ^^^^^^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+4 |
+  - def caller():
+5 + def caller() raises TypeError:
+6 |     rethrow(TypeError())
+  |

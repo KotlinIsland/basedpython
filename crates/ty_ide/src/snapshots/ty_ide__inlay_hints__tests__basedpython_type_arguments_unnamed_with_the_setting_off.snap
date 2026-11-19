@@ -70,5 +70,5 @@ info[inlay-hint-edit]: Inlay hint edits
   |
 4 |
   - a = Pair(1, 'x')
-5 + a: Pair[1, "x"] = Pair(1, 'x')
+5 + a: Pair[1, "x"] = Pair[1, "x"](1, 'x')
   |

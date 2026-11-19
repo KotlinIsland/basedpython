@@ -16,3 +16,55 @@ class A:
 
     let d: bytes
         get() = b''
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL |     let a[: 1]
+   |             ^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL |     let b[: str]
+   |             ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
+  --> main2.py:LL:13
+   |
+LL |     var c[: int] = 0
+   |             ^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+2  | class A:
+   -     let a
+3  +     let a: 1
+4  |         get() = 1
+5  |
+   -     let b
+6  +     let b: str
+7  |         field = 'two'
+8  |
+   -     var c = 0
+9  +     var c: int = 0
+10 |         get() = field
+   |

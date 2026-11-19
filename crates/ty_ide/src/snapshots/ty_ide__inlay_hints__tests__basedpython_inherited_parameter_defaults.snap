@@ -11,3 +11,13 @@ class B(A):
 
 class C:
     def f(self, a) -> None: ...
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+5 | class B(A):
+  -     def f(self, a, b: str, c, d, e=3) -> None: ...
+6 +     def f(self, a=1, b: str = "x", c=None, d, e=3) -> None: ...
+7 |
+  |

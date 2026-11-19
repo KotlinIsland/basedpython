@@ -25,3 +25,13 @@ info: Source
   |
 8 |     [override ]def f(self) -> None: ...
   |      ^^^^^^^^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+7 | class B(A):
+  -     def f(self) -> None: ...
+8 +     override def f(self) -> None: ...
+9 |     override def g(self) -> None: ...
+  |

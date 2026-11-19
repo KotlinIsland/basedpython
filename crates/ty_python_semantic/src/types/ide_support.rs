@@ -53,7 +53,7 @@ use crate::types::{
     BoundTypeVarInstance, CallDunderError, ClassBase, ClassLiteral, ClassType, KnownClass,
     KnownFunction, KnownInstanceType, KnownUnion, PropertyAccessorRole, SpecialFormType,
     SubclassOfType, Type, TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
-    binding_type,
+    UnionType, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
 use ruff_db::files::{File, FileRange};
@@ -2278,13 +2278,41 @@ pub fn resolved_call_signature<'db>(
 
 #[derive(Default)]
 pub struct InlayHintCallArgumentDetails<'db> {
-    /// The position of the arguments mapped to their name and the range of the argument definition in the signature.
-    pub argument_names: HashMap<usize, (String, Option<FileRange>)>,
+    /// The position of the arguments mapped to the parameter each is passed to.
+    pub argument_names: HashMap<usize, CallArgumentParameter>,
 
     /// The type arguments inferred for the callee's own generic context, as the
     /// type parameter each fills paired with the type it was solved to, in
     /// declaration order. Empty when the callee is not generic.
     pub type_arguments: Vec<(Name, Type<'db>)>,
+}
+
+/// the parameter a positional argument is passed to, which it could be passed to by name
+#[derive(Debug, Clone)]
+pub struct CallArgumentParameter {
+    /// the parameter's name
+    pub name: String,
+    /// where the signature names the parameter
+    pub name_range: Option<FileRange>,
+    /// the parameter as its signature writes it — its name, annotation and default — when the
+    /// signature is written somewhere
+    pub declaration: Option<String>,
+}
+
+/// the source of the parameter `definition` defines: its name, annotation and default
+fn parameter_declaration(db: &dyn Db, definition: Definition<'_>) -> Option<String> {
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let range = match definition.kind(db) {
+        DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter, _)) => {
+            parameter.node(&module).range()
+        }
+        DefinitionKind::Parameter(_) => definition.full_range(db, &module).range(),
+        _ => return None,
+    };
+    let source = source_text(db, definition.file(db));
+    let declaration = source.get(range.to_std_range())?.trim();
+    // a parameter the lowering synthesizes, as an `init(...)`'s `self`, has no source of its own
+    (!declaration.is_empty()).then(|| declaration.to_string())
 }
 
 pub fn inlay_hint_call_argument_details<'db>(
@@ -2321,17 +2349,25 @@ pub fn inlay_hint_call_argument_details<'db>(
             continue;
         };
 
-        let parameter_label_offset = param.definition().map(|definition| {
-            let module = parsed_module(db, definition.python_file(db)).load(db);
-            definition.focus_range(db, &module)
-        });
-
         // Only add hints for parameters that can be specified by name
         if !param.is_positional_only() && !param.is_variadic() && !param.is_keyword_variadic() {
             let Some(name) = param.name() else {
                 continue;
             };
-            argument_names.insert(arg_index, (name.to_string(), parameter_label_offset));
+            let name_range = param.definition().map(|definition| {
+                let module = parsed_module(db, definition.python_file(db)).load(db);
+                definition.focus_range(db, &module)
+            });
+            argument_names.insert(
+                arg_index,
+                CallArgumentParameter {
+                    name: name.to_string(),
+                    name_range,
+                    declaration: param
+                        .definition()
+                        .and_then(|definition| parameter_declaration(db, definition)),
+                },
+            );
         }
     }
 
@@ -3171,7 +3207,28 @@ pub fn inferred_raises<'db>(
     }
 
     let raised = crate::types::exceptions::function_raised_exceptions(db, env, literal);
-    (!raised.is_never()).then_some(raised)
+    (!raised.is_never()).then(|| as_raises_clause(db, env, raised))
+}
+
+/// basedpython: an exception set as a `raises` clause names it: the classes raised, whichever
+/// way each instance was made. `raise E()` raises a `final E` — the instance its constructor
+/// call makes — but the clause says what a caller may catch, and no clause writes `final`
+fn as_raises_clause<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    raised: Type<'db>,
+) -> Type<'db> {
+    match raised {
+        Type::Union(union) => UnionType::from_elements(
+            db,
+            env,
+            union
+                .elements(db)
+                .iter()
+                .map(|element| element.erase_restriction(db)),
+        ),
+        raised => raised.erase_restriction(db),
+    }
 }
 
 /// basedpython-ui: one observable a function reads while composing, as the
@@ -3406,7 +3463,7 @@ pub fn implicit_enum_member_value<'db>(
 pub fn inferred_override<'db>(
     model: &SemanticModel<'db>,
     function: &ast::StmtFunctionDef,
-) -> Option<Type<'db>> {
+) -> Option<InferredOverride<'db>> {
     let db = model.db();
     let env = model.program_environment();
     let definition = function.definition(model);
@@ -3424,10 +3481,104 @@ pub fn inferred_override<'db>(
         .into_iter()
         .find_map(|step| match step {
             OverrideStep::Overrides(OverriddenDeclaration { superclass, .. }) => {
-                Some(Type::from(superclass))
+                Some(InferredOverride {
+                    superclass: Type::from(superclass),
+                    superclass_name: superclass.name(db).clone(),
+                })
             }
             OverrideStep::Dynamic | OverrideStep::TypedDict => None,
         })
+}
+
+/// basedpython: the superclass member a method overrides without saying so, see
+/// [`inferred_override`]
+#[derive(Debug, Clone)]
+pub struct InferredOverride<'db> {
+    /// the superclass that declares the member
+    pub superclass: Type<'db>,
+    /// what the superclass is called, as its `class` statement names it
+    pub superclass_name: Name,
+}
+
+/// basedpython: the member a method overrides, named the way a reader looks it up —
+/// `Animal.speak` — after the first superclass the override checks' walk up the MRO finds, as
+/// [`inferred_override`] does. `None` when `function` is not a method, or overrides nothing
+fn overridden_member_name(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Option<String> {
+    let db = model.db();
+    let env = model.program_environment();
+    let class = declaring_class(db, function.definition(model))?;
+    overridden_declarations(db, &env, class, &function.name.id)
+        .into_iter()
+        .find_map(|step| match step {
+            OverrideStep::Overrides(OverriddenDeclaration { superclass, .. }) => {
+                Some(format!("{}.{}", superclass.name(db), function.name.id))
+            }
+            OverrideStep::Dynamic | OverrideStep::TypedDict => None,
+        })
+}
+
+/// basedpython: where an unannotated parameter's type comes from, when it comes from something
+/// other than its own source, see [`inherited_parameter_source`]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParameterTypeSource {
+    /// the overloads the `def` implements, of the function named
+    Overloads(Name),
+    /// the method it overrides, named as `Class.method`
+    Method(String),
+}
+
+/// basedpython: where the type [`inherited_parameter_annotation`] answers for `parameter` comes
+/// from, in the order the signature takes it: the overloads a `def` implements first, then the
+/// method it overrides. `None` when it comes from neither — what a decorator accepts
+pub fn inherited_parameter_source(
+    model: &SemanticModel<'_>,
+    parameter: &ast::Parameter,
+) -> Option<ParameterTypeSource> {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.try_definition(parameter)?;
+    let function = nearest_enclosing_function(db, index, definition.scope(db))?;
+    let (overloads, implementation) = function.overloads_and_implementation(db);
+    if !overloads.is_empty() && implementation.is_some() {
+        return Some(ParameterTypeSource::Overloads(function.name(db).clone()));
+    }
+    let module = parsed_module(db, db.program_file(model.file()).python_file(db)).load(db);
+    let function_node = definition.scope(db).node(db).as_function()?.node(&module);
+    overridden_member_name(model, function_node).map(ParameterTypeSource::Method)
+}
+
+/// basedpython: the method the default [`inherited_parameter_default`] answers for a parameter of
+/// `function` comes from, named as `Class.method`
+pub fn inherited_default_source(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Option<String> {
+    overridden_member_name(model, function)
+}
+
+/// basedpython: each place in the body of the function `function` that an exception escapes
+/// from, with what escapes there — a `raise`, an `assert`, or a call whose exceptions are not all
+/// caught around it — in source order: the parts the set [`inferred_raises`] answers is the union
+/// of. empty where it answers nothing
+pub fn inferred_raise_sites<'db>(
+    db: &'db dyn Db,
+    function: Type<'db>,
+) -> Vec<(TextRange, Type<'db>)> {
+    let Type::FunctionLiteral(function) = function else {
+        return Vec::new();
+    };
+    let env = ProgramEnvironment::from_file(function.literal(db).last_definition.program_file(db));
+    let mut sites: Vec<_> = function
+        .literal(db)
+        .iter_overloads_and_implementation(db)
+        .flat_map(|overload| crate::types::exceptions::inferred_exception_sites(db, overload))
+        .map(|(range, raised)| (range, as_raises_clause(db, &env, raised)))
+        .collect();
+    sites.sort_by_key(|(range, _)| range.start());
+    sites
 }
 
 /// basedpython: a binding or declaration a class body makes of one of the

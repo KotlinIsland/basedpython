@@ -19,3 +19,25 @@ class Plain:
     pass
 
 type Alias[[in out ]T] = list[T]
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+1  |
+   - class Source[T]:
+2  + class Source[out T]:
+3  |     def get(self) -> T: ...
+4  |
+   - class Sink[T]:
+5  + class Sink[in T]:
+6  |     def put(self, value: T) -> None: ...
+7  |
+   - class Both[T]:
+8  + class Both[in out T]:
+9  |     value: T
+--------------------------------------------------------------------------------
+16 |
+   - type Alias[T] = list[T]
+17 + type Alias[in out T] = list[T]
+   |
