@@ -269,14 +269,19 @@ note: wrote back app/migrations/__init__.py
     one project directory were staged into has no one place to go, and is reported
     rather than written. the root of a src-layout project's tree is one: `src/` and
     the project root both land there
-- nothing is carried back from a directory the build never stages — hidden ones,
-    `__pycache__`, `build` and the rest — so the bytecode python caches in the tree
-    stays there
+- nothing is carried back from a directory the build never descends into, by
+    name: a hidden one, or one called `__pycache__`, `build`, `out`, `target`,
+    `env` or `site-packages`. so the bytecode python caches in
+    the tree stays there
+- a project path reached through a symbolic link, which the build never stages
+    from, is reported rather than written through
 
 the tree is compared by content, as it was just before the program started, and
 this happens however the program ends: a non-zero exit, or a signal `by run`
-passed on to it. with `--in-build` the program's working directory is the tree,
-so a relative path it writes is carried back the same way
+passed on to it. `by run` still exits as the program did, unless a file could
+not be read or written, which makes a program that exited 0 exit 1. with
+`--in-build` the program's working directory is the tree, so a relative path it
+writes is carried back the same way
 
 hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
 treated as project source: they are neither checked nor transpiled, by `run`
