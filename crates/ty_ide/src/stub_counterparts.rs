@@ -586,13 +586,13 @@ mod tests {
             .build();
         let foo = ruff_db::files::system_path_to_file(&test.db, "/site-packages/foo/__init__.py")
             .expect("the runtime package");
+        let foo_stubs =
+            ruff_db::files::system_path_to_file(&test.db, "/site-packages/foo-stubs/__init__.pyi")
+                .expect("the stub package");
         let counterparts =
             document_counterparts(&test.db, test.program_file(foo)).expect("a stub package");
         assert_eq!(counterparts.role, StubRole::Implementation);
-        assert_eq!(
-            counterparts.counterparts[0].path(&test.db).as_str(),
-            "/site-packages/foo-stubs/__init__.pyi"
-        );
+        assert_eq!(counterparts.counterparts, [foo_stubs]);
         assert_eq!(counterparts.declarations.len(), 1);
     }
 

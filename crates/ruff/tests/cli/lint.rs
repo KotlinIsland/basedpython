@@ -5481,16 +5481,16 @@ impl CliTest {
 fn package_roots_without_a_ruff_configuration() -> Result<()> {
     let test = CliTest::with_files([
         ("pyproject.toml", "[project]\nname = \"p\"\n"),
-        ("pkg/a.by", ""),
-        ("src/app/b.by", ""),
-        ("tools/c.by", ""),
+        ("pkg/models.by", ""),
+        ("src/app/views.by", ""),
+        ("tools/cli.by", ""),
     ])?;
     assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
     success: false
     exit_code: 1
     ----- stdout -----
-    pkg/a.by:1:1: INP001 File `pkg/a.by` is part of an implicit namespace package. Add an `__init__.py`.
-    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    pkg/models.by:1:1: INP001 File `pkg/models.by` is part of an implicit namespace package. Add an `__init__.py`.
+    tools/cli.by:1:1: INP001 File `tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 2 errors.
 
     ----- stderr -----
@@ -5506,15 +5506,15 @@ fn package_roots_beside_a_ruff_section() -> Result<()> {
             "[project]\nname = \"p\"\n\n[tool.ruff]\nline-length = 100\n\n\
              [tool.basedpython.environment]\npackage-roots = [\".\", \"src\"]\n",
         ),
-        ("pkg/a.by", ""),
-        ("src/app/b.by", ""),
-        ("my-tools/c.by", ""),
+        ("pkg/models.by", ""),
+        ("src/app/views.by", ""),
+        ("my-tools/cli.by", ""),
     ])?;
     assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
     success: false
     exit_code: 1
     ----- stdout -----
-    my-tools/c.by:1:1: INP001 File `my-tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    my-tools/cli.by:1:1: INP001 File `my-tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----
@@ -5531,14 +5531,14 @@ fn package_roots_with_a_ruff_toml_below_the_project() -> Result<()> {
             "[project]\nname = \"p\"\n\n[tool.basedpython.environment]\npackage-roots = [\".\"]\n",
         ),
         ("lib/ruff.toml", "line-length = 100\n"),
-        ("lib/pkg/a.by", ""),
-        ("lib/my-tools/c.by", ""),
+        ("lib/pkg/models.by", ""),
+        ("lib/my-tools/cli.by", ""),
     ])?;
     assert_cmd_snapshot!(test.implicit_namespace_packages().arg("."), @"
     success: false
     exit_code: 1
     ----- stdout -----
-    lib/my-tools/c.by:1:1: INP001 File `lib/my-tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    lib/my-tools/cli.by:1:1: INP001 File `lib/my-tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----
@@ -5555,7 +5555,7 @@ fn package_roots_of_a_nested_project() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    tools/cli.by:1:1: INP001 File `tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----
@@ -5575,9 +5575,9 @@ fn nested_project() -> [(&'static str, &'static str); 5] {
             "inner/basedpython.toml",
             "[environment]\npackage-roots = [\".\"]\n",
         ),
-        ("inner/pkg/a.by", ""),
-        ("src/app/b.by", ""),
-        ("tools/c.by", ""),
+        ("inner/pkg/models.by", ""),
+        ("src/app/views.by", ""),
+        ("tools/cli.by", ""),
     ]
 }
 
@@ -5590,7 +5590,7 @@ fn package_roots_with_an_inline_configuration() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    tools/cli.by:1:1: INP001 File `tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----
@@ -5607,7 +5607,7 @@ fn package_roots_when_isolated() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    tools/c.by:1:1: INP001 File `tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    tools/cli.by:1:1: INP001 File `tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----
@@ -5629,14 +5629,14 @@ fn package_roots_with_an_extended_configuration() -> Result<()> {
             "app/pyproject.toml",
             "[project]\nname = \"app\"\n\n[tool.ruff]\nextend = \"../shared/ruff.toml\"\n",
         ),
-        ("app/src/pkg/a.by", ""),
-        ("app/tools/c.by", ""),
+        ("app/src/pkg/models.by", ""),
+        ("app/tools/cli.by", ""),
     ])?;
     assert_cmd_snapshot!(test.implicit_namespace_packages().arg("app"), @"
     success: false
     exit_code: 1
     ----- stdout -----
-    app/tools/c.by:1:1: INP001 File `app/tools/c.by` is part of an implicit namespace package. Add an `__init__.py`.
+    app/tools/cli.by:1:1: INP001 File `app/tools/cli.by` is part of an implicit namespace package. Add an `__init__.py`.
     Found 1 error.
 
     ----- stderr -----

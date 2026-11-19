@@ -6,7 +6,7 @@ in the module.
 
 ## a member the stub declares and the module does not define
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 from typing import TypeVar, TypeAlias, type_check_only
@@ -25,7 +25,7 @@ class A:
     def n(self) -> None: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 def f():  # error: [missing-runtime-member] "`g` is declared by the stub but not defined by this module"
@@ -38,12 +38,12 @@ class A:  # snapshot
 
 ```snapshot
 warning[missing-runtime-member]: `n` is declared by the stub but not defined by class `A`
-  --> src/m.py:4:7
+  --> src/mod.py:4:7
    |
  4 | class A:  # snapshot
    |       ^
    |
-  ::: src/m.pyi:14:9
+  ::: src/mod.pyi:14:9
    |
 14 |     def n(self) -> None: ...
    |         - declared here
@@ -54,7 +54,7 @@ warning[missing-runtime-member]: `n` is declared by the stub but not defined by 
 a member the module binds through an import, one a class inherits, and anything a `__getattr__` can
 supply are all defined.
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 def f() -> None: ...
@@ -80,7 +80,7 @@ def f():
     pass
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 from typing import Any
@@ -110,13 +110,13 @@ class Namespace: ...
 `missing-stub-member` is disabled by default, since a stub often describes only the supported part
 of a module.
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 def f() -> None: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 import os
@@ -135,7 +135,7 @@ def _helper():
 
 every call the stub accepts has to reach the runtime function.
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 def f(a: int, b: int = ..., *, c: int) -> None: ...
@@ -145,7 +145,7 @@ def k(a: int, *args: int, **kwargs: int) -> None: ...
 def anything(a: int, b: int = ...) -> None: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 # error: [incompatible-stub-signature] "`f` has no parameter for the stub's parameter `c`"
@@ -172,13 +172,13 @@ def anything(*args, **kwargs):  # no diagnostic
 a parameter annotation has to accept what the stub says is passed, and a return annotation has to
 promise no more than the stub's.
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 def f(a: int, b: int) -> int: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 # error: [incompatible-stub-signature] "`f` returns `object`, which is not assignable to the stub's return type `int`"
@@ -188,12 +188,12 @@ def f(a: str, b: object) -> object:  # snapshot
 
 ```snapshot
 error[incompatible-stub-signature]: Parameter `a` of `f` is annotated `str`, which does not accept the stub's `int`
- --> src/m.py:2:10
+ --> src/mod.py:2:10
   |
 2 | def f(a: str, b: object) -> object:  # snapshot
   |          ^^^
   |
- ::: src/m.pyi:1:5
+ ::: src/mod.pyi:1:5
   |
 1 | def f(a: int, b: int) -> int: ...
   |     ------------------------ the stub's declaration
@@ -227,7 +227,7 @@ current: Node = Node()  # no diagnostic
 
 ## an overloaded function is held to every overload
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 from typing import overload
@@ -238,7 +238,7 @@ def f(a: int) -> int: ...
 def f(a: str, b: str) -> str: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 def f(a, b):  # error: [incompatible-stub-signature] "Parameter `b` of `f` is required, but a call its stub accepts leaves it out"
@@ -250,7 +250,7 @@ def f(a, b):  # error: [incompatible-stub-signature] "Parameter `b` of `f` is re
 where the module overloads the function itself, its implementation is what takes every call the stub
 accepts. each of its `@overload`s declares a signature of its own.
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 from typing import overload
@@ -261,7 +261,7 @@ def f(a: int) -> int: ...
 def f(a: str) -> str: ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 from typing import overload
@@ -276,7 +276,7 @@ def f(a: int | str) -> int | str:  # no diagnostic
 
 ## a variable annotated differently from the stub
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 x: int
@@ -286,7 +286,7 @@ class A:
     z: str
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 x: str = ""  # error: [incompatible-stub-attribute] "`x` is declared as `str` here but as `int` in the stub"
@@ -299,7 +299,7 @@ class A:
 
 ## a class that does not inherit from the stub's bases
 
-`m.pyi`:
+`mod.pyi`:
 
 ```pyi
 from typing import Protocol
@@ -312,7 +312,7 @@ class P(Protocol): ...
 class H(P): ...
 ```
 
-`m.py`:
+`mod.py`:
 
 ```py
 class Base: ...
